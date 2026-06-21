@@ -2,10 +2,15 @@
 
 ## Data Coverage
 
-### taxable_value (2021–2024): Not available
+### taxable_value (2021–2024): Not publicly available — requires PIR
 - `taxable_value` is only populated for **2025** (source: TCAD Certified Appraisal Export, PROP_ENT.TXT).
-- The Texas Comptroller AJR files (2021–2024) do not include taxable value. AJR carries market value, assessed value, and homestead cap loss only.
-- **Resolution:** Would require historical Certified Export files (EARS format) for 2021–2024 from TCAD. Not currently in scope.
+- The Texas Comptroller AJR/EARS files (2021–2024) do not include taxable value. AJR carries market value, assessed value, and homestead cap loss only.
+- **TCAD only publishes the current year's Certified Export** on their public information page (traviscad.org/publicinformation). Historical Certified Export files for 2021–2024 are **not available for public download**.
+- **Path to resolution:** Submit a Public Information Request (PIR) directly to TCAD:
+  - Online portal: https://traviscad.govqa.us/WEBAPP/_rs/SupportHome.aspx
+  - Email: CSInfo@tcadcentral.org
+  - Request: "Certified Appraisal Export files (PROP.TXT and PROP_ENT.TXT) for tax years 2021, 2022, 2023, and 2024 in EARS fixed-width format." The 2025 export we already have came from this same source and TCAD does retain prior-year exports internally.
+- Do not attempt to estimate or derive taxable_value from market/assessed values — it depends on exemption amounts which vary per entity per parcel.
 
 ### land_value / imprv_value (2021–2024): Not available
 - Land and improvement value breakdown is only populated for **2025**.
@@ -17,10 +22,14 @@
 - `hs_cap_loss` is populated for **2021–2024** from AJR field[35].
 - The investor insight report and projection engine look for the most recent year with hs_cap_loss data rather than hardcoding to 2025, so homestead cap warnings still fire correctly from AJR data.
 
-### tax_billing detail (2021–2024): Not available
+### tax_billing detail (2021–2024): Hard limit — no public archive exists
 - Full billing detail (`total_tax`, `total_paid`, `total_due`) is only available for **2025** (source: Travis County Tax Office TaxCurOpenData).
 - Pre-2025 rows in `tax_billing` are delinquent-only records sourced from TaxDelqOpenData — they do not represent the full billing population for those years.
-- **Resolution:** Would require historical TaxCurOpenData exports from the Travis County Tax Office for each prior year. Not currently in scope.
+- **The Travis County Tax Office does not publish historical billing snapshots.** The open data portal (traviscountytx.gov/open-data-portal) provides only current-year billing and rolling delinquent data — there is no archive of prior-year TaxCurOpenData files available for public download.
+- **Path to resolution:** Submit an Open Records Request to Travis County:
+  - Portal: https://www.traviscountytx.gov/departments/records-request
+  - Request: "TaxCurOpenData export files (current year billing roll) as of certification date for tax years 2021, 2022, 2023, and 2024." The Tax Office may or may not retain snapshots from prior years — this is genuinely uncertain and depends on their internal data retention policy.
+- This is a hard limitation on publicly available data, not a gap in our loader. Do not attempt to backfill billing from delinquent data or AJR sources — they are structurally different datasets.
 
 ## Out of Scope for Phase 1
 

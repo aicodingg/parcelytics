@@ -81,11 +81,6 @@ def _int_or_none(v):
         return None
 
 
-def _clean_geo_id(v):
-    """Return the 10-char TCAD long account, stripped of whitespace."""
-    return v.strip()[:14] if v else None
-
-
 def build_pid_lookup(conn):
     """Return {prop_id: geo_id} from parcels already in the DB (from certified export)."""
     with conn.cursor() as cur:

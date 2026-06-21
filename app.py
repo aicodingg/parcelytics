@@ -276,6 +276,13 @@ def property_detail(geo_id):
     # Current year snapshot (2025)
     current = next((r for r in history if r["tax_year"] == 2025), None)
 
+    # If total_tax is NULL in tax_billing (common when TOTAL_TAX field is blank in
+    # TaxCurOpenData), derive it from the sum of entity amounts.
+    if current is not None and not current.get("total_tax") and entity_detail:
+        derived_tax = sum(e["amount_due"] for e in entity_detail if e["amount_due"])
+        if derived_tax:
+            current["total_tax"] = derived_tax
+
     # Historical combined tax rate for this parcel's entities (for trend projection)
     rate_history = query("""
         SELECT ctr.tax_year, SUM(ctr.rate) AS total_rate
