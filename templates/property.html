@@ -7,11 +7,27 @@
 <a href="/" class="text-muted small">&larr; New search</a>
 
 {# ── Property header ─────────────────────────────────────────────────── #}
+{# Property type label derived from state_cd1 (A/B/C/D/E/F prefix) #}
+{% set _sc = (parcel.state_cd1 or "")|trim %}
+{% set _sc1 = _sc[:1] %}
+{% if _sc1 == "A" %}{% set _prop_type = "Residential (Single-Family)" %}
+{% elif _sc1 == "B" %}{% set _prop_type = "Multi-Family" %}
+{% elif _sc1 == "C" %}{% set _prop_type = "Land / Vacant" %}
+{% elif _sc1 in ["D", "E"] %}{% set _prop_type = "Agricultural" %}
+{% elif _sc1 == "F" %}{% set _prop_type = "Commercial" %}
+{% elif _sc %}{% set _prop_type = _sc %}
+{% else %}{% set _prop_type = "" %}
+{% endif %}
+
 <div class="mt-3 mb-4">
   <h2 class="fw-bold mb-0">
     {{ parcel.situs_address or "Address unknown" }}
   </h2>
   <span class="text-muted">Travis County, TX</span>
+  {% if _prop_type %}
+    <span class="text-muted ms-2">&middot;</span>
+    <span class="text-muted ms-2 small">{{ _prop_type }}</span>
+  {% endif %}
   {% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
     <span class="badge bg-danger ms-2">Delinquent</span>
   {% endif %}
