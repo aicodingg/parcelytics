@@ -1,0 +1,57 @@
+/* Travis County Property Tax Platform — custom styles */
+
+body {
+  background-color: #f8f9fa;
+}
+
+.navbar-brand {
+  letter-spacing: 0.02em;
+}
+
+main.container {
+  max-width: 1200px;
+}
+
+.card {
+  border-radius: 0.5rem;
+}
+
+.card-header {
+  border-radius: 0.5rem 0.5rem 0 0 !important;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+}
+
+/* Tighter table on small screens */
+@media (max-width: 576px) {
+  .table-sm th, .table-sm td {
+    padding: 0.25rem 0.4rem;
+    font-size: 0.8rem;
+  }
+}
+
+/* Value history table — highlight 2025 row */
+.table .table-active td,
+.table .table-active th {
+  background-color: rgba(13, 110, 253, 0.06);
+}
+
+/* Delinquent badge pulse */
+.badge.bg-danger {
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+/* Entity checkbox list — compact */
+.form-check {
+  margin-bottom: 0.1rem;
+}
+
+/* Chart canvas */
+canvas {
+  max-height: 440px;
+}

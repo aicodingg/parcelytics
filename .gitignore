@@ -1,0 +1,73 @@
+# ── Raw data files (never commit these) ──────────────────────────────────────
+*.csv
+*.xlsx
+*.xls
+*.zip
+*.gz
+*.tar
+*.txt.bz2
+*.TXT
+*.txt
+
+# Allow schema and template text files but not data dumps
+!schema.sql
+!requirements.txt
+
+# Certified Export and EARS directories
+2025 Certified Appraisal Export*/
+2021EARS*/
+227EARS*/
+ears_extracted/
+extracted/
+
+# Tax Office data
+TaxCur*.csv
+TaxDelq*.csv
+*RatesHistory*.xlsx
+
+# Database dumps / exports
+*.dump
+*.sql.gz
+*.pgdump
+
+# ── Secrets and config ────────────────────────────────────────────────────────
+.env
+.env.*
+config.local.py
+secrets.py
+*.pem
+*.key
+*.p12
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ── Editor ────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/

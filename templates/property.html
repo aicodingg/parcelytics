@@ -1,0 +1,436 @@
+{% extends "base.html" %}
+{% block title %}{{ parcel.geo_id }} — Travis County Property Tax{% endblock %}
+
+{% block content %}
+
+{# ── Back link ───────────────────────────────────────────────────────── #}
+<a href="/" class="text-muted small">&larr; New search</a>
+
+{# ── Property header ─────────────────────────────────────────────────── #}
+<div class="mt-3 mb-4">
+  <h2 class="fw-bold mb-0">
+    {{ parcel.situs_address or "Address unknown" }}
+  </h2>
+  <span class="text-muted">Travis County, TX</span>
+  {% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
+    <span class="badge bg-danger ms-2">Delinquent</span>
+  {% endif %}
+</div>
+
+<div class="row g-4">
+
+{# ── Left column ─────────────────────────────────────────────────────── #}
+<div class="col-lg-4">
+
+  {# Property info card #}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+      Property Info
+    </div>
+    <div class="card-body">
+      <table class="table table-sm mb-0">
+        <tbody>
+          <tr><th class="text-muted fw-normal">Owner</th>
+              <td>{{ parcel.owner_name or "—" }}</td></tr>
+          <tr><th class="text-muted fw-normal">Parcel ID</th>
+              <td><code>{{ parcel.geo_id }}</code></td></tr>
+          <tr><th class="text-muted fw-normal">Short ID</th>
+              <td>{{ parcel.prop_id or "—" }}</td></tr>
+          <tr><th class="text-muted fw-normal">Type</th>
+              <td>{{ {"R":"Real","P":"Personal","MH":"Mobile Home","MN":"Mineral"}.get(parcel.prop_type_cd|trim if parcel.prop_type_cd else "", parcel.prop_type_cd or "—") }}</td></tr>
+          <tr><th class="text-muted fw-normal">Legal</th>
+              <td class="small">{{ parcel.legal_desc or "—" }}</td></tr>
+          <tr><th class="text-muted fw-normal">Neighborhood</th>
+              <td>{{ parcel.neighborhood_cd or "—" }}</td></tr>
+          <tr><th class="text-muted fw-normal">State Code</th>
+              <td>{{ parcel.state_cd1 or "—" }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# 2025 snapshot #}
+  {% if current %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+      2025 Snapshot
+    </div>
+    <div class="card-body">
+      <table class="table table-sm mb-0">
+        <tbody>
+          <tr><th class="text-muted fw-normal">Market Value</th>
+              <td class="text-end fw-semibold">${{ "{:,.0f}".format(current.market_value) if current.market_value else "—" }}</td></tr>
+          <tr><th class="text-muted fw-normal">Assessed Value</th>
+              <td class="text-end">${{ "{:,.0f}".format(current.assessed_value) if current.assessed_value else "—" }}</td></tr>
+          {% if current.hs_cap_loss and current.hs_cap_loss > 0 %}
+          <tr><th class="text-muted fw-normal">HS Cap Loss</th>
+              <td class="text-end text-success">-${{ "{:,.0f}".format(current.hs_cap_loss) }}</td></tr>
+          {% endif %}
+          <tr><th class="text-muted fw-normal">Taxable Value</th>
+              <td class="text-end">${{ "{:,.0f}".format(current.taxable_value) if current.taxable_value else "—" }}</td></tr>
+          {% if current.land_value %}
+          <tr><th class="text-muted fw-normal">Land Value</th>
+              <td class="text-end">${{ "{:,.0f}".format(current.land_value) }}</td></tr>
+          {% endif %}
+          {% if current.imprv_value %}
+          <tr><th class="text-muted fw-normal">Imprv. Value</th>
+              <td class="text-end">${{ "{:,.0f}".format(current.imprv_value) }}</td></tr>
+          {% endif %}
+          <tr><td colspan="2"><hr class="my-1"></td></tr>
+          <tr><th class="text-muted fw-normal">Total Tax</th>
+              <td class="text-end fw-semibold">${{ "{:,.2f}".format(current.total_tax) if current.total_tax else "—" }}</td></tr>
+          {% if current.is_delinquent %}
+          <tr><th class="text-muted fw-normal">Amount Due</th>
+              <td class="text-end text-danger fw-semibold">${{ "{:,.2f}".format(current.total_due) }}</td></tr>
+          {% endif %}
+          {% if current.exemption_codes or current.billing_exemptions %}
+          <tr><th class="text-muted fw-normal">Exemptions</th>
+              <td>{{ current.exemption_codes or current.billing_exemptions }}</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {# Delinquency detail #}
+  {% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
+  <div class="card border-danger border-0 shadow-sm mb-4">
+    <div class="card-header bg-danger text-white fw-semibold small text-uppercase">
+      Delinquency
+    </div>
+    <div class="card-body">
+      <table class="table table-sm mb-0">
+        <tbody>
+          <tr><th class="text-muted fw-normal">Total Due</th>
+              <td class="text-end fw-bold text-danger">${{ "{:,.2f}".format(delinquent.total_due) }}</td></tr>
+          <tr><th class="text-muted fw-normal">First Delinquent</th>
+              <td class="text-end">{{ delinquent.first_delinquent_yr or "—" }}</td></tr>
+          {% if delinquent.cause_number %}
+          <tr><th class="text-muted fw-normal">Cause #</th>
+              <td class="text-end">{{ delinquent.cause_number }}</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+</div>{# /col-lg-4 #}
+
+{# ── Right column ────────────────────────────────────────────────────── #}
+<div class="col-lg-8">
+
+  {# ── Investor Insight Report ────────────────────────────────────── #}
+  {% if insights %}
+  <div class="card border-0 shadow-sm mb-4" style="border-left: 4px solid #0d6efd !important;">
+    <div class="card-header bg-primary text-white fw-semibold small text-uppercase">
+      Investor Insight Report
+    </div>
+    <div class="card-body">
+
+      {# Appreciation #}
+      {% if insights.value_change_pct is defined %}
+      <p class="mb-2">
+        <strong>Appreciation:</strong>
+        Market value has
+        {% if insights.value_change_pct > 0 %}risen{% else %}fallen{% endif %}
+        <strong class="{% if insights.value_change_pct > 0 %}text-success{% else %}text-danger{% endif %}">
+          {{ "{:+.1f}%".format(insights.value_change_pct) }}
+        </strong>
+        from
+        <strong>${{ "{:,.0f}".format(insights.earliest_market) }}</strong> ({{ insights.earliest_year }})
+        to
+        <strong>${{ "{:,.0f}".format(insights.latest_market) }}</strong> ({{ insights.latest_year }}),
+        a CAGR of <strong>{{ insights.value_cagr }}%</strong> over {{ insights.span }} year{{ "s" if insights.span != 1 }}.
+        {% if insights.value_cagr > 8 %}
+        This is strong appreciation — well above typical inflation.
+        {% elif insights.value_cagr > 4 %}
+        This represents moderate, steady growth.
+        {% else %}
+        Growth has been relatively flat for this asset class.
+        {% endif %}
+      </p>
+      {% endif %}
+
+      {# Tax burden #}
+      {% if insights.total_rate_2025 %}
+      <p class="mb-2">
+        <strong>Tax Burden:</strong>
+        The combined rate across {{ insights.entity_count }} taxing entities is
+        <strong>{{ "{:.4f}%".format(insights.total_rate_2025) }}</strong> in 2025
+        {% if insights.rate_delta is defined %}
+          ({{ "{:+.4f}%".format(insights.rate_delta) }} vs 2024 —
+          {% if insights.rate_delta < 0 %}
+            <span class="text-success">rates decreased</span>
+          {% elif insights.rate_delta > 0 %}
+            <span class="text-danger">rates increased</span>
+          {% else %}
+            unchanged
+          {% endif %}).
+        {% else %}.{% endif %}
+        {% if insights.est_annual_tax %}
+          At the current taxable value, estimated annual taxes are
+          <strong>${{ "{:,.0f}".format(insights.est_annual_tax) }}</strong>.
+        {% endif %}
+      </p>
+      {% endif %}
+
+      {# Homestead cap — key for investors #}
+      {% if insights.hs_cap_loss is defined %}
+      <p class="mb-2">
+        <strong>⚠ Homestead Cap Warning:</strong>
+        This property carries a homestead cap loss of
+        <strong>${{ "{:,.0f}".format(insights.hs_cap_loss) }}</strong>
+        ({{ insights.hs_cap_pct }}% of market value).
+        A new buyer <strong>loses this benefit</strong> at purchase — assessed value
+        will reset to full market value, increasing the annual tax bill.
+        This should be factored into acquisition underwriting.
+      </p>
+      {% endif %}
+
+      {# Assessed vs market gap without HS cap #}
+      {% if not insights.hs_cap_loss is defined and insights.latest_assessed and insights.latest_market %}
+        {% set gap = insights.latest_market - insights.latest_assessed %}
+        {% if gap > 1000 %}
+        <p class="mb-2">
+          <strong>Assessment Gap:</strong>
+          Assessed value (${{ "{:,.0f}".format(insights.latest_assessed) }}) is
+          ${{ "{:,.0f}".format(gap) }} below market value, suggesting potential
+          for an upward assessment in future years.
+        </p>
+        {% endif %}
+      {% endif %}
+
+      {# Property class #}
+      {% if insights.prop_class %}
+      <p class="mb-2">
+        <strong>Asset Class:</strong> {{ insights.prop_class }}.
+        {% if "Commercial" in insights.prop_class %}
+          No homestead exemptions apply — full market value is taxable.
+        {% elif "Single-family" in insights.prop_class %}
+          Buyer should verify which exemptions carry and which reset at sale.
+        {% elif "Agricultural" in insights.prop_class %}
+          Agricultural valuation may be subject to rollback taxes if land use changes.
+        {% endif %}
+      </p>
+      {% endif %}
+
+      {# Delinquency #}
+      {% if insights.delinquent_amount is defined %}
+      <p class="mb-0">
+        <strong class="text-danger">🚨 Delinquent Taxes:</strong>
+        ${{ "{:,.2f}".format(insights.delinquent_amount) }} in unpaid taxes
+        {% if insights.delinquent_since %}since {{ insights.delinquent_since }}{% endif %}.
+        These become a lien on the property and transfer to the buyer at closing
+        unless negotiated otherwise.
+      </p>
+      {% else %}
+      <p class="mb-0 text-muted small">
+        ✓ No delinquent taxes on record.
+      </p>
+      {% endif %}
+
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Tax Projection Table ────────────────────────────────────────── #}
+  {% if projections %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+      5-Year Tax Estimate (Projection)
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+          <thead class="table-light small text-muted text-uppercase">
+            <tr>
+              <th>Year</th>
+              <th class="text-end">Est. Market Value</th>
+              <th class="text-end">Est. Assessed Value</th>
+              <th class="text-end">Proj. Rate</th>
+              <th class="text-end">Est. Annual Tax</th>
+              <th class="text-end">Value Δ vs 2025</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in projections %}
+            <tr>
+              <td class="fw-semibold">{{ p.year }}</td>
+              <td class="text-end">${{ "{:,.0f}".format(p.market) }}</td>
+              <td class="text-end">${{ "{:,.0f}".format(p.assessed) }}</td>
+              <td class="text-end text-muted small">{{ "{:.4f}%".format(p.rate) }}</td>
+              <td class="text-end fw-semibold">${{ "{:,.0f}".format(p.est_tax) }}</td>
+              <td class="text-end {% if p.value_change > 0 %}text-success{% else %}text-danger{% endif %}">
+                {{ "{:+.1f}%".format(p.value_change) }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card-footer text-muted small">
+      Projections based on {{ history|length }}-year historical CAGR and avg rate trend. Not a guarantee of future values.
+    </div>
+  </div>
+  {% endif %}
+
+  {# 5-year history table #}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+      5-Year History (2021–2025)
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead class="table-light small text-muted text-uppercase">
+            <tr>
+              <th>Year</th>
+              <th class="text-end">Market Value</th>
+              <th class="text-end">Assessed Value</th>
+              <th class="text-end">Taxable Value</th>
+              <th class="text-end">Total Tax</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in history | sort(attribute='tax_year', reverse=True) %}
+            <tr {% if r.tax_year == 2025 %}class="table-active fw-semibold"{% endif %}>
+              <td>{{ r.tax_year }}</td>
+              <td class="text-end">${{ "{:,.0f}".format(r.market_value) if r.market_value else "—" }}</td>
+              <td class="text-end">${{ "{:,.0f}".format(r.assessed_value) if r.assessed_value else "—" }}</td>
+              <td class="text-end">${{ "{:,.0f}".format(r.taxable_value) if r.taxable_value else "—" }}</td>
+              <td class="text-end">{% if r.total_tax %}${{ "{:,.2f}".format(r.total_tax) }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+              <td class="small text-muted">{{ r.data_source or "—" }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="text-muted text-center py-3">No history found</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# Value trend chart #}
+  {% if history %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+      Value Trend
+    </div>
+    <div class="card-body">
+      <canvas id="valueTrendChart" height="120"></canvas>
+    </div>
+  </div>
+  {% endif %}
+
+  {# Entity-level tax breakdown (2025) #}
+  {% if entity_detail %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+      2025 Tax by Entity
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+          <thead class="table-light small text-muted text-uppercase">
+            <tr>
+              <th>Entity</th>
+              <th class="text-end">2025 Rate</th>
+              <th class="text-end">YoY Δ</th>
+              <th class="text-end">Amount Due</th>
+              <th class="text-end">Amount Paid</th>
+              <th class="text-end">Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for e in entity_detail %}
+            {% set delta = (e.rate - e.rate_prev) if (e.rate and e.rate_prev) else none %}
+            <tr>
+              <td>
+                <span class="badge bg-secondary me-1">{{ e.entity_code }}</span>
+                {{ e.entity_name or "" }}
+              </td>
+              <td class="text-end text-muted small">
+                {{ "{:.4f}%".format(e.rate) if e.rate else "—" }}
+              </td>
+              <td class="text-end small {% if delta is not none %}{% if delta < 0 %}text-success{% elif delta > 0 %}text-danger{% endif %}{% endif %}">
+                {% if delta is not none %}
+                  {{ "{:+.4f}%".format(delta) }}
+                {% else %}—{% endif %}
+              </td>
+              <td class="text-end">${{ "{:,.2f}".format(e.amount_due) if e.amount_due else "—" }}</td>
+              <td class="text-end">${{ "{:,.2f}".format(e.amount_paid) if e.amount_paid else "—" }}</td>
+              <td class="text-end {% if (e.amount_due or 0) - (e.amount_paid or 0) > 0.01 %}text-danger{% endif %}">
+                {% set bal = (e.amount_due or 0) - (e.amount_paid or 0) %}
+                {% if bal > 0.01 %}<strong>${{ "{:,.2f}".format(bal) }}</strong>
+                {% else %}Paid{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot class="table-light fw-semibold small">
+            {% set total_rate = namespace(val=0) %}
+            {% set total_prev = namespace(val=0) %}
+            {% for e in entity_detail %}
+              {% if e.rate %}{% set total_rate.val = total_rate.val + e.rate %}{% endif %}
+              {% if e.rate_prev %}{% set total_prev.val = total_prev.val + e.rate_prev %}{% endif %}
+            {% endfor %}
+            {% set total_delta = total_rate.val - total_prev.val %}
+            <tr class="border-top border-2">
+              <td>Total</td>
+              <td class="text-end">{{ "{:.4f}%".format(total_rate.val) if total_rate.val else "—" }}</td>
+              <td class="text-end {% if total_delta < 0 %}text-success{% elif total_delta > 0 %}text-danger{% endif %}">
+                {% if total_rate.val and total_prev.val %}{{ "{:+.4f}%".format(total_delta) }}{% else %}—{% endif %}
+              </td>
+              <td class="text-end"></td>
+              <td class="text-end"></td>
+              <td class="text-end"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>{# /col-lg-8 #}
+</div>{# /row #}
+
+{% endblock %}
+
+{% block scripts %}
+{% if history %}
+<script>
+const historyData = {{ history | tojson }};
+const years  = historyData.map(r => r.tax_year).sort();
+const market = years.map(y => { const r = historyData.find(h => h.tax_year===y); return r && r.market_value ? r.market_value : null; });
+const assessed = years.map(y => { const r = historyData.find(h => h.tax_year===y); return r && r.assessed_value ? r.assessed_value : null; });
+const taxable  = years.map(y => { const r = historyData.find(h => h.tax_year===y); return r && r.taxable_value  ? r.taxable_value  : null; });
+
+new Chart(document.getElementById('valueTrendChart'), {
+  type: 'line',
+  data: {
+    labels: years,
+    datasets: [
+      { label: 'Market Value',   data: market,   borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.08)', tension: 0.3, fill: true },
+      { label: 'Assessed Value', data: assessed, borderColor: '#198754', backgroundColor: 'transparent', borderDash: [5,4], tension: 0.3 },
+      { label: 'Taxable Value',  data: taxable,  borderColor: '#ffc107', backgroundColor: 'transparent', borderDash: [2,3], tension: 0.3 },
+    ]
+  },
+  options: {
+    plugins: { legend: { position: 'bottom' } },
+    scales: {
+      y: {
+        ticks: {
+          callback: v => '$' + (v >= 1e6 ? (v/1e6).toFixed(1)+'M' : (v/1e3).toFixed(0)+'K')
+        }
+      }
+    }
+  }
+});
+</script>
+{% endif %}
+{% endblock %}
