@@ -49,8 +49,10 @@ TYPE_GROUPS = [
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 def _like_clause(prefixes):
-    """Build a LIKE ANY(...) clause for state_cd1 prefix matching."""
-    patterns = ", ".join(f"'{p}%'" for p in prefixes)
+    """Build a LIKE ANY(...) clause for state_cd1 prefix matching.
+    Uses %% so the literal % survives psycopg2 parameter substitution
+    when the result is interpolated into an f-string SQL."""
+    patterns = ", ".join(f"'{p}%%'" for p in prefixes)
     return f"p.state_cd1 LIKE ANY(ARRAY[{patterns}])"
 
 
@@ -175,17 +177,23 @@ def compute_parcel_metrics(conn):
                 -- Will be updated when historical billing arrives via PIR
                 NULL,
 
-                -- Assessment ratio: assessed / market (NULL if market = 0)
+                -- Assessment ratio: assessed / market
+                -- NULL if market = 0 OR ratio > 100 (AJR bad-data rows where
+                -- market_value is erroneously tiny produce ratios > 999 that
+                -- overflow even NUMERIC(10,4); cap these as not meaningful).
                 CASE
                     WHEN pty.market_value > 0
+                     AND pty.assessed_value::NUMERIC / pty.market_value <= 100
                     THEN ROUND(pty.assessed_value::NUMERIC / pty.market_value, 4)
                 END,
 
                 -- Effective tax rate: real billing for 2025 only; Not Available otherwise
+                -- Cap at 1.0 (100% effective rate) — values above that are bad data.
                 CASE
                     WHEN pty.tax_year = 2025
                      AND COALESCE(tb.total_tax, 0) > 0
                      AND pty.market_value > 0
+                     AND tb.total_tax::NUMERIC / pty.market_value <= 1
                     THEN ROUND(tb.total_tax::NUMERIC / pty.market_value, 6)
                 END,
 
@@ -222,8 +230,11 @@ def compute_parcel_metrics(conn):
     conn.commit()
     print(f"    risk_large_value_jump: {n_jump:,} rows flagged (>{LARGE_JUMP_THRESHOLD_PCT}%)  ({time.time()-t1:.1f}s)")
 
-    # Pass 3: homestead cap expiry risk — residential only, consistent with Phase 1 guard
-    # Fires when hs_cap_loss > 0 in ANY year for the parcel AND assessed < 90% of market
+    # Pass 3: homestead cap expiry risk — residential only, consistent with Phase 1 guard.
+    # Condition: the 2025 row specifically has hs_cap_loss > 0 AND assessed < market.
+    # Restricting to the 2025 row (Certified data) avoids AJR noise where hs_cap_loss
+    # is present on almost every residential parcel. The 2025 Certified value is the
+    # authoritative source; if the gap is real it will show there.
     t1 = time.time()
     with conn.cursor() as cur:
         cur.execute("""
@@ -234,9 +245,10 @@ def compute_parcel_metrics(conn):
                 FROM parcel_tax_year pty
                 JOIN parcel p ON p.geo_id = pty.geo_id
                 WHERE p.state_cd1 LIKE 'A%'
+                  AND pty.tax_year = 2025
                   AND pty.hs_cap_loss > 0
                   AND pty.market_value > 0
-                  AND pty.assessed_value < pty.market_value * 0.90
+                  AND pty.assessed_value < pty.market_value
             ) hs
             WHERE pm.geo_id = hs.geo_id
         """)

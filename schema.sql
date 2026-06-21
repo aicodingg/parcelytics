@@ -135,8 +135,10 @@ CREATE TABLE IF NOT EXISTS parcel_metrics (
     yoy_tax_amount_pct           NUMERIC(15,4),  -- NULL for 2021–2024 (not available)
 
     -- Ratios
-    assessment_ratio             NUMERIC(7,4),   -- assessed_value / market_value; NULL if market = 0
-    effective_tax_rate           NUMERIC(7,4),   -- total_tax / market_value; NULL for 2021–2024
+    -- NUMERIC(10,4): assessment_ratio can exceed 999 in AJR bad-data rows
+    -- (e.g. market_value=1, assessed_value=normal), overflowing NUMERIC(7,4).
+    assessment_ratio             NUMERIC(10,4),  -- assessed_value / market_value; NULL if market = 0 or ratio > 100
+    effective_tax_rate           NUMERIC(10,4),  -- total_tax / market_value; NULL for 2021–2024
 
     -- Cumulative (only set on the most-recent-year row per parcel)
     cumulative_value_growth_pct  NUMERIC(15,4),  -- earliest valid year → 2025
@@ -197,6 +199,8 @@ DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN cumulative_value_growth_pct 
 DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN cumulative_tax_growth_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
 DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN risk_large_value_jump_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
 DO $$ BEGIN ALTER TABLE county_benchmark ALTER COLUMN median_yoy_value_change_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN assessment_ratio  TYPE NUMERIC(10,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN effective_tax_rate TYPE NUMERIC(10,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
 
 
 -- rate_trend: VIEW on county_tax_rate adding YoY delta/pct.
