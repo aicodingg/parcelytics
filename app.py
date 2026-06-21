@@ -40,12 +40,19 @@ def build_insights(parcel, history, entity_detail, delinquent):
         out["value_change_pct"] = round(pct, 1)
         out["value_cagr"]       = round(cagr, 1)
 
-    # Homestead cap — check most recent year that has hs_cap_loss data (not hardcoded to 2025,
-    # since the 2025 Certified Export does not carry this field)
-    hs_row = next(
-        (r for r in reversed(hist) if r.get("hs_cap_loss") and r["hs_cap_loss"] > 0),
-        None
-    )
+    # Homestead cap — only applies to single-family residential (state_cd1 == 'A').
+    # AJR carries non-zero hs_cap_loss for commercial/multi-family parcels but this
+    # is bad source data — homestead exemptions cannot apply to those property types.
+    # Using the narrowest safe interpretation: class 'A' only.
+    sc = (parcel.get("state_cd1") or "").strip()
+    is_residential_sfr = sc.startswith("A")
+
+    hs_row = None
+    if is_residential_sfr:
+        hs_row = next(
+            (r for r in reversed(hist) if r.get("hs_cap_loss") and r["hs_cap_loss"] > 0),
+            None
+        )
     if hs_row and latest["market_value"]:
         out["hs_cap_loss"]   = hs_row["hs_cap_loss"]
         out["hs_cap_year"]   = hs_row["tax_year"]
