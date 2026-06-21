@@ -47,18 +47,20 @@ PROP_ENT.TXT field positions (0-based):
   appraised_val[403:418]
 
 LAND_DET.TXT field positions (0-based):
-  prop_id      [0:12]
-  prop_val_yr  [12:16]
-  land_seg_id  [16:28]
-  …
-  land_seg_mkt_val [112:126]  numeric(14)
-
-IMP_INFO.TXT field positions (0-based):
-  prop_id      [0:12]
-  prop_val_yr  [12:16]
-  imprv_id     [16:28]
-  …
-  imprv_val    [68:82]   numeric(14)
+  prop_id          [0:12]
+  prop_val_yr      [12:16]
+  land_seg_id      [16:28]
+  land_type_cd     [28:38]
+  land_type_desc   [38:63]
+  state_class      [63:68]
+  flag             [68]
+  land_seg_num     [69:83]
+  area_sf          [83:97]
+  price_per_unit   [97:111]
+  land_unit_type   (text label, positions 111–139 variable)
+  land_seg_mkt_val [140:154]  numeric(14)  ← CONFIRMED from file inspection
+  NOTE: IMP_INFO.TXT improvement values are cost-basis (not market); imprv_value
+        is derived as max(0, market_value − land_value) after both files load.
 """
 import os
 import sys
@@ -274,44 +276,44 @@ def load_prop_ent_txt(conn, cert_dir):
     return total
 
 
-# ── Step 3: LAND_DET.TXT + IMP_INFO.TXT → land_value / imprv_value ──────────
+# ── Step 3: LAND_DET.TXT → land_value; imprv_value = market − land ───────────
 def load_land_and_imprv(conn, cert_dir):
-    """Sum land and improvement values per parcel and update parcel_tax_year."""
+    """
+    Sum land segment market values per parcel from LAND_DET.TXT, then set:
+      land_value  = sum of land_seg_mkt_val  (field [140:154], confirmed)
+      imprv_value = max(0, market_value − land_value)
+
+    IMP_INFO.TXT and IMP_DET.TXT contain cost-approach component values (not
+    market values) and cannot be directly summed to improvement market value.
+    Deriving imprv_value from market − land is more accurate and consistent
+    with how TCAD publishes certified values.
+    """
     print("  Loading LAND_DET.TXT…")
     t0 = time.time()
 
-    # land_seg_mkt_val at [112:126] per layout
-    land_totals = {}  # prop_id → total land value
+    # land_seg_mkt_val confirmed at [140:154] by field inspection
+    land_totals = {}  # prop_id → total land market value
     land_path = os.path.join(cert_dir, "LAND_DET.TXT")
     with open(land_path, encoding="latin-1", errors="replace") as f:
         for line in f:
-            if len(line) < 128:
+            if len(line) < 155:
                 continue
             prop_id = _int_field(line, slice(0, 12))
-            val     = _int_field(line, slice(112, 126))
+            val     = _int_field(line, slice(140, 154))
             if prop_id and val:
                 land_totals[prop_id] = land_totals.get(prop_id, 0) + val
 
     print(f"    {len(land_totals):,} parcels with land detail")
 
-    print("  Loading IMP_INFO.TXT…")
-    imprv_totals = {}  # prop_id → total improvement value
-    imprv_path = os.path.join(cert_dir, "IMP_INFO.TXT")
-    with open(imprv_path, encoding="latin-1", errors="replace") as f:
-        for line in f:
-            if len(line) < 84:
-                continue
-            prop_id = _int_field(line, slice(0, 12))
-            val     = _int_field(line, slice(68, 82))
-            if prop_id and val:
-                imprv_totals[prop_id] = imprv_totals.get(prop_id, 0) + val
-
-    print(f"    {len(imprv_totals):,} parcels with improvement detail")
-
-    # Fetch prop_id → geo_id
+    # Fetch prop_id → (geo_id, market_value) for the 2025 year
     with conn.cursor() as cur:
-        cur.execute("SELECT prop_id, geo_id FROM parcel WHERE prop_id IS NOT NULL")
-        pid_to_geo = {r[0]: r[1] for r in cur.fetchall()}
+        cur.execute("""
+            SELECT p.prop_id, p.geo_id, pty.market_value
+            FROM parcel p
+            JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+            WHERE p.prop_id IS NOT NULL
+        """)
+        pid_info = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
 
     update_sql = """
         UPDATE parcel_tax_year
@@ -319,11 +321,13 @@ def load_land_and_imprv(conn, cert_dir):
         WHERE geo_id = %s AND tax_year = 2025
     """
     updates = []
-    all_pids = set(land_totals) | set(imprv_totals)
-    for pid in all_pids:
-        geo_id = pid_to_geo.get(pid)
-        if geo_id:
-            updates.append((land_totals.get(pid), imprv_totals.get(pid), geo_id))
+    for pid, land_val in land_totals.items():
+        info = pid_info.get(pid)
+        if not info:
+            continue
+        geo_id, market_val = info
+        imprv_val = max(0, (market_val or 0) - land_val)
+        updates.append((land_val, imprv_val, geo_id))
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(cur, update_sql, updates, page_size=2000)

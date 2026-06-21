@@ -40,12 +40,18 @@ def build_insights(parcel, history, entity_detail, delinquent):
         out["value_change_pct"] = round(pct, 1)
         out["value_cagr"]       = round(cagr, 1)
 
-    # Homestead cap
-    if latest["hs_cap_loss"] and latest["hs_cap_loss"] > 0 and latest["market_value"]:
-        out["hs_cap_loss"]     = latest["hs_cap_loss"]
-        out["hs_cap_pct"]      = round(latest["hs_cap_loss"] / latest["market_value"] * 100, 1)
+    # Homestead cap — check most recent year that has hs_cap_loss data (not hardcoded to 2025,
+    # since the 2025 Certified Export does not carry this field)
+    hs_row = next(
+        (r for r in reversed(hist) if r.get("hs_cap_loss") and r["hs_cap_loss"] > 0),
+        None
+    )
+    if hs_row and latest["market_value"]:
+        out["hs_cap_loss"]   = hs_row["hs_cap_loss"]
+        out["hs_cap_year"]   = hs_row["tax_year"]
+        out["hs_cap_pct"]    = round(hs_row["hs_cap_loss"] / latest["market_value"] * 100, 1)
         # This loss disappears for a new buyer — quantify impact
-        out["hs_buyer_risk"]   = True
+        out["hs_buyer_risk"] = True
 
     # Tax rates
     rate_2025 = sum(e["rate"] for e in entity_detail if e["rate"])
@@ -117,8 +123,12 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5):
         avg_rate_change = 0
         current_rate = sum(float(e["rate"]) for e in entity_detail if e["rate"])
 
-    # Homestead cap: if assessed < market in 2025, cap future assessed at 10%/yr
-    has_hs_cap = bool(current.get("hs_cap_loss") and current["hs_cap_loss"] > 0)
+    # Homestead cap: check any year with hs_cap_loss (2025 Certified doesn't carry this field)
+    hs_row = next(
+        (r for r in reversed(hist) if r.get("hs_cap_loss") and r["hs_cap_loss"] > 0),
+        None
+    )
+    has_hs_cap = hs_row is not None
     base_assessed = float(current["assessed_value"] or current["market_value"] or 0)
     base_market   = float(current["market_value"])
 

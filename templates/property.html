@@ -180,9 +180,9 @@
       {% if insights.hs_cap_loss is defined %}
       <p class="mb-2">
         <strong>⚠ Homestead Cap Warning:</strong>
-        This property carries a homestead cap loss of
+        As of {{ insights.hs_cap_year }}, this property carried a homestead cap loss of
         <strong>${{ "{:,.0f}".format(insights.hs_cap_loss) }}</strong>
-        ({{ insights.hs_cap_pct }}% of market value).
+        (~{{ insights.hs_cap_pct }}% of current market value).
         A new buyer <strong>loses this benefit</strong> at purchase — assessed value
         will reset to full market value, increasing the annual tax bill.
         This should be factored into acquisition underwriting.
@@ -238,8 +238,9 @@
   {# ── Tax Projection Table ────────────────────────────────────────── #}
   {% if projections %}
   <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
-      5-Year Tax Estimate (Projection)
+    <div class="card-header bg-secondary text-white fw-semibold small text-uppercase d-flex justify-content-between align-items-center">
+      <span>5-Year Tax Projection</span>
+      <span class="badge bg-warning text-dark">ESTIMATES ONLY</span>
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
@@ -247,21 +248,21 @@
           <thead class="table-light small text-muted text-uppercase">
             <tr>
               <th>Year</th>
-              <th class="text-end">Est. Market Value</th>
-              <th class="text-end">Est. Assessed Value</th>
-              <th class="text-end">Proj. Rate</th>
+              <th class="text-end">Est. Market Value ¹</th>
+              <th class="text-end">Est. Assessed Value ²</th>
+              <th class="text-end">Est. Rate ³</th>
               <th class="text-end">Est. Annual Tax</th>
               <th class="text-end">Value Δ vs 2025</th>
             </tr>
           </thead>
           <tbody>
             {% for p in projections %}
-            <tr>
-              <td class="fw-semibold">{{ p.year }}</td>
-              <td class="text-end">${{ "{:,.0f}".format(p.market) }}</td>
-              <td class="text-end">${{ "{:,.0f}".format(p.assessed) }}</td>
-              <td class="text-end text-muted small">{{ "{:.4f}%".format(p.rate) }}</td>
-              <td class="text-end fw-semibold">${{ "{:,.0f}".format(p.est_tax) }}</td>
+            <tr class="text-muted">
+              <td class="fw-semibold text-body">{{ p.year }}</td>
+              <td class="text-end font-italic">~${{ "{:,.0f}".format(p.market) }}</td>
+              <td class="text-end font-italic">~${{ "{:,.0f}".format(p.assessed) }}</td>
+              <td class="text-end small font-italic">~{{ "{:.4f}%".format(p.rate) }}</td>
+              <td class="text-end fw-semibold text-body">~${{ "{:,.0f}".format(p.est_tax) }}</td>
               <td class="text-end {% if p.value_change > 0 %}text-success{% else %}text-danger{% endif %}">
                 {{ "{:+.1f}%".format(p.value_change) }}
               </td>
@@ -272,7 +273,11 @@
       </div>
     </div>
     <div class="card-footer text-muted small">
-      Projections based on {{ history|length }}-year historical CAGR and avg rate trend. Not a guarantee of future values.
+      <strong>These are estimates, not recorded values.</strong>
+      ¹ Market value projected using historical CAGR from {{ history|selectattr('market_value')|list|length }}-year trend.
+      ² Assessed value applies Texas 10%/yr homestead cap if applicable; otherwise tracks market.
+      ³ Rate projected using average annual change from 2021–2025 entity rate history.
+      Actual values will be set by TCAD appraisal and taxing entity budgets each year.
     </div>
   </div>
   {% endif %}
@@ -311,6 +316,12 @@
           </tbody>
         </table>
       </div>
+    </div>
+    <div class="card-footer text-muted small">
+      <strong>Data sources:</strong>
+      2025 — TCAD Certified Appraisal Export (market, assessed, taxable, land, improvement values; full billing detail).
+      2021–2024 — Texas Comptroller Annual Jurisdiction Roll (AJR): market and assessed values only.
+      Taxable value, land/improvement breakdown, and billing detail are not available in AJR files for 2021–2024.
     </div>
   </div>
 
