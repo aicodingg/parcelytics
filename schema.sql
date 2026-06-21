@@ -105,6 +105,117 @@ DO $$ BEGIN
 EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 
+-- ============================================================
+-- PHASE 2 — Computed insight layer
+-- ============================================================
+
+-- parcel_metrics: one row per parcel × year, computed values only.
+-- Source data (parcel_tax_year) is never modified — this table is fully derived.
+-- Refreshed by compute_metrics.py after each data load.
+--
+-- Confidence levels (per Part 2 Data Integrity Standard):
+--   coverage_level = 'full'        → 2025: market + assessed + real billing data (Verified)
+--   coverage_level = 'value_only'  → 2021–2024: market + assessed only; tax fields are NOT AVAILABLE
+--
+-- Fields that are NULL on a 'value_only' row are NOT AVAILABLE, never zero.
+-- has_tax_data mirrors coverage_level as a boolean for easy querying.
+CREATE TABLE IF NOT EXISTS parcel_metrics (
+    geo_id                       VARCHAR(20)  NOT NULL REFERENCES parcel(geo_id),
+    tax_year                     SMALLINT     NOT NULL,
+
+    -- Coverage / confidence
+    coverage_level               VARCHAR(20)  NOT NULL,   -- 'full' | 'value_only'
+    has_tax_data                 BOOLEAN      NOT NULL,   -- TRUE only for 2025
+
+    -- Year-over-year changes (NULL when prior year missing or zero)
+    -- NUMERIC(15,4): AJR source data contains extreme outliers (e.g. 751,858,200% YoY)
+    -- that overflow NUMERIC(9,4); NUMERIC(15,4) handles up to ~10^11 safely.
+    yoy_market_value_pct         NUMERIC(15,4),
+    yoy_assessed_value_pct       NUMERIC(15,4),
+    yoy_tax_amount_pct           NUMERIC(15,4),  -- NULL for 2021–2024 (not available)
+
+    -- Ratios
+    assessment_ratio             NUMERIC(7,4),   -- assessed_value / market_value; NULL if market = 0
+    effective_tax_rate           NUMERIC(7,4),   -- total_tax / market_value; NULL for 2021–2024
+
+    -- Cumulative (only set on the most-recent-year row per parcel)
+    cumulative_value_growth_pct  NUMERIC(15,4),  -- earliest valid year → 2025
+    cumulative_tax_growth_pct    NUMERIC(15,4),  -- NULL until full billing history exists
+
+    -- Risk flags
+    risk_large_value_jump        BOOLEAN      DEFAULT FALSE,  -- |yoy_market_value_pct| > threshold
+    risk_large_value_jump_pct    NUMERIC(15,4),
+    risk_homestead_cap_expiry    BOOLEAN      DEFAULT FALSE,  -- residential, hs_cap present, mkt >> assessed
+    risk_delinquent              BOOLEAN      DEFAULT FALSE,
+    risk_data_incomplete         BOOLEAN      DEFAULT FALSE,  -- market_value = 0 or known gap
+
+    -- Provenance
+    computed_at                  TIMESTAMPTZ  DEFAULT NOW(),
+    computation_version          VARCHAR(20),
+
+    PRIMARY KEY (geo_id, tax_year)
+);
+
+CREATE INDEX IF NOT EXISTS idx_metrics_year        ON parcel_metrics (tax_year);
+CREATE INDEX IF NOT EXISTS idx_metrics_risk_jump   ON parcel_metrics (risk_large_value_jump) WHERE risk_large_value_jump = TRUE;
+CREATE INDEX IF NOT EXISTS idx_metrics_cap_expiry  ON parcel_metrics (risk_homestead_cap_expiry) WHERE risk_homestead_cap_expiry = TRUE;
+CREATE INDEX IF NOT EXISTS idx_metrics_delinquent  ON parcel_metrics (risk_delinquent) WHERE risk_delinquent = TRUE;
+
+
+-- county_benchmark: one row per property type per year, county-wide aggregates.
+-- property_type_label matches the display mapping used in the UI
+-- (A→'Residential', B→'Multi-Family', C→'Land/Vacant', D/E→'Agricultural', F→'Commercial').
+CREATE TABLE IF NOT EXISTS county_benchmark (
+    county_code              VARCHAR(20)  NOT NULL DEFAULT 'TRAVIS',
+    tax_year                 SMALLINT     NOT NULL,
+    property_type_label      VARCHAR(50)  NOT NULL,
+    state_cd1_prefix         VARCHAR(5),           -- the state_cd1 first-char that defines this group
+
+    parcel_count             INTEGER,
+    median_market_value      BIGINT,
+    p25_market_value         BIGINT,
+    p75_market_value         BIGINT,
+    median_assessed_value    BIGINT,
+    median_assessment_ratio  NUMERIC(7,4),
+    median_yoy_value_change_pct NUMERIC(15,4),    -- NULL for 2021 (no prior year)
+
+    computed_at              TIMESTAMPTZ  DEFAULT NOW(),
+
+    PRIMARY KEY (county_code, tax_year, property_type_label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_benchmark_year_type ON county_benchmark (tax_year, property_type_label);
+
+-- ── Migration: widen pct columns to NUMERIC(15,4) ──────────────────────────────
+-- AJR source data contains extreme outliers (max observed: 751,858,200% YoY) that
+-- overflow NUMERIC(9,4). These DO blocks are safe to re-run; they no-op if the
+-- column is already the right type.
+DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN yoy_market_value_pct      TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN yoy_assessed_value_pct    TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN yoy_tax_amount_pct        TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN cumulative_value_growth_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN cumulative_tax_growth_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN risk_large_value_jump_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE county_benchmark ALTER COLUMN median_yoy_value_change_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+
+
+-- rate_trend: VIEW on county_tax_rate adding YoY delta/pct.
+-- No new table — just makes rate history easier to query with trends.
+CREATE OR REPLACE VIEW rate_trend AS
+SELECT
+    entity_code,
+    entity_name,
+    tax_year,
+    rate,
+    rate - LAG(rate) OVER (PARTITION BY entity_code ORDER BY tax_year)   AS yoy_rate_change,
+    ROUND(
+        100.0 * (rate - LAG(rate) OVER (PARTITION BY entity_code ORDER BY tax_year))
+        / NULLIF(LAG(rate) OVER (PARTITION BY entity_code ORDER BY tax_year), 0),
+        4
+    )                                                                      AS yoy_rate_change_pct
+FROM county_tax_rate
+ORDER BY entity_code, tax_year;
+
 -- Indexes for fast lookups
 CREATE INDEX IF NOT EXISTS idx_parcel_prop_id     ON parcel(prop_id);
 CREATE INDEX IF NOT EXISTS idx_parcel_owner       ON parcel(owner_name);

@@ -3,14 +3,16 @@ Master loader — runs all data loaders in the correct order.
 
 Usage:
     python loaders/run_all.py [--schema-only] [--skip-ajr] [--skip-cert] [--skip-tax]
+                              [--skip-metrics]
 
 Order matters:
-  1. Schema       — create tables/indexes
-  2. Tax rates    — small, fast; useful for validation early
-  3. AJR 2021-24  — populates parcel + parcel_tax_year for historic years
-  4. Certified 25 — upserts parcel (adds prop_type_cd, owner) + 2025 values
-  5. TaxCurrent   — billing data + backfills owner name
-  6. TaxDelinquent— delinquency flags
+  1. Schema        — create tables/indexes (including Phase 2 parcel_metrics, county_benchmark)
+  2. Tax rates     — small, fast; useful for validation early
+  3. Certified 25  — upserts parcel (adds prop_type_cd, owner) + 2025 values
+  4. AJR 2021-24   — populates parcel + parcel_tax_year for historic years
+  5. TaxCurrent    — billing data + backfills owner name
+  6. TaxDelinquent — delinquency flags
+  7. compute_metrics — Phase 2 derived insight layer (parcel_metrics, county_benchmark)
 """
 import sys
 import os
@@ -19,11 +21,14 @@ import argparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from loaders.db             import get_conn, execute_schema
-from loaders.load_tax_rates  import load as load_rates
-from loaders.load_ajr        import load as load_ajr
+from loaders.db                  import get_conn, execute_schema
+from loaders.load_tax_rates      import load as load_rates
+from loaders.load_ajr            import load as load_ajr
 from loaders.load_certified_2025 import load as load_cert
 from loaders.load_tax_current    import load as load_tax, load_delinquent
+from loaders.compute_metrics     import (
+    analyze_threshold, compute_parcel_metrics, compute_county_benchmarks
+)
 
 
 def reset_parcel_tables(conn):
@@ -37,11 +42,13 @@ def reset_parcel_tables(conn):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--schema-only",  action="store_true")
-    parser.add_argument("--skip-ajr",     action="store_true")
-    parser.add_argument("--skip-cert",    action="store_true")
-    parser.add_argument("--skip-tax",     action="store_true")
-    parser.add_argument("--reset",        action="store_true",
+    parser.add_argument("--schema-only",   action="store_true")
+    parser.add_argument("--skip-ajr",      action="store_true")
+    parser.add_argument("--skip-cert",     action="store_true")
+    parser.add_argument("--skip-tax",      action="store_true")
+    parser.add_argument("--skip-metrics",  action="store_true",
+                        help="Skip Phase 2 compute_metrics step")
+    parser.add_argument("--reset",         action="store_true",
                         help="Truncate parcel tables before loading")
     args = parser.parse_args()
 
@@ -81,12 +88,20 @@ def main():
         print("\n[4/6] AJR skipped.")
 
     if not args.skip_tax:
-        print("\n[5/6] TaxCurOpenData (billing)…")
+        print("\n[5/7] TaxCurOpenData (billing)…")
         load_tax(conn)
-        print("\n[6/6] TaxDelqOpenData (delinquent)…")
+        print("\n[6/7] TaxDelqOpenData (delinquent)…")
         load_delinquent(conn)
     else:
-        print("\n[5-6/6] Tax billing skipped.")
+        print("\n[5-6/7] Tax billing skipped.")
+
+    if not args.skip_metrics:
+        print("\n[7/7] Phase 2: compute_metrics…")
+        analyze_threshold(conn)
+        compute_parcel_metrics(conn)
+        compute_county_benchmarks(conn)
+    else:
+        print("\n[7/7] compute_metrics skipped (--skip-metrics).")
 
     conn.close()
 
@@ -99,7 +114,8 @@ def main():
     print("\nRow counts:")
     conn2 = get_conn()
     with conn2.cursor() as cur:
-        for tbl in ("parcel", "parcel_tax_year", "tax_billing", "county_tax_rate"):
+        for tbl in ("parcel", "parcel_tax_year", "tax_billing", "county_tax_rate",
+                    "parcel_metrics", "county_benchmark"):
             cur.execute(f"SELECT COUNT(*) FROM {tbl}")
             n = cur.fetchone()[0]
             print(f"  {tbl:30s} {n:>10,}")

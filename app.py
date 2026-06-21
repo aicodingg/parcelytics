@@ -306,6 +306,32 @@ def property_detail(geo_id):
     insights    = build_insights(parcel, history, entity_detail, delinquent)
     projections = build_projections(history, rate_history, entity_detail)
 
+    # ── Phase 2: computed insight metrics ──────────────────────────────────────
+    # Populated by compute_metrics.py. Gracefully absent before first run.
+    metrics_by_year  = {}
+    bench_label      = None
+    benchmark_by_year = {}
+    try:
+        for m in query(
+            "SELECT * FROM parcel_metrics WHERE geo_id = %s ORDER BY tax_year", (geo_id,)
+        ):
+            metrics_by_year[m["tax_year"]] = m
+
+        sc1 = ((parcel.get("state_cd1") or "")).strip()[:1]
+        _label_map = {
+            "A": "Residential", "B": "Multi-Family", "C": "Land/Vacant",
+            "D": "Agricultural", "E": "Agricultural", "F": "Commercial",
+        }
+        bench_label = _label_map.get(sc1)
+        if bench_label:
+            for b in query("""
+                SELECT * FROM county_benchmark
+                WHERE property_type_label = %s ORDER BY tax_year
+            """, (bench_label,)):
+                benchmark_by_year[b["tax_year"]] = b
+    except Exception:
+        pass  # Phase 2 tables not yet populated — skip metrics sections
+
     return render_template(
         "property.html",
         parcel=parcel,
@@ -315,6 +341,9 @@ def property_detail(geo_id):
         delinquent=delinquent,
         insights=insights,
         projections=projections,
+        metrics_by_year=metrics_by_year,
+        benchmark_by_year=benchmark_by_year,
+        bench_label=bench_label,
     )
 
 
