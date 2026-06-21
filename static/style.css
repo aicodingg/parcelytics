@@ -1,57 +1,464 @@
-/* Travis County Property Tax Platform — custom styles */
+/* ── Design System ─────────────────────────────────────────────────────────
+   Parcelytics — Travis County, TX
+   Typeface: Inter (sans) + JetBrains Mono (numeric/code)
+   Audience: investors and developers; density + precision over hand-holding
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --font-sans:  'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono:  'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+  /* Surfaces */
+  --bg:              #f4f4f6;
+  --surface:         #ffffff;
+  --surface-2:       #f8f8fb;
+  --border:          #e3e3ea;
+  --border-strong:   #c8c8d4;
+
+  /* Text */
+  --text:            #111116;
+  --text-2:          #4a4a5a;
+  --text-3:          #8a8a9e;
+
+  /* Accent — used sparingly */
+  --accent:          #2563eb;
+  --accent-hover:    #1d4ed8;
+  --accent-light:    #eff4ff;
+  --accent-border:   #bfdbfe;
+
+  /* Semantic: in tax context, ↑ = more tax = risk, ↓ = relief */
+  --up:              #dc2626;
+  --up-bg:           #fef2f2;
+  --down:            #16a34a;
+  --down-bg:         #f0fdf4;
+
+  /* Confidence levels */
+  --verified-text:   #15803d;
+  --verified-bg:     #dcfce7;
+  --verified-border: #86efac;
+
+  --partial-text:    #92400e;
+  --partial-bg:      #fef3c7;
+  --partial-border:  #fcd34d;
+
+  --estimated-text:  #6d28d9;
+  --estimated-bg:    #ede9fe;
+  --estimated-border:#c4b5fd;
+
+  --na-text:         #9a9aae;
+
+  /* Risk callout blocks */
+  --risk-warn-text:   #92400e;
+  --risk-warn-bg:     #fffbeb;
+  --risk-warn-border: #fcd34d;
+  --risk-err-text:    #991b1b;
+  --risk-err-bg:      #fef2f2;
+  --risk-err-border:  #fca5a5;
+  --risk-info-text:   #1e40af;
+  --risk-info-bg:     #eff6ff;
+  --risk-info-border: #93c5fd;
+}
+
+/* ── Reset / Base ───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
 
 body {
-  background-color: #f8f9fa;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Override Bootstrap semantic colors to use our palette */
+.text-danger  { color: var(--up)    !important; }
+.text-success { color: var(--down)  !important; }
+.text-muted   { color: var(--text-3) !important; }
+
+/* ── Typography ─────────────────────────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--text);
+  line-height: 1.25;
+}
+
+/* Tabular numerals everywhere data appears */
+td, th, .tabnum {
+  font-variant-numeric: tabular-nums;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 5px;
+  color: var(--text-2);
+}
+
+/* ── Layout ─────────────────────────────────────────────────────────────── */
+main.container {
+  max-width: 1260px;
+  padding-top: 1.75rem;
+  padding-bottom: 3rem;
+}
+
+/* ── Navbar ─────────────────────────────────────────────────────────────── */
+.navbar {
+  background: #0c0c12 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+  height: 52px;
+  align-items: center;
 }
 
 .navbar-brand {
+  font-size: 14.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+  color: #ffffff !important;
+  gap: 9px;
+}
+
+.navbar-brand img {
+  border-radius: 5px !important;
+}
+
+.navbar .nav-link {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6) !important;
+  padding: 0.35rem 0.7rem !important;
+  border-radius: 6px;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.navbar .nav-link:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────────── */
+.card {
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05) !important;
+  background: var(--surface);
+}
+
+/* Override Bootstrap's bg-dark / bg-primary / bg-secondary / bg-warning on card headers */
+.card-header {
+  background: var(--surface-2) !important;
+  border-bottom: 1px solid var(--border) !important;
+  border-radius: 7px 7px 0 0 !important;
+  padding: 9px 16px !important;
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  color: var(--text-2) !important;
+}
+
+/* Insight report: accent-tinted header */
+.insight-card > .card-header {
+  background: var(--accent-light) !important;
+  border-bottom-color: var(--accent-border) !important;
+  color: var(--accent) !important;
+  border-left: 3px solid var(--accent);
+}
+
+/* Delinquency card header */
+.delinquency-card > .card-header {
+  background: var(--risk-err-bg) !important;
+  border-bottom-color: var(--risk-err-border) !important;
+  color: var(--risk-err-text) !important;
+}
+
+.card-footer {
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 7px 7px !important;
+  padding: 10px 16px;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.55;
+}
+
+/* ── Tables ─────────────────────────────────────────────────────────────── */
+.table {
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 0;
+  --bs-table-hover-bg: var(--surface-2);
+  --bs-table-striped-bg: transparent;
+}
+
+.table thead th {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border-strong) !important;
+  padding: 8px 12px;
+  white-space: nowrap;
+  background: transparent !important;
+}
+
+/* Override Bootstrap .table-light in thead */
+.table-light {
+  --bs-table-bg: transparent !important;
+  --bs-table-color: var(--text-3) !important;
+}
+
+.table td,
+.table th {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  color: var(--text);
+}
+
+.table tbody tr:last-child > td,
+.table tbody tr:last-child > th {
+  border-bottom: none;
+}
+
+.table tfoot td,
+.table tfoot th {
+  border-top: 2px solid var(--border-strong) !important;
+  font-weight: 600;
+  background: var(--surface-2);
+}
+
+/* 2025 current-year row highlight */
+.table .table-active td,
+.table .table-active th {
+  background-color: var(--accent-light) !important;
+}
+
+/* ── Confidence Badges ──────────────────────────────────────────────────── */
+.badge-verified,
+.badge-partial,
+.badge-estimated,
+.badge-na {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+  line-height: 1.4;
+}
+
+.badge-verified {
+  background: var(--verified-bg);
+  color: var(--verified-text);
+  border-color: var(--verified-border);
+}
+
+.badge-partial {
+  background: var(--partial-bg);
+  color: var(--partial-text);
+  border-color: var(--partial-border);
+}
+
+.badge-estimated {
+  background: var(--estimated-bg);
+  color: var(--estimated-text);
+  border-color: var(--estimated-border);
+}
+
+.badge-na {
+  background: transparent;
+  color: var(--na-text);
+  border-color: transparent;
+  font-style: italic;
+  font-weight: 400;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Estimates-only label for projection table */
+.estimates-badge {
+  display: inline-block;
+  background: var(--partial-bg);
+  color: var(--partial-text);
+  border: 1px solid var(--partial-border);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+}
+
+/* ── Entity code pills ──────────────────────────────────────────────────── */
+.entity-badge {
+  display: inline-block;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  border-radius: 3px;
   letter-spacing: 0.02em;
 }
 
-main.container {
-  max-width: 1200px;
+/* Delinquent property badge in header */
+.badge-delinquent {
+  display: inline-block;
+  background: var(--up);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 9px;
+  border-radius: 4px;
+  animation: pulse 2s ease-in-out infinite;
 }
 
-.card {
-  border-radius: 0.5rem;
-}
-
-.card-header {
-  border-radius: 0.5rem 0.5rem 0 0 !important;
-  letter-spacing: 0.04em;
-  font-size: 0.72rem;
-}
-
-/* Tighter table on small screens */
-@media (max-width: 576px) {
-  .table-sm th, .table-sm td {
-    padding: 0.25rem 0.4rem;
-    font-size: 0.8rem;
-  }
-}
-
-/* Value history table — highlight 2025 row */
-.table .table-active td,
-.table .table-active th {
-  background-color: rgba(13, 110, 253, 0.06);
-}
-
-/* Delinquent badge pulse */
-.badge.bg-danger {
-  animation: pulse 2s infinite;
-}
 @keyframes pulse {
   0%   { opacity: 1; }
-  50%  { opacity: 0.6; }
+  50%  { opacity: 0.72; }
   100% { opacity: 1; }
 }
 
-/* Entity checkbox list — compact */
-.form-check {
-  margin-bottom: 0.1rem;
+/* ── Risk Callout Blocks ────────────────────────────────────────────────── */
+.risk-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  margin-bottom: 10px;
 }
 
-/* Chart canvas */
-canvas {
-  max-height: 440px;
+.risk-block:last-child { margin-bottom: 0; }
+
+.risk-block.warn  { background: var(--risk-warn-bg);  border-color: var(--risk-warn-border); }
+.risk-block.error { background: var(--risk-err-bg);   border-color: var(--risk-err-border); }
+.risk-block.info  { background: var(--risk-info-bg);  border-color: var(--risk-info-border); }
+.risk-block.ok    { background: var(--down-bg);        border-color: #86efac; }
+
+.risk-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.warn  .risk-icon { background: #fbbf24; color: #78350f; }
+.error .risk-icon { background: #ef4444; color: #fff; }
+.info  .risk-icon { background: #93c5fd; color: #1e3a8a; }
+.ok    .risk-icon { background: #86efac; color: #14532d; }
+
+.risk-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+  line-height: 1.35;
+}
+
+.risk-desc {
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+  margin-bottom: 0;
+}
+
+/* ── Not-Available cell ─────────────────────────────────────────────────── */
+.na-cell {
+  color: var(--na-text);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ── Property header ────────────────────────────────────────────────────── */
+.property-header {
+  margin-bottom: 1.5rem;
+}
+
+.property-header h2 {
+  font-size: 1.6rem;
+  margin-bottom: 5px;
+}
+
+.property-meta {
+  font-size: 13px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.property-meta .sep { color: var(--border-strong); }
+
+/* ── Back link ──────────────────────────────────────────────────────────── */
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-3);
+  text-decoration: none;
+  margin-bottom: 1rem;
+  transition: color 0.12s ease;
+}
+.back-link:hover { color: var(--text-2); }
+
+/* ── Chart canvas ───────────────────────────────────────────────────────── */
+canvas { max-height: 440px; }
+
+/* ── Rate trends: entity checkbox list ─────────────────────────────────── */
+.form-check { margin-bottom: 2px; }
+
+.form-check-label {
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.form-check-input:checked {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+footer {
+  font-size: 12px;
+  color: var(--text-3) !important;
+  border-top: 1px solid var(--border) !important;
+  padding: 1.25rem 0;
+  margin-top: 2rem;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 576px) {
+  body { font-size: 13px; }
+  .table td, .table th { padding: 6px 8px; }
+  .property-header h2 { font-size: 1.3rem; }
+  main.container { padding-top: 1.25rem; }
 }

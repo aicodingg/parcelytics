@@ -4,7 +4,7 @@
 {% block content %}
 
 {# ── Back link ───────────────────────────────────────────────────────── #}
-<a href="/" class="text-muted small">&larr; New search</a>
+<a href="/" class="back-link">&larr; New search</a>
 
 {# ── Property header ─────────────────────────────────────────────────── #}
 {# Property type label derived from state_cd1 (A/B/C/D/E/F prefix) #}
@@ -19,18 +19,20 @@
 {% else %}{% set _prop_type = "" %}
 {% endif %}
 
-<div class="mt-3 mb-4">
-  <h2 class="fw-bold mb-0">
+<div class="property-header mt-2">
+  <h2 class="fw-bold mb-1">
     {{ parcel.situs_address or "Address unknown" }}
   </h2>
-  <span class="text-muted">Travis County, TX</span>
-  {% if _prop_type %}
-    <span class="text-muted ms-2">&middot;</span>
-    <span class="text-muted ms-2 small">{{ _prop_type }}</span>
-  {% endif %}
-  {% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
-    <span class="badge bg-danger ms-2">Delinquent</span>
-  {% endif %}
+  <div class="property-meta">
+    <span>Travis County, TX</span>
+    {% if _prop_type %}
+      <span class="sep">&middot;</span>
+      <span>{{ _prop_type }}</span>
+    {% endif %}
+    {% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
+      <span class="badge-delinquent">Delinquent</span>
+    {% endif %}
+  </div>
 </div>
 
 <div class="row g-4">
@@ -40,7 +42,7 @@
 
   {# Property info card #}
   <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+    <div class="card-header">
       Property Info
     </div>
     <div class="card-body">
@@ -68,7 +70,7 @@
   {# 2025 snapshot #}
   {% if current %}
   <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+    <div class="card-header">
       2025 Snapshot
     </div>
     <div class="card-body">
@@ -111,8 +113,8 @@
 
   {# Delinquency detail #}
   {% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
-  <div class="card border-danger border-0 shadow-sm mb-4">
-    <div class="card-header bg-danger text-white fw-semibold small text-uppercase">
+  <div class="card mb-4 delinquency-card">
+    <div class="card-header">
       Delinquency
     </div>
     <div class="card-body">
@@ -141,8 +143,8 @@
 
   {# ── Investor Insight Report ────────────────────────────────────── #}
   {% if insights %}
-  <div class="card border-0 shadow-sm mb-4" style="border-left: 4px solid #0d6efd !important;">
-    <div class="card-header bg-primary text-white fw-semibold small text-uppercase">
+  <div class="card mb-4 insight-card">
+    <div class="card-header">
       Investor Insight Report
     </div>
     <div class="card-body">
@@ -210,7 +212,7 @@
           (${{ "{:,.0f}".format(insights.hs_history_loss) }},
           ~{{ insights.hs_history_pct }}% of market value at the time).
           The cap has since reset or expired.
-          <span class="badge bg-success ms-1" style="font-size:.7rem;">Verified clear — 2025 Certified</span>
+          <span class="badge-verified ms-1">Verified clear — 2025 Certified</span>
         {% endif %}
         <small class="d-block mt-1" style="font-size:.75rem;">
           Historical data from AJR 2021–2024 (Partial confidence).
@@ -249,15 +251,15 @@
       {# Delinquency #}
       {% if insights.delinquent_amount is defined %}
       <p class="mb-0">
-        <strong class="text-danger">🚨 Delinquent Taxes:</strong>
+        <strong class="text-danger">Delinquent Taxes:</strong>
         ${{ "{:,.2f}".format(insights.delinquent_amount) }} in unpaid taxes
         {% if insights.delinquent_since %}since {{ insights.delinquent_since }}{% endif %}.
         These become a lien on the property and transfer to the buyer at closing
         unless negotiated otherwise.
       </p>
       {% else %}
-      <p class="mb-0 text-muted small">
-        ✓ No delinquent taxes on record.
+      <p class="mb-0 small" style="color: var(--down);">
+        No delinquent taxes on record.
       </p>
       {% endif %}
 
@@ -267,10 +269,10 @@
 
   {# ── Tax Projection Table ────────────────────────────────────────── #}
   {% if projections %}
-  <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header bg-secondary text-white fw-semibold small text-uppercase d-flex justify-content-between align-items-center">
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
       <span>5-Year Tax Projection</span>
-      <span class="badge bg-warning text-dark">ESTIMATES ONLY</span>
+      <span class="estimates-badge">Estimates Only</span>
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
@@ -314,7 +316,7 @@
 
   {# 5-year history table #}
   <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+    <div class="card-header">
       5-Year History (2021–2025)
     </div>
     <div class="card-body p-0">
@@ -337,11 +339,11 @@
               <td class="text-end">${{ "{:,.0f}".format(r.market_value) if r.market_value else "—" }}</td>
               <td class="text-end">${{ "{:,.0f}".format(r.assessed_value) if r.assessed_value else "—" }}</td>
               <td class="text-end">${{ "{:,.0f}".format(r.taxable_value) if r.taxable_value else "—" }}</td>
-              <td class="text-end">{% if r.total_tax %}${{ "{:,.2f}".format(r.total_tax) }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+              <td class="text-end">{% if r.total_tax %}${{ "{:,.2f}".format(r.total_tax) }}{% else %}<span class="na-cell">Not available yet</span>{% endif %}</td>
               <td class="small text-muted">{{ r.data_source or "—" }}</td>
             </tr>
             {% else %}
-            <tr><td colspan="6" class="text-muted text-center py-3">No history found</td></tr>
+            <tr><td colspan="6" class="na-cell text-center py-3">No history found for this parcel.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -359,9 +361,8 @@
   {# Only rendered when parcel_metrics rows exist (compute_metrics.py has been run) #}
   {% if metrics_by_year %}
   <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header bg-dark text-white fw-semibold small text-uppercase d-flex justify-content-between align-items-center">
+    <div class="card-header d-flex justify-content-between align-items-center">
       <span>Year-over-Year Growth &amp; Assessment Metrics</span>
-      <span class="text-white-50 fw-normal" style="font-size:.7rem;">Phase 2</span>
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
@@ -423,7 +424,7 @@
                 {% if m and m.has_tax_data and m.effective_tax_rate is not none %}
                   {{ "{:.4f}%".format(m.effective_tax_rate * 100) }}
                 {% else %}
-                  <span class="text-muted small fst-italic">Not Available</span>
+                  <span class="na-cell">Not available yet</span>
                 {% endif %}
               </td>
 
@@ -431,12 +432,12 @@
               <td class="text-center">
                 {% if m %}
                   {% if m.coverage_level == 'full' %}
-                    <span class="badge bg-success">Verified</span>
+                    <span class="badge-verified">Verified</span>
                   {% else %}
-                    <span class="badge bg-warning text-dark">Partial</span>
+                    <span class="badge-partial">Partial</span>
                   {% endif %}
                 {% else %}
-                  <span class="text-muted small">—</span>
+                  <span class="na-cell">—</span>
                 {% endif %}
               </td>
             </tr>
@@ -459,10 +460,10 @@
         </table>
       </div>
     </div>
-    <div class="card-footer text-muted small">
-      <strong>Verified</strong> = 2025 data with real billing.
-      <strong>Partial</strong> = 2021–2024 AJR values only — tax billing fields are Not Available for these years.
-      YoY values are year-over-year percent change. Assessment ratio = assessed ÷ market.
+    <div class="card-footer">
+      <span class="badge-verified">Verified</span> = 2025 data with real billing.
+      <span class="badge-partial ms-1">Partial</span> = 2021–2024 AJR values only — billing fields not available yet for these years.
+      YoY = year-over-year percent change. Assessment ratio = assessed ÷ market.
     </div>
   </div>
   {% endif %}
@@ -470,7 +471,7 @@
   {# Value trend chart #}
   {% if history %}
   <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+    <div class="card-header">
       Value Trend
     </div>
     <div class="card-body">
@@ -482,9 +483,8 @@
   {# ── Phase 2: Risk Indicators ────────────────────────────────────── #}
   {% if metrics_by_year %}
   <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header bg-dark text-white fw-semibold small text-uppercase d-flex justify-content-between align-items-center">
+    <div class="card-header d-flex justify-content-between align-items-center">
       <span>Risk Indicators</span>
-      <span class="text-white-50 fw-normal" style="font-size:.7rem;">Phase 2</span>
     </div>
     <div class="card-body">
       {% set has_risk = false %}
@@ -498,15 +498,15 @@
       {% endfor %}
       {% if jump_year.yr is not none %}
         {% set has_risk = true %}
-        <div class="d-flex align-items-start mb-3">
-          <span class="badge bg-warning text-dark me-2 mt-1">⚠</span>
+        <div class="risk-block warn">
+          <div class="risk-icon">!</div>
           <div>
-            <strong>Large Value Jump</strong>
-            <div class="text-muted small">
+            <div class="risk-title">Large Value Jump</div>
+            <p class="risk-desc">
               Market value changed by {{ "{:.0f}%".format(jump_year.pct) }} in {{ jump_year.yr }},
-              which is flagged as unusually large. Verify against comparable sales before
-              using this value in underwriting.
-            </div>
+              flagged as unusually large. Verify against comparable sales before using
+              this value in underwriting.
+            </p>
           </div>
         </div>
       {% endif %}
@@ -514,20 +514,22 @@
       {# Homestead cap expiry — PRIMARY signal (2025 Certified, Verified confidence) #}
       {% if m25 and m25.risk_homestead_cap_expiry %}
         {% set has_risk = true %}
-        <div class="d-flex align-items-start mb-3">
-          <span class="badge bg-warning text-dark me-2 mt-1">⚠</span>
+        <div class="risk-block warn">
+          <div class="risk-icon">!</div>
           <div>
-            <strong>Homestead Cap Expiry Risk</strong>
-            <span class="badge bg-success ms-1" style="font-size:.7rem;">Verified</span>
-            <div class="text-muted small mt-1">
-              This residential parcel carries an active homestead cap per 2025 Certified
-              data — assessed value is below market value. A new buyer loses this benefit
-              at purchase and the assessed value resets to full market value, increasing
-              the annual tax bill. Factor this into acquisition underwriting.
+            <div class="risk-title">
+              Homestead Cap Expiry Risk
+              <span class="badge-verified ms-1">Verified</span>
+            </div>
+            <p class="risk-desc">
+              This parcel carries an active homestead cap per 2025 Certified data — assessed
+              value is below market value. A buyer loses this benefit at purchase and the
+              assessed value resets to full market, increasing the annual tax bill. Factor
+              this into acquisition underwriting.
               {% if insights and insights.hs_history_year is defined %}
                 Cap activity consistent with AJR records back to {{ insights.hs_history_year }}.
               {% endif %}
-            </div>
+            </p>
           </div>
         </div>
       {% endif %}
@@ -535,14 +537,14 @@
       {# Delinquency — sourced from tax_delinquent via parcel_metrics #}
       {% if m25 and m25.risk_delinquent %}
         {% set has_risk = true %}
-        <div class="d-flex align-items-start mb-3">
-          <span class="badge bg-danger me-2 mt-1">!</span>
+        <div class="risk-block error">
+          <div class="risk-icon">!</div>
           <div>
-            <strong class="text-danger">Delinquent Taxes</strong>
-            <div class="text-muted small">
+            <div class="risk-title" style="color: var(--up);">Delinquent Taxes</div>
+            <p class="risk-desc">
               This parcel has unpaid taxes on record. Delinquent taxes are a lien on the
               property and transfer to the buyer at closing unless negotiated otherwise.
-            </div>
+            </p>
           </div>
         </div>
       {% endif %}
@@ -554,21 +556,27 @@
       {% endfor %}
       {% if any_incomplete.val %}
         {% set has_risk = true %}
-        <div class="d-flex align-items-start mb-3">
-          <span class="badge bg-secondary me-2 mt-1">i</span>
+        <div class="risk-block info">
+          <div class="risk-icon">i</div>
           <div>
-            <strong>Incomplete Market Value Data</strong>
-            <div class="text-muted small">
-              One or more years have a market value of zero or null — this is a known
-              anomaly in AJR source files for some parcels. Growth metrics for those
-              years may be unreliable.
-            </div>
+            <div class="risk-title">Incomplete Market Value Data</div>
+            <p class="risk-desc">
+              One or more years have a market value of zero or null — a known anomaly
+              in AJR source files for some parcels. Growth metrics for those years
+              may be unreliable.
+            </p>
           </div>
         </div>
       {% endif %}
 
       {% if not has_risk %}
-        <p class="text-muted mb-0 small">✓ No risk indicators flagged for this parcel.</p>
+        <div class="risk-block ok">
+          <div class="risk-icon">✓</div>
+          <div>
+            <div class="risk-title" style="color: var(--down);">No risk indicators flagged</div>
+            <p class="risk-desc">No large value jumps, delinquencies, or data anomalies found for this parcel.</p>
+          </div>
+        </div>
       {% endif %}
     </div>
   </div>
@@ -577,7 +585,7 @@
   {# Entity-level tax breakdown (2025) #}
   {% if entity_detail %}
   <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header bg-dark text-white fw-semibold small text-uppercase">
+    <div class="card-header">
       2025 Tax by Entity
     </div>
     <div class="card-body p-0">
@@ -598,7 +606,7 @@
             {% set delta = (e.rate - e.rate_prev) if (e.rate and e.rate_prev) else none %}
             <tr>
               <td>
-                <span class="badge bg-secondary me-1">{{ e.entity_code }}</span>
+                <span class="entity-badge me-1">{{ e.entity_code }}</span>
                 {{ e.entity_name or "" }}
               </td>
               <td class="text-end text-muted small">
@@ -647,9 +655,8 @@
   {# ── Phase 2: County Benchmark Comparison ───────────────────────── #}
   {% if benchmark_by_year and bench_label %}
   <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header bg-dark text-white fw-semibold small text-uppercase d-flex justify-content-between align-items-center">
+    <div class="card-header d-flex justify-content-between align-items-center">
       <span>County Benchmark — {{ bench_label }}</span>
-      <span class="text-white-50 fw-normal" style="font-size:.7rem;">Phase 2</span>
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
