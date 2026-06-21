@@ -54,11 +54,12 @@ def build_insights(parcel, history, entity_detail, delinquent):
             None
         )
     if hs_row and latest["market_value"]:
-        out["hs_cap_loss"]   = hs_row["hs_cap_loss"]
-        out["hs_cap_year"]   = hs_row["tax_year"]
-        out["hs_cap_pct"]    = round(hs_row["hs_cap_loss"] / latest["market_value"] * 100, 1)
-        # This loss disappears for a new buyer — quantify impact
-        out["hs_buyer_risk"] = True
+        # Renamed to hs_history_* — this is AJR-based historical context only.
+        # The primary "is the cap active right now?" signal is parcel_metrics.risk_homestead_cap_expiry
+        # (2025 Certified data). These keys feed the calm historical note in the Insight Report.
+        out["hs_history_loss"] = hs_row["hs_cap_loss"]
+        out["hs_history_year"] = hs_row["tax_year"]
+        out["hs_history_pct"]  = round(hs_row["hs_cap_loss"] / latest["market_value"] * 100, 1)
 
     # Tax rates
     rate_2025 = sum(e["rate"] for e in entity_detail if e["rate"])

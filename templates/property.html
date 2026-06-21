@@ -135,6 +135,8 @@
 </div>{# /col-lg-4 #}
 
 {# ── Right column ────────────────────────────────────────────────────── #}
+{# m25 set here so it's available in every card in this column #}
+{% set m25 = metrics_by_year.get(2025) %}
 <div class="col-lg-8">
 
   {# ── Investor Insight Report ────────────────────────────────────── #}
@@ -192,21 +194,33 @@
       </p>
       {% endif %}
 
-      {# Homestead cap — key for investors #}
-      {% if insights.hs_cap_loss is defined %}
-      <p class="mb-2">
-        <strong>⚠ Homestead Cap Warning:</strong>
-        As of {{ insights.hs_cap_year }}, this property carried a homestead cap loss of
-        <strong>${{ "{:,.0f}".format(insights.hs_cap_loss) }}</strong>
-        (~{{ insights.hs_cap_pct }}% of current market value).
-        A new buyer <strong>loses this benefit</strong> at purchase — assessed value
-        will reset to full market value, increasing the annual tax bill.
-        This should be factored into acquisition underwriting.
+      {# Homestead cap — historical AJR context, NOT a primary warning.
+         Primary risk signal is Phase 2 risk_homestead_cap_expiry (Risk Indicators card). #}
+      {% if insights.hs_history_year is defined %}
+      <p class="mb-2 {% if not (m25 and m25.risk_homestead_cap_expiry) %}text-muted{% endif %}">
+        <strong>Homestead Cap History:</strong>
+        {% if m25 and m25.risk_homestead_cap_expiry %}
+          {# Primary Phase 2 flag is set — add AJR history as reinforcing context only #}
+          Cap activity also recorded in AJR data as recently as {{ insights.hs_history_year }}
+          (${{ "{:,.0f}".format(insights.hs_history_loss) }},
+          ~{{ insights.hs_history_pct }}% of market), consistent with the active cap shown above.
+        {% else %}
+          {# Primary Phase 2 flag is clear — AJR evidence is historical context only #}
+          This property had an active homestead cap as recently as {{ insights.hs_history_year }}
+          (${{ "{:,.0f}".format(insights.hs_history_loss) }},
+          ~{{ insights.hs_history_pct }}% of market value at the time).
+          The cap has since reset or expired.
+          <span class="badge bg-success ms-1" style="font-size:.7rem;">Verified clear — 2025 Certified</span>
+        {% endif %}
+        <small class="d-block mt-1" style="font-size:.75rem;">
+          Historical data from AJR 2021–2024 (Partial confidence).
+          Current status confirmed by 2025 TCAD Certified Export.
+        </small>
       </p>
       {% endif %}
 
-      {# Assessed vs market gap without HS cap #}
-      {% if not insights.hs_cap_loss is defined and insights.latest_assessed and insights.latest_market %}
+      {# Assessment gap — only for parcels with no HS cap history at all #}
+      {% if not (insights.hs_history_year is defined) and insights.latest_assessed and insights.latest_market %}
         {% set gap = insights.latest_market - insights.latest_assessed %}
         {% if gap > 1000 %}
         <p class="mb-2">
@@ -429,7 +443,6 @@
             {% endfor %}
 
             {# Cumulative row — 2025 row if it exists #}
-            {% set m25 = metrics_by_year.get(2025) %}
             {% if m25 and m25.cumulative_value_growth_pct is not none %}
             <tr class="table-light small text-muted">
               <td colspan="6" class="ps-2">
@@ -467,7 +480,6 @@
   {% endif %}
 
   {# ── Phase 2: Risk Indicators ────────────────────────────────────── #}
-  {% set m25 = metrics_by_year.get(2025) %}
   {% if metrics_by_year %}
   <div class="card border-0 shadow-sm mb-4">
     <div class="card-header bg-dark text-white fw-semibold small text-uppercase d-flex justify-content-between align-items-center">
@@ -499,18 +511,22 @@
         </div>
       {% endif %}
 
-      {# Homestead cap expiry #}
+      {# Homestead cap expiry — PRIMARY signal (2025 Certified, Verified confidence) #}
       {% if m25 and m25.risk_homestead_cap_expiry %}
         {% set has_risk = true %}
         <div class="d-flex align-items-start mb-3">
           <span class="badge bg-warning text-dark me-2 mt-1">⚠</span>
           <div>
             <strong>Homestead Cap Expiry Risk</strong>
-            <div class="text-muted small">
-              This residential parcel carries an active homestead cap — assessed value is
-              below market value. A new buyer loses this benefit at purchase and the
-              assessed value resets to full market value, increasing the annual tax bill.
-              Factor this into acquisition underwriting.
+            <span class="badge bg-success ms-1" style="font-size:.7rem;">Verified</span>
+            <div class="text-muted small mt-1">
+              This residential parcel carries an active homestead cap per 2025 Certified
+              data — assessed value is below market value. A new buyer loses this benefit
+              at purchase and the assessed value resets to full market value, increasing
+              the annual tax bill. Factor this into acquisition underwriting.
+              {% if insights and insights.hs_history_year is defined %}
+                Cap activity consistent with AJR records back to {{ insights.hs_history_year }}.
+              {% endif %}
             </div>
           </div>
         </div>
