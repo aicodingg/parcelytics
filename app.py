@@ -97,7 +97,7 @@ def build_insights(parcel, history, entity_detail, delinquent):
     return out
 
 
-def build_projections(history, rate_history, entity_detail, years_ahead=5):
+def build_projections(history, rate_history, entity_detail, years_ahead=5, state_cd1=None):
     """
     Project market value, assessed value, and estimated taxes for the next N years.
 
@@ -110,11 +110,22 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5):
     If 2026 preliminary market value exists and is non-anomalous (assessed ≤ market),
     extend the CAGR window to 2021–2026 for a 6-year baseline. Projections still
     start from the 2025 certified values; the 2026 data only calibrates the CAGR.
-    Label indicates which baseline window was used.
+
+    Agricultural guard (D/E parcels):
+    AJR 2021 stores productivity/use values in the market_value field for agricultural
+    property classes. Using 2021 as the CAGR starting point for D/E parcels produces
+    meaningless projections. 2021 is excluded and 2022 used as the earliest reliable year.
     """
     hist = sorted([r for r in history if r["market_value"]], key=lambda r: r["tax_year"])
     if len(hist) < 2:
         return [], None
+
+    # Agricultural guard: skip 2021 baseline for D/E property classes
+    _is_ag = (state_cd1 or "").strip()[:1].upper() in ("D", "E")
+    if _is_ag:
+        hist = [r for r in hist if r["tax_year"] != 2021]
+        if len(hist) < 2:
+            return [], None
 
     earliest = hist[0]
 
@@ -129,10 +140,16 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5):
     cagr_endpoint = r2026 if r2026 else next(
         (r for r in hist if r["tax_year"] == 2025), hist[-1]
     )
-    if r2026:
-        baseline_label = "Based on 2021–2026 preliminary trend"
+    if _is_ag:
+        baseline_label = (
+            "Based on 2022–2026 preliminary trend" if r2026
+            else "Based on 2022–2025 certified trend"
+        )
     else:
-        baseline_label = "Based on 2021–2025 certified trend"
+        baseline_label = (
+            "Based on 2021–2026 preliminary trend" if r2026
+            else "Based on 2021–2025 certified trend"
+        )
 
     span = cagr_endpoint["tax_year"] - earliest["tax_year"]
     if span <= 0 or not earliest["market_value"]:
@@ -430,7 +447,10 @@ def property_detail(geo_id):
             chart_entity_data[code] = pts
 
     insights    = build_insights(parcel, history, entity_detail, delinquent)
-    projections, proj_baseline = build_projections(history, rate_history, entity_detail)
+    projections, proj_baseline = build_projections(
+        history, rate_history, entity_detail,
+        state_cd1=parcel.get("state_cd1")
+    )
 
     # ── Phase 2: computed insight metrics ──────────────────────────────────────
     # Populated by compute_metrics.py. Gracefully absent before first run.
