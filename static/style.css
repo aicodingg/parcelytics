@@ -15,16 +15,16 @@
   --border:          #e3e3ea;
   --border-strong:   #c8c8d4;
 
-  /* Text */
+  /* Text — brand slate grays */
   --text:            #111116;
-  --text-2:          #4a4a5a;
-  --text-3:          #8a8a9e;
+  --text-2:          #505A5B;   /* dark slate gray */
+  --text-3:          #8F91A2;   /* muted slate gray */
 
-  /* Accent — used sparingly */
-  --accent:          #2563eb;
-  --accent-hover:    #1d4ed8;
-  --accent-light:    #eff4ff;
-  --accent-border:   #bfdbfe;
+  /* Accent — Parcelytics brand palette */
+  --accent:          #94B0DA;   /* soft mid-tone blue */
+  --accent-hover:    #7a9cc8;   /* slightly deeper for hover */
+  --accent-light:    #DCEDFF;   /* very light pale blue — tints/highlights */
+  --accent-border:   #94B0DA;
 
   /* Semantic: in tax context, ↑ = more tax = risk, ↓ = relief */
   --up:              #dc2626;
@@ -110,7 +110,7 @@ main.container {
 
 /* ── Navbar ─────────────────────────────────────────────────────────────── */
 .navbar {
-  background: #0c0c12 !important;
+  background: #1e2628 !important;   /* deep slate, derived from #505A5B darkened */
   border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
   padding-top: 0;
   padding-bottom: 0;
@@ -171,7 +171,7 @@ main.container {
 .insight-card > .card-header {
   background: var(--accent-light) !important;
   border-bottom-color: var(--accent-border) !important;
-  color: var(--accent) !important;
+  color: var(--text-2) !important;   /* dark slate — contrast-safe on DCEDFF */
   border-left: 3px solid var(--accent);
 }
 
@@ -388,11 +388,98 @@ main.container {
   margin-bottom: 0;
 }
 
+/* ── Projection table — visually distinct from all real-data tables ─────── */
+/*
+ * Goal: someone skimming quickly should never confuse a projected number
+ * for a recorded one. Three signals stack:
+ *   1. Dashed card border (visible while scrolling, before reading table)
+ *   2. Muted italic text on every data cell (visible when reading the table)
+ *   3. "Estimates Only" badge in the card header (explicit label)
+ */
+.projection-card {
+  border-style: dashed !important;
+  border-color: var(--border-strong) !important;
+  background: var(--surface-2) !important;
+}
+
+.projection-card > .card-header {
+  border-bottom-style: dashed !important;
+  background: transparent !important;
+}
+
+.projection-row td {
+  color: var(--text-2) !important;
+  font-style: italic;
+}
+
+/* Year column stays bold and full-weight to anchor each row, just muted */
+.projection-row .proj-year {
+  color: var(--text) !important;
+  font-style: normal;
+  font-weight: 600;
+}
+
 /* ── Not-Available cell ─────────────────────────────────────────────────── */
 .na-cell {
   color: var(--na-text);
   font-size: 12px;
   font-style: italic;
+}
+
+/* ── Property Info / Snapshot label-value tables ───────────────────────── */
+/*
+ * Used for the left-column card tables (Property Info, 2025 Snapshot).
+ * Design intent: label in small muted text, value in normal weight to the
+ * right. No full-width horizontal borders — a hairline between rows only,
+ * keeping the table lightweight and scan-friendly.
+ */
+.info-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.info-table th {
+  width: 48%;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-3);
+  padding: 6px 8px 6px 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.info-table td {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+  padding: 6px 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Remove top border from first row — cleaner opening */
+.info-table tr:first-child th,
+.info-table tr:first-child td {
+  border-top: none;
+}
+
+/* Divider rows (the <hr> separator in the snapshot card) */
+.info-table .divider-row td,
+.info-table .divider-row th {
+  padding: 0;
+  border-top: 2px solid var(--border-strong);
+}
+
+/* Primary stats — Market Value, Total Tax: larger and bolder */
+.primary-value {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: var(--text) !important;
+  letter-spacing: -0.01em;
 }
 
 /* ── Property header ────────────────────────────────────────────────────── */
@@ -428,6 +515,108 @@ main.container {
   transition: color 0.12s ease;
 }
 .back-link:hover { color: var(--text-2); }
+
+/* ── Search page ────────────────────────────────────────────────────────── */
+.search-input-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.search-input {
+  flex: 1;
+  height: 50px;
+  font-size: 15px;
+  font-family: var(--font-sans);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0 16px;
+  color: var(--text);
+  background: var(--surface);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  -webkit-appearance: none;
+}
+
+.search-input::placeholder { color: var(--text-3); }
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(148, 176, 218, 0.22);
+}
+
+.search-input.is-error {
+  border-color: var(--up);
+}
+
+.search-btn {
+  height: 50px;
+  padding: 0 24px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  background: var(--text);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.search-btn:hover  { background: #2a2a32; }
+.search-btn:active { background: var(--text-2); }
+
+/* Error block below search input */
+.search-error-block {
+  background: var(--risk-err-bg);
+  border: 1px solid var(--risk-err-border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  color: var(--risk-err-text);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+/* Example parcel section */
+.search-examples {
+  margin-top: 36px;
+  text-align: center;
+}
+
+.examples-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 10px;
+}
+
+.examples-list { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
+
+.example-link {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  color: var(--text-2);
+  text-decoration: none;
+  background: var(--surface);
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.example-link:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-light);
+}
 
 /* ── Chart canvas ───────────────────────────────────────────────────────── */
 canvas { max-height: 440px; }
