@@ -249,6 +249,7 @@ main.container {
 .badge-verified,
 .badge-partial,
 .badge-estimated,
+.badge-preliminary,
 .badge-na {
   display: inline-flex;
   align-items: center;
@@ -279,6 +280,12 @@ main.container {
   border-color: var(--estimated-border);
 }
 
+.badge-preliminary {
+  background: #DBEAFE;
+  color: #1D4ED8;
+  border-color: #93C5FD;
+}
+
 .badge-na {
   background: transparent;
   color: var(--na-text);
@@ -287,6 +294,34 @@ main.container {
   font-weight: 400;
   padding-left: 0;
   padding-right: 0;
+}
+
+/* Inline data-anomaly indicator — amber "!" next to a value cell */
+.badge-data-anomaly {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  background: var(--partial-bg);
+  color: var(--partial-text);
+  border: 1px solid var(--partial-border);
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: help;
+  margin-left: 4px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* 2026 preliminary callout card */
+.preliminary-card > .card-header {
+  background: #DBEAFE !important;
+  border-bottom-color: #93C5FD !important;
+  color: #1D4ED8 !important;
+  border-left: 3px solid #2563EB;
 }
 
 /* Estimates-only label for projection table */

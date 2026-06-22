@@ -101,24 +101,45 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5):
     """
     Project market value, assessed value, and estimated taxes for the next N years.
 
-    Value trend  : CAGR from earliest→2025 market values.
+    Value trend  : CAGR from earliest→current market values.
     Rate trend   : avg annual change in combined rate over available rate history.
     Assessed     : if homestead cap exists, cap at 10%/yr; else tracks market.
     Est. tax     : assessed * projected_rate / 100.
+
+    Task 10 — CAGR baseline extension:
+    If 2026 preliminary market value exists and is non-anomalous (assessed ≤ market),
+    extend the CAGR window to 2021–2026 for a 6-year baseline. Projections still
+    start from the 2025 certified values; the 2026 data only calibrates the CAGR.
+    Label indicates which baseline window was used.
     """
     hist = sorted([r for r in history if r["market_value"]], key=lambda r: r["tax_year"])
     if len(hist) < 2:
-        return []
+        return [], None
 
     earliest = hist[0]
-    current  = next((r for r in hist if r["tax_year"] == 2025), hist[-1])
-    span     = current["tax_year"] - earliest["tax_year"]
 
+    # Prefer 2026 preliminary for CAGR calibration if non-anomalous
+    r2026 = next(
+        (r for r in hist if r["tax_year"] == 2026
+         and r.get("data_source") == "preliminary"
+         and r.get("market_value") and r.get("assessed_value")
+         and r["assessed_value"] <= r["market_value"]),
+        None
+    )
+    cagr_endpoint = r2026 if r2026 else next(
+        (r for r in hist if r["tax_year"] == 2025), hist[-1]
+    )
+    if r2026:
+        baseline_label = "Based on 2021–2026 preliminary trend"
+    else:
+        baseline_label = "Based on 2021–2025 certified trend"
+
+    span = cagr_endpoint["tax_year"] - earliest["tax_year"]
     if span <= 0 or not earliest["market_value"]:
-        return []
+        return [], None
 
-    # Value CAGR
-    value_cagr = (current["market_value"] / earliest["market_value"]) ** (1 / span) - 1
+    # CAGR uses earliest → cagr_endpoint
+    value_cagr = (cagr_endpoint["market_value"] / earliest["market_value"]) ** (1 / span) - 1
 
     # Rate trend from rate_history
     rh = sorted(rate_history, key=lambda r: r["tax_year"])
@@ -137,12 +158,16 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5):
         None
     )
     has_hs_cap = hs_row is not None
-    base_assessed = float(current["assessed_value"] or current["market_value"] or 0)
-    base_market   = float(current["market_value"])
+
+    # Always project from 2025 certified base values
+    base_row      = next((r for r in hist if r["tax_year"] == 2025), hist[-1])
+    base_assessed = float(base_row["assessed_value"] or base_row["market_value"] or 0)
+    base_market   = float(base_row["market_value"])
+    base_year     = base_row["tax_year"]
 
     rows = []
     for i in range(1, years_ahead + 1):
-        proj_year   = 2025 + i
+        proj_year   = base_year + i
         proj_market = round(base_market * (1 + value_cagr) ** i)
         proj_rate   = max(0, current_rate + avg_rate_change * i)
 
@@ -163,7 +188,68 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5):
             "value_change": round((proj_market - base_market) / base_market * 100, 1),
         })
 
-    return rows
+    return rows, baseline_label
+
+# ── Texas Comptroller state property use code descriptions ────────────────────
+# Source: Texas Property Tax Code, Comptroller Rule 9.4001
+STATE_CD_DESCRIPTIONS = {
+    # Residential
+    "A":  "Single-Family Residential",
+    "A1": "Single-Family Residence",
+    "A2": "Single-Family (Manufactured Home)",
+    "A3": "Single-Family Residence Details",
+    "A4": "Condominium",
+    "A5": "Condominium Details",
+    "A9": "HS Commercial (Highest & Best Use)",
+    # Multi-family
+    "B":  "Multi-Family Residential",
+    "B1": "Multifamily",
+    "B2": "Duplex",
+    "B3": "Triplex",
+    "B4": "Four-Plex",
+    "B5": "Multifamily with HS",
+    # Vacant / Land
+    "C":  "Vacant Lots and Tracts",
+    "C1": "Vacant Lot",
+    "C2": "Colonia Property",
+    # Agricultural
+    "D":  "Agricultural",
+    "D1": "Acreage — Qualified Open-Space Land (1-d-1)",
+    "D2": "Farm/Ranch Improvements on Open-Space Land",
+    "D3": "Agricultural (1-d)",
+    "E":  "Rural Land (Not Qualified for Open-Space Appraisal)",
+    "E1": "Farm and Ranch Improvements on Non-Ag Land",
+    "E2": "Farm and Ranch Improvements (MH) on Non-Ag Land",
+    "E3": "Farm and Ranch Misc Improvements on Non-Ag Land",
+    # Commercial / Industrial
+    "F":  "Commercial Real Property",
+    "F1": "Commercial Real Property (Improved)",
+    "F2": "Industrial / Major Manufacturing",
+    "F3": "Commercial Details",
+    "F4": "Commercial Condo",
+    "F5": "Commercial Residential Conversion",
+    # Minerals / Utilities
+    "G1": "Oil and Gas",
+    "G2": "Minerals",
+    "G3": "Sub-Surface Mines and Quarries",
+    "J1": "Water Utility",
+    "J2": "Gas Distribution System",
+    "J3": "Electric Company (incl. Co-ops)",
+    "J4": "Telephone Company (incl. Co-ops)",
+    "J5": "Railroad",
+    "J6": "Pipeline",
+    "J7": "Cable Company",
+    "J8": "Other Utility",
+    "J9": "Railroad Rolling Stock",
+    # Personal property
+    "L1": "Commercial Personal Property",
+    "L2": "Industrial/Manufacturing Personal Property",
+    "M1": "Mobile Home",
+    "M2": "Other Tangible Personal Property",
+    # Exempt / Special
+    "X":  "Exempt Property",
+    "X1": "Totally Exempt",
+}
 
 app = Flask(__name__)
 app.secret_key = config.FLASK_SECRET
@@ -315,8 +401,36 @@ def property_detail(geo_id):
         ORDER  BY ctr.tax_year
     """, (geo_id,))
 
+    # Entity rate history for trend chart + rate columns (2016–2025 for 10-year chart context)
+    rate_history_rows = query("""
+        SELECT ctr.entity_code, ctr.tax_year, ctr.rate
+        FROM   county_tax_rate ctr
+        WHERE  ctr.entity_code IN (
+                   SELECT entity_code FROM tax_billing_entity
+                   WHERE  geo_id = %s AND tax_year = 2025
+               )
+        AND    ctr.tax_year BETWEEN 2016 AND 2025
+        ORDER  BY ctr.entity_code, ctr.tax_year
+    """, (geo_id,))
+
+    # {entity_code: {year: rate_float}}
+    entity_rate_by_code = {}
+    for r in rate_history_rows:
+        code = r["entity_code"]
+        entity_rate_by_code.setdefault(code, {})[r["tax_year"]] = (
+            float(r["rate"]) if r["rate"] is not None else None
+        )
+
+    # Chart JSON — only entities with ≥2 data points; years 2016–2025
+    chart_years = list(range(2016, 2026))
+    chart_entity_data = {}
+    for code, yr_map in entity_rate_by_code.items():
+        pts = [yr_map.get(y) for y in chart_years]
+        if sum(1 for p in pts if p is not None) >= 2:
+            chart_entity_data[code] = pts
+
     insights    = build_insights(parcel, history, entity_detail, delinquent)
-    projections = build_projections(history, rate_history, entity_detail)
+    projections, proj_baseline = build_projections(history, rate_history, entity_detail)
 
     # ── Phase 2: computed insight metrics ──────────────────────────────────────
     # Populated by compute_metrics.py. Gracefully absent before first run.
@@ -344,18 +458,27 @@ def property_detail(geo_id):
     except Exception:
         pass  # Phase 2 tables not yet populated — skip metrics sections
 
+    # 2026 preliminary row (for the preliminary callout card)
+    current_2026 = next((r for r in history if r["tax_year"] == 2026), None)
+
     return render_template(
         "property.html",
         parcel=parcel,
         history=history,
         current=current,
+        current_2026=current_2026,
         entity_detail=entity_detail,
         delinquent=delinquent,
         insights=insights,
         projections=projections,
+        proj_baseline=proj_baseline,
         metrics_by_year=metrics_by_year,
         benchmark_by_year=benchmark_by_year,
         bench_label=bench_label,
+        state_cd_descriptions=STATE_CD_DESCRIPTIONS,
+        entity_rate_by_code=entity_rate_by_code,
+        chart_entity_data=chart_entity_data,
+        chart_years=chart_years,
     )
 
 
