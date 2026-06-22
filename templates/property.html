@@ -58,18 +58,30 @@
               <td>{{ {"R":"Real","P":"Personal","MH":"Mobile Home","MN":"Mineral"}.get(parcel.prop_type_cd|trim if parcel.prop_type_cd else "", parcel.prop_type_cd or "—") }}</td></tr>
           <tr><th>Use Code</th>
               <td>
-                {% set _sc = parcel.state_cd1 or "" %}
-                {% if _sc %}
-                  <span style="font-family:var(--font-mono); font-size:12px; font-weight:600;">{{ _sc }}</span>
-                  {% set _desc = state_cd_descriptions.get(_sc, "") %}
-                  {% if not _desc and _sc|length > 1 %}
-                    {# fallback: try just the first character #}
-                    {% set _desc = state_cd_descriptions.get(_sc[:1], "") %}
+                {% set _cc = parcel.classi_cd or "" %}
+                {% if _cc %}
+                  {# TCAD numeric improvement use code loaded from IMP_INFO.TXT #}
+                  <span style="font-family:var(--font-mono); font-size:12px; font-weight:600;">{{ _cc }}</span>
+                  {% set _entry = use_code_lookup.get(_cc) %}
+                  {% if _entry %}
+                    <span style="color:var(--text-3); font-size:12px; font-weight:400; display:block;">{{ _entry[0] }}</span>
+                  {% else %}
+                    <span style="color:var(--text-3); font-size:12px; font-weight:400; display:block;">(unlisted)</span>
                   {% endif %}
-                  {% if _desc %}
-                    <span style="color:var(--text-3); font-size:12px; font-weight:400; display:block;">{{ _desc }}</span>
-                  {% endif %}
-                {% else %}—{% endif %}
+                {% else %}
+                  {# Fallback: Comptroller state_cd1 when classi_cd not yet loaded #}
+                  {% set _sc = parcel.state_cd1 or "" %}
+                  {% if _sc %}
+                    <span style="font-family:var(--font-mono); font-size:12px; font-weight:600;">{{ _sc }}</span>
+                    {% set _desc = state_cd_descriptions.get(_sc, "") %}
+                    {% if not _desc and _sc|length > 1 %}
+                      {% set _desc = state_cd_descriptions.get(_sc[:1], "") %}
+                    {% endif %}
+                    {% if _desc %}
+                      <span style="color:var(--text-3); font-size:12px; font-weight:400; display:block;">{{ _desc }}</span>
+                    {% endif %}
+                  {% else %}—{% endif %}
+                {% endif %}
               </td></tr>
           <tr><th>Valuation</th>
               <td>{{ val_method }}</td></tr>

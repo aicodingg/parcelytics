@@ -274,79 +274,117 @@ STATE_CD_DESCRIPTIONS = {
 }
 
 # ── TCAD internal numeric use code → (description, valuation_method) ──────────
-# Source: TCAD Property Use Code matrix.
-# These codes appear in PROP.TXT (classi_cd field — not currently loaded).
+# Source: TCAD improvement-level use codes from IMP_INFO.TXT.
+# Field position [28:38] (10 chars, left-justified).  Loaded by backfill_classi_cd.py.
+# Strategy: highest-value non-"00" improvement row per parcel is used as the
+# property-level use code.  Tuple = (description, valuation_method).
 # Loaded here for future use once that field is added to the schema.
 # Key = numeric string as it appears in the TCAD export.
 USE_CODE_LOOKUP = {
-    # Residential
-    "10": ("Single-Family Residence", "Cost"),
-    "11": ("Single-Family (Acreage)", "Cost"),
-    "12": ("Condominium", "Cost"),
-    "13": ("Townhouse", "Cost"),
-    "14": ("Duplex", "Cost"),
-    "15": ("Triplex / Fourplex", "Cost"),
-    "16": ("Single-Family (Manufactured)", "Cost"),
-    # Multi-Family
-    "20": ("Apartment — Garden (Low-Rise)", "Income"),
-    "21": ("Apartment — Mid-Rise", "Income"),
-    "22": ("Apartment — High-Rise", "Income"),
-    "23": ("Mobile Home Park", "Income"),
-    "24": ("Mixed-Use Residential", "Income"),
-    # Vacant Land
-    "25": ("Residential Lot (Vacant)", "Cost"),
-    "26": ("Commercial Lot (Vacant)", "Cost"),
-    "27": ("Agricultural Land (Vacant)", "Cost"),
-    # Office / Medical
-    "30": ("Strip Center / Small Office", "Income"),
-    "31": ("Neighborhood Shopping Center", "Income"),
-    "32": ("Medium Office", "Cost"),
-    "33": ("Large Office / Campus", "Income"),
-    "34": ("Medical Office", "Income"),
-    "35": ("Medical Clinic / Outpatient", "Income"),
-    "36": ("Hospital", "Income"),
-    "37": ("Restaurant / Fast Food", "Income"),
-    # Retail
-    "38": ("Retail — Freestanding", "Income"),
-    "39": ("Big-Box Retail", "Income"),
-    "40": ("Auto Dealership", "Income"),
-    "41": ("Service Station / Gas", "Income"),
-    "42": ("Car Wash", "Income"),
-    "43": ("Auto Repair / Service", "Income"),
-    # Industrial / Warehouse
-    "44": ("Warehouse / Distribution", "Income"),
-    "45": ("Light Industrial", "Cost"),
-    "46": ("Heavy Industrial / Manufacturing", "Cost"),
-    "47": ("Flex Space", "Income"),
-    # Hospitality / Special
-    "48": ("Convenience Store", "Income"),
-    "49": ("Hotel / Motel", "Income"),
-    "50": ("Bed & Breakfast", "Income"),
-    "51": ("Country Club / Golf", "Income"),
-    "52": ("Theater / Entertainment", "Income"),
-    "53": ("Church / Religious", "Cost"),
-    "54": ("School / Educational", "Cost"),
-    "55": ("Government / Civic", "Cost"),
-    "56": ("Cemetery / Mortuary", "Cost"),
-    "57": ("Parking Garage / Lot", "Income"),
-    "58": ("Self-Storage / Mini-Warehouse", "Income"),
-    "59": ("Data Center / Tech", "Income"),
-    # Agricultural
-    "60": ("Cropland — Open Space", "Cost"),
-    "61": ("Improved Pasture", "Cost"),
-    "62": ("Native Pasture / Range", "Cost"),
-    "63": ("Orchard / Vineyard", "Cost"),
-    "64": ("Timber", "Cost"),
-    "65": ("Wildlife Management", "Cost"),
+    # Residential — single-family / duplex / townhome / condo
+    "01": ("Single-Family Residence",      "Cost"),
+    "02": ("Duplex",                        "Cost"),
+    "03": ("Triplex",                       "Income"),
+    "04": ("Fourplex",                      "Income"),
+    # Multi-family apartments
+    "05": ("Apartment 5–25 Units",         "Income"),
+    "06": ("Apartment 26–49 Units",        "Income"),
+    "07": ("Apartment 50–100 Units",       "Income"),
+    "08": ("Apartment 100+ Units",         "Income"),
+    "09": ("Special Residential (F-V)",    "Income"),
+    # Manufactured / mobile home
+    "10": ("Manufactured Commercial Bldg", "Cost"),
+    "11": ("Mobile Home — Single (PP)",    "Cost"),
+    "12": ("Mobile Home — Double (PP)",    "Cost"),
+    "13": ("Mobile Home — Single (Real)",  "Cost"),
+    "14": ("Mobile Home — Double (Real)",  "Cost"),
+    # Attached residential
+    "15": ("Condominium (Stacked)",        "Cost"),
+    "16": ("Townhome",                      "Cost"),
+    "17": ("Clubhouse",                     "Cost"),
+    "19": ("Special (No Depreciation)",    "Cost"),
+    # Small retail / garage apt
+    "20": ("Small Store (<10,000 SF)",     "Income"),
+    "21": ("Garage Apartment",             "Cost"),
+    "22": ("Hi-Rise Condo / Apartment",    "Income"),
+    # Office condos / industrial campus
+    "23": ("Small Office Condo",           "Income"),
+    "24": ("Commercial Space Condos",      "Income"),
+    "26": ("Large Office Condo",           "Income"),
+    "27": ("Major Industrial — Office",    "Cost"),
+    "28": ("Major Industrial — Eng.",      "Cost"),
+    "29": ("Major Industrial — Mfg.",      "Cost"),
+    # Retail — strip centers / restaurants / hotels
+    "30": ("Strip Center (<10,000 SF)",    "Income"),
+    "31": ("Night Club / Bar",             "Income"),
+    "32": ("Restaurant",                   "Income"),
+    "33": ("Fast Food Restaurant",         "Income"),
+    "34": ("Hotel — Full Service",         "Income"),
+    "35": ("Hotel — Limited Service",      "Income"),
+    "37": ("Motel — Extended Stay",        "Income"),
+    "39": ("Restaurant (SFR Conversion)",  "Income"),
+    # Shopping centers / big-box retail
+    "40": ("Regional Shopping Center",     "Income"),
+    "41": ("Community Shopping Center",    "Income"),
+    "42": ("Neighborhood Shopping Center", "Income"),
+    "43": ("Strip Center (>10,000 SF)",    "Income"),
+    "44": ("Grocery Store",                "Income"),
+    "45": ("Dept. Store (>25,000 SF)",     "Income"),
+    "46": ("Discount Store (>25,000 SF)",  "Income"),
+    "47": ("Retail Store",                 "Income"),
+    "48": ("Convenience Store",            "Income"),
+    "49": ("Bed & Breakfast",              "Income"),
+    # Office
+    "50": ("Office Hi-Rise (≥6 Stories)",  "Income"),
+    "51": ("Office Large (>35,000 SF)",    "Income"),
+    "52": ("Office Medium (10–35,000 SF)", "Income"),
+    "53": ("Office Small (<10,000 SF)",    "Income"),
+    "54": ("Medical Office (<10,000 SF)",  "Income"),
+    "55": ("Medical Office (>10,000 SF)",  "Income"),
+    "56": ("Bank — Office",                "Income"),
+    "57": ("Bank — Drive-Thru",            "Income"),
+    "58": ("Bank — Branch Office",         "Income"),
+    "59": ("Office / Retail (SFR Conv.)",  "Income"),
+    # Industrial / warehouse
+    "60": ("Industrial 20K+ SF (<25% FO)", "Cost"),
+    "61": ("Warehouse (<20,000 SF)",       "Cost"),
+    "63": ("Mini-Warehouse / Self-Storage","Income"),
+    "64": ("Industrial 20K+ SF (25–49%)",  "Cost"),
+    "65": ("Industrial 20K+ SF (50–74%)",  "Cost"),
+    "66": ("Industrial 20K+ SF (>75% FO)", "Cost"),
+    "67": ("Computer / Data Center",       "Income"),
+    "68": ("Transit Warehouse",            "Cost"),
+    "69": ("Mfg / Eng / Lab Industrial",   "Cost"),
+    # Institutional / special use
+    "70": ("Religious Facility",           "Cost"),
+    "72": ("Fraternity / Sorority",        "Cost"),
+    "73": ("Dormitory",                    "Cost"),
+    "74": ("Dormitory Hi-Rise",            "Cost"),
+    "76": ("Retirement Center",            "Cost"),
+    "77": ("Hospital",                     "Income"),
+    "78": ("Day Care Center",              "Income"),
+    # Auto / service
+    "80": ("Auto Dealership",              "Income"),
+    "81": ("Service Station",              "Income"),
+    "82": ("Self-Service (Car Wash Booth)","Income"),
+    "83": ("Service / Repair Garage",      "Income"),
+    "84": ("Mini-Lube / Tune-Up",          "Income"),
+    "86": ("Car Wash — Full Service",      "Income"),
     # Misc
-    "70": ("Utility Infrastructure", "Cost"),
-    "71": ("Pipeline / Easement", "Cost"),
-    "72": ("Oil / Gas Surface", "Income"),
-    "80": ("Exempt — Government", "N/A"),
-    "81": ("Exempt — Religious", "N/A"),
-    "82": ("Exempt — Educational", "N/A"),
-    "90": ("Personal Property", "Cost"),
-    "91": ("Business Personal Property", "Cost"),
+    "87": ("Parking Garage",               "Income"),
+    "88": ("Treatment / Rehab Center",     "Cost"),
+    "89": ("Assisted Living Center",       "Income"),
+    "90": ("Theater",                      "Income"),
+    "91": ("Mortuary / Funeral Home",      "Income"),
+    "92": ("Country Club",                 "Income"),
+    "93": ("Bowling Center",               "Income"),
+    "94": ("Health Club",                  "Income"),
+    "95": ("Marina",                       "Income"),
+    "96": ("Classroom / School",           "Cost"),
+    "98": ("Leasehold — Exempt Property",  "N/A"),
+    "108": ("Luxury Hi-Rise Apts 100+",   "Income"),
+    "120": ("Additional Living Quarter",   "Cost"),
+    "483": ("Accessory Dwelling Unit",     "Cost"),
 }
 
 # Valuation method inferred from Texas Comptroller state_cd1 first character.
@@ -605,7 +643,11 @@ def property_detail(geo_id):
         benchmark_by_year=benchmark_by_year,
         bench_label=bench_label,
         state_cd_descriptions=STATE_CD_DESCRIPTIONS,
-        val_method=get_valuation_method(parcel.get("state_cd1") or ""),
+        use_code_lookup=USE_CODE_LOOKUP,
+        val_method=(
+            USE_CODE_LOOKUP.get(parcel.get("classi_cd") or "", ("", ""))[1]
+            or get_valuation_method(parcel.get("state_cd1") or "")
+        ),
         entity_rate_by_code=entity_rate_by_code,
         chart_entity_data=chart_entity_data,
         chart_years=chart_years,
