@@ -268,6 +268,107 @@ STATE_CD_DESCRIPTIONS = {
     "X1": "Totally Exempt",
 }
 
+# ── TCAD internal numeric use code → (description, valuation_method) ──────────
+# Source: TCAD Property Use Code matrix.
+# These codes appear in PROP.TXT (classi_cd field — not currently loaded).
+# Loaded here for future use once that field is added to the schema.
+# Key = numeric string as it appears in the TCAD export.
+USE_CODE_LOOKUP = {
+    # Residential
+    "10": ("Single-Family Residence", "Cost"),
+    "11": ("Single-Family (Acreage)", "Cost"),
+    "12": ("Condominium", "Cost"),
+    "13": ("Townhouse", "Cost"),
+    "14": ("Duplex", "Cost"),
+    "15": ("Triplex / Fourplex", "Cost"),
+    "16": ("Single-Family (Manufactured)", "Cost"),
+    # Multi-Family
+    "20": ("Apartment — Garden (Low-Rise)", "Income"),
+    "21": ("Apartment — Mid-Rise", "Income"),
+    "22": ("Apartment — High-Rise", "Income"),
+    "23": ("Mobile Home Park", "Income"),
+    "24": ("Mixed-Use Residential", "Income"),
+    # Vacant Land
+    "25": ("Residential Lot (Vacant)", "Cost"),
+    "26": ("Commercial Lot (Vacant)", "Cost"),
+    "27": ("Agricultural Land (Vacant)", "Cost"),
+    # Office / Medical
+    "30": ("Strip Center / Small Office", "Income"),
+    "31": ("Neighborhood Shopping Center", "Income"),
+    "32": ("Medium Office", "Cost"),
+    "33": ("Large Office / Campus", "Income"),
+    "34": ("Medical Office", "Income"),
+    "35": ("Medical Clinic / Outpatient", "Income"),
+    "36": ("Hospital", "Income"),
+    "37": ("Restaurant / Fast Food", "Income"),
+    # Retail
+    "38": ("Retail — Freestanding", "Income"),
+    "39": ("Big-Box Retail", "Income"),
+    "40": ("Auto Dealership", "Income"),
+    "41": ("Service Station / Gas", "Income"),
+    "42": ("Car Wash", "Income"),
+    "43": ("Auto Repair / Service", "Income"),
+    # Industrial / Warehouse
+    "44": ("Warehouse / Distribution", "Income"),
+    "45": ("Light Industrial", "Cost"),
+    "46": ("Heavy Industrial / Manufacturing", "Cost"),
+    "47": ("Flex Space", "Income"),
+    # Hospitality / Special
+    "48": ("Convenience Store", "Income"),
+    "49": ("Hotel / Motel", "Income"),
+    "50": ("Bed & Breakfast", "Income"),
+    "51": ("Country Club / Golf", "Income"),
+    "52": ("Theater / Entertainment", "Income"),
+    "53": ("Church / Religious", "Cost"),
+    "54": ("School / Educational", "Cost"),
+    "55": ("Government / Civic", "Cost"),
+    "56": ("Cemetery / Mortuary", "Cost"),
+    "57": ("Parking Garage / Lot", "Income"),
+    "58": ("Self-Storage / Mini-Warehouse", "Income"),
+    "59": ("Data Center / Tech", "Income"),
+    # Agricultural
+    "60": ("Cropland — Open Space", "Cost"),
+    "61": ("Improved Pasture", "Cost"),
+    "62": ("Native Pasture / Range", "Cost"),
+    "63": ("Orchard / Vineyard", "Cost"),
+    "64": ("Timber", "Cost"),
+    "65": ("Wildlife Management", "Cost"),
+    # Misc
+    "70": ("Utility Infrastructure", "Cost"),
+    "71": ("Pipeline / Easement", "Cost"),
+    "72": ("Oil / Gas Surface", "Income"),
+    "80": ("Exempt — Government", "N/A"),
+    "81": ("Exempt — Religious", "N/A"),
+    "82": ("Exempt — Educational", "N/A"),
+    "90": ("Personal Property", "Cost"),
+    "91": ("Business Personal Property", "Cost"),
+}
+
+# Valuation method inferred from Texas Comptroller state_cd1 first character.
+# Used as a fallback until the TCAD numeric use code field is loaded.
+VALUATION_METHOD_BY_CLASS = {
+    "A": "Cost",        # Residential SFR — market/cost approach
+    "B": "Income",      # Multi-family — income approach
+    "C": "Cost",        # Vacant land — sales comparison / cost
+    "D": "Productivity",# Agricultural — 1-d-1 productivity value
+    "E": "Cost",        # Rural land — cost/comparable sales
+    "F": "Income",      # Commercial — income approach
+    "G": "Income",      # Minerals/Oil — DCF / yield capitalisation
+    "J": "Cost",        # Utilities — cost approach
+    "L": "Cost",        # Personal property — cost (depreciated)
+    "M": "Cost",        # Mobile home — cost
+    "X": "Exempt",      # Exempt property
+}
+
+
+def get_valuation_method(state_cd1: str) -> str:
+    """Return the most likely valuation method for a parcel given its state_cd1 code."""
+    if not state_cd1:
+        return "Unknown"
+    prefix = state_cd1.strip()[:1].upper()
+    return VALUATION_METHOD_BY_CLASS.get(prefix, "Unknown")
+
+
 app = Flask(__name__)
 app.secret_key = config.FLASK_SECRET
 
@@ -496,6 +597,7 @@ def property_detail(geo_id):
         benchmark_by_year=benchmark_by_year,
         bench_label=bench_label,
         state_cd_descriptions=STATE_CD_DESCRIPTIONS,
+        val_method=get_valuation_method(parcel.get("state_cd1") or ""),
         entity_rate_by_code=entity_rate_by_code,
         chart_entity_data=chart_entity_data,
         chart_years=chart_years,

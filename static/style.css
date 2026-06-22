@@ -103,9 +103,15 @@ code {
 
 /* ── Layout ─────────────────────────────────────────────────────────────── */
 main.container {
-  max-width: 1260px;
+  max-width: 1440px;
   padding-top: 1.75rem;
   padding-bottom: 3rem;
+}
+
+/* Full-width table rows: ensure table takes 100% of its col-12 container */
+.col-12 .table-responsive,
+.col-12 .table {
+  width: 100%;
 }
 
 /* ── Navbar ─────────────────────────────────────────────────────────────── */
