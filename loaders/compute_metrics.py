@@ -379,7 +379,7 @@ def compute_county_benchmarks(conn):
                   {excl}
                   AND p.geo_id NOT LIKE 'AJR%%'
                   AND pty.market_value > 0
-                  AND (pty.data_source IS NULL OR pty.data_source = 'certified')
+                  AND (pty.data_source IS NULL OR pty.data_source != 'preliminary')
                 GROUP BY pty.tax_year
                 ON CONFLICT (county_code, tax_year, property_type_label) DO UPDATE
                     SET parcel_count                = EXCLUDED.parcel_count,

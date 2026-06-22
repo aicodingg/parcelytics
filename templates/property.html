@@ -335,33 +335,32 @@
             {% set paid_partial = (tot.paid_n > 0 and tot.paid_n < n_ent) %}
             {% set bal_complete = (tot.due_n == n_ent and tot.paid_n == n_ent) %}
             {% set total_bal    = tot.due - tot.paid %}
-            <tr>
-              <td class="fw-semibold" style="font-size:12px; padding-top:10px; border-top:2px solid var(--border-strong);">Combined Rate</td>
+            <tr class="combined-rate-row">
+              <td class="fw-semibold">Combined Rate</td>
               {% for yr_total in [tot.r2021, tot.r2022, tot.r2023, tot.r2024] %}
-              <td class="text-end fw-semibold" style="font-size:12px; border-top:2px solid var(--border-strong);">
+              <td class="text-end fw-semibold">
                 {{ "{:.4f}%".format(yr_total) if yr_total else "—" }}
               </td>
               {% endfor %}
-              <td class="text-end fw-semibold" style="font-size:12px; border-top:2px solid var(--border-strong);">
+              <td class="text-end fw-semibold">
                 {{ "{:.4f}%".format(tot.rate) if tot.rate else "—" }}
               </td>
-              <td class="text-end fw-semibold {% if rate_delta < 0 %}text-success{% elif rate_delta > 0 %}text-danger{% endif %}"
-                  style="border-top:2px solid var(--border-strong);">
+              <td class="text-end fw-semibold {% if rate_delta < 0 %}text-success{% elif rate_delta > 0 %}text-danger{% endif %}">
                 {% if tot.rate and tot.prev %}{{ "{:+.4f}%".format(rate_delta) }}{% else %}—{% endif %}
               </td>
-              <td class="text-end" style="border-top:2px solid var(--border-strong);">
+              <td class="text-end">
                 {% if tot.due_n > 0 %}
                   <span class="fw-bold" style="font-size:13px;">${{ "{:,.2f}".format(tot.due) }}</span>
                   {% if due_partial %}<span class="badge-partial d-block" style="font-size:10px; margin-top:2px;">{{ tot.due_n }} of {{ n_ent }}</span>{% endif %}
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
-              <td class="text-end" style="border-top:2px solid var(--border-strong);">
+              <td class="text-end">
                 {% if tot.paid_n > 0 %}
                   <span class="fw-bold" style="font-size:13px;">${{ "{:,.2f}".format(tot.paid) }}</span>
                   {% if paid_partial %}<span class="badge-partial d-block" style="font-size:10px; margin-top:2px;">{{ tot.paid_n }} of {{ n_ent }}</span>{% endif %}
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
-              <td class="text-end" style="border-top:2px solid var(--border-strong);">
+              <td class="text-end">
                 {% if bal_complete %}
                   {% if total_bal > 0.01 %}<span class="fw-bold" style="font-size:13px; color:var(--up);">${{ "{:,.2f}".format(total_bal) }}</span>
                   {% else %}<span class="fw-bold" style="font-size:13px; color:var(--down);">Paid</span>{% endif %}
@@ -580,7 +579,7 @@
           <tbody>
             {% for r in history | sort(attribute='tax_year', reverse=True) %}
             {% set _av_anomaly = r.assessed_value and r.market_value and r.assessed_value > r.market_value %}
-            <tr {% if r.tax_year == 2025 %}class="table-active fw-semibold"{% endif %}>
+            <tr>
               <td>
                 {{ r.tax_year }}
                 {% if r.data_source == 'preliminary' %}
@@ -659,7 +658,7 @@
           <tbody>
             {% for r in history | sort(attribute='tax_year', reverse=True) %}
             {% set m = metrics_by_year.get(r.tax_year) %}
-            <tr {% if r.tax_year == 2025 %}class="table-active fw-semibold"{% endif %}>
+            <tr>
               <td>{{ r.tax_year }}</td>
 
               {# YoY market value % #}
@@ -698,12 +697,16 @@
                 {% endif %}
               </td>
 
-              {# Effective tax rate — 2025 only, Not Available otherwise #}
+              {# Effective tax rate — 2025 only when billing data exists #}
               <td class="text-end">
                 {% if m and m.has_tax_data and m.effective_tax_rate is not none %}
                   {{ "{:.4f}%".format(m.effective_tax_rate * 100) }}
+                {% elif m and m.has_tax_data %}
+                  {# 2025 row but no billing match in tax_billing #}
+                  <span class="na-cell" title="This parcel does not have a matching row in the 2025 Travis County tax billing data. It may be billed under a different account number or exempt from the open billing roll.">No billing data</span>
                 {% else %}
-                  <span class="na-cell">Not available yet</span>
+                  {# Pre-2025 rows — no billing history available #}
+                  <span class="na-cell" title="Effective tax rate requires actual billing data (total tax ÷ market value). Historical billing data (2021–2024) is not publicly available and is pending a public records request to Travis County.">Not available</span>
                 {% endif %}
               </td>
 
@@ -915,23 +918,31 @@
       <span>Where This Property Stands — <span id="benchFilterLabel">{{ bench_label }}</span> Benchmark</span>
       {# ── Filter bar ──────────────────────────────────────────────── #}
       <div class="d-flex gap-2 flex-wrap align-items-center" style="font-size:12px;">
-        {# Geography (placeholder — only All Travis County for now) #}
-        <select id="benchGeoFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;" disabled title="Sub-county geography filters coming soon">
-          <option value="county">All Travis County</option>
-        </select>
-        {# Neighborhood #}
-        <select id="benchNbFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;">
-          <option value="">— Neighborhood —</option>
-        </select>
-        {# Property Type #}
-        <select id="benchTypeFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;">
-          <option value="">— Type —</option>
-        </select>
-        {# Use Code #}
-        <select id="benchCodeFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;">
-          <option value="">— Use Code —</option>
-        </select>
-        {# Year #}
+        {# Geography — single option, disabled #}
+        <input class="form-control form-control-sm" style="width:auto; font-size:12px; min-width:130px;"
+               value="All Travis County" disabled title="Sub-county geography filters coming soon">
+        {# Neighborhood typeahead #}
+        <div class="ta-wrap" style="min-width:130px;">
+          <input type="text" class="form-control form-control-sm" style="font-size:12px;"
+                 id="benchNbInput" placeholder="— Neighborhood —" autocomplete="off">
+          <div class="ta-list" id="benchNbList"></div>
+          <input type="hidden" id="benchNbFilter">
+        </div>
+        {# Property Type typeahead #}
+        <div class="ta-wrap" style="min-width:110px;">
+          <input type="text" class="form-control form-control-sm" style="font-size:12px;"
+                 id="benchTypeInput" placeholder="— Type —" autocomplete="off">
+          <div class="ta-list" id="benchTypeList"></div>
+          <input type="hidden" id="benchTypeFilter">
+        </div>
+        {# Use Code typeahead #}
+        <div class="ta-wrap" style="min-width:140px;">
+          <input type="text" class="form-control form-control-sm" style="font-size:12px;"
+                 id="benchCodeInput" placeholder="— Use Code —" autocomplete="off">
+          <div class="ta-list" id="benchCodeList"></div>
+          <input type="hidden" id="benchCodeFilter">
+        </div>
+        {# Year — short fixed list, no typeahead needed #}
         <select id="benchYearFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;">
           {% for yr in [2026, 2025, 2024, 2023, 2022, 2021] %}
           <option value="{{ yr }}" {% if yr == 2025 %}selected{% endif %}>
@@ -987,8 +998,7 @@
             {% for r in history | sort(attribute='tax_year', reverse=True) %}
             {% if r.tax_year <= 2025 %}
             {% set b = benchmark_by_year.get(r.tax_year) %}
-            <tr {% if r.tax_year == 2025 %}class="table-active fw-semibold" id="benchRow2025"{% endif %}
-                data-year="{{ r.tax_year }}"
+            <tr data-year="{{ r.tax_year }}"
                 data-mv="{{ r.market_value or 0 }}">
               <td>{{ r.tax_year }}</td>
               <td class="text-end">{{ "$" + "{:,.0f}".format(r.market_value) if r.market_value else "—" }}</td>
@@ -1147,103 +1157,152 @@ if (rCtx) {
 {% if benchmark_by_year and bench_label %}
 <script>
 (function () {
-  // Parcel's own 2025 market value for percentile placement
-  const parcelMv = {{ (_r25.market_value if _r25 and _r25.market_value else 0) | tojson }};
-  const parcelGeoId = {{ parcel.geo_id | tojson }};
-  const parcelClassiCd = {{ (parcel.classi_cd or "") | tojson }};
+  const parcelMv        = {{ (_r25.market_value if _r25 and _r25.market_value else 0) | tojson }};
+  const parcelClassiCd  = {{ (parcel.classi_cd or "") | tojson }};
   const defaultBenchLabel = {{ bench_label | tojson }};
 
-  const selType = document.getElementById('benchTypeFilter');
-  const selCode = document.getElementById('benchCodeFilter');
-  const selYear = document.getElementById('benchYearFilter');
-  const selNb   = document.getElementById('benchNbFilter');
-  const loadingEl = document.getElementById('benchLoading');
-  const filterLabelEl = document.getElementById('benchFilterLabel');
-  const footerTypeEl  = document.getElementById('benchFooterType');
+  const selYear      = document.getElementById('benchYearFilter');
+  const loadingEl    = document.getElementById('benchLoading');
+  const filterLabelEl= document.getElementById('benchFilterLabel');
+  const footerTypeEl = document.getElementById('benchFooterType');
 
-  let metaData = null; // populated on first load
+  let metaData = null;
 
+  // ── Typeahead factory ───────────────────────────────────────────
+  // Returns {setOptions, select, clear, getValue}
+  function makeTypeahead(inputId, listId, hiddenId, onSelect) {
+    const inp  = document.getElementById(inputId);
+    const list = document.getElementById(listId);
+    const hid  = document.getElementById(hiddenId);
+    let allOpts = [];
+
+    function renderList(q) {
+      const query = (q || '').trim().toLowerCase();
+      const matches = query
+        ? allOpts.filter(o => o.label.toLowerCase().includes(query) || o.value.toLowerCase().includes(query))
+        : allOpts;
+      list.innerHTML = '';
+      if (!matches.length) { list.style.display = 'none'; return; }
+      matches.slice(0, 60).forEach(opt => {
+        const div = document.createElement('div');
+        div.className = 'ta-opt';
+        div.textContent = opt.label;
+        div.dataset.value = opt.value;
+        div.addEventListener('mousedown', e => {
+          e.preventDefault();
+          selectOpt(opt.value, opt.label);
+          onSelect(opt.value);
+        });
+        list.appendChild(div);
+      });
+      list.style.display = 'block';
+    }
+
+    function selectOpt(value, label) {
+      inp.value  = label;
+      hid.value  = value;
+      list.style.display = 'none';
+    }
+
+    inp.addEventListener('input',  () => renderList(inp.value));
+    inp.addEventListener('focus',  () => renderList(inp.value));
+    inp.addEventListener('blur',   () => setTimeout(() => { list.style.display = 'none'; }, 160));
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { list.style.display = 'none'; inp.blur(); }
+    });
+
+    return {
+      setOptions(opts) { allOpts = opts; },
+      select(value, label) { selectOpt(value, label); },
+      clear()  { inp.value = ''; hid.value = ''; list.innerHTML = ''; list.style.display = 'none'; },
+      getValue() { return hid.value; },
+    };
+  }
+
+  // Instantiate three typeaheads
+  const taNb   = makeTypeahead('benchNbInput',   'benchNbList',   'benchNbFilter',
+                               () => fetchAndRender());
+  const taType = makeTypeahead('benchTypeInput', 'benchTypeList', 'benchTypeFilter',
+                               v  => { taCode.clear(); populateCodeOptions(v); fetchAndRender(); });
+  const taCode = makeTypeahead('benchCodeInput', 'benchCodeList', 'benchCodeFilter',
+                               () => fetchAndRender());
+
+  // ── Helpers ─────────────────────────────────────────────────────
   function fmt(n) {
     if (n == null || isNaN(n)) return '—';
     return '$' + Math.round(n).toLocaleString();
   }
   function fmtPct(n) {
     if (n == null || isNaN(n)) return '—';
-    const sign = n >= 0 ? '+' : '';
-    return sign + n.toFixed(1) + '%';
+    return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
   }
   function posBand(mv, p25, med, p75) {
     if (!mv || !med) return {label:'—', color:'var(--text-3)'};
     if (p75 && mv >= p75) return {label:'↑ Top 25%', color:'var(--up)'};
-    if (mv >= med) return {label:'↑ Above median', color:'var(--text-2)'};
-    if (p25 && mv >= p25) return {label:'↓ Below median', color:'var(--text-2)'};
+    if (mv >= med)         return {label:'↑ Above median', color:'var(--text-2)'};
+    if (p25 && mv >= p25)  return {label:'↓ Below median', color:'var(--text-2)'};
     return {label:'↓ Bottom 25%', color:'var(--down)'};
   }
 
-  // ── Populate type dropdown from /api/benchmark/meta ──────────────
-  function loadMeta() {
-    return fetch('/api/benchmark/meta')
-      .then(r => r.json())
-      .then(data => {
-        metaData = data;
-        // Populate type dropdown
-        (data.prop_types || []).forEach(pt => {
-          const opt = document.createElement('option');
-          opt.value = pt;
-          opt.textContent = pt;
-          selType.appendChild(opt);
-        });
-        // Pre-select type matching default bench_label
-        const matchOpt = [...selType.options].find(o => o.value === defaultBenchLabel);
-        if (matchOpt) {
-          selType.value = defaultBenchLabel;
-          populateCodeDropdown(defaultBenchLabel, parcelClassiCd);
-        }
-        // Populate neighborhood dropdown
-        const nbs = data.neighborhoods || [];
-        const nbCovPct = data.neighborhood_coverage_pct;
-        if (nbs.length > 0) {
-          if (nbCovPct < 80) {
-            const note = document.createElement('option');
-            note.disabled = true;
-            note.textContent = `⚠ Coverage: ${nbCovPct}% of parcels`;
-            selNb.appendChild(note);
-          }
-          nbs.forEach(item => {
-            const opt = document.createElement('option');
-            opt.value = item.code;
-            opt.textContent = `${item.code} (${item.n.toLocaleString()})`;
-            selNb.appendChild(opt);
-          });
-        } else {
-          selNb.disabled = true;
-          selNb.options[0].textContent = 'No neighborhood data';
-        }
-      })
-      .catch(() => {/* silently ignore if meta endpoint not yet live */});
-  }
-
-  function populateCodeDropdown(propType, preselect) {
-    // Remove all but first placeholder option
-    while (selCode.options.length > 1) selCode.remove(1);
+  // ── Populate code options for a given prop type ──────────────────
+  function populateCodeOptions(propType) {
     if (!metaData || !propType) return;
     const codes = (metaData.use_codes_by_type || {})[propType] || [];
-    codes.forEach(item => {
-      const opt = document.createElement('option');
-      opt.value = item.code;
-      opt.textContent = `${item.code} — ${item.desc} (${item.n.toLocaleString()})`;
-      selCode.appendChild(opt);
-    });
-    if (preselect && [...selCode.options].find(o => o.value === preselect)) {
-      selCode.value = preselect;
+    taCode.setOptions(codes.map(item => ({
+      value: item.code,
+      label: `${item.code} — ${item.desc} (${item.n.toLocaleString()})`,
+    })));
+    // Pre-select parcel's own classi_cd if it exists in the list
+    if (parcelClassiCd) {
+      const match = codes.find(c => c.code === parcelClassiCd);
+      if (match) taCode.select(match.code, `${match.code} — ${match.desc} (${match.n.toLocaleString()})`);
     }
   }
 
-  // ── Fetch updated benchmark row for selected year and update table ──
+  // ── Load meta from server ────────────────────────────────────────
+  function loadMeta() {
+    fetch('/api/benchmark/meta')
+      .then(r => r.json())
+      .then(data => {
+        metaData = data;
+
+        // Populate Property Type typeahead
+        taType.setOptions((data.prop_types || []).map(pt => ({ value: pt, label: pt })));
+        // Pre-select default label
+        if (defaultBenchLabel) {
+          const matchPt = (data.prop_types || []).find(pt => pt === defaultBenchLabel);
+          if (matchPt) {
+            taType.select(matchPt, matchPt);
+            populateCodeOptions(matchPt);
+          }
+        }
+
+        // Populate Neighborhood typeahead
+        const nbs = data.neighborhoods || [];
+        if (nbs.length > 0) {
+          const nbOpts = nbs.map(item => ({
+            value: item.code,
+            label: `${item.code} (${item.n.toLocaleString()})`,
+          }));
+          taNb.setOptions(nbOpts);
+          const nbCovPct = data.neighborhood_coverage_pct;
+          if (nbCovPct < 80) {
+            document.getElementById('benchNbInput').placeholder =
+              `— Neighborhood (⚠ ${nbCovPct}% cov.) —`;
+          }
+        } else {
+          document.getElementById('benchNbInput').disabled = true;
+          document.getElementById('benchNbInput').placeholder = 'No neighborhood data';
+        }
+      })
+      .catch(() => {});
+  }
+
+  // ── Update benchmark row cells in the table ──────────────────────
   function updateBenchmarkRow(data, year) {
     const row = document.querySelector(`tr[data-year="${year}"]`);
     if (!row) return;
-    const mv = parseFloat(row.dataset.mv);
+    const mv  = parseFloat(row.dataset.mv);
     const p25 = data.p25_market_value;
     const med = data.median_market_value;
     const p75 = data.p75_market_value;
@@ -1253,18 +1312,17 @@ if (rCtx) {
     row.querySelector('.bench-p25').textContent = fmt(p25);
     row.querySelector('.bench-med').textContent = fmt(med);
     row.querySelector('.bench-p75').textContent = fmt(p75);
-    const posEl = row.querySelector('.bench-pos');
-    posEl.innerHTML = `<span style="color:${pos.color};">${pos.label}</span>`;
+    row.querySelector('.bench-pos').innerHTML =
+      `<span style="color:${pos.color};">${pos.label}</span>`;
     const yoyEl = row.querySelector('.bench-yoy');
     if (yoy != null) {
-      const cls = yoy > 0 ? 'text-danger' : (yoy < 0 ? 'text-success' : '');
-      yoyEl.innerHTML = `<span class="${cls}">${fmtPct(yoy)}</span>`;
+      yoyEl.innerHTML = `<span class="${yoy > 0 ? 'text-danger' : yoy < 0 ? 'text-success' : ''}">${fmtPct(yoy)}</span>`;
     } else {
       yoyEl.innerHTML = '<span class="text-muted">base yr</span>';
     }
   }
 
-  // ── Update the summary sentence (2025 row) ──────────────────────
+  // ── Update summary sentence ──────────────────────────────────────
   function updateSummary(data, label) {
     const summaryText = document.getElementById('benchSummaryText');
     if (!summaryText) return;
@@ -1274,7 +1332,6 @@ if (rCtx) {
     const n   = data.n_parcels;
     const pos = posBand(parcelMv, p25, med, p75);
     const vsMed = med ? ((parcelMv - med) / med * 100) : null;
-    const yr = selYear.value;
 
     document.getElementById('benchPctLabel').textContent = pos.label.replace(/[↑↓] /,'');
     document.getElementById('benchPctLabel').style.color = pos.color;
@@ -1284,28 +1341,22 @@ if (rCtx) {
     vsMedEl.textContent = vsMed != null ? (vsMed >= 0 ? '+' : '') + vsMed.toFixed(0) + '%' : '—';
     vsMedEl.className = vsMed > 0 ? 'text-danger' : 'text-success';
     document.getElementById('benchMedianVal').textContent = fmt(med);
-
-    // Update year reference in sentence
     const strongYr = summaryText.querySelector('strong');
     if (strongYr) strongYr.textContent = '$' + Math.round(parcelMv).toLocaleString();
   }
 
   // ── Main fetch + render ──────────────────────────────────────────
   function fetchAndRender() {
-    const year = parseInt(selYear.value, 10) || 2025;
-    const propType = selType.value;
-    const classiCd = selCode.value;
-    const neighborhood = selNb ? selNb.value : '';
+    const year      = parseInt(selYear.value, 10) || 2025;
+    const propType  = taType.getValue();
+    const classiCd  = taCode.getValue();
+    const neighborhood = taNb.getValue();
 
-    // Build params — prefer classi_cd filter if selected, else prop_type
     const params = new URLSearchParams({ year });
-    if (classiCd && classiCd !== '') {
-      params.set('classi_cd', classiCd);
-    } else if (propType) {
-      params.set('prop_type', propType);
-    } else {
-      return; // nothing to filter on
-    }
+    if (classiCd)  params.set('classi_cd', classiCd);
+    else if (propType) params.set('prop_type', propType);
+    else return; // nothing selected
+
     if (neighborhood) params.set('neighborhood', neighborhood);
 
     loadingEl.style.display = 'inline';
@@ -1313,16 +1364,13 @@ if (rCtx) {
       .then(r => r.json())
       .then(data => {
         loadingEl.style.display = 'none';
-        if (!data.ok) {
-          console.warn('Benchmark API:', data.error);
-          return;
-        }
+        if (!data.ok) { console.warn('Benchmark API:', data.error); return; }
         const label = data.filter_label || propType || classiCd;
         filterLabelEl.textContent = label;
         if (footerTypeEl) footerTypeEl.textContent = label;
         updateBenchmarkRow(data, year);
         if (year === 2025 || year === 2026) updateSummary(data, label);
-        // Show/hide Preliminary pill on benchmark card header
+        // Preliminary badge
         const hdr = document.querySelector('#benchmarkCard .card-header > span:first-child');
         let prelBadge = document.getElementById('benchPrelimBadge');
         if (data.is_preliminary) {
@@ -1340,16 +1388,7 @@ if (rCtx) {
       .catch(() => { loadingEl.style.display = 'none'; });
   }
 
-  // ── Event wiring ─────────────────────────────────────────────────
-  selType.addEventListener('change', function () {
-    populateCodeDropdown(this.value, null);
-    fetchAndRender();
-  });
-  selCode.addEventListener('change', fetchAndRender);
   selYear.addEventListener('change', fetchAndRender);
-  if (selNb) selNb.addEventListener('change', fetchAndRender);
-
-  // Initialise on page load
   loadMeta();
 })();
 </script>

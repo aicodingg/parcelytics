@@ -245,11 +245,16 @@ main.container {
   background: var(--surface-2);
 }
 
-/* 2025 current-year row highlight */
-.table .table-active td,
-.table .table-active th {
-  background-color: var(--accent-light) !important;
+tfoot .combined-rate-row td {
+  font-size: 12px;
+  border-top: 2px solid var(--border-strong);
 }
+
+tfoot .combined-rate-row td:first-child {
+  padding-top: 10px;
+}
+
+/* Year-row highlight removed — Preliminary badge on 2026 provides sufficient visual differentiation */
 
 /* ── Confidence Badges ──────────────────────────────────────────────────── */
 .badge-verified,
@@ -674,6 +679,38 @@ canvas { max-height: 440px; }
 .form-check-input:checked {
   background-color: var(--accent);
   border-color: var(--accent);
+}
+
+/* ── Typeahead filter widget ────────────────────────────────────────────── */
+.ta-wrap { position: relative; }
+
+.ta-list {
+  display: none;
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 1050;
+  min-width: 100%;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.12);
+}
+
+.ta-opt {
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.ta-opt:hover,
+.ta-opt.active {
+  background: var(--accent-light);
+  color: var(--text);
 }
 
 /* ── Footer ─────────────────────────────────────────────────────────────── */

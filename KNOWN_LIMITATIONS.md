@@ -172,6 +172,15 @@ Top 5 codes by parcel count: `A7100` (3,462), `A5850` (3,272), `J3000` (2,960), 
 
 **Impact of exclusion on county_benchmark (verified June 22, 2026):** 32,576 AJR* F/L accounts were removed from the commercial benchmark source. The commercial parcel_count dropped from ~46,103 to **13,527** real estate parcels. The Residential count was unaffected (317,461 parcels).
 
-**Residual outliers after AJR* exclusion:** After excluding AJR*, the commercial 2025→2026 mean is +19,085% vs. a median of +6.49%. A further 27 non-AJR* F/L parcels have >500% increases — these appear to be newly-platted lots or previously-unvalued parcels that received a $1 placeholder value in the 2025 certified export and their first real appraisal in 2026 preliminary. Investigation script: `query_remaining_outliers.py`. The median (6.49%) is the appropriate summary statistic; the mean is distorted by these extreme-base-value records and should not be used as a market indicator.
+**Residual outliers after AJR* exclusion (verified June 22, 2026):** After excluding AJR*, the commercial 2025→2026 mean is +19,085% vs. a median of +6.49%. A further 27 non-AJR* F/L parcels have >500% increases. Investigation via `query_remaining_outliers.py` found these are **not** placeholder artifacts — 26 of 27 have real 2025 certified values and represent genuine large commercial reappraisals by TCAD. Notable examples:
+
+| geo_id | Address | MV 2025 | MV 2026 | Change |
+|--------|---------|---------|---------|--------|
+| 0134180201 | 4408 Long Champ Dr | $15.9M | $111.9M | +602% |
+| 0331310602 | 6005 S FM 973 | $5.6M | $55.2M | +878% |
+| 0430130406 | 707 W Slaughter Ln | $2.6M | $36.4M | +1,312% |
+| 0200160205 | 5119 E 7th St | $7.1M | $51.1M | +617% |
+
+Only `0275010202` (Howard Ln) had a true $1 base. Excluding mv_2025 ≤ $100 brings the mean to +20.66%, which still reflects actual large commercial reappraisals. **No further exclusions are warranted** — these are legitimate TCAD valuations. The **median (+6.49%)** is the appropriate summary statistic for commercial; the mean is not meaningful given this distribution. Note: geo_id `2-001470-0` uses a non-standard format (possibly a utility or complex account) and warrants manual review if its commercial comparability is needed.
 
 **The one prominent real-property outlier in the 2026 data:** Geo_id `0275010202` (HOWARD LN TX 78728) is a regular 10-digit TCAD F2 parcel with classi_cd=61. It went from $1 MV (2025 certified) to $2,588,746 MV (2026 preliminary) — a new lot receiving its first appraisal. Confirmed: not an AJR* account; no AV>MV anomaly in 2026 (AV=$1 < MV=$2.6M); included in the 2026 Commercial benchmark. Note: the 2026 preliminary export left AV and TV at $1 (matching the 2025 certified values) — the assessed and taxable values for this lot have not been finalized in the preliminary roll. The `risk_large_value_jump` flag fires for this parcel (expected).

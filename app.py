@@ -708,10 +708,66 @@ def tax_rates():
 
 @app.route("/snapshot")
 def county_snapshot():
-    """County Market Snapshot — 2026 preliminary vs 2025 certified market value comparison."""
+    """County Market Snapshot — 2026 preliminary vs 2025 certified.
+    Supports ?view=overall|residential|commercial (default: overall).
+    """
+    view = request.args.get("view", "overall")
+    if view not in ("overall", "residential", "commercial"):
+        view = "overall"
 
-    # Aggregate by property type (certified real-estate prefixes only — exclude X/M/N/O)
-    rows = query("""
+    # ── View-specific WHERE clause applied to the y25 CTE ───────────────────
+    # Base exclusions always apply: X-prefix (exempt), AJR* (personal property supplements).
+    if view == "residential":
+        view_where = "AND LEFT(p.state_cd1,1) = 'A'"
+        ptype_case = """
+            CASE
+                WHEN y25.state_cd1 LIKE 'A1%%' THEN 'Single-Family'
+                WHEN y25.state_cd1 LIKE 'A2%%' THEN 'Condo / Townhome'
+                WHEN y25.state_cd1 LIKE 'A4%%' THEN 'Condo / Townhome'
+                ELSE 'Other Residential'
+            END"""
+        sort_case = """
+            CASE
+                WHEN y25.state_cd1 LIKE 'A1%%' THEN 1
+                WHEN y25.state_cd1 LIKE 'A2%%' OR y25.state_cd1 LIKE 'A4%%' THEN 2
+                ELSE 3
+            END"""
+    elif view == "commercial":
+        view_where = "AND LEFT(p.state_cd1,1) IN ('F','L')"
+        ptype_case = """
+            CASE
+                WHEN LEFT(y25.state_cd1,1) = 'F' THEN 'Commercial Improved'
+                WHEN LEFT(y25.state_cd1,1) = 'L' THEN 'Commercial Land / RE'
+                ELSE 'Other'
+            END"""
+        sort_case = """
+            CASE
+                WHEN LEFT(y25.state_cd1,1) = 'F' THEN 1
+                WHEN LEFT(y25.state_cd1,1) = 'L' THEN 2
+                ELSE 3
+            END"""
+    else:  # overall
+        view_where = "AND p.state_cd1 NOT LIKE 'N%%'"
+        ptype_case = """
+            CASE
+                WHEN LEFT(y25.state_cd1,1) = 'A'        THEN 'Residential'
+                WHEN LEFT(y25.state_cd1,1) = 'B'        THEN 'Multi-Family'
+                WHEN LEFT(y25.state_cd1,1) IN ('F','L') THEN 'Commercial'
+                WHEN LEFT(y25.state_cd1,1) = 'C'        THEN 'Land/Vacant'
+                WHEN LEFT(y25.state_cd1,1) IN ('D','E') THEN 'Agricultural'
+                ELSE 'Other'
+            END"""
+        sort_case = """
+            CASE
+                WHEN LEFT(y25.state_cd1,1) = 'A'        THEN 1
+                WHEN LEFT(y25.state_cd1,1) = 'B'        THEN 2
+                WHEN LEFT(y25.state_cd1,1) IN ('F','L') THEN 3
+                WHEN LEFT(y25.state_cd1,1) = 'C'        THEN 4
+                WHEN LEFT(y25.state_cd1,1) IN ('D','E') THEN 5
+                ELSE 6
+            END"""
+
+    rows = query(f"""
         WITH y25 AS (
             SELECT p.geo_id, p.state_cd1, t.market_value AS mv25
             FROM parcel p
@@ -719,6 +775,7 @@ def county_snapshot():
             WHERE t.market_value > 0
               AND p.state_cd1 NOT LIKE 'X%%'
               AND p.geo_id NOT LIKE 'AJR%%'
+              {view_where}
         ),
         y26 AS (
             SELECT geo_id, market_value AS mv26
@@ -731,22 +788,8 @@ def county_snapshot():
                 y25.mv25,
                 y26.mv26,
                 (y26.mv26 - y25.mv25)::FLOAT / y25.mv25 AS pct_chg,
-                CASE
-                    WHEN LEFT(y25.state_cd1,1) = 'A'        THEN 'Residential'
-                    WHEN LEFT(y25.state_cd1,1) = 'B'        THEN 'Multi-Family'
-                    WHEN LEFT(y25.state_cd1,1) IN ('F','L') THEN 'Commercial'
-                    WHEN LEFT(y25.state_cd1,1) = 'C'        THEN 'Land/Vacant'
-                    WHEN LEFT(y25.state_cd1,1) IN ('D','E') THEN 'Agricultural'
-                    ELSE 'Other'
-                END AS ptype,
-                CASE
-                    WHEN LEFT(y25.state_cd1,1) = 'A'        THEN 1
-                    WHEN LEFT(y25.state_cd1,1) = 'B'        THEN 2
-                    WHEN LEFT(y25.state_cd1,1) IN ('F','L') THEN 3
-                    WHEN LEFT(y25.state_cd1,1) = 'C'        THEN 4
-                    WHEN LEFT(y25.state_cd1,1) IN ('D','E') THEN 5
-                    ELSE 6
-                END AS sort_key
+                ({ptype_case}) AS ptype,
+                ({sort_case}) AS sort_key
             FROM y25 JOIN y26 USING (geo_id)
         )
         SELECT
@@ -766,8 +809,8 @@ def county_snapshot():
         ORDER BY sort_key
     """)
 
-    # County total (excludes AJR* personal property supplement accounts)
-    totals = query("""
+    # Totals row (same view filter applied)
+    totals = query(f"""
         WITH y25 AS (
             SELECT t.geo_id, market_value AS mv25
             FROM parcel_tax_year t
@@ -776,6 +819,7 @@ def county_snapshot():
               AND p.state_cd1 NOT LIKE 'X%%'
               AND p.state_cd1 NOT LIKE 'N%%'
               AND t.geo_id NOT LIKE 'AJR%%'
+              {view_where}
         ),
         y26 AS (
             SELECT geo_id, market_value AS mv26
@@ -799,6 +843,7 @@ def county_snapshot():
         "snapshot.html",
         rows=rows,
         totals=totals,
+        view=view,
     )
 
 
@@ -833,8 +878,10 @@ def api_benchmark():
     if year not in (2021, 2022, 2023, 2024, 2025, 2026):
         return jsonify({"ok": False, "error": "Year must be between 2021 and 2026"})
 
-    # For 2026 preliminary data allow both 'preliminary' and 'certified' data_source
-    ds_filter = "" if year == 2026 else "AND (t.data_source IS NULL OR t.data_source = 'certified')"
+    # Allow AJR data (ajr_2021…ajr_2024) and certified (NULL) for historical years.
+    # Exclude only 'preliminary' (2026 data loaded into all years if ever reloaded).
+    # 2026 has no filter — preliminary data is intentionally included.
+    ds_filter = "" if year == 2026 else "AND (t.data_source IS NULL OR t.data_source != 'preliminary')"
     nb_filter = "AND p.neighborhood_cd = %s" if neighborhood else ""
     # Exclude non-real-property accounts from all live benchmark queries (mirrors compute_metrics.py).
     # Only X (exempt) and N (personal property, 3 parcels) excluded from state_cd1.
@@ -869,7 +916,7 @@ def api_benchmark():
         prev_year = year - 1
         yoy = None
         if prev_year >= 2021:
-            prev_ds = "" if prev_year == 2026 else "AND (t.data_source IS NULL OR t.data_source = 'certified')"
+            prev_ds = "" if prev_year == 2026 else "AND (t.data_source IS NULL OR t.data_source != 'preliminary')"
             prev_params = [prev_year, classi_cd]
             if neighborhood:
                 prev_params.append(neighborhood)
