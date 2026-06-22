@@ -266,6 +266,11 @@ STATE_CD_DESCRIPTIONS = {
     # Exempt / Special
     "X":  "Exempt Property",
     "X1": "Totally Exempt",
+    # Non-standard codes that appear in TCAD data
+    "O":  "Other / Unclassified",   # 3.9% of parcels — TCAD catch-all, no Comptroller equivalent
+    "S":  "Special / State Property",
+    "N":  "Non-Taxable",
+    "ER": "Exempt — Religious",
 }
 
 # ── TCAD internal numeric use code → (description, valuation_method) ──────────
@@ -358,6 +363,9 @@ VALUATION_METHOD_BY_CLASS = {
     "L": "Cost",        # Personal property — cost (depreciated)
     "M": "Cost",        # Mobile home — cost
     "X": "Exempt",      # Exempt property
+    "O": "Unknown",     # TCAD catch-all — no standard valuation method
+    "S": "Unknown",     # Special/State
+    "N": "Unknown",
 }
 
 
