@@ -336,13 +336,13 @@
             {% set bal_complete = (tot.due_n == n_ent and tot.paid_n == n_ent) %}
             {% set total_bal    = tot.due - tot.paid %}
             <tr>
-              <td class="fw-bold" style="font-size:13px; padding-top:10px; border-top:2px solid var(--border-strong);">Combined Rate</td>
+              <td class="fw-semibold" style="font-size:12px; padding-top:10px; border-top:2px solid var(--border-strong);">Combined Rate</td>
               {% for yr_total in [tot.r2021, tot.r2022, tot.r2023, tot.r2024] %}
-              <td class="text-end fw-semibold small" style="border-top:2px solid var(--border-strong); font-size:11.5px;">
+              <td class="text-end fw-semibold" style="font-size:12px; border-top:2px solid var(--border-strong);">
                 {{ "{:.4f}%".format(yr_total) if yr_total else "—" }}
               </td>
               {% endfor %}
-              <td class="text-end fw-bold" style="border-top:2px solid var(--border-strong);">
+              <td class="text-end fw-semibold" style="font-size:12px; border-top:2px solid var(--border-strong);">
                 {{ "{:.4f}%".format(tot.rate) if tot.rate else "—" }}
               </td>
               <td class="text-end fw-semibold {% if rate_delta < 0 %}text-success{% elif rate_delta > 0 %}text-danger{% endif %}"
@@ -518,10 +518,22 @@
             </tr>
             {% endif %}
             <tr class="divider-row"><td colspan="4"></td></tr>
-            {# Total Tax #}
+            {# Total Tax / Est. 2026 Tax #}
             <tr>
-              <th class="text-muted fw-normal small ps-3">Total Tax</th>
-              <td class="text-end" style="color:var(--text-3); font-style:italic; font-size:12px;">Pending certification</td>
+              <th class="text-muted fw-normal small ps-3">
+                Total Tax
+                {% if estimated_tax_2026 %}<span class="d-block" style="font-size:10px; font-weight:400; color:var(--text-3);">2026 = estimate</span>{% endif %}
+              </th>
+              <td class="text-end">
+                {% if estimated_tax_2026 %}
+                  <span class="badge-estimated me-1">Estimated</span>
+                  <span style="font-size:13px; font-weight:600;">~${{ "{:,.0f}".format(estimated_tax_2026) }}</span>
+                {% elif current_2026 and current_2026.taxable_value %}
+                  <span class="na-cell" title="Blended 2025 entity rates not available for this parcel">Not available</span>
+                {% else %}
+                  <span class="na-cell" title="Taxable value not available for 2026">Pending certification</span>
+                {% endif %}
+              </td>
               <td class="text-end">
                 {% if current and current.total_tax %}<span class="primary-value">${{ "{:,.2f}".format(current.total_tax) }}</span>
                 {% else %}<span class="na-cell">—</span>{% endif %}
@@ -535,6 +547,10 @@
     <div class="card-footer text-muted small">
       2026 from June 9, 2026 TCAD preliminary export — subject to change; certified July 25, 2026.
       No 2026 tax billing until post-certification.
+      {% if estimated_tax_2026 %}
+      <span class="badge-estimated">Estimated</span> 2026 Total Tax = 2026 preliminary taxable value × 2025 blended entity rates.
+      Actual 2026 tax set after certification and entity budget adoption.
+      {% endif %}
       Change%: <span class="text-danger fw-semibold">red</span> = higher burden,
       <span class="text-success fw-semibold">green</span> = lower.
     </div>
@@ -903,6 +919,10 @@
         <select id="benchGeoFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;" disabled title="Sub-county geography filters coming soon">
           <option value="county">All Travis County</option>
         </select>
+        {# Neighborhood #}
+        <select id="benchNbFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;">
+          <option value="">— Neighborhood —</option>
+        </select>
         {# Property Type #}
         <select id="benchTypeFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;">
           <option value="">— Type —</option>
@@ -913,8 +933,10 @@
         </select>
         {# Year #}
         <select id="benchYearFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;">
-          {% for yr in [2025, 2024, 2023, 2022, 2021] %}
-          <option value="{{ yr }}" {% if yr == 2025 %}selected{% endif %}>{{ yr }}</option>
+          {% for yr in [2026, 2025, 2024, 2023, 2022, 2021] %}
+          <option value="{{ yr }}" {% if yr == 2025 %}selected{% endif %}>
+            {{ yr }}{% if yr == 2026 %} (Preliminary){% endif %}
+          </option>
           {% endfor %}
         </select>
         <span id="benchLoading" style="display:none; color:var(--text-3);">Loading…</span>
@@ -1134,6 +1156,7 @@ if (rCtx) {
   const selType = document.getElementById('benchTypeFilter');
   const selCode = document.getElementById('benchCodeFilter');
   const selYear = document.getElementById('benchYearFilter');
+  const selNb   = document.getElementById('benchNbFilter');
   const loadingEl = document.getElementById('benchLoading');
   const filterLabelEl = document.getElementById('benchFilterLabel');
   const footerTypeEl  = document.getElementById('benchFooterType');
@@ -1175,6 +1198,26 @@ if (rCtx) {
         if (matchOpt) {
           selType.value = defaultBenchLabel;
           populateCodeDropdown(defaultBenchLabel, parcelClassiCd);
+        }
+        // Populate neighborhood dropdown
+        const nbs = data.neighborhoods || [];
+        const nbCovPct = data.neighborhood_coverage_pct;
+        if (nbs.length > 0) {
+          if (nbCovPct < 80) {
+            const note = document.createElement('option');
+            note.disabled = true;
+            note.textContent = `⚠ Coverage: ${nbCovPct}% of parcels`;
+            selNb.appendChild(note);
+          }
+          nbs.forEach(item => {
+            const opt = document.createElement('option');
+            opt.value = item.code;
+            opt.textContent = `${item.code} (${item.n.toLocaleString()})`;
+            selNb.appendChild(opt);
+          });
+        } else {
+          selNb.disabled = true;
+          selNb.options[0].textContent = 'No neighborhood data';
         }
       })
       .catch(() => {/* silently ignore if meta endpoint not yet live */});
@@ -1252,6 +1295,7 @@ if (rCtx) {
     const year = parseInt(selYear.value, 10) || 2025;
     const propType = selType.value;
     const classiCd = selCode.value;
+    const neighborhood = selNb ? selNb.value : '';
 
     // Build params — prefer classi_cd filter if selected, else prop_type
     const params = new URLSearchParams({ year });
@@ -1262,6 +1306,7 @@ if (rCtx) {
     } else {
       return; // nothing to filter on
     }
+    if (neighborhood) params.set('neighborhood', neighborhood);
 
     loadingEl.style.display = 'inline';
     fetch(`/api/benchmark?${params}`)
@@ -1276,7 +1321,21 @@ if (rCtx) {
         filterLabelEl.textContent = label;
         if (footerTypeEl) footerTypeEl.textContent = label;
         updateBenchmarkRow(data, year);
-        if (year === 2025) updateSummary(data, label);
+        if (year === 2025 || year === 2026) updateSummary(data, label);
+        // Show/hide Preliminary pill on benchmark card header
+        const hdr = document.querySelector('#benchmarkCard .card-header > span:first-child');
+        let prelBadge = document.getElementById('benchPrelimBadge');
+        if (data.is_preliminary) {
+          if (!prelBadge) {
+            prelBadge = document.createElement('span');
+            prelBadge.id = 'benchPrelimBadge';
+            prelBadge.className = 'badge-preliminary ms-2';
+            prelBadge.textContent = 'Preliminary';
+            hdr && hdr.appendChild(prelBadge);
+          }
+        } else {
+          prelBadge && prelBadge.remove();
+        }
       })
       .catch(() => { loadingEl.style.display = 'none'; });
   }
@@ -1288,6 +1347,7 @@ if (rCtx) {
   });
   selCode.addEventListener('change', fetchAndRender);
   selYear.addEventListener('change', fetchAndRender);
+  if (selNb) selNb.addEventListener('change', fetchAndRender);
 
   // Initialise on page load
   loadMeta();

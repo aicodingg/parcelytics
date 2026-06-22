@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% block title %}County Market Snapshot — Parcelytics{% endblock %}
+
+{% block content %}
+<div class="page-header mb-4 d-flex align-items-center gap-3 flex-wrap">
+  <div>
+    <h1 class="page-title mb-0">Travis County Market Snapshot</h1>
+    <p class="text-muted mb-0" style="font-size:13px; margin-top:4px;">
+      2026 Preliminary vs 2025 Certified — all taxable real property
+      <span class="badge-preliminary ms-2">Preliminary</span>
+    </p>
+  </div>
+</div>
+
+{% if totals %}
+{# ── Headline cards ────────────────────────────────────────────── #}
+{% set mv_delta_b = (totals.total_mv26_b - totals.total_mv25_b) | round(2) %}
+{% set mv_delta_pct = ((totals.total_mv26_b - totals.total_mv25_b) / totals.total_mv25_b * 100) | round(1) %}
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="card h-100">
+      <div class="card-body text-center">
+        <div class="text-muted small text-uppercase mb-1">2025 Total MV (Certified)</div>
+        <div style="font-size:1.6rem; font-weight:700; font-family:var(--font-mono);">
+          ${{ "{:,.2f}B".format(totals.total_mv25_b) }}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card h-100">
+      <div class="card-body text-center">
+        <div class="text-muted small text-uppercase mb-1">2026 Total MV (Preliminary)</div>
+        <div style="font-size:1.6rem; font-weight:700; font-family:var(--font-mono);">
+          ${{ "{:,.2f}B".format(totals.total_mv26_b) }}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card h-100">
+      <div class="card-body text-center">
+        <div class="text-muted small text-uppercase mb-1">Net Change</div>
+        <div style="font-size:1.6rem; font-weight:700; font-family:var(--font-mono);"
+             class="{% if mv_delta_b >= 0 %}text-danger{% else %}text-success{% endif %}">
+          {{ "+" if mv_delta_b >= 0 else "" }}${{ "{:,.2f}B".format(mv_delta_b) }}
+        </div>
+        <div class="text-muted small">{{ "+" if mv_delta_pct >= 0 else "" }}{{ mv_delta_pct }}%</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card h-100">
+      <div class="card-body text-center">
+        <div class="text-muted small text-uppercase mb-1">Median Parcel Change</div>
+        <div style="font-size:1.6rem; font-weight:700; font-family:var(--font-mono);"
+             class="{% if totals.median_pct >= 0 %}text-danger{% else %}text-success{% endif %}">
+          {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
+        </div>
+        <div class="text-muted small">{{ "{:,}".format(totals.n_up) }} ↑ &nbsp; {{ "{:,}".format(totals.n_down) }} ↓</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Investor takeaway ─────────────────────────────────────────── #}
+<div class="card mb-4" style="border-left:4px solid var(--accent);">
+  <div class="card-body" style="font-size:14px; line-height:1.65;">
+    {% if rows %}
+    {% set res = rows | selectattr('ptype', 'equalto', 'Residential') | list | first | default(none) %}
+    {% set com = rows | selectattr('ptype', 'equalto', 'Commercial') | list | first | default(none) %}
+    {% set mf  = rows | selectattr('ptype', 'equalto', 'Multi-Family') | list | first | default(none) %}
+    <strong>Investor takeaway:</strong>
+    {% if res %}
+      Residential owners should expect
+      <strong class="{% if res.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+        {{ "modest relief" if res.median_pct < 0 else "modest increases" }}
+      </strong>
+      (median {{ "+" if res.median_pct >= 0 else "" }}{{ res.median_pct }}%) —
+      more parcels decreased in value than increased
+      ({{ "{:,}".format(res.n_down) }} down vs {{ "{:,}".format(res.n_up) }} up).
+    {% endif %}
+    {% if com %}
+      Commercial and land owners are looking at
+      <strong class="text-danger">meaningful increases</strong>
+      — commercial added ${{ "{:,.1f}B".format(com.total_mv26_b - com.total_mv25_b) }} in aggregate preliminary value.
+    {% endif %}
+    {% if mf %}
+      Multi-family values
+      {% if mf.median_pct < 0 %}declined (median {{ mf.median_pct }}%),
+      reflecting continued cap-rate pressure in the multifamily sector.
+      {% else %}increased (median +{{ mf.median_pct }}%).{% endif %}
+    {% endif %}
+    County total taxable value: ${{ "{:,.2f}B".format(totals.total_mv25_b) }} → ${{ "{:,.2f}B".format(totals.total_mv26_b) }} (+${{ "{:,.2f}B".format(mv_delta_b) }}).
+    {% endif %}
+  </div>
+</div>
+
+{# ── Property-type breakdown table ─────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center gap-2">
+    2026 Preliminary vs 2025 Certified — By Property Type
+    <span class="badge-preliminary">Preliminary</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead class="table-light small text-muted text-uppercase">
+          <tr>
+            <th>Property Type</th>
+            <th class="text-end">Parcels</th>
+            <th class="text-end">↑ Up</th>
+            <th class="text-end">↓ Down</th>
+            <th class="text-end">= Flat</th>
+            <th class="text-end">Median Δ</th>
+            <th class="text-end">P25 / P75</th>
+            <th class="text-end">2025 Total MV</th>
+            <th class="text-end">2026 Total MV</th>
+            <th class="text-end">Net Δ ($B)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          {% if r.ptype != 'Other' %}
+          {% set delta_b = r.total_mv26_b - r.total_mv25_b %}
+          <tr>
+            <td class="fw-semibold">{{ r.ptype }}</td>
+            <td class="text-end text-muted">{{ "{:,}".format(r.n_parcels) }}</td>
+            <td class="text-end text-danger">{{ "{:,}".format(r.n_up) }}</td>
+            <td class="text-end text-success">{{ "{:,}".format(r.n_down) }}</td>
+            <td class="text-end text-muted">{{ "{:,}".format(r.n_flat) }}</td>
+            <td class="text-end fw-semibold {% if r.median_pct > 0 %}text-danger{% elif r.median_pct < 0 %}text-success{% endif %}">
+              {{ "+" if r.median_pct >= 0 else "" }}{{ r.median_pct }}%
+            </td>
+            <td class="text-end text-muted small">
+              {{ "+" if r.p25_pct >= 0 else "" }}{{ r.p25_pct }}% / {{ "+" if r.p75_pct >= 0 else "" }}{{ r.p75_pct }}%
+            </td>
+            <td class="text-end text-muted">${{ "{:,.2f}B".format(r.total_mv25_b) }}</td>
+            <td class="text-end">${{ "{:,.2f}B".format(r.total_mv26_b) }}</td>
+            <td class="text-end fw-semibold {% if delta_b > 0 %}text-danger{% elif delta_b < 0 %}text-success{% endif %}">
+              {{ "+" if delta_b >= 0 else "" }}${{ "{:,.2f}B".format(delta_b) }}
+            </td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          {% set t = totals %}
+          {% set t_delta = t.total_mv26_b - t.total_mv25_b %}
+          <tr class="fw-bold table-light">
+            <td>All Real Property</td>
+            <td class="text-end">{{ "{:,}".format(t.n_total) }}</td>
+            <td class="text-end text-danger">{{ "{:,}".format(t.n_up) }}</td>
+            <td class="text-end text-success">{{ "{:,}".format(t.n_down) }}</td>
+            <td class="text-end text-muted">—</td>
+            <td class="text-end {% if t.median_pct > 0 %}text-danger{% elif t.median_pct < 0 %}text-success{% endif %}">
+              {{ "+" if t.median_pct >= 0 else "" }}{{ t.median_pct }}%
+            </td>
+            <td></td>
+            <td class="text-end">${{ "{:,.2f}B".format(t.total_mv25_b) }}</td>
+            <td class="text-end">${{ "{:,.2f}B".format(t.total_mv26_b) }}</td>
+            <td class="text-end {% if t_delta >= 0 %}text-danger{% else %}text-success{% endif %}">
+              {{ "+" if t_delta >= 0 else "" }}${{ "{:,.2f}B".format(t_delta) }}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+  <div class="card-footer text-muted small">
+    Based on 2026 Preliminary TCAD Appraisal Export (June 9, 2026) vs 2025 Certified Export.
+    Subject to change at certification (July 25, 2026).
+    Excludes: tax-exempt accounts (X state_cd1 prefix), personal property accounts (N prefix, 3 accounts),
+    and AJR* personal property supplement records (placeholder $1 values in certified data).
+    M (manufactured homes) and O (other real property) are included as real property.
+    Median Δ = median parcel-level % change; P25/P75 = 25th/75th percentiles.
+    Red = increasing burden, green = decreasing.
+  </div>
+</div>
+
+{# ── Chart ─────────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-header">Net Value Change by Property Type ($B)</div>
+  <div class="card-body">
+    <canvas id="snapshotChart" height="80"></canvas>
+  </div>
+</div>
+
+{% else %}
+<div class="alert alert-info">
+  2026 preliminary data not yet loaded. Run the preliminary loader to populate this page.
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if rows %}
+<script>
+const snapLabels = {{ rows | selectattr('ptype', 'ne', 'Other') | map(attribute='ptype') | list | tojson }};
+const snapDeltas = [
+  {% for r in rows %}{% if r.ptype != 'Other' %}{{ (r.total_mv26_b - r.total_mv25_b) | round(2) }},{% endif %}{% endfor %}
+];
+const snapColors = snapDeltas.map(v => v >= 0 ? 'rgba(220,53,69,0.7)' : 'rgba(25,135,84,0.7)');
+
+new Chart(document.getElementById('snapshotChart'), {
+  type: 'bar',
+  data: {
+    labels: snapLabels,
+    datasets: [{
+      label: 'Net MV Change ($B)',
+      data: snapDeltas,
+      backgroundColor: snapColors,
+      borderColor: snapColors.map(c => c.replace('0.7','1')),
+      borderWidth: 1,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: item => `${item.parsed.y >= 0 ? '+' : ''}$${item.parsed.y.toFixed(2)}B`
+        }
+      }
+    },
+    scales: {
+      y: {
+        ticks: { callback: v => (v >= 0 ? '+' : '') + '$' + v.toFixed(1) + 'B' },
+        grid: { color: 'rgba(0,0,0,0.06)' }
+      },
+      x: { grid: { display: false } }
+    }
+  }
+});
+</script>
+{% endif %}
+{% endblock %}

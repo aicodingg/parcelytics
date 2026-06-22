@@ -105,3 +105,73 @@ Some AJR parcels have `market_value = 0` or NULL for specific years (e.g., `0284
 
 ### 2025 Certified Export: ~9% of parcels have no land/imprv data
 44,114 of 479,181 2025 parcels (9%) have no `land_value` or `imprv_value`. These are accounts that do not appear in `LAND_DET.TXT` — typically exempt properties (churches, government), mineral accounts, or personal property accounts that have no land segments in the certified export. This is expected behavior, not a loader bug.
+
+### classi_cd source: IMP_INFO.TXT (improvement-level), not the parcel master record
+`classi_cd` (the TCAD numeric use code displayed in Property Info) is sourced from `IMP_INFO.TXT`, not from `PROP.TXT` or the parcel master record. The loader selects the highest-value non-`"00"` improvement row per parcel as the property-level use code (`backfill_classi_cd.py`). This means:
+
+- **Vacant land and some agricultural parcels** have no improvement records in `IMP_INFO.TXT`. For these, `classi_cd` will be NULL and the UI falls back to displaying the Comptroller `state_cd1` code instead. This is expected and correct behavior — vacant land has no improvement-level classification.
+- **Multi-improvement parcels** (e.g., a commercial property with a main building plus a secondary structure) are represented by their highest-value improvement's code. This may occasionally understate secondary uses.
+
+### Comptroller class / TCAD improvement code disagreement (example: 0284460113)
+Parcel `0284460113` carries `state_cd1 = A` (Comptroller residential single-family classification) but `classi_cd = 08` (TCAD improvement code for "Apartment 100+ Units"). The Comptroller's aggregate roll code and TCAD's parcel-level improvement record disagree on property use. The UI displays the TCAD `classi_cd` when available (more specific), falling back to `state_cd1` only when `classi_cd` is NULL. Investors should be aware that these two classification systems can diverge, particularly for parcels with non-standard uses or recent rezoning.
+
+### state_cd1 prefix population (517,614 total parcels as of June 2026)
+Full prefix breakdown from `query_state_cd1_prefixes.py`:
+
+| Prefix | Count | % | Notes |
+|--------|------:|---:|-------|
+| A | 334,227 | 64.6% | Residential single-family |
+| L | 42,504 | 8.2% | Commercial real estate |
+| C | 38,719 | 7.5% | Land / vacant |
+| O | 19,986 | 3.9% | Other real property (real estate, kept in benchmarks) |
+| NULL | 17,175 | 3.3% | No state_cd1 — see note below |
+| F | 15,132 | 2.9% | Commercial improved |
+| X | 13,998 | 2.7% | Tax-exempt (churches, government — excluded from benchmarks) |
+| B | 12,981 | 2.5% | Multi-family residential |
+| M | 10,699 | 2.1% | Manufactured homes (real property under TX law, kept in benchmarks) |
+| D | 5,078 | 1.0% | Agricultural |
+| E | 4,831 | 0.9% | Rural / open space |
+| J | 1,524 | 0.3% | Industrial / utility real property |
+| S | 751 | 0.1% | State-assessed utility real property |
+| G | 6 | 0.0% | Government-assessed |
+| N | 3 | 0.0% | Personal property (excluded from benchmarks) |
+
+**No unrecognized prefixes were found** — all 517,614 parcels use standard Texas Comptroller codes.
+
+**Benchmark exclusion policy (as implemented in `compute_metrics.py` and `/api/benchmark`):**
+- Excluded: `X` (tax-exempt, 14K parcels) and `N` (personal property, 3 parcels).
+- Kept: all others including `M` (manufactured homes — real property) and `O` (other real property).
+- `NULL` parcels (17,175) are naturally excluded because NULL does not match any `LIKE` pattern in the TYPE_GROUPS WHERE clause.
+
+**NULL state_cd1 parcels:** The 17,175 parcels with no state_cd1 are the same population as those with no `neighborhood_cd` — both fields come from AJR and are absent for accounts not included in the aggregate EARS/AJR roll (mineral accounts, personal property accounts, and some exempt special-use accounts that have no real-property segment). These accounts do not appear in any benchmark calculation.
+
+### neighborhood_cd field: TCAD alphanumeric codes
+`neighborhood_cd` is populated from AJR field[16] (loaded by `load_ajr.py`). Coverage as of June 2026: **96.7% of parcels** (500,439 of 517,614). The 17,175 NULL parcels are the same as the NULL state_cd1 group above.
+
+The values are TCAD internal neighborhood codes (e.g., `A7100`, `J3000`, `B0810`) — not human-readable neighborhood names. These codes represent TCAD appraisal neighborhoods used for mass appraisal uniformity; they do not correspond to public neighborhood names or zip codes. The Benchmark filter uses them as-is for grouping — an investor can filter to parcels with the same TCAD appraisal neighborhood as the subject parcel, which is a meaningful comparability filter for mass-appraisal context.
+
+Top 5 codes by parcel count: `A7100` (3,462), `A5850` (3,272), `J3000` (2,960), `J3100` (2,948), `B0810` (2,903).
+
+### AJR* personal property supplement accounts — permanent exclusion policy
+
+**What AJR* accounts are:** `geo_id` values starting with `AJR` (e.g., `AJR929676`, `AJR963828`) are **personal property supplement records** loaded from the TCAD AJR file, not real estate parcels from the Certified Appraisal Export. They are commercial personal property accounts (equipment, inventory, etc.) supplementally carried in the AJR. They carry `market_value = $1` as a placeholder in certified data and receive real assessed values in the preliminary roll.
+
+**Why they distort benchmarks:** A $1 certified base value produces percentage changes of 115,000%–258,000,000% when a real preliminary value is assigned — pure arithmetic artifacts. These accounts produced a mean commercial MV change of **6,084%** (vs. 0.00% median) before the fix. After exclusion, the commercial mean converges to within single-digit percentage points of the median.
+
+**Platform-wide exclusion policy** (applied at query time, per Data Integrity Standard Rule 1 — data stored as-is):
+
+| Context | Exclusion applied |
+|---------|------------------|
+| `/snapshot` county comparison — type breakdown | `AND p.geo_id NOT LIKE 'AJR%%'` |
+| `/snapshot` county totals | `AND t.geo_id NOT LIKE 'AJR%%'` / `AND geo_id NOT LIKE 'AJR%%'` |
+| `/api/benchmark` live aggregation (all years incl. 2026) | `AND p.geo_id NOT LIKE 'AJR%%'` via `excl_filter` |
+| `compute_metrics.py` county_benchmark INSERT | `AND p.geo_id NOT LIKE 'AJR%%'` |
+| `query_2026_vs_2025.py` analysis script | `AND p.geo_id NOT LIKE 'AJR%%'` |
+
+**Not excluded:** Parcel search and property detail pages include AJR* accounts — if someone searches for an AJR* geo_id directly, they can view the record. The exclusion applies only to aggregate/benchmark/comparison contexts.
+
+**Impact of exclusion on county_benchmark (verified June 22, 2026):** 32,576 AJR* F/L accounts were removed from the commercial benchmark source. The commercial parcel_count dropped from ~46,103 to **13,527** real estate parcels. The Residential count was unaffected (317,461 parcels).
+
+**Residual outliers after AJR* exclusion:** After excluding AJR*, the commercial 2025→2026 mean is +19,085% vs. a median of +6.49%. A further 27 non-AJR* F/L parcels have >500% increases — these appear to be newly-platted lots or previously-unvalued parcels that received a $1 placeholder value in the 2025 certified export and their first real appraisal in 2026 preliminary. Investigation script: `query_remaining_outliers.py`. The median (6.49%) is the appropriate summary statistic; the mean is distorted by these extreme-base-value records and should not be used as a market indicator.
+
+**The one prominent real-property outlier in the 2026 data:** Geo_id `0275010202` (HOWARD LN TX 78728) is a regular 10-digit TCAD F2 parcel with classi_cd=61. It went from $1 MV (2025 certified) to $2,588,746 MV (2026 preliminary) — a new lot receiving its first appraisal. Confirmed: not an AJR* account; no AV>MV anomaly in 2026 (AV=$1 < MV=$2.6M); included in the 2026 Commercial benchmark. Note: the 2026 preliminary export left AV and TV at $1 (matching the 2025 certified values) — the assessed and taxable values for this lot have not been finalized in the preliminary roll. The `risk_large_value_jump` flag fires for this parcel (expected).

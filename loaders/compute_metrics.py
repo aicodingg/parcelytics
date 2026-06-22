@@ -46,6 +46,35 @@ TYPE_GROUPS = [
     (["F"],      "Commercial",   "F"),
 ]
 
+# State code prefixes excluded from benchmark aggregation.
+# Based on query_state_cd1_prefixes.py analysis of 517,614 Travis CAD parcels:
+#   X* (13,998) — tax-exempt accounts (churches, government, nonprofits; XV, XB,
+#                 XU, XI, XJ, XR, XD, XG, XO, XL, XN, XA). Excluded because
+#                 large preliminary-vs-certified swings on near-zero prior values
+#                 produce meaningless benchmark statistics.
+#   N*  (3)     — personal property accounts. Negligible count; excluded for
+#                 correctness.
+#
+# KEPT in benchmarks (all confirmed real property in Travis CAD):
+#   M* (10,699) — manufactured homes (treated as real property under TX law)
+#   O* (19,986) — "Other" use-type parcels (real property with valid MV)
+#   L* (42,504) — commercial real estate (already in Commercial TYPE_GROUP)
+#   J*  (1,524) — industrial / utility real property
+#   S*    (751) — state-assessed utility real property
+#   G*      (6) — government-assessed parcels (de minimis)
+#
+# NULL state_cd1 (17,175) parcels are naturally excluded because NULL does not
+# match any LIKE pattern in the TYPE_GROUPS WHERE clause.
+BENCHMARK_EXCLUDE_PREFIXES = ["X", "N"]
+
+
+def _exclude_clause():
+    """SQL fragment excluding non-real-property state_cd1 prefixes from benchmark queries."""
+    parts = " AND ".join(
+        f"p.state_cd1 NOT LIKE '{px}%%'" for px in BENCHMARK_EXCLUDE_PREFIXES
+    )
+    return f"AND ({parts})"
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 def _like_clause(prefixes):
@@ -173,9 +202,16 @@ def compute_parcel_metrics(conn):
                         / LAG(pty.assessed_value) OVER w, 4)
                 END,
 
-                -- yoy_tax_amount_pct: Not Available — no prior-year billing data exists yet
-                -- Will be updated when historical billing arrives via PIR
-                NULL,
+                -- yoy_tax_amount_pct: computed when prior-year billing exists;
+                -- NULL (Not Available) when either year lacks billing data.
+                -- Initially NULL for 2021-2024 (no historical billing yet);
+                -- flips to real values after load_pir_billing.py runs.
+                CASE
+                    WHEN LAG(tb.total_tax) OVER w > 0
+                    THEN ROUND(
+                        100.0 * (tb.total_tax - LAG(tb.total_tax) OVER w)
+                        / LAG(tb.total_tax) OVER w, 4)
+                END,
 
                 -- Assessment ratio: assessed / market
                 -- NULL if market = 0 OR ratio > 100 (AJR bad-data rows where
@@ -303,6 +339,7 @@ def compute_county_benchmarks(conn):
         cur.execute("DELETE FROM county_benchmark")
     conn.commit()
 
+    excl = _exclude_clause()
     with conn.cursor() as cur:
         for prefixes, label, prefix_key in TYPE_GROUPS:
             like_cond = _like_clause(prefixes)
@@ -339,7 +376,10 @@ def compute_county_benchmarks(conn):
                 LEFT JOIN parcel_metrics pm
                   ON pm.geo_id = pty.geo_id AND pm.tax_year = pty.tax_year
                 WHERE {like_cond}
+                  {excl}
+                  AND p.geo_id NOT LIKE 'AJR%%'
                   AND pty.market_value > 0
+                  AND (pty.data_source IS NULL OR pty.data_source = 'certified')
                 GROUP BY pty.tax_year
                 ON CONFLICT (county_code, tax_year, property_type_label) DO UPDATE
                     SET parcel_count                = EXCLUDED.parcel_count,

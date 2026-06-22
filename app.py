@@ -628,6 +628,18 @@ def property_detail(geo_id):
     # 2026 preliminary row (for the preliminary callout card)
     current_2026 = next((r for r in history if r["tax_year"] == 2026), None)
 
+    # Estimated 2026 total tax: taxable_value_2026 × blended 2025 entity rates
+    # Uses this parcel's specific entity mix (not county-wide avg) for accuracy.
+    # Only computed when taxable_value is available for 2026 — never falls back to MV.
+    estimated_tax_2026 = None
+    if current_2026 and current_2026.get("taxable_value") and entity_detail:
+        tv26 = current_2026["taxable_value"]
+        blended_rate_2025 = sum(
+            float(e["rate"]) for e in entity_detail if e.get("rate") is not None
+        )
+        if blended_rate_2025 > 0:
+            estimated_tax_2026 = round(tv26 * blended_rate_2025 / 100.0, 2)
+
     return render_template(
         "property.html",
         parcel=parcel,
@@ -651,6 +663,7 @@ def property_detail(geo_id):
         entity_rate_by_code=entity_rate_by_code,
         chart_entity_data=chart_entity_data,
         chart_years=chart_years,
+        estimated_tax_2026=estimated_tax_2026,
     )
 
 
@@ -693,6 +706,102 @@ def tax_rates():
     )
 
 
+@app.route("/snapshot")
+def county_snapshot():
+    """County Market Snapshot — 2026 preliminary vs 2025 certified market value comparison."""
+
+    # Aggregate by property type (certified real-estate prefixes only — exclude X/M/N/O)
+    rows = query("""
+        WITH y25 AS (
+            SELECT p.geo_id, p.state_cd1, t.market_value AS mv25
+            FROM parcel p
+            JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = 2025
+            WHERE t.market_value > 0
+              AND p.state_cd1 NOT LIKE 'X%%'
+              AND p.geo_id NOT LIKE 'AJR%%'
+        ),
+        y26 AS (
+            SELECT geo_id, market_value AS mv26
+            FROM parcel_tax_year
+            WHERE tax_year = 2026 AND market_value > 0
+        ),
+        joined AS (
+            SELECT
+                y25.state_cd1,
+                y25.mv25,
+                y26.mv26,
+                (y26.mv26 - y25.mv25)::FLOAT / y25.mv25 AS pct_chg,
+                CASE
+                    WHEN LEFT(y25.state_cd1,1) = 'A'        THEN 'Residential'
+                    WHEN LEFT(y25.state_cd1,1) = 'B'        THEN 'Multi-Family'
+                    WHEN LEFT(y25.state_cd1,1) IN ('F','L') THEN 'Commercial'
+                    WHEN LEFT(y25.state_cd1,1) = 'C'        THEN 'Land/Vacant'
+                    WHEN LEFT(y25.state_cd1,1) IN ('D','E') THEN 'Agricultural'
+                    ELSE 'Other'
+                END AS ptype,
+                CASE
+                    WHEN LEFT(y25.state_cd1,1) = 'A'        THEN 1
+                    WHEN LEFT(y25.state_cd1,1) = 'B'        THEN 2
+                    WHEN LEFT(y25.state_cd1,1) IN ('F','L') THEN 3
+                    WHEN LEFT(y25.state_cd1,1) = 'C'        THEN 4
+                    WHEN LEFT(y25.state_cd1,1) IN ('D','E') THEN 5
+                    ELSE 6
+                END AS sort_key
+            FROM y25 JOIN y26 USING (geo_id)
+        )
+        SELECT
+            ptype,
+            sort_key,
+            COUNT(*)                                                                        AS n_parcels,
+            SUM(CASE WHEN mv26 > mv25 THEN 1 ELSE 0 END)                                   AS n_up,
+            SUM(CASE WHEN mv26 < mv25 THEN 1 ELSE 0 END)                                   AS n_down,
+            SUM(CASE WHEN mv26 = mv25 THEN 1 ELSE 0 END)                                   AS n_flat,
+            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY pct_chg)::NUMERIC * 100, 2)  AS median_pct,
+            ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY pct_chg)::NUMERIC * 100, 2) AS p25_pct,
+            ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY pct_chg)::NUMERIC * 100, 2) AS p75_pct,
+            ROUND(SUM(mv25)::NUMERIC / 1e9, 2)                                             AS total_mv25_b,
+            ROUND(SUM(mv26)::NUMERIC / 1e9, 2)                                             AS total_mv26_b
+        FROM joined
+        GROUP BY ptype, sort_key
+        ORDER BY sort_key
+    """)
+
+    # County total (excludes AJR* personal property supplement accounts)
+    totals = query("""
+        WITH y25 AS (
+            SELECT t.geo_id, market_value AS mv25
+            FROM parcel_tax_year t
+            JOIN parcel p ON p.geo_id = t.geo_id
+            WHERE tax_year = 2025 AND market_value > 0
+              AND p.state_cd1 NOT LIKE 'X%%'
+              AND p.state_cd1 NOT LIKE 'N%%'
+              AND t.geo_id NOT LIKE 'AJR%%'
+        ),
+        y26 AS (
+            SELECT geo_id, market_value AS mv26
+            FROM parcel_tax_year
+            WHERE tax_year = 2026 AND market_value > 0
+              AND geo_id NOT LIKE 'AJR%%'
+        )
+        SELECT
+            COUNT(*)                                                                        AS n_total,
+            SUM(CASE WHEN mv26 > mv25 THEN 1 ELSE 0 END)                                   AS n_up,
+            SUM(CASE WHEN mv26 < mv25 THEN 1 ELSE 0 END)                                   AS n_down,
+            ROUND(SUM(mv25)::NUMERIC / 1e9, 3)                                             AS total_mv25_b,
+            ROUND(SUM(mv26)::NUMERIC / 1e9, 3)                                             AS total_mv26_b,
+            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
+                ORDER BY (mv26 - mv25)::FLOAT / mv25
+            )::NUMERIC * 100, 2)                                                           AS median_pct
+        FROM y25 JOIN y26 USING (geo_id)
+    """, one=True)
+
+    return render_template(
+        "snapshot.html",
+        rows=rows,
+        totals=totals,
+    )
+
+
 @app.route("/api/rates")
 def api_rates():
     """JSON endpoint for rate data (for dynamic chart filtering)."""
@@ -715,17 +824,30 @@ def api_benchmark():
       prop_type str  (default "")     — broad type label from county_benchmark table
       classi_cd str  (default "")     — specific TCAD use code; triggers on-the-fly aggregation
     """
-    year      = request.args.get("year", 2025, type=int)
-    prop_type = request.args.get("prop_type", "").strip()
-    classi_cd = request.args.get("classi_cd", "").strip()
+    year         = request.args.get("year", 2025, type=int)
+    prop_type    = request.args.get("prop_type", "").strip()
+    classi_cd    = request.args.get("classi_cd", "").strip()
+    neighborhood = request.args.get("neighborhood", "").strip()
 
-    # Guard: only allow certified years for benchmark (2021–2025)
-    if year not in (2021, 2022, 2023, 2024, 2025):
-        return jsonify({"ok": False, "error": "Year must be between 2021 and 2025"})
+    # Guard: allow certified years 2021–2025 plus 2026 preliminary
+    if year not in (2021, 2022, 2023, 2024, 2025, 2026):
+        return jsonify({"ok": False, "error": "Year must be between 2021 and 2026"})
+
+    # For 2026 preliminary data allow both 'preliminary' and 'certified' data_source
+    ds_filter = "" if year == 2026 else "AND (t.data_source IS NULL OR t.data_source = 'certified')"
+    nb_filter = "AND p.neighborhood_cd = %s" if neighborhood else ""
+    # Exclude non-real-property accounts from all live benchmark queries (mirrors compute_metrics.py).
+    # Only X (exempt) and N (personal property, 3 parcels) excluded from state_cd1.
+    # M (manufactured homes) and O (other real property) are kept — confirmed real property in Travis CAD.
+    # AJR* geo_ids = personal property supplement accounts loaded from AJR (not real estate); excluded.
+    excl_filter = "AND p.state_cd1 NOT LIKE 'X%%' AND p.state_cd1 NOT LIKE 'N%%' AND p.geo_id NOT LIKE 'AJR%%'"
 
     if classi_cd and classi_cd != "all":
         # ── On-the-fly aggregation by classi_cd ──────────────────────────
-        row = query("""
+        params_cc = [year, classi_cd]
+        if neighborhood:
+            params_cc.append(neighborhood)
+        row = query(f"""
             SELECT
                 COUNT(*)                                                               AS n_parcels,
                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.market_value)           AS median_market_value,
@@ -735,8 +857,10 @@ def api_benchmark():
             JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = %s
             WHERE p.classi_cd = %s
               AND t.market_value IS NOT NULL AND t.market_value > 0
-              AND (t.data_source IS NULL OR t.data_source = 'certified')
-        """, (year, classi_cd), one=True)
+              {ds_filter}
+              {excl_filter}
+              {nb_filter}
+        """, params_cc, one=True)
 
         entry = USE_CODE_LOOKUP.get(classi_cd, (classi_cd, ""))
         filter_label = f"{entry[0]} (code {classi_cd})"
@@ -745,14 +869,20 @@ def api_benchmark():
         prev_year = year - 1
         yoy = None
         if prev_year >= 2021:
-            prev_row = query("""
+            prev_ds = "" if prev_year == 2026 else "AND (t.data_source IS NULL OR t.data_source = 'certified')"
+            prev_params = [prev_year, classi_cd]
+            if neighborhood:
+                prev_params.append(neighborhood)
+            prev_row = query(f"""
                 SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.market_value) AS prev_med
                 FROM parcel p
                 JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = %s
                 WHERE p.classi_cd = %s
                   AND t.market_value IS NOT NULL AND t.market_value > 0
-                  AND (t.data_source IS NULL OR t.data_source = 'certified')
-            """, (prev_year, classi_cd), one=True)
+                  {prev_ds}
+                  {excl_filter}
+                  {nb_filter}
+            """, prev_params, one=True)
             if prev_row and prev_row["prev_med"] and row and row["median_market_value"]:
                 yoy = round((float(row["median_market_value"]) / float(prev_row["prev_med"]) - 1) * 100, 2)
 
@@ -766,29 +896,69 @@ def api_benchmark():
                 "median_yoy_value_change_pct": yoy,
                 "filter_label": filter_label,
                 "year": year,
+                "is_preliminary": year == 2026,
             })
         return jsonify({"ok": False, "error": "No data for this use code / year combination."})
 
     elif prop_type:
-        # ── Pre-aggregated county_benchmark table ─────────────────────────
-        row = query("""
-            SELECT * FROM county_benchmark
-            WHERE property_type_label = %s AND tax_year = %s
-        """, (prop_type, year), one=True)
-        if row:
-            return jsonify({
-                "ok": True,
-                "n_parcels": int(row["parcel_count"] or 0),
-                "median_market_value": float(row["median_market_value"] or 0),
-                "p25_market_value":    float(row["p25_market_value"]    or 0),
-                "p75_market_value":    float(row["p75_market_value"]    or 0),
-                "median_yoy_value_change_pct": (
-                    float(row["median_yoy_value_change_pct"])
-                    if row["median_yoy_value_change_pct"] is not None else None
-                ),
-                "filter_label": prop_type,
-                "year": year,
-            })
+        if year == 2026:
+            # ── 2026 live aggregation (preliminary — not in county_benchmark table) ──
+            _label_map = {
+                "Residential": ["A"], "Multi-Family": ["B"], "Land/Vacant": ["C"],
+                "Agricultural": ["D", "E"], "Commercial": ["F", "L"],
+            }
+            prefixes = _label_map.get(prop_type, [])
+            if not prefixes:
+                return jsonify({"ok": False, "error": "Unknown property type."})
+            like_parts = " OR ".join(f"p.state_cd1 LIKE '{px}%%'" for px in prefixes)
+            params_2026 = (neighborhood,) if neighborhood else None
+            row = query(f"""
+                SELECT
+                    COUNT(*)                                                            AS n_parcels,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.market_value)        AS median_market_value,
+                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY t.market_value)       AS p25_market_value,
+                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY t.market_value)       AS p75_market_value
+                FROM parcel p
+                JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = 2026
+                WHERE ({like_parts})
+                  AND t.market_value IS NOT NULL AND t.market_value > 0
+                  {excl_filter}
+                  {nb_filter}
+            """, params_2026, one=True)
+            if row and row["n_parcels"] > 0:
+                return jsonify({
+                    "ok": True,
+                    "n_parcels": int(row["n_parcels"]),
+                    "median_market_value": float(row["median_market_value"] or 0),
+                    "p25_market_value":    float(row["p25_market_value"]    or 0),
+                    "p75_market_value":    float(row["p75_market_value"]    or 0),
+                    "median_yoy_value_change_pct": None,
+                    "filter_label": prop_type,
+                    "year": 2026,
+                    "is_preliminary": True,
+                })
+            return jsonify({"ok": False, "error": "No 2026 preliminary data for this property type."})
+        else:
+            # ── Pre-aggregated county_benchmark table ─────────────────────────
+            row = query("""
+                SELECT * FROM county_benchmark
+                WHERE property_type_label = %s AND tax_year = %s
+            """, (prop_type, year), one=True)
+            if row:
+                return jsonify({
+                    "ok": True,
+                    "n_parcels": int(row["parcel_count"] or 0),
+                    "median_market_value": float(row["median_market_value"] or 0),
+                    "p25_market_value":    float(row["p25_market_value"]    or 0),
+                    "p75_market_value":    float(row["p75_market_value"]    or 0),
+                    "median_yoy_value_change_pct": (
+                        float(row["median_yoy_value_change_pct"])
+                        if row["median_yoy_value_change_pct"] is not None else None
+                    ),
+                    "filter_label": prop_type,
+                    "year": year,
+                    "is_preliminary": False,
+                })
         return jsonify({"ok": False, "error": "No benchmark data for this property type / year."})
 
     return jsonify({"ok": False, "error": "Specify prop_type or classi_cd."})
@@ -831,7 +1001,31 @@ def api_benchmark_meta():
         desc = USE_CODE_LOOKUP.get(r["classi_cd"], (r["classi_cd"], ""))[0]
         by_type[pt].append({"code": r["classi_cd"], "desc": desc, "n": int(r["n"])})
 
-    return jsonify({"prop_types": prop_types, "use_codes_by_type": by_type})
+    # Neighborhoods with ≥5 parcels (sorted by count desc, capped at 500 to avoid huge dropdown)
+    nb_raw = query("""
+        SELECT neighborhood_cd, COUNT(*) AS n
+        FROM parcel
+        WHERE neighborhood_cd IS NOT NULL AND neighborhood_cd != ''
+        GROUP BY neighborhood_cd
+        HAVING COUNT(*) >= 5
+        ORDER BY n DESC
+        LIMIT 500
+    """)
+    total_parcels = query("SELECT COUNT(*) AS n FROM parcel", one=True)["n"]
+    nb_non_null = query(
+        "SELECT COUNT(*) AS n FROM parcel WHERE neighborhood_cd IS NOT NULL AND neighborhood_cd != ''",
+        one=True
+    )["n"]
+    nb_coverage_pct = round(100.0 * nb_non_null / total_parcels, 1) if total_parcels else 0
+
+    neighborhoods = [{"code": r["neighborhood_cd"], "n": int(r["n"])} for r in nb_raw]
+
+    return jsonify({
+        "prop_types": prop_types,
+        "use_codes_by_type": by_type,
+        "neighborhoods": neighborhoods,
+        "neighborhood_coverage_pct": nb_coverage_pct,
+    })
 
 
 if __name__ == "__main__":
