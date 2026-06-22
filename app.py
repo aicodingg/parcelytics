@@ -705,5 +705,134 @@ def api_rates():
     return jsonify([dict(r) for r in rates])
 
 
+@app.route("/api/benchmark")
+def api_benchmark():
+    """
+    Live benchmark query for the County Benchmark filter UI.
+
+    Query params:
+      year      int  (default 2025)   — certified year only (not 2026)
+      prop_type str  (default "")     — broad type label from county_benchmark table
+      classi_cd str  (default "")     — specific TCAD use code; triggers on-the-fly aggregation
+    """
+    year      = request.args.get("year", 2025, type=int)
+    prop_type = request.args.get("prop_type", "").strip()
+    classi_cd = request.args.get("classi_cd", "").strip()
+
+    # Guard: only allow certified years for benchmark (2021–2025)
+    if year not in (2021, 2022, 2023, 2024, 2025):
+        return jsonify({"ok": False, "error": "Year must be between 2021 and 2025"})
+
+    if classi_cd and classi_cd != "all":
+        # ── On-the-fly aggregation by classi_cd ──────────────────────────
+        row = query("""
+            SELECT
+                COUNT(*)                                                               AS n_parcels,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.market_value)           AS median_market_value,
+                PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY t.market_value)          AS p25_market_value,
+                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY t.market_value)          AS p75_market_value
+            FROM parcel p
+            JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = %s
+            WHERE p.classi_cd = %s
+              AND t.market_value IS NOT NULL AND t.market_value > 0
+              AND (t.data_source IS NULL OR t.data_source = 'certified')
+        """, (year, classi_cd), one=True)
+
+        entry = USE_CODE_LOOKUP.get(classi_cd, (classi_cd, ""))
+        filter_label = f"{entry[0]} (code {classi_cd})"
+
+        # YoY vs prior year
+        prev_year = year - 1
+        yoy = None
+        if prev_year >= 2021:
+            prev_row = query("""
+                SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.market_value) AS prev_med
+                FROM parcel p
+                JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = %s
+                WHERE p.classi_cd = %s
+                  AND t.market_value IS NOT NULL AND t.market_value > 0
+                  AND (t.data_source IS NULL OR t.data_source = 'certified')
+            """, (prev_year, classi_cd), one=True)
+            if prev_row and prev_row["prev_med"] and row and row["median_market_value"]:
+                yoy = round((float(row["median_market_value"]) / float(prev_row["prev_med"]) - 1) * 100, 2)
+
+        if row and row["n_parcels"] > 0:
+            return jsonify({
+                "ok": True,
+                "n_parcels": int(row["n_parcels"]),
+                "median_market_value": float(row["median_market_value"] or 0),
+                "p25_market_value":    float(row["p25_market_value"]    or 0),
+                "p75_market_value":    float(row["p75_market_value"]    or 0),
+                "median_yoy_value_change_pct": yoy,
+                "filter_label": filter_label,
+                "year": year,
+            })
+        return jsonify({"ok": False, "error": "No data for this use code / year combination."})
+
+    elif prop_type:
+        # ── Pre-aggregated county_benchmark table ─────────────────────────
+        row = query("""
+            SELECT * FROM county_benchmark
+            WHERE property_type_label = %s AND tax_year = %s
+        """, (prop_type, year), one=True)
+        if row:
+            return jsonify({
+                "ok": True,
+                "n_parcels": int(row["parcel_count"] or 0),
+                "median_market_value": float(row["median_market_value"] or 0),
+                "p25_market_value":    float(row["p25_market_value"]    or 0),
+                "p75_market_value":    float(row["p75_market_value"]    or 0),
+                "median_yoy_value_change_pct": (
+                    float(row["median_yoy_value_change_pct"])
+                    if row["median_yoy_value_change_pct"] is not None else None
+                ),
+                "filter_label": prop_type,
+                "year": year,
+            })
+        return jsonify({"ok": False, "error": "No benchmark data for this property type / year."})
+
+    return jsonify({"ok": False, "error": "Specify prop_type or classi_cd."})
+
+
+@app.route("/api/benchmark/meta")
+def api_benchmark_meta():
+    """Return available property types and use codes with ≥10 parcels (for filter dropdowns)."""
+    prop_types_raw = query("""
+        SELECT DISTINCT property_type_label
+        FROM county_benchmark WHERE tax_year = 2025
+        ORDER BY property_type_label
+    """)
+    prop_types = [r["property_type_label"] for r in prop_types_raw]
+
+    use_codes_raw = query("""
+        SELECT
+            p.classi_cd,
+            CASE
+                WHEN LEFT(p.state_cd1,1) = 'A'        THEN 'Residential'
+                WHEN LEFT(p.state_cd1,1) = 'B'        THEN 'Multi-Family'
+                WHEN LEFT(p.state_cd1,1) IN ('F','L') THEN 'Commercial'
+                WHEN LEFT(p.state_cd1,1) = 'C'        THEN 'Land/Vacant'
+                WHEN LEFT(p.state_cd1,1) IN ('D','E') THEN 'Agricultural'
+                ELSE 'Other'
+            END AS prop_type,
+            COUNT(*) AS n
+        FROM parcel p
+        WHERE p.classi_cd IS NOT NULL AND p.classi_cd != '00'
+        GROUP BY p.classi_cd, prop_type
+        HAVING COUNT(*) >= 10
+        ORDER BY prop_type, n DESC
+    """)
+
+    by_type = {}
+    for r in use_codes_raw:
+        pt = r["prop_type"]
+        if pt not in by_type:
+            by_type[pt] = []
+        desc = USE_CODE_LOOKUP.get(r["classi_cd"], (r["classi_cd"], ""))[0]
+        by_type[pt].append({"code": r["classi_cd"], "desc": desc, "n": int(r["n"])})
+
+    return jsonify({"prop_types": prop_types, "use_codes_by_type": by_type})
+
+
 if __name__ == "__main__":
     app.run(debug=config.DEBUG, port=config.PORT)

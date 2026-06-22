@@ -94,100 +94,6 @@
     </div>
   </div>
 
-  {# 2026 Preliminary callout — moved above 2025 Snapshot; most recent data first #}
-  {% if current_2026 and current_2026.market_value %}
-  <div class="card mb-4 preliminary-card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span>2026 Preliminary Values</span>
-      <span class="badge-preliminary">Preliminary</span>
-    </div>
-    <div class="card-body p-3">
-      <table class="info-table">
-        <tbody>
-          <tr><th>Market Value</th>
-              <td class="primary-value">${{ "{:,.0f}".format(current_2026.market_value) }}</td></tr>
-          <tr><th>Assessed Value</th>
-              <td>
-                ${{ "{:,.0f}".format(current_2026.assessed_value) if current_2026.assessed_value else "—" }}
-                {% if current_2026.assessed_value and current_2026.assessed_value > current_2026.market_value %}
-                  <span class="badge-data-anomaly" title="Assessed value exceeds market value in the 2026 preliminary data. Verify against TCAD before relying on this figure.">!</span>
-                {% endif %}
-              </td></tr>
-          {% if current_2026.land_value %}
-          <tr><th>Land Value</th>
-              <td>${{ "{:,.0f}".format(current_2026.land_value) }}</td></tr>
-          {% endif %}
-          {% if current_2026.taxable_value %}
-          <tr><th>Taxable Value</th>
-              <td>${{ "{:,.0f}".format(current_2026.taxable_value) }}</td></tr>
-          {% endif %}
-          {% if current_2026.exemption_codes %}
-          <tr><th>Exemptions</th>
-              <td style="font-size:12px;">{{ current_2026.exemption_codes }}</td></tr>
-          {% endif %}
-          {% if current_2026.market_value and current and current.market_value %}
-          {% set mv_chg = (current_2026.market_value - current.market_value) / current.market_value * 100 %}
-          <tr class="divider-row"><th></th><td></td></tr>
-          <tr><th>vs 2025 Certified</th>
-              <td class="{% if mv_chg > 0 %}text-danger{% elif mv_chg < 0 %}text-success{% endif %} fw-semibold">
-                {{ "{:+.1f}%".format(mv_chg) }}
-              </td></tr>
-          {% endif %}
-        </tbody>
-      </table>
-      <p class="mt-2 mb-0" style="font-size:11.5px; color:var(--text-3); line-height:1.5;">
-        Preliminary values from June 9, 2026 TCAD export. Subject to change —
-        TCAD certifies the appraisal roll on <strong>July 25, 2026</strong>.
-        No tax billing amounts are available until post-certification.
-      </p>
-    </div>
-  </div>
-  {% endif %}
-
-  {# 2025 snapshot — most recently certified year; primary authoritative record #}
-  {% if current %}
-  <div class="card mb-4">
-    <div class="card-header">
-      2025 Snapshot (Certified)
-    </div>
-    <div class="card-body p-3">
-      <table class="info-table">
-        <tbody>
-          <tr><th>Market Value</th>
-              <td class="primary-value">${{ "{:,.0f}".format(current.market_value) if current.market_value else "—" }}</td></tr>
-          <tr><th>Assessed Value</th>
-              <td>${{ "{:,.0f}".format(current.assessed_value) if current.assessed_value else "—" }}</td></tr>
-          {% if current.hs_cap_loss and current.hs_cap_loss > 0 %}
-          <tr><th>HS Cap Loss</th>
-              <td style="color: var(--down);">-${{ "{:,.0f}".format(current.hs_cap_loss) }}</td></tr>
-          {% endif %}
-          <tr><th>Taxable Value</th>
-              <td>${{ "{:,.0f}".format(current.taxable_value) if current.taxable_value else "—" }}</td></tr>
-          {% if current.land_value %}
-          <tr><th>Land Value</th>
-              <td>${{ "{:,.0f}".format(current.land_value) }}</td></tr>
-          {% endif %}
-          {% if current.imprv_value %}
-          <tr><th>Improvement Value</th>
-              <td>${{ "{:,.0f}".format(current.imprv_value) }}</td></tr>
-          {% endif %}
-          <tr class="divider-row"><th></th><td></td></tr>
-          <tr><th>Total Tax</th>
-              <td class="primary-value">${{ "{:,.2f}".format(current.total_tax) if current.total_tax else "—" }}</td></tr>
-          {% if current.is_delinquent %}
-          <tr><th>Amount Due</th>
-              <td style="color: var(--up); font-weight: 700;">${{ "{:,.2f}".format(current.total_due) }}</td></tr>
-          {% endif %}
-          {% if current.exemption_codes or current.billing_exemptions %}
-          <tr><th>Exemptions</th>
-              <td style="font-size:12px; text-align:right;">{{ current.exemption_codes or current.billing_exemptions }}</td></tr>
-          {% endif %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  {% endif %}
-
   {# Delinquency detail #}
   {% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
   <div class="card mb-4 delinquency-card">
@@ -351,52 +257,291 @@
 <div class="row mt-2">
 <div class="col-12">
 
-  {# ── Tax Projection Table ────────────────────────────────────────── #}
-  {% if projections %}
-  <div class="card mb-4 projection-card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span>5-Year Tax Projection</span>
-      <span class="estimates-badge">Estimates Only</span>
+  {# ── 1. Historical Tax Rates by Entity (rate context first) ──────── #}
+  {% if entity_detail %}
+  <div class="card mb-4">
+    <div class="card-header">
+      Historical Tax Rates by Entity (Travis County)
     </div>
+    {# Compact rate trend chart #}
+    {% if chart_entity_data %}
+    <div class="card-body" style="padding: 16px 16px 8px;">
+      <canvas id="entityRateChart" height="70"></canvas>
+    </div>
+    {% endif %}
     <div class="card-body p-0">
       <div class="table-responsive">
         <table class="table table-sm table-hover mb-0">
           <thead class="table-light small text-muted text-uppercase">
             <tr>
-              <th>Year</th>
-              <th class="text-end">Est. Market Value ¹</th>
-              <th class="text-end">Est. Assessed Value ²</th>
-              <th class="text-end">Est. Rate ³</th>
-              <th class="text-end">Est. Annual Tax</th>
-              <th class="text-end">Value Δ vs 2025</th>
+              <th>Entity</th>
+              <th class="text-end">2021 Rate</th>
+              <th class="text-end">2022 Rate</th>
+              <th class="text-end">2023 Rate</th>
+              <th class="text-end">2024 Rate</th>
+              <th class="text-end">2025 Rate</th>
+              <th class="text-end">YoY (2024→25)</th>
+              <th class="text-end">Amt Due</th>
+              <th class="text-end">Amt Paid</th>
+              <th class="text-end">Balance</th>
             </tr>
           </thead>
           <tbody>
-            {% for p in projections %}
-            <tr class="projection-row">
-              <td class="proj-year">{{ p.year }}</td>
-              <td class="text-end">~${{ "{:,.0f}".format(p.market) }}</td>
-              <td class="text-end">~${{ "{:,.0f}".format(p.assessed) }}</td>
-              <td class="text-end small">~{{ "{:.4f}%".format(p.rate) }}</td>
-              <td class="text-end">~${{ "{:,.0f}".format(p.est_tax) }}</td>
-              <td class="text-end">{{ "{:+.1f}%".format(p.value_change) }}</td>
+            {% for e in entity_detail %}
+            {% set delta = (e.rate - e.rate_prev) if (e.rate and e.rate_prev) else none %}
+            {% set e_rates = entity_rate_by_code.get(e.entity_code, {}) %}
+            <tr>
+              <td>
+                <span class="entity-badge me-1">{{ e.entity_code }}</span>
+                <span style="font-size:12px; color:var(--text-2);">{{ e.entity_name or "" }}</span>
+              </td>
+              {% for yr in [2021, 2022, 2023, 2024] %}
+              {% set yr_rate = e_rates.get(yr) %}
+              <td class="text-end small text-muted" style="font-size:11.5px; white-space:nowrap;">
+                {{ "{:.4f}%".format(yr_rate) if yr_rate is not none else "—" }}
+              </td>
+              {% endfor %}
+              <td class="text-end text-muted small">
+                {{ "{:.4f}%".format(e.rate) if e.rate else "—" }}
+              </td>
+              <td class="text-end small {% if delta is not none %}{% if delta < 0 %}text-success{% elif delta > 0 %}text-danger{% endif %}{% endif %}">
+                {% if delta is not none %}{{ "{:+.4f}%".format(delta) }}{% else %}—{% endif %}
+              </td>
+              <td class="text-end">${{ "{:,.2f}".format(e.amount_due) if e.amount_due else "—" }}</td>
+              <td class="text-end">${{ "{:,.2f}".format(e.amount_paid) if e.amount_paid else "—" }}</td>
+              <td class="text-end {% if (e.amount_due or 0) - (e.amount_paid or 0) > 0.01 %}text-danger{% endif %}">
+                {% set bal = (e.amount_due or 0) - (e.amount_paid or 0) %}
+                {% if bal > 0.01 %}<strong>${{ "{:,.2f}".format(bal) }}</strong>{% else %}Paid{% endif %}
+              </td>
             </tr>
             {% endfor %}
+          </tbody>
+          <tfoot>
+            {% set n_ent = entity_detail | length %}
+            {% set tot = namespace(rate=0,prev=0,r2021=0,r2022=0,r2023=0,r2024=0,due=0,due_n=0,paid=0,paid_n=0) %}
+            {% for e in entity_detail %}
+              {% if e.rate     %}{% set tot.rate  = tot.rate  + e.rate     %}{% endif %}
+              {% if e.rate_prev%}{% set tot.prev  = tot.prev  + e.rate_prev%}{% endif %}
+              {% set _er = entity_rate_by_code.get(e.entity_code, {}) %}
+              {% if _er.get(2021) %}{% set tot.r2021 = tot.r2021 + _er.get(2021) %}{% endif %}
+              {% if _er.get(2022) %}{% set tot.r2022 = tot.r2022 + _er.get(2022) %}{% endif %}
+              {% if _er.get(2023) %}{% set tot.r2023 = tot.r2023 + _er.get(2023) %}{% endif %}
+              {% if _er.get(2024) %}{% set tot.r2024 = tot.r2024 + _er.get(2024) %}{% endif %}
+              {% if e.amount_due  is not none %}{% set tot.due  = tot.due  + e.amount_due  %}{% set tot.due_n  = tot.due_n  + 1 %}{% endif %}
+              {% if e.amount_paid is not none %}{% set tot.paid = tot.paid + e.amount_paid %}{% set tot.paid_n = tot.paid_n + 1 %}{% endif %}
+            {% endfor %}
+            {% set rate_delta   = tot.rate - tot.prev %}
+            {% set due_partial  = (tot.due_n  > 0 and tot.due_n  < n_ent) %}
+            {% set paid_partial = (tot.paid_n > 0 and tot.paid_n < n_ent) %}
+            {% set bal_complete = (tot.due_n == n_ent and tot.paid_n == n_ent) %}
+            {% set total_bal    = tot.due - tot.paid %}
+            <tr>
+              <td class="fw-bold" style="font-size:13px; padding-top:10px; border-top:2px solid var(--border-strong);">Combined Rate</td>
+              {% for yr_total in [tot.r2021, tot.r2022, tot.r2023, tot.r2024] %}
+              <td class="text-end fw-semibold small" style="border-top:2px solid var(--border-strong); font-size:11.5px;">
+                {{ "{:.4f}%".format(yr_total) if yr_total else "—" }}
+              </td>
+              {% endfor %}
+              <td class="text-end fw-bold" style="border-top:2px solid var(--border-strong);">
+                {{ "{:.4f}%".format(tot.rate) if tot.rate else "—" }}
+              </td>
+              <td class="text-end fw-semibold {% if rate_delta < 0 %}text-success{% elif rate_delta > 0 %}text-danger{% endif %}"
+                  style="border-top:2px solid var(--border-strong);">
+                {% if tot.rate and tot.prev %}{{ "{:+.4f}%".format(rate_delta) }}{% else %}—{% endif %}
+              </td>
+              <td class="text-end" style="border-top:2px solid var(--border-strong);">
+                {% if tot.due_n > 0 %}
+                  <span class="fw-bold" style="font-size:13px;">${{ "{:,.2f}".format(tot.due) }}</span>
+                  {% if due_partial %}<span class="badge-partial d-block" style="font-size:10px; margin-top:2px;">{{ tot.due_n }} of {{ n_ent }}</span>{% endif %}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end" style="border-top:2px solid var(--border-strong);">
+                {% if tot.paid_n > 0 %}
+                  <span class="fw-bold" style="font-size:13px;">${{ "{:,.2f}".format(tot.paid) }}</span>
+                  {% if paid_partial %}<span class="badge-partial d-block" style="font-size:10px; margin-top:2px;">{{ tot.paid_n }} of {{ n_ent }}</span>{% endif %}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end" style="border-top:2px solid var(--border-strong);">
+                {% if bal_complete %}
+                  {% if total_bal > 0.01 %}<span class="fw-bold" style="font-size:13px; color:var(--up);">${{ "{:,.2f}".format(total_bal) }}</span>
+                  {% else %}<span class="fw-bold" style="font-size:13px; color:var(--down);">Paid</span>{% endif %}
+                {% elif tot.due_n > 0 or tot.paid_n > 0 %}<span class="badge-partial" style="font-size:10px;">Partial</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+    <div class="card-footer text-muted small">
+      Rate columns (2021–2025) from Travis County tax rate records.
+      2025 billing from Travis County Tax Office open data.
+      <span class="na-cell">—</span> = entity not in rate records for that year.
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── 2. Unified Current & Preliminary Values ──────────────────────── #}
+  {% if current or current_2026 %}
+  <div class="card mb-4">
+    <div class="card-header">
+      Current &amp; Preliminary Values
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light small text-muted text-uppercase">
+            <tr>
+              <th style="width:22%"></th>
+              <th class="text-end" style="width:26%;">
+                2026 Preliminary
+                {% if current_2026 %}<span class="badge-preliminary ms-1" style="font-size:9.5px;">Preliminary</span>{% endif %}
+              </th>
+              <th class="text-end" style="width:26%;">
+                2025 Certified
+                {% if current %}<span class="badge-verified ms-1" style="font-size:9.5px;">Verified</span>{% endif %}
+              </th>
+              <th class="text-end" style="width:26%;">Change 2025→2026</th>
+            </tr>
+          </thead>
+          <tbody>
+            {# Market Value #}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">Market Value</th>
+              <td class="text-end">
+                {% if current_2026 and current_2026.market_value %}
+                  <span class="primary-value">${{ "{:,.0f}".format(current_2026.market_value) }}</span>
+                  {% if current_2026.assessed_value and current_2026.assessed_value > current_2026.market_value %}
+                    <span class="badge-data-anomaly ms-1" title="Assessed > Market in 2026 preliminary">!</span>
+                  {% endif %}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current and current.market_value %}<span class="primary-value">${{ "{:,.0f}".format(current.market_value) }}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current_2026 and current_2026.market_value and current and current.market_value %}
+                  {% set _c = (current_2026.market_value - current.market_value) / current.market_value * 100 %}
+                  <span class="fw-semibold {% if _c > 0 %}text-danger{% elif _c < 0 %}text-success{% endif %}">{{ "{:+.1f}%".format(_c) }}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+            </tr>
+            {# Assessed Value #}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">Assessed Value</th>
+              <td class="text-end">
+                {% if current_2026 and current_2026.assessed_value %}${{ "{:,.0f}".format(current_2026.assessed_value) }}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current and current.assessed_value %}${{ "{:,.0f}".format(current.assessed_value) }}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current_2026 and current_2026.assessed_value and current and current.assessed_value %}
+                  {% set _c = (current_2026.assessed_value - current.assessed_value) / current.assessed_value * 100 %}
+                  <span class="fw-semibold {% if _c > 0 %}text-danger{% elif _c < 0 %}text-success{% endif %}">{{ "{:+.1f}%".format(_c) }}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+            </tr>
+            {# Taxable Value #}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">Taxable Value</th>
+              <td class="text-end">
+                {% if current_2026 and current_2026.taxable_value %}${{ "{:,.0f}".format(current_2026.taxable_value) }}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current and current.taxable_value %}${{ "{:,.0f}".format(current.taxable_value) }}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current_2026 and current_2026.taxable_value and current and current.taxable_value %}
+                  {% set _c = (current_2026.taxable_value - current.taxable_value) / current.taxable_value * 100 %}
+                  <span class="fw-semibold {% if _c > 0 %}text-danger{% elif _c < 0 %}text-success{% endif %}">{{ "{:+.1f}%".format(_c) }}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+            </tr>
+            {# Land Value #}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">Land Value</th>
+              <td class="text-end">
+                {% if current_2026 and current_2026.land_value %}${{ "{:,.0f}".format(current_2026.land_value) }}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current and current.land_value %}${{ "{:,.0f}".format(current.land_value) }}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current_2026 and current_2026.land_value and current and current.land_value %}
+                  {% set _c = (current_2026.land_value - current.land_value) / current.land_value * 100 %}
+                  <span class="fw-semibold {% if _c > 0 %}text-danger{% elif _c < 0 %}text-success{% endif %}">{{ "{:+.1f}%".format(_c) }}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+            </tr>
+            {# Improvement Value #}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">Improvement Value</th>
+              <td class="text-end">
+                {% if current_2026 and current_2026.imprv_value %}${{ "{:,.0f}".format(current_2026.imprv_value) }}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current and current.imprv_value %}${{ "{:,.0f}".format(current.imprv_value) }}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current_2026 and current_2026.imprv_value and current and current.imprv_value %}
+                  {% set _c = (current_2026.imprv_value - current.imprv_value) / current.imprv_value * 100 %}
+                  <span class="fw-semibold {% if _c > 0 %}text-danger{% elif _c < 0 %}text-success{% endif %}">{{ "{:+.1f}%".format(_c) }}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+            </tr>
+            {# Exemptions (show only if either year has them) #}
+            {% if (current and (current.exemption_codes or current.billing_exemptions)) or (current_2026 and current_2026.exemption_codes) %}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">Exemptions</th>
+              <td class="text-end" style="font-size:11.5px;">{{ current_2026.exemption_codes if current_2026 and current_2026.exemption_codes else "—" }}</td>
+              <td class="text-end" style="font-size:11.5px;">{{ (current.exemption_codes or current.billing_exemptions) if current else "—" }}</td>
+              <td></td>
+            </tr>
+            {% endif %}
+            {# HS Cap Loss — 2025 only #}
+            {% if current and current.hs_cap_loss and current.hs_cap_loss > 0 %}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">HS Cap Loss (2025)</th>
+              <td></td>
+              <td class="text-end" style="color:var(--down);">-${{ "{:,.0f}".format(current.hs_cap_loss) }}</td>
+              <td></td>
+            </tr>
+            {% endif %}
+            <tr class="divider-row"><td colspan="4"></td></tr>
+            {# Total Tax #}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">Total Tax</th>
+              <td class="text-end" style="color:var(--text-3); font-style:italic; font-size:12px;">Pending certification</td>
+              <td class="text-end">
+                {% if current and current.total_tax %}<span class="primary-value">${{ "{:,.2f}".format(current.total_tax) }}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td></td>
+            </tr>
           </tbody>
         </table>
       </div>
     </div>
     <div class="card-footer text-muted small">
-      <strong>These are estimates, not recorded values.</strong>
-      ¹ Market value projected using historical CAGR. {{ proj_baseline or "Based on 2021–2025 certified trend" }}.
-      ² Assessed value applies Texas 10%/yr homestead cap if applicable; otherwise tracks market.
-      ³ Rate projected using average annual change from available entity rate history.
-      Actual values will be set by TCAD appraisal and taxing entity budgets each year.
+      2026 from June 9, 2026 TCAD preliminary export — subject to change; certified July 25, 2026.
+      No 2026 tax billing until post-certification.
+      Change%: <span class="text-danger fw-semibold">red</span> = higher burden,
+      <span class="text-success fw-semibold">green</span> = lower.
     </div>
   </div>
   {% endif %}
 
-  {# History table — now 6-year when 2026 preliminary is loaded #}
+  {# ── 3. History table — now 6-year when 2026 preliminary is loaded ── #}
   {% set _hist_years = history | map(attribute='tax_year') | list %}
   {% set _has_2026 = 2026 in _hist_years %}
   <div class="card mb-4">
@@ -700,217 +845,12 @@
   </div>
   {% endif %}
 
-  {# Entity-level tax breakdown (2025) + 5-year rate history + trend chart #}
-  {% if entity_detail %}
-  <div class="card mb-4">
-    <div class="card-header">
-      Historical Tax Rates by Entity (Travis County)
-    </div>
-    {# Compact rate trend chart — same styling as Rate Trends page #}
-    {% if chart_entity_data %}
-    <div class="card-body" style="padding: 16px 16px 8px;">
-      <canvas id="entityRateChart" height="70"></canvas>
-    </div>
-    {% endif %}
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-sm table-hover mb-0">
-          <thead class="table-light small text-muted text-uppercase">
-            <tr>
-              <th>Entity</th>
-              <th class="text-end">2021 Rate</th>
-              <th class="text-end">2022 Rate</th>
-              <th class="text-end">2023 Rate</th>
-              <th class="text-end">2024 Rate</th>
-              <th class="text-end">2025 Rate</th>
-              <th class="text-end">YoY (2024→25)</th>
-              <th class="text-end">Amt Due</th>
-              <th class="text-end">Amt Paid</th>
-              <th class="text-end">Balance</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for e in entity_detail %}
-            {% set delta = (e.rate - e.rate_prev) if (e.rate and e.rate_prev) else none %}
-            {% set e_rates = entity_rate_by_code.get(e.entity_code, {}) %}
-            <tr>
-              <td>
-                <span class="entity-badge me-1">{{ e.entity_code }}</span>
-                <span style="font-size:12px; color:var(--text-2);">{{ e.entity_name or "" }}</span>
-              </td>
-              {# Historical rate columns 2021–2024 #}
-              {% for yr in [2021, 2022, 2023, 2024] %}
-              {% set yr_rate = e_rates.get(yr) %}
-              <td class="text-end small text-muted" style="font-size:11.5px; white-space:nowrap;">
-                {{ "{:.4f}%".format(yr_rate) if yr_rate is not none else "—" }}
-              </td>
-              {% endfor %}
-              {# 2025 rate (primary) #}
-              <td class="text-end text-muted small">
-                {{ "{:.4f}%".format(e.rate) if e.rate else "—" }}
-              </td>
-              {# YoY delta #}
-              <td class="text-end small {% if delta is not none %}{% if delta < 0 %}text-success{% elif delta > 0 %}text-danger{% endif %}{% endif %}">
-                {% if delta is not none %}
-                  {{ "{:+.4f}%".format(delta) }}
-                {% else %}—{% endif %}
-              </td>
-              <td class="text-end">${{ "{:,.2f}".format(e.amount_due) if e.amount_due else "—" }}</td>
-              <td class="text-end">${{ "{:,.2f}".format(e.amount_paid) if e.amount_paid else "—" }}</td>
-              <td class="text-end {% if (e.amount_due or 0) - (e.amount_paid or 0) > 0.01 %}text-danger{% endif %}">
-                {% set bal = (e.amount_due or 0) - (e.amount_paid or 0) %}
-                {% if bal > 0.01 %}<strong>${{ "{:,.2f}".format(bal) }}</strong>
-                {% else %}Paid{% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-          <tfoot>
-            {# ── Accumulate totals in a single pass ────────────────────── #}
-            {% set n_ent = entity_detail | length %}
-            {% set tot = namespace(
-                rate=0, prev=0,
-                r2021=0, r2022=0, r2023=0, r2024=0,
-                due=0,  due_n=0,
-                paid=0, paid_n=0
-            ) %}
-            {% for e in entity_detail %}
-              {% if e.rate     %}{% set tot.rate  = tot.rate  + e.rate     %}{% endif %}
-              {% if e.rate_prev%}{% set tot.prev  = tot.prev  + e.rate_prev%}{% endif %}
-              {% set _er = entity_rate_by_code.get(e.entity_code, {}) %}
-              {% if _er.get(2021) %}{% set tot.r2021 = tot.r2021 + _er.get(2021) %}{% endif %}
-              {% if _er.get(2022) %}{% set tot.r2022 = tot.r2022 + _er.get(2022) %}{% endif %}
-              {% if _er.get(2023) %}{% set tot.r2023 = tot.r2023 + _er.get(2023) %}{% endif %}
-              {% if _er.get(2024) %}{% set tot.r2024 = tot.r2024 + _er.get(2024) %}{% endif %}
-              {% if e.amount_due  is not none %}{% set tot.due   = tot.due   + e.amount_due  %}{% set tot.due_n  = tot.due_n  + 1 %}{% endif %}
-              {% if e.amount_paid is not none %}{% set tot.paid  = tot.paid  + e.amount_paid %}{% set tot.paid_n = tot.paid_n + 1 %}{% endif %}
-            {% endfor %}
-            {% set rate_delta    = tot.rate - tot.prev %}
-            {% set due_partial   = (tot.due_n  > 0 and tot.due_n  < n_ent) %}
-            {% set paid_partial  = (tot.paid_n > 0 and tot.paid_n < n_ent) %}
-            {% set bal_complete  = (tot.due_n == n_ent and tot.paid_n == n_ent) %}
-            {% set total_bal     = tot.due - tot.paid %}
-
-            <tr>
-              <td class="fw-bold" style="font-size:13px; padding-top:10px; border-top: 2px solid var(--border-strong);">
-                Combined Rate
-              </td>
-              {# Historical combined rates for 2021–2024 #}
-              {% for yr_total in [tot.r2021, tot.r2022, tot.r2023, tot.r2024] %}
-              <td class="text-end fw-semibold small" style="border-top: 2px solid var(--border-strong); font-size:11.5px;">
-                {{ "{:.4f}%".format(yr_total) if yr_total else "—" }}
-              </td>
-              {% endfor %}
-
-              {# Combined 2025 rate #}
-              <td class="text-end fw-bold" style="border-top: 2px solid var(--border-strong);">
-                {{ "{:.4f}%".format(tot.rate) if tot.rate else "—" }}
-              </td>
-
-              {# Rate YoY delta #}
-              <td class="text-end fw-semibold {% if rate_delta < 0 %}text-success{% elif rate_delta > 0 %}text-danger{% endif %}"
-                  style="border-top: 2px solid var(--border-strong);">
-                {% if tot.rate and tot.prev %}{{ "{:+.4f}%".format(rate_delta) }}{% else %}—{% endif %}
-              </td>
-
-              {# Amount Due total #}
-              <td class="text-end" style="border-top: 2px solid var(--border-strong);">
-                {% if tot.due_n > 0 %}
-                  <span class="fw-bold" style="font-size:13px;">${{ "{:,.2f}".format(tot.due) }}</span>
-                  {% if due_partial %}
-                    <span class="badge-partial d-block" style="font-size:10px; margin-top:2px;">
-                      {{ tot.due_n }} of {{ n_ent }} entities
-                    </span>
-                  {% endif %}
-                {% else %}
-                  <span class="na-cell">—</span>
-                {% endif %}
-              </td>
-
-              {# Amount Paid total #}
-              <td class="text-end" style="border-top: 2px solid var(--border-strong);">
-                {% if tot.paid_n > 0 %}
-                  <span class="fw-bold" style="font-size:13px;">${{ "{:,.2f}".format(tot.paid) }}</span>
-                  {% if paid_partial %}
-                    <span class="badge-partial d-block" style="font-size:10px; margin-top:2px;">
-                      {{ tot.paid_n }} of {{ n_ent }} entities
-                    </span>
-                  {% endif %}
-                {% else %}
-                  <span class="na-cell">—</span>
-                {% endif %}
-              </td>
-
-              {# Balance — only show a number when both columns are complete #}
-              <td class="text-end" style="border-top: 2px solid var(--border-strong);">
-                {% if bal_complete %}
-                  {% if total_bal > 0.01 %}
-                    <span class="fw-bold" style="font-size:13px; color: var(--up);">${{ "{:,.2f}".format(total_bal) }}</span>
-                  {% else %}
-                    <span class="fw-bold" style="font-size:13px; color: var(--down);">Paid</span>
-                  {% endif %}
-                {% elif tot.due_n > 0 or tot.paid_n > 0 %}
-                  <span class="badge-partial" style="font-size:10px;">Partial</span>
-                {% else %}
-                  <span class="na-cell">—</span>
-                {% endif %}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </div>
-    <div class="card-footer text-muted small">
-      Rate columns (2021–2025 Rate) from Travis County tax rate records.
-      2025 billing data from Travis County Tax Office open data.
-      <span class="na-cell">—</span> = entity not in rate records for that year.
-    </div>
-  </div>
-  {% endif %}
-
-  {# ── Phase 2: County Benchmark Comparison ───────────────────────── #}
-  {% if benchmark_by_year and bench_label %}
-  {# Compute 2025 percentile position for the summary sentence #}
-  {% set _b25 = benchmark_by_year.get(2025) %}
-  {% set _r25 = history | selectattr('tax_year', 'equalto', 2025) | list | first | default(none) %}
-  <div class="card mb-4">
+  {# ── 5. Tax Projection ────────────────────────────────────────────── #}
+  {% if projections %}
+  <div class="card mb-4 projection-card">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <span>Where This Property Stands — {{ bench_label }} Benchmark</span>
-    </div>
-    <div class="card-body" style="padding-bottom: 0;">
-      {# Percentile position summary — investor-first context sentence #}
-      {% if _b25 and _r25 and _r25.market_value and _b25.median_market_value %}
-        {% set _mv = _r25.market_value %}
-        {% set _p25v = _b25.p25_market_value %}
-        {% set _medv = _b25.median_market_value %}
-        {% set _p75v = _b25.p75_market_value %}
-        {% if _p75v and _mv >= _p75v %}
-          {% set _pct_label = "top 25%" %}
-          {% set _pct_color = "var(--up)" %}
-        {% elif _medv and _mv >= _medv %}
-          {% set _pct_label = "50th–75th percentile" %}
-          {% set _pct_color = "var(--text-2)" %}
-        {% elif _p25v and _mv >= _p25v %}
-          {% set _pct_label = "25th–50th percentile" %}
-          {% set _pct_color = "var(--text-2)" %}
-        {% else %}
-          {% set _pct_label = "bottom 25%" %}
-          {% set _pct_color = "var(--down)" %}
-        {% endif %}
-        {% set _vs_med = (_mv - _medv) / _medv * 100 %}
-        <p class="mb-3" style="font-size:13.5px; line-height:1.55;">
-          In 2025, this property's market value of
-          <strong>${{ "{:,.0f}".format(_mv) }}</strong>
-          places it in the
-          <strong style="color:{{ _pct_color }};">{{ _pct_label }}</strong>
-          for {{ bench_label }} properties in Travis County —
-          <strong class="{% if _vs_med > 0 %}text-danger{% else %}text-success{% endif %}">
-            {{ "{:+.0f}%".format(_vs_med) }}
-          </strong>
-          {% if _vs_med > 0 %}above{% else %}below{% endif %} the county median of
-          ${{ "{:,.0f}".format(_medv) }}.
-        </p>
-      {% endif %}
+      <span>5-Year Tax Projection</span>
+      <span class="estimates-badge">Estimates Only</span>
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
@@ -918,45 +858,133 @@
           <thead class="table-light small text-muted text-uppercase">
             <tr>
               <th>Year</th>
+              <th class="text-end">Est. Market Value ¹</th>
+              <th class="text-end">Est. Assessed Value ²</th>
+              <th class="text-end">Est. Rate ³</th>
+              <th class="text-end">Est. Annual Tax</th>
+              <th class="text-end">Value Δ vs 2025</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in projections %}
+            <tr class="projection-row">
+              <td class="proj-year">{{ p.year }}</td>
+              <td class="text-end">~${{ "{:,.0f}".format(p.market) }}</td>
+              <td class="text-end">~${{ "{:,.0f}".format(p.assessed) }}</td>
+              <td class="text-end small">~{{ "{:.4f}%".format(p.rate) }}</td>
+              <td class="text-end">~${{ "{:,.0f}".format(p.est_tax) }}</td>
+              <td class="text-end">{{ "{:+.1f}%".format(p.value_change) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card-footer text-muted small">
+      <strong>These are estimates, not recorded values.</strong>
+      ¹ Market value projected using historical CAGR. {{ proj_baseline or "Based on 2021–2025 certified trend" }}.
+      ² Assessed value applies Texas 10%/yr homestead cap if applicable; otherwise tracks market.
+      ³ Rate projected using average annual change from available entity rate history.
+      Actual values will be set by TCAD appraisal and taxing entity budgets each year.
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── 6. County Benchmark Comparison ──────────────────────────────── #}
+  {% if benchmark_by_year and bench_label %}
+  {% set _b25 = benchmark_by_year.get(2025) %}
+  {% set _r25 = history | selectattr('tax_year', 'equalto', 2025) | list | first | default(none) %}
+  <div class="card mb-4" id="benchmarkCard">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span>Where This Property Stands — <span id="benchFilterLabel">{{ bench_label }}</span> Benchmark</span>
+      {# ── Filter bar ──────────────────────────────────────────────── #}
+      <div class="d-flex gap-2 flex-wrap align-items-center" style="font-size:12px;">
+        {# Geography (placeholder — only All Travis County for now) #}
+        <select id="benchGeoFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;" disabled title="Sub-county geography filters coming soon">
+          <option value="county">All Travis County</option>
+        </select>
+        {# Property Type #}
+        <select id="benchTypeFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;">
+          <option value="">— Type —</option>
+        </select>
+        {# Use Code #}
+        <select id="benchCodeFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;">
+          <option value="">— Use Code —</option>
+        </select>
+        {# Year #}
+        <select id="benchYearFilter" class="form-select form-select-sm" style="width:auto; font-size:12px;">
+          {% for yr in [2025, 2024, 2023, 2022, 2021] %}
+          <option value="{{ yr }}" {% if yr == 2025 %}selected{% endif %}>{{ yr }}</option>
+          {% endfor %}
+        </select>
+        <span id="benchLoading" style="display:none; color:var(--text-3);">Loading…</span>
+      </div>
+    </div>
+    {# Percentile summary sentence — updated by JS #}
+    <div class="card-body" style="padding-bottom:0;" id="benchSummaryPane">
+      {% if _b25 and _r25 and _r25.market_value and _b25.median_market_value %}
+        {% set _mv = _r25.market_value %}
+        {% set _medv = _b25.median_market_value %}
+        {% set _p25v = _b25.p25_market_value %}
+        {% set _p75v = _b25.p75_market_value %}
+        {% if _p75v and _mv >= _p75v %}{% set _pct_lbl = "top 25%" %}{% set _pct_clr = "var(--up)" %}
+        {% elif _medv and _mv >= _medv %}{% set _pct_lbl = "50th–75th percentile" %}{% set _pct_clr = "var(--text-2)" %}
+        {% elif _p25v and _mv >= _p25v %}{% set _pct_lbl = "25th–50th percentile" %}{% set _pct_clr = "var(--text-2)" %}
+        {% else %}{% set _pct_lbl = "bottom 25%" %}{% set _pct_clr = "var(--down)" %}{% endif %}
+        {% set _vs_med = (_mv - _medv) / _medv * 100 %}
+        <p class="mb-3" style="font-size:13.5px; line-height:1.55;" id="benchSummaryText">
+          In 2025, this property's market value of
+          <strong>${{ "{:,.0f}".format(_mv) }}</strong>
+          places it in the <strong style="color:{{ _pct_clr }};" id="benchPctLabel">{{ _pct_lbl }}</strong>
+          for <span id="benchSummaryType">{{ bench_label }}</span> properties in Travis County
+          (<span id="benchComparableCount">{{ _b25.parcel_count if _b25.parcel_count else "—" }}</span> comparable) —
+          <strong class="{% if _vs_med > 0 %}text-danger{% else %}text-success{% endif %}" id="benchVsMed">
+            {{ "{:+.0f}%".format(_vs_med) }}
+          </strong>
+          {% if _vs_med > 0 %}above{% else %}below{% endif %} the county median of
+          <strong id="benchMedianVal">${{ "{:,.0f}".format(_medv) }}</strong>.
+        </p>
+      {% endif %}
+    </div>
+    {# Benchmark table — 2025 selected-year row gets JS-updated; full history rows are static #}
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0" id="benchTable">
+          <thead class="table-light small text-muted text-uppercase">
+            <tr>
+              <th>Year</th>
               <th class="text-end">This Property</th>
               <th class="text-end">Bottom 25%</th>
-              <th class="text-end">County Median</th>
+              <th class="text-end">Median</th>
               <th class="text-end">Top 25%</th>
               <th class="text-center">Position</th>
-              <th class="text-end">County YoY</th>
+              <th class="text-end">Group YoY</th>
             </tr>
           </thead>
           <tbody>
             {% for r in history | sort(attribute='tax_year', reverse=True) %}
             {% if r.tax_year <= 2025 %}
             {% set b = benchmark_by_year.get(r.tax_year) %}
-            <tr {% if r.tax_year == 2025 %}class="table-active fw-semibold"{% endif %}>
+            <tr {% if r.tax_year == 2025 %}class="table-active fw-semibold" id="benchRow2025"{% endif %}
+                data-year="{{ r.tax_year }}"
+                data-mv="{{ r.market_value or 0 }}">
               <td>{{ r.tax_year }}</td>
-              <td class="text-end">
-                {{ "$" + "{:,.0f}".format(r.market_value) if r.market_value else "—" }}
-              </td>
+              <td class="text-end">{{ "$" + "{:,.0f}".format(r.market_value) if r.market_value else "—" }}</td>
               {% if b %}
-              <td class="text-end text-muted small">${{ "{:,.0f}".format(b.p25_market_value) if b.p25_market_value else "—" }}</td>
-              <td class="text-end text-muted small">${{ "{:,.0f}".format(b.median_market_value) if b.median_market_value else "—" }}</td>
-              <td class="text-end text-muted small">${{ "{:,.0f}".format(b.p75_market_value) if b.p75_market_value else "—" }}</td>
-              <td class="text-center small">
+              <td class="text-end text-muted small bench-p25">${{ "{:,.0f}".format(b.p25_market_value) if b.p25_market_value else "—" }}</td>
+              <td class="text-end text-muted small bench-med">${{ "{:,.0f}".format(b.median_market_value) if b.median_market_value else "—" }}</td>
+              <td class="text-end text-muted small bench-p75">${{ "{:,.0f}".format(b.p75_market_value) if b.p75_market_value else "—" }}</td>
+              <td class="text-center small bench-pos">
                 {% if r.market_value and b.median_market_value %}
-                  {% set _mv = r.market_value %}
-                  {% set _p25v = b.p25_market_value %}
-                  {% set _medv = b.median_market_value %}
-                  {% set _p75v = b.p75_market_value %}
-                  {% if _p75v and _mv >= _p75v %}
-                    <span style="color:var(--up);" title="Above 75th percentile">↑ Top 25%</span>
-                  {% elif _mv >= _medv %}
-                    <span style="color:var(--text-2);">↑ Above median</span>
-                  {% elif _p25v and _mv >= _p25v %}
-                    <span style="color:var(--text-2);">↓ Below median</span>
-                  {% else %}
-                    <span style="color:var(--down);" title="Below 25th percentile">↓ Bottom 25%</span>
-                  {% endif %}
+                  {% set _mv = r.market_value %}{% set _p25v = b.p25_market_value %}
+                  {% set _medv = b.median_market_value %}{% set _p75v = b.p75_market_value %}
+                  {% if _p75v and _mv >= _p75v %}<span style="color:var(--up);">↑ Top 25%</span>
+                  {% elif _mv >= _medv %}<span style="color:var(--text-2);">↑ Above median</span>
+                  {% elif _p25v and _mv >= _p25v %}<span style="color:var(--text-2);">↓ Below median</span>
+                  {% else %}<span style="color:var(--down);">↓ Bottom 25%</span>{% endif %}
                 {% else %}—{% endif %}
               </td>
-              <td class="text-end small text-muted">
+              <td class="text-end small text-muted bench-yoy">
                 {% if b.median_yoy_value_change_pct is not none %}
                   <span class="{% if b.median_yoy_value_change_pct > 0 %}text-danger{% elif b.median_yoy_value_change_pct < 0 %}text-success{% endif %}">
                     {{ "{:+.1f}%".format(b.median_yoy_value_change_pct) }}
@@ -974,10 +1002,10 @@
       </div>
     </div>
     <div class="card-footer text-muted small">
-      County benchmarks derived from {{ bench_label }} parcels in Travis County with valid 2025 certified market values.
-      Bottom 25% / Median / Top 25% are the 25th, 50th, and 75th percentiles of county market values for this property type.
-      Position = approximate percentile band for this parcel's market value.
-      Benchmark figures computed from AJR data for 2021–2024 (Partial confidence).
+      Benchmark figures for the <span id="benchFooterType">{{ bench_label }}</span> group.
+      Bottom 25% / Median / Top 25% = 25th, 50th, 75th percentiles of county market values.
+      Use Code filter runs a live query — count shown reflects actual records for the selected group.
+      AJR data for 2021–2024 (Partial confidence); 2025 from Certified Export (Verified).
     </div>
   </div>
   {% endif %}
@@ -1090,6 +1118,180 @@ if (rCtx) {
   });
 }
 {% endif %}
+</script>
+{% endif %}
+
+{# ── Benchmark filter JS ──────────────────────────────────────── #}
+{% if benchmark_by_year and bench_label %}
+<script>
+(function () {
+  // Parcel's own 2025 market value for percentile placement
+  const parcelMv = {{ (_r25.market_value if _r25 and _r25.market_value else 0) | tojson }};
+  const parcelGeoId = {{ parcel.geo_id | tojson }};
+  const parcelClassiCd = {{ (parcel.classi_cd or "") | tojson }};
+  const defaultBenchLabel = {{ bench_label | tojson }};
+
+  const selType = document.getElementById('benchTypeFilter');
+  const selCode = document.getElementById('benchCodeFilter');
+  const selYear = document.getElementById('benchYearFilter');
+  const loadingEl = document.getElementById('benchLoading');
+  const filterLabelEl = document.getElementById('benchFilterLabel');
+  const footerTypeEl  = document.getElementById('benchFooterType');
+
+  let metaData = null; // populated on first load
+
+  function fmt(n) {
+    if (n == null || isNaN(n)) return '—';
+    return '$' + Math.round(n).toLocaleString();
+  }
+  function fmtPct(n) {
+    if (n == null || isNaN(n)) return '—';
+    const sign = n >= 0 ? '+' : '';
+    return sign + n.toFixed(1) + '%';
+  }
+  function posBand(mv, p25, med, p75) {
+    if (!mv || !med) return {label:'—', color:'var(--text-3)'};
+    if (p75 && mv >= p75) return {label:'↑ Top 25%', color:'var(--up)'};
+    if (mv >= med) return {label:'↑ Above median', color:'var(--text-2)'};
+    if (p25 && mv >= p25) return {label:'↓ Below median', color:'var(--text-2)'};
+    return {label:'↓ Bottom 25%', color:'var(--down)'};
+  }
+
+  // ── Populate type dropdown from /api/benchmark/meta ──────────────
+  function loadMeta() {
+    return fetch('/api/benchmark/meta')
+      .then(r => r.json())
+      .then(data => {
+        metaData = data;
+        // Populate type dropdown
+        (data.prop_types || []).forEach(pt => {
+          const opt = document.createElement('option');
+          opt.value = pt;
+          opt.textContent = pt;
+          selType.appendChild(opt);
+        });
+        // Pre-select type matching default bench_label
+        const matchOpt = [...selType.options].find(o => o.value === defaultBenchLabel);
+        if (matchOpt) {
+          selType.value = defaultBenchLabel;
+          populateCodeDropdown(defaultBenchLabel, parcelClassiCd);
+        }
+      })
+      .catch(() => {/* silently ignore if meta endpoint not yet live */});
+  }
+
+  function populateCodeDropdown(propType, preselect) {
+    // Remove all but first placeholder option
+    while (selCode.options.length > 1) selCode.remove(1);
+    if (!metaData || !propType) return;
+    const codes = (metaData.use_codes_by_type || {})[propType] || [];
+    codes.forEach(item => {
+      const opt = document.createElement('option');
+      opt.value = item.code;
+      opt.textContent = `${item.code} — ${item.desc} (${item.n.toLocaleString()})`;
+      selCode.appendChild(opt);
+    });
+    if (preselect && [...selCode.options].find(o => o.value === preselect)) {
+      selCode.value = preselect;
+    }
+  }
+
+  // ── Fetch updated benchmark row for selected year and update table ──
+  function updateBenchmarkRow(data, year) {
+    const row = document.querySelector(`tr[data-year="${year}"]`);
+    if (!row) return;
+    const mv = parseFloat(row.dataset.mv);
+    const p25 = data.p25_market_value;
+    const med = data.median_market_value;
+    const p75 = data.p75_market_value;
+    const yoy = data.median_yoy_value_change_pct;
+    const pos = posBand(mv, p25, med, p75);
+
+    row.querySelector('.bench-p25').textContent = fmt(p25);
+    row.querySelector('.bench-med').textContent = fmt(med);
+    row.querySelector('.bench-p75').textContent = fmt(p75);
+    const posEl = row.querySelector('.bench-pos');
+    posEl.innerHTML = `<span style="color:${pos.color};">${pos.label}</span>`;
+    const yoyEl = row.querySelector('.bench-yoy');
+    if (yoy != null) {
+      const cls = yoy > 0 ? 'text-danger' : (yoy < 0 ? 'text-success' : '');
+      yoyEl.innerHTML = `<span class="${cls}">${fmtPct(yoy)}</span>`;
+    } else {
+      yoyEl.innerHTML = '<span class="text-muted">base yr</span>';
+    }
+  }
+
+  // ── Update the summary sentence (2025 row) ──────────────────────
+  function updateSummary(data, label) {
+    const summaryText = document.getElementById('benchSummaryText');
+    if (!summaryText) return;
+    const med = data.median_market_value;
+    const p25 = data.p25_market_value;
+    const p75 = data.p75_market_value;
+    const n   = data.n_parcels;
+    const pos = posBand(parcelMv, p25, med, p75);
+    const vsMed = med ? ((parcelMv - med) / med * 100) : null;
+    const yr = selYear.value;
+
+    document.getElementById('benchPctLabel').textContent = pos.label.replace(/[↑↓] /,'');
+    document.getElementById('benchPctLabel').style.color = pos.color;
+    document.getElementById('benchSummaryType').textContent = label;
+    document.getElementById('benchComparableCount').textContent = n ? n.toLocaleString() : '—';
+    const vsMedEl = document.getElementById('benchVsMed');
+    vsMedEl.textContent = vsMed != null ? (vsMed >= 0 ? '+' : '') + vsMed.toFixed(0) + '%' : '—';
+    vsMedEl.className = vsMed > 0 ? 'text-danger' : 'text-success';
+    document.getElementById('benchMedianVal').textContent = fmt(med);
+
+    // Update year reference in sentence
+    const strongYr = summaryText.querySelector('strong');
+    if (strongYr) strongYr.textContent = '$' + Math.round(parcelMv).toLocaleString();
+  }
+
+  // ── Main fetch + render ──────────────────────────────────────────
+  function fetchAndRender() {
+    const year = parseInt(selYear.value, 10) || 2025;
+    const propType = selType.value;
+    const classiCd = selCode.value;
+
+    // Build params — prefer classi_cd filter if selected, else prop_type
+    const params = new URLSearchParams({ year });
+    if (classiCd && classiCd !== '') {
+      params.set('classi_cd', classiCd);
+    } else if (propType) {
+      params.set('prop_type', propType);
+    } else {
+      return; // nothing to filter on
+    }
+
+    loadingEl.style.display = 'inline';
+    fetch(`/api/benchmark?${params}`)
+      .then(r => r.json())
+      .then(data => {
+        loadingEl.style.display = 'none';
+        if (!data.ok) {
+          console.warn('Benchmark API:', data.error);
+          return;
+        }
+        const label = data.filter_label || propType || classiCd;
+        filterLabelEl.textContent = label;
+        if (footerTypeEl) footerTypeEl.textContent = label;
+        updateBenchmarkRow(data, year);
+        if (year === 2025) updateSummary(data, label);
+      })
+      .catch(() => { loadingEl.style.display = 'none'; });
+  }
+
+  // ── Event wiring ─────────────────────────────────────────────────
+  selType.addEventListener('change', function () {
+    populateCodeDropdown(this.value, null);
+    fetchAndRender();
+  });
+  selCode.addEventListener('change', fetchAndRender);
+  selYear.addEventListener('change', fetchAndRender);
+
+  // Initialise on page load
+  loadMeta();
+})();
 </script>
 {% endif %}
 {% endblock %}
