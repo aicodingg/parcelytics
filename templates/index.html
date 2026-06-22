@@ -2,44 +2,56 @@
 {% block title %}Parcel Search — Parcelytics{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center mt-5">
-  <div class="col-md-7 col-lg-6">
+<div class="row justify-content-center" style="margin-top: 9vh;">
+  <div class="col-md-8 col-lg-5">
 
-    <h1 class="fw-bold mb-1">Property Tax Search</h1>
-    <p class="text-muted mb-4">
-      Travis County, TX &bull; 2021–2025 appraisal history
-    </p>
+    {# Title #}
+    <div class="text-center mb-5">
+      <h1 class="fw-bold mb-2" style="font-size: 1.8rem; letter-spacing: -0.035em;">
+        Property Tax Search
+      </h1>
+      <p style="font-size: 13.5px; color: var(--text-3); margin: 0;">
+        Travis County, TX &bull; 2021–2025 appraisal &amp; billing history
+      </p>
+    </div>
 
-    <form method="get" action="/">
-      <div class="input-group input-group-lg shadow-sm">
+    {# Search form #}
+    <form method="get" action="/" class="mb-2">
+      <div class="search-input-wrap">
         <input
           type="text"
           name="q"
-          class="form-control {% if error %}is-invalid{% endif %}"
-          placeholder="Enter Parcel ID  (e.g. 0100030105)"
+          class="search-input{% if error %} is-error{% endif %}"
+          placeholder="Parcel ID — e.g. 0100030105"
           value="{{ q }}"
           autofocus
           autocomplete="off"
+          spellcheck="false"
         >
-        <button class="btn btn-dark px-4" type="submit">Search</button>
+        <button class="search-btn" type="submit">Search</button>
       </div>
-      {% if error %}
-        <div class="invalid-feedback d-block mt-1">{{ error }}</div>
-      {% endif %}
     </form>
 
-    <p class="text-muted mt-3 small">
-      Enter the TCAD 10-digit account number, the 14-digit Tax Office account,
-      or the short prop_id integer. Address search coming in a future phase.
+    {# Error state — styled block, not inline Bootstrap feedback #}
+    {% if error %}
+    <div class="search-error-block">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    {# Helper text #}
+    <p class="text-center mt-3" style="font-size: 12px; color: var(--text-3);">
+      Accepts 10-digit TCAD account, 14-digit Tax Office account, or short prop_id.
     </p>
 
-    <hr class="my-4">
-
-    <h6 class="text-muted text-uppercase small fw-semibold mb-2">Try an example</h6>
-    <div class="d-flex flex-wrap gap-2">
-      <a class="btn btn-sm btn-outline-secondary" href="/?q=0100030105">0100030105</a>
-      <a class="btn btn-sm btn-outline-secondary" href="/?q=0100060160">0100060160</a>
-      <a class="btn btn-sm btn-outline-secondary" href="/?q=0205000100">0205000100</a>
+    {# Example parcels #}
+    <div class="search-examples">
+      <span class="examples-label">Try an example</span>
+      <div class="examples-list">
+        <a class="example-link" href="/?q=0100030105">0100030105</a>
+        <a class="example-link" href="/?q=0100060160">0100060160</a>
+        <a class="example-link" href="/?q=0205000100">0205000100</a>
+      </div>
     </div>
 
   </div>

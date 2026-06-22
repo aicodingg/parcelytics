@@ -3,25 +3,26 @@
 
 {% block content %}
 
-<div class="d-flex align-items-center mb-3">
-  <h2 class="fw-bold mb-0 me-3">Tax Rate Trends</h2>
-  <span class="text-muted">Travis County jurisdictions · 2006–2025</span>
+<div class="d-flex align-items-baseline gap-3 mb-1">
+  <h2 class="fw-bold mb-0" style="letter-spacing: -0.025em;">Tax Rate Trends</h2>
+  <span style="font-size: 13px; color: var(--text-3);">Travis County · 2006–2025</span>
 </div>
-<p class="text-muted mb-4">
-  Rates are per $100 of <em>taxable</em> value. Select one or more entities to compare.
+<p style="font-size: 13px; color: var(--text-3); margin-bottom: 1.5rem;">
+  Rates per $100 of taxable value. Select one or more entities to compare.
 </p>
 
 <div class="row g-4">
 
   {# Entity selector sidebar #}
   <div class="col-lg-3">
-    <div class="card border-0 shadow-sm">
-      <div class="card-header bg-dark text-white small fw-semibold text-uppercase">
+    <div class="card" style="position: sticky; top: 16px;">
+      <div class="card-header">
         Entities
       </div>
-      <div class="card-body p-2" style="max-height:600px;overflow-y:auto;">
-        <div class="mb-2">
-          <button class="btn btn-sm btn-outline-secondary w-100" onclick="selectKey()">
+      <div class="card-body p-2" style="max-height: 580px; overflow-y: auto;">
+        <div class="mb-2 px-1">
+          <button class="btn btn-sm w-100 fw-semibold" onclick="selectKey()"
+                  style="font-size:12px; background: var(--accent-light); border: 1px solid var(--accent-border); color: var(--text-2);">
             Key Entities
           </button>
         </div>
@@ -32,9 +33,10 @@
                  value="{{ ent.code }}"
                  {% if ent.code in key_entities %}checked{% endif %}
                  onchange="updateChart()">
-          <label class="form-check-label small" for="cb_{{ ent.code }}">
-            <span class="fw-semibold">{{ ent.code }}</span>
-            {% if ent.name %} — {{ ent.name }}{% endif %}
+          <label class="form-check-label" for="cb_{{ ent.code }}"
+                 style="font-size: 12px; color: var(--text-2); cursor: pointer;">
+            <span class="fw-semibold" style="font-family: var(--font-mono); font-size: 11px;">{{ ent.code }}</span>
+            {% if ent.name %}<span style="color: var(--text-3);"> — {{ ent.name }}</span>{% endif %}
           </label>
         </div>
         {% endfor %}
@@ -42,23 +44,23 @@
     </div>
   </div>
 
-  {# Chart #}
+  {# Chart + summary table #}
   <div class="col-lg-9">
-    <div class="card border-0 shadow-sm mb-4">
-      <div class="card-body">
+    <div class="card mb-4">
+      <div class="card-body" style="padding: 20px;">
         <canvas id="ratesChart" height="100"></canvas>
       </div>
     </div>
 
-    {# Summary table (top 10 highest current rates) #}
-    <div class="card border-0 shadow-sm">
-      <div class="card-header bg-dark text-white small fw-semibold text-uppercase">
+    {# All-entity summary table #}
+    <div class="card">
+      <div class="card-header">
         2025 Rates — All Entities
       </div>
       <div class="card-body p-0">
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
-            <thead class="table-light small text-muted text-uppercase">
+            <thead>
               <tr>
                 <th>Entity</th>
                 <th>Name</th>
@@ -79,25 +81,23 @@
 
 {% block scripts %}
 <script>
-const BY_ENTITY   = {{ by_entity_json | safe }};
+const BY_ENTITY    = {{ by_entity_json | safe }};
 const ENTITY_NAMES = {{ entity_names_json | safe }};
 const KEY_ENTITIES = {{ key_entities | tojson }};
 
-// ── Colour palette ────────────────────────────────────────────────────────────
+// Brand-adjacent palette: distinct lines, not Bootstrap defaults
 const PALETTE = [
-  '#0d6efd','#dc3545','#198754','#fd7e14','#6f42c1',
-  '#20c997','#e83e8c','#17a2b8','#ffc107','#6610f2',
+  '#2E6DA4','#C05640','#3B8A57','#7B5EA7','#B07830',
+  '#2E8A8A','#A04870','#5B7FA6','#6B8C3E','#8A5C3E',
 ];
 let colorIdx = 0;
 const entityColor = {};
 function getColor(code) {
-  if (!entityColor[code]) {
-    entityColor[code] = PALETTE[colorIdx++ % PALETTE.length];
-  }
+  if (!entityColor[code]) entityColor[code] = PALETTE[colorIdx++ % PALETTE.length];
   return entityColor[code];
 }
 
-// ── Chart init ────────────────────────────────────────────────────────────────
+// Chart init — minimal gridlines, no axis title clutter
 const ctx = document.getElementById('ratesChart');
 const chart = new Chart(ctx, {
   type: 'line',
@@ -105,8 +105,17 @@ const chart = new Chart(ctx, {
   options: {
     interaction: { mode: 'index', intersect: false },
     plugins: {
-      legend: { position: 'bottom' },
+      legend: {
+        position: 'bottom',
+        labels: { boxWidth: 10, padding: 14, font: { size: 11, family: "'Inter', sans-serif" } }
+      },
       tooltip: {
+        backgroundColor: '#fff',
+        borderColor: 'rgba(0,0,0,0.1)',
+        borderWidth: 1,
+        titleColor: '#111116',
+        bodyColor: '#505A5B',
+        padding: 10,
         callbacks: {
           label: item => `${item.dataset.label}: ${item.parsed.y != null ? item.parsed.y.toFixed(4) + '%' : '—'}`,
         }
@@ -114,10 +123,15 @@ const chart = new Chart(ctx, {
     },
     scales: {
       y: {
-        title: { display: true, text: 'Tax Rate (% of taxable value)' },
-        ticks: { callback: v => v.toFixed(4) + '%' }
+        border: { display: false },
+        grid:   { color: 'rgba(0,0,0,0.04)', drawBorder: false },
+        ticks:  { callback: v => v.toFixed(4) + '%', font: { size: 11 }, color: '#8F91A2' }
       },
-      x: { title: { display: true, text: 'Tax Year' } }
+      x: {
+        border: { display: false },
+        grid:   { display: false },
+        ticks:  { font: { size: 11 }, color: '#8F91A2', maxRotation: 0 }
+      }
     }
   }
 });
@@ -126,7 +140,6 @@ function updateChart() {
   const checked = [...document.querySelectorAll('.entity-cb:checked')].map(cb => cb.value);
   if (!checked.length) { chart.data.datasets = []; chart.data.labels = []; chart.update(); return; }
 
-  // Collect all years present in checked entities
   const yearsSet = new Set();
   checked.forEach(code => (BY_ENTITY[code] || []).forEach(p => yearsSet.add(p.year)));
   const years = [...yearsSet].sort();
@@ -140,7 +153,10 @@ function updateChart() {
       data:  years.map(y => pMap[y] ?? null),
       borderColor: getColor(code),
       backgroundColor: 'transparent',
-      tension: 0.3,
+      borderWidth: 1.75,
+      pointRadius: 2,
+      pointHoverRadius: 4,
+      tension: 0.25,
       spanGaps: true,
     };
   });
@@ -154,7 +170,7 @@ function selectKey() {
   updateChart();
 }
 
-// Build summary table
+// Build summary table — entity badges match the design system
 function buildSummary() {
   const tbody = document.getElementById('summaryTable');
   const rows = [];
@@ -167,20 +183,25 @@ function buildSummary() {
     rows.push({ code, name: ENTITY_NAMES[code] || '', r2025: r2025.rate, r2020: r2020 && r2020.rate, delta });
   }
   rows.sort((a, b) => b.r2025 - a.r2025);
-  tbody.innerHTML = rows.map(r => `
+  tbody.innerHTML = rows.map(r => {
+    const deltaColor = r.delta != null
+      ? (r.delta < 0 ? 'style="color: var(--down);"' : r.delta > 0 ? 'style="color: var(--up);"' : '')
+      : '';
+    const deltaStr = r.delta != null
+      ? (r.delta > 0 ? '+' : '') + r.delta.toFixed(4) + '%'
+      : '—';
+    return `
     <tr>
-      <td><span class="badge bg-secondary">${r.code}</span></td>
-      <td class="small">${r.name}</td>
-      <td class="text-end">${r.r2025.toFixed(4)}%</td>
-      <td class="text-end">${r.r2020 != null ? r.r2020.toFixed(4) + '%' : '—'}</td>
-      <td class="text-end ${r.delta != null ? (r.delta < 0 ? 'text-success' : r.delta > 0 ? 'text-danger' : '') : ''}">
-        ${r.delta != null ? (r.delta > 0 ? '+' : '') + r.delta.toFixed(4) + '%' : '—'}
-      </td>
-    </tr>
-  `).join('');
+      <td><span class="entity-badge">${r.code}</span></td>
+      <td style="font-size:12.5px; color: var(--text-2);">${r.name}</td>
+      <td class="text-end" style="font-variant-numeric: tabular-nums;">${r.r2025.toFixed(4)}%</td>
+      <td class="text-end" style="font-variant-numeric: tabular-nums; color: var(--text-3);">${r.r2020 != null ? r.r2020.toFixed(4) + '%' : '—'}</td>
+      <td class="text-end" style="font-variant-numeric: tabular-nums;" ${deltaColor}>${deltaStr}</td>
+    </tr>`;
+  }).join('');
 }
 
-// Initialise on page load
+// Init on page load
 selectKey();
 buildSummary();
 </script>

@@ -41,26 +41,26 @@
 <div class="col-lg-4">
 
   {# Property info card #}
-  <div class="card border-0 shadow-sm mb-4">
+  <div class="card mb-4">
     <div class="card-header">
       Property Info
     </div>
-    <div class="card-body">
-      <table class="table table-sm mb-0">
+    <div class="card-body p-3">
+      <table class="info-table">
         <tbody>
-          <tr><th class="text-muted fw-normal">Owner</th>
+          <tr><th>Owner</th>
               <td>{{ parcel.owner_name or "—" }}</td></tr>
-          <tr><th class="text-muted fw-normal">Parcel ID</th>
+          <tr><th>Parcel ID</th>
               <td><code>{{ parcel.geo_id }}</code></td></tr>
-          <tr><th class="text-muted fw-normal">Short ID</th>
+          <tr><th>Short ID</th>
               <td>{{ parcel.prop_id or "—" }}</td></tr>
-          <tr><th class="text-muted fw-normal">Type</th>
+          <tr><th>Type</th>
               <td>{{ {"R":"Real","P":"Personal","MH":"Mobile Home","MN":"Mineral"}.get(parcel.prop_type_cd|trim if parcel.prop_type_cd else "", parcel.prop_type_cd or "—") }}</td></tr>
-          <tr><th class="text-muted fw-normal">Legal</th>
-              <td class="small">{{ parcel.legal_desc or "—" }}</td></tr>
-          <tr><th class="text-muted fw-normal">Neighborhood</th>
+          <tr><th>Legal</th>
+              <td style="font-size:12px; font-weight:400; text-align:right;">{{ parcel.legal_desc or "—" }}</td></tr>
+          <tr><th>Neighborhood</th>
               <td>{{ parcel.neighborhood_cd or "—" }}</td></tr>
-          <tr><th class="text-muted fw-normal">State Code</th>
+          <tr><th>State Code</th>
               <td>{{ parcel.state_cd1 or "—" }}</td></tr>
         </tbody>
       </table>
@@ -69,41 +69,41 @@
 
   {# 2025 snapshot #}
   {% if current %}
-  <div class="card border-0 shadow-sm mb-4">
+  <div class="card mb-4">
     <div class="card-header">
       2025 Snapshot
     </div>
-    <div class="card-body">
-      <table class="table table-sm mb-0">
+    <div class="card-body p-3">
+      <table class="info-table">
         <tbody>
-          <tr><th class="text-muted fw-normal">Market Value</th>
-              <td class="text-end fw-semibold">${{ "{:,.0f}".format(current.market_value) if current.market_value else "—" }}</td></tr>
-          <tr><th class="text-muted fw-normal">Assessed Value</th>
-              <td class="text-end">${{ "{:,.0f}".format(current.assessed_value) if current.assessed_value else "—" }}</td></tr>
+          <tr><th>Market Value</th>
+              <td class="primary-value">${{ "{:,.0f}".format(current.market_value) if current.market_value else "—" }}</td></tr>
+          <tr><th>Assessed Value</th>
+              <td>${{ "{:,.0f}".format(current.assessed_value) if current.assessed_value else "—" }}</td></tr>
           {% if current.hs_cap_loss and current.hs_cap_loss > 0 %}
-          <tr><th class="text-muted fw-normal">HS Cap Loss</th>
-              <td class="text-end text-success">-${{ "{:,.0f}".format(current.hs_cap_loss) }}</td></tr>
+          <tr><th>HS Cap Loss</th>
+              <td style="color: var(--down);">-${{ "{:,.0f}".format(current.hs_cap_loss) }}</td></tr>
           {% endif %}
-          <tr><th class="text-muted fw-normal">Taxable Value</th>
-              <td class="text-end">${{ "{:,.0f}".format(current.taxable_value) if current.taxable_value else "—" }}</td></tr>
+          <tr><th>Taxable Value</th>
+              <td>${{ "{:,.0f}".format(current.taxable_value) if current.taxable_value else "—" }}</td></tr>
           {% if current.land_value %}
-          <tr><th class="text-muted fw-normal">Land Value</th>
-              <td class="text-end">${{ "{:,.0f}".format(current.land_value) }}</td></tr>
+          <tr><th>Land Value</th>
+              <td>${{ "{:,.0f}".format(current.land_value) }}</td></tr>
           {% endif %}
           {% if current.imprv_value %}
-          <tr><th class="text-muted fw-normal">Imprv. Value</th>
-              <td class="text-end">${{ "{:,.0f}".format(current.imprv_value) }}</td></tr>
+          <tr><th>Improvement Value</th>
+              <td>${{ "{:,.0f}".format(current.imprv_value) }}</td></tr>
           {% endif %}
-          <tr><td colspan="2"><hr class="my-1"></td></tr>
-          <tr><th class="text-muted fw-normal">Total Tax</th>
-              <td class="text-end fw-semibold">${{ "{:,.2f}".format(current.total_tax) if current.total_tax else "—" }}</td></tr>
+          <tr class="divider-row"><th></th><td></td></tr>
+          <tr><th>Total Tax</th>
+              <td class="primary-value">${{ "{:,.2f}".format(current.total_tax) if current.total_tax else "—" }}</td></tr>
           {% if current.is_delinquent %}
-          <tr><th class="text-muted fw-normal">Amount Due</th>
-              <td class="text-end text-danger fw-semibold">${{ "{:,.2f}".format(current.total_due) }}</td></tr>
+          <tr><th>Amount Due</th>
+              <td style="color: var(--up); font-weight: 700;">${{ "{:,.2f}".format(current.total_due) }}</td></tr>
           {% endif %}
           {% if current.exemption_codes or current.billing_exemptions %}
-          <tr><th class="text-muted fw-normal">Exemptions</th>
-              <td>{{ current.exemption_codes or current.billing_exemptions }}</td></tr>
+          <tr><th>Exemptions</th>
+              <td style="font-size:12px; text-align:right;">{{ current.exemption_codes or current.billing_exemptions }}</td></tr>
           {% endif %}
         </tbody>
       </table>
@@ -117,16 +117,16 @@
     <div class="card-header">
       Delinquency
     </div>
-    <div class="card-body">
-      <table class="table table-sm mb-0">
+    <div class="card-body p-3">
+      <table class="info-table">
         <tbody>
-          <tr><th class="text-muted fw-normal">Total Due</th>
-              <td class="text-end fw-bold text-danger">${{ "{:,.2f}".format(delinquent.total_due) }}</td></tr>
-          <tr><th class="text-muted fw-normal">First Delinquent</th>
-              <td class="text-end">{{ delinquent.first_delinquent_yr or "—" }}</td></tr>
+          <tr><th>Total Due</th>
+              <td class="primary-value" style="color: var(--up);">${{ "{:,.2f}".format(delinquent.total_due) }}</td></tr>
+          <tr><th>First Delinquent</th>
+              <td>{{ delinquent.first_delinquent_yr or "—" }}</td></tr>
           {% if delinquent.cause_number %}
-          <tr><th class="text-muted fw-normal">Cause #</th>
-              <td class="text-end">{{ delinquent.cause_number }}</td></tr>
+          <tr><th>Cause #</th>
+              <td>{{ delinquent.cause_number }}</td></tr>
           {% endif %}
         </tbody>
       </table>
@@ -269,7 +269,7 @@
 
   {# ── Tax Projection Table ────────────────────────────────────────── #}
   {% if projections %}
-  <div class="card mb-4">
+  <div class="card mb-4 projection-card">
     <div class="card-header d-flex justify-content-between align-items-center">
       <span>5-Year Tax Projection</span>
       <span class="estimates-badge">Estimates Only</span>
@@ -289,15 +289,13 @@
           </thead>
           <tbody>
             {% for p in projections %}
-            <tr class="text-muted">
-              <td class="fw-semibold text-body">{{ p.year }}</td>
-              <td class="text-end font-italic">~${{ "{:,.0f}".format(p.market) }}</td>
-              <td class="text-end font-italic">~${{ "{:,.0f}".format(p.assessed) }}</td>
-              <td class="text-end small font-italic">~{{ "{:.4f}%".format(p.rate) }}</td>
-              <td class="text-end fw-semibold text-body">~${{ "{:,.0f}".format(p.est_tax) }}</td>
-              <td class="text-end {% if p.value_change > 0 %}text-success{% else %}text-danger{% endif %}">
-                {{ "{:+.1f}%".format(p.value_change) }}
-              </td>
+            <tr class="projection-row">
+              <td class="proj-year">{{ p.year }}</td>
+              <td class="text-end">~${{ "{:,.0f}".format(p.market) }}</td>
+              <td class="text-end">~${{ "{:,.0f}".format(p.assessed) }}</td>
+              <td class="text-end small">~{{ "{:.4f}%".format(p.rate) }}</td>
+              <td class="text-end">~${{ "{:,.0f}".format(p.est_tax) }}</td>
+              <td class="text-end">{{ "{:+.1f}%".format(p.value_change) }}</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -315,7 +313,7 @@
   {% endif %}
 
   {# 5-year history table #}
-  <div class="card border-0 shadow-sm mb-4">
+  <div class="card mb-4">
     <div class="card-header">
       5-Year History (2021–2025)
     </div>
@@ -340,7 +338,15 @@
               <td class="text-end">${{ "{:,.0f}".format(r.assessed_value) if r.assessed_value else "—" }}</td>
               <td class="text-end">${{ "{:,.0f}".format(r.taxable_value) if r.taxable_value else "—" }}</td>
               <td class="text-end">{% if r.total_tax %}${{ "{:,.2f}".format(r.total_tax) }}{% else %}<span class="na-cell">Not available yet</span>{% endif %}</td>
-              <td class="small text-muted">{{ r.data_source or "—" }}</td>
+              <td>
+                {% if r.tax_year == 2025 %}
+                  <span class="badge-verified">Verified</span>
+                {% elif r.data_source %}
+                  <span class="badge-partial">Partial</span>
+                {% else %}
+                  <span class="na-cell">—</span>
+                {% endif %}
+              </td>
             </tr>
             {% else %}
             <tr><td colspan="6" class="na-cell text-center py-3">No history found for this parcel.</td></tr>
@@ -360,7 +366,7 @@
   {# ── Phase 2: Growth & Assessment Metrics ───────────────────────── #}
   {# Only rendered when parcel_metrics rows exist (compute_metrics.py has been run) #}
   {% if metrics_by_year %}
-  <div class="card border-0 shadow-sm mb-4">
+  <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
       <span>Year-over-Year Growth &amp; Assessment Metrics</span>
     </div>
@@ -389,7 +395,7 @@
                   <span class="{% if m.yoy_market_value_pct > 0 %}text-danger{% elif m.yoy_market_value_pct < 0 %}text-success{% endif %}">
                     {{ "{:+.1f}%".format(m.yoy_market_value_pct) }}
                     {% if m.risk_large_value_jump %}
-                      <span class="badge bg-warning text-dark ms-1" title="Large value jump (>{m.risk_large_value_jump_pct:.0f}%)">⚠</span>
+                      <span class="badge-partial ms-1" style="font-size:10px; padding: 1px 5px;" title="Large value jump (>{{ '{:.0f}'.format(m.risk_large_value_jump_pct) }}%)">!</span>
                     {% endif %}
                   </span>
                 {% elif r.tax_year == history|sort(attribute='tax_year')|first|attr('tax_year') %}
@@ -470,7 +476,7 @@
 
   {# Value trend chart #}
   {% if history %}
-  <div class="card border-0 shadow-sm mb-4">
+  <div class="card mb-4">
     <div class="card-header">
       Value Trend
     </div>
@@ -482,7 +488,7 @@
 
   {# ── Phase 2: Risk Indicators ────────────────────────────────────── #}
   {% if metrics_by_year %}
-  <div class="card border-0 shadow-sm mb-4">
+  <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
       <span>Risk Indicators</span>
     </div>
@@ -584,7 +590,7 @@
 
   {# Entity-level tax breakdown (2025) #}
   {% if entity_detail %}
-  <div class="card border-0 shadow-sm mb-4">
+  <div class="card mb-4">
     <div class="card-header">
       2025 Tax by Entity
     </div>
@@ -627,23 +633,84 @@
             </tr>
             {% endfor %}
           </tbody>
-          <tfoot class="table-light fw-semibold small">
-            {% set total_rate = namespace(val=0) %}
-            {% set total_prev = namespace(val=0) %}
+          <tfoot>
+            {# ── Accumulate totals in a single pass ────────────────────── #}
+            {% set n_ent = entity_detail | length %}
+            {% set tot = namespace(
+                rate=0, prev=0,
+                due=0,  due_n=0,
+                paid=0, paid_n=0
+            ) %}
             {% for e in entity_detail %}
-              {% if e.rate %}{% set total_rate.val = total_rate.val + e.rate %}{% endif %}
-              {% if e.rate_prev %}{% set total_prev.val = total_prev.val + e.rate_prev %}{% endif %}
+              {% if e.rate     %}{% set tot.rate  = tot.rate  + e.rate     %}{% endif %}
+              {% if e.rate_prev%}{% set tot.prev  = tot.prev  + e.rate_prev%}{% endif %}
+              {% if e.amount_due  is not none %}{% set tot.due   = tot.due   + e.amount_due  %}{% set tot.due_n  = tot.due_n  + 1 %}{% endif %}
+              {% if e.amount_paid is not none %}{% set tot.paid  = tot.paid  + e.amount_paid %}{% set tot.paid_n = tot.paid_n + 1 %}{% endif %}
             {% endfor %}
-            {% set total_delta = total_rate.val - total_prev.val %}
-            <tr class="border-top border-2">
-              <td>Total</td>
-              <td class="text-end">{{ "{:.4f}%".format(total_rate.val) if total_rate.val else "—" }}</td>
-              <td class="text-end {% if total_delta < 0 %}text-success{% elif total_delta > 0 %}text-danger{% endif %}">
-                {% if total_rate.val and total_prev.val %}{{ "{:+.4f}%".format(total_delta) }}{% else %}—{% endif %}
+            {% set rate_delta    = tot.rate - tot.prev %}
+            {% set due_partial   = (tot.due_n  > 0 and tot.due_n  < n_ent) %}
+            {% set paid_partial  = (tot.paid_n > 0 and tot.paid_n < n_ent) %}
+            {% set bal_complete  = (tot.due_n == n_ent and tot.paid_n == n_ent) %}
+            {% set total_bal     = tot.due - tot.paid %}
+
+            <tr>
+              <td class="fw-bold" style="font-size:13px; padding-top:10px; border-top: 2px solid var(--border-strong);">
+                Total
               </td>
-              <td class="text-end"></td>
-              <td class="text-end"></td>
-              <td class="text-end"></td>
+
+              {# Combined rate #}
+              <td class="text-end fw-bold" style="border-top: 2px solid var(--border-strong);">
+                {{ "{:.4f}%".format(tot.rate) if tot.rate else "—" }}
+              </td>
+
+              {# Rate YoY delta #}
+              <td class="text-end fw-semibold {% if rate_delta < 0 %}text-success{% elif rate_delta > 0 %}text-danger{% endif %}"
+                  style="border-top: 2px solid var(--border-strong);">
+                {% if tot.rate and tot.prev %}{{ "{:+.4f}%".format(rate_delta) }}{% else %}—{% endif %}
+              </td>
+
+              {# Amount Due total #}
+              <td class="text-end" style="border-top: 2px solid var(--border-strong);">
+                {% if tot.due_n > 0 %}
+                  <span class="fw-bold" style="font-size:13px;">${{ "{:,.2f}".format(tot.due) }}</span>
+                  {% if due_partial %}
+                    <span class="badge-partial d-block" style="font-size:10px; margin-top:2px;">
+                      {{ tot.due_n }} of {{ n_ent }} entities
+                    </span>
+                  {% endif %}
+                {% else %}
+                  <span class="na-cell">—</span>
+                {% endif %}
+              </td>
+
+              {# Amount Paid total #}
+              <td class="text-end" style="border-top: 2px solid var(--border-strong);">
+                {% if tot.paid_n > 0 %}
+                  <span class="fw-bold" style="font-size:13px;">${{ "{:,.2f}".format(tot.paid) }}</span>
+                  {% if paid_partial %}
+                    <span class="badge-partial d-block" style="font-size:10px; margin-top:2px;">
+                      {{ tot.paid_n }} of {{ n_ent }} entities
+                    </span>
+                  {% endif %}
+                {% else %}
+                  <span class="na-cell">—</span>
+                {% endif %}
+              </td>
+
+              {# Balance — only show a number when both columns are complete #}
+              <td class="text-end" style="border-top: 2px solid var(--border-strong);">
+                {% if bal_complete %}
+                  {% if total_bal > 0.01 %}
+                    <span class="fw-bold" style="font-size:13px; color: var(--up);">${{ "{:,.2f}".format(total_bal) }}</span>
+                  {% else %}
+                    <span class="fw-bold" style="font-size:13px; color: var(--down);">Paid</span>
+                  {% endif %}
+                {% elif tot.due_n > 0 or tot.paid_n > 0 %}
+                  <span class="badge-partial" style="font-size:10px;">Partial</span>
+                {% else %}
+                  <span class="na-cell">—</span>
+                {% endif %}
+              </td>
             </tr>
           </tfoot>
         </table>
@@ -654,7 +721,7 @@
 
   {# ── Phase 2: County Benchmark Comparison ───────────────────────── #}
   {% if benchmark_by_year and bench_label %}
-  <div class="card border-0 shadow-sm mb-4">
+  <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
       <span>County Benchmark — {{ bench_label }}</span>
     </div>

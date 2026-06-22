@@ -225,7 +225,11 @@ def index():
         if parcel:
             return redirect(url_for("property_detail", geo_id=parcel["geo_id"]))
         else:
-            error = f'No parcel found for "{q}". Try the 10-digit TCAD account number.'
+            error = (
+                f"We couldn't find a parcel matching \"{q}\". "
+                "Double-check the format — the 10-digit TCAD account number works most reliably. "
+                "The 14-digit Tax Office account and short prop_id integer are also accepted."
+            )
 
     return render_template("index.html", q=q, error=error)
 
@@ -235,7 +239,14 @@ def property_detail(geo_id):
     # Core parcel
     parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
     if not parcel:
-        return render_template("index.html", error=f"Parcel {geo_id} not found."), 404
+        return render_template(
+            "index.html",
+            q=geo_id,
+            error=(
+                f"We couldn't find parcel \"{geo_id}\". "
+                "Double-check the format — the 10-digit TCAD account number works most reliably."
+            )
+        ), 404
 
     # 5-year value history
     history = query("""
