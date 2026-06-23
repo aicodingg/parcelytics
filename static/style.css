@@ -866,6 +866,79 @@ footer {
   margin-top: 2rem;
 }
 
+/* ── About page ─────────────────────────────────────────────────────────── */
+.about-hero {
+  text-align: center;
+  padding: 3rem 1rem 2.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.about-hero-headline {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.75rem;
+  letter-spacing: -0.02em;
+}
+
+.about-hero-sub {
+  font-size: 1.0625rem;
+  color: var(--text-2);
+  max-width: 600px;
+  margin: 0 auto 1.5rem;
+  line-height: 1.6;
+}
+
+.about-cta {
+  background: var(--accent);
+  border: none;
+  padding: 0.5rem 1.5rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+  border-radius: 6px;
+}
+
+.about-cta:hover {
+  background: var(--accent-dark, #1a6fd4);
+}
+
+.about-feature-icon {
+  font-size: 10px;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+  letter-spacing: 2px;
+}
+
+.about-feature-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+
+.about-feature-body {
+  font-size: 0.8375rem;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin-bottom: 0;
+}
+
+.about-audience-card {
+  border-left: 3px solid var(--accent);
+}
+
+.about-audience-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+
+.about-integrity-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 576px) {
   body { font-size: 13px; }

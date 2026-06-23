@@ -71,3 +71,14 @@ pip-wheel-metadata/
 # ── Logs ─────────────────────────────────────────────────────────────────────
 *.log
 logs/
+
+# ── Session artifacts (not project code) ─────────────────────────────────────
+push_*.sh
+run_*.sh
+CHANGE_REPORT_*.md
+SESSION_REPORT.md
+Step5_*.docx
+Step5_*.md
+*.docx
+investigate_*.py
+validate_*.py

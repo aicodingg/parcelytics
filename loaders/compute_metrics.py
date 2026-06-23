@@ -224,13 +224,15 @@ def compute_parcel_metrics(conn):
                 END,
 
                 -- Effective tax rate: real billing for 2025 only; Not Available otherwise
+                -- Uses LATERAL join (tb_bill) so it works even if TAXYEAR in tax_billing
+                -- differs from parcel_tax_year tax_year (e.g. stored as 2024 vs 2025).
                 -- Cap at 1.0 (100% effective rate) — values above that are bad data.
                 CASE
                     WHEN pty.tax_year = 2025
-                     AND COALESCE(tb.total_tax, 0) > 0
+                     AND COALESCE(tb_bill.total_tax, 0) > 0
                      AND pty.market_value > 0
-                     AND tb.total_tax::NUMERIC / pty.market_value <= 1
-                    THEN ROUND(tb.total_tax::NUMERIC / pty.market_value, 6)
+                     AND tb_bill.total_tax::NUMERIC / pty.market_value <= 1
+                    THEN ROUND(tb_bill.total_tax::NUMERIC / pty.market_value, 6)
                 END,
 
                 -- Delinquency flag
@@ -245,6 +247,15 @@ def compute_parcel_metrics(conn):
             JOIN parcel p ON p.geo_id = pty.geo_id
             LEFT JOIN tax_billing tb
               ON tb.geo_id = pty.geo_id AND tb.tax_year = pty.tax_year
+            -- tb_bill: year-agnostic billing for eff_rate; handles TAXYEAR mismatch
+            -- between the source CSV and what parcel_tax_year considers "2025".
+            LEFT JOIN LATERAL (
+                SELECT total_tax
+                FROM   tax_billing
+                WHERE  geo_id = pty.geo_id
+                ORDER  BY tax_year DESC
+                LIMIT  1
+            ) tb_bill ON (pty.tax_year = 2025)
             LEFT JOIN tax_delinquent td
               ON td.geo_id = pty.geo_id
             WINDOW w AS (PARTITION BY pty.geo_id ORDER BY pty.tax_year)
@@ -405,9 +416,29 @@ def print_sample(conn):
         ("0284460113", "Residential A — Abbeyglen Castle Dr"),
     ]
     print("\n=== Sample: sanity-check parcels ===")
+    # First show tax_billing state so we can diagnose eff_rate issues
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM tax_billing")
+        tb_total = cur.fetchone()[0]
+        cur.execute("SELECT tax_year, COUNT(*) FROM tax_billing GROUP BY tax_year ORDER BY tax_year")
+        tb_by_year = cur.fetchall()
+    print(f"\n  tax_billing rows: {tb_total:,}")
+    for yr, cnt in tb_by_year:
+        print(f"    tax_year={yr}: {cnt:,} rows")
+
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         for geo_id, label in sanity_parcels:
             print(f"\n  {label} ({geo_id})")
+            cur.execute(
+                "SELECT tax_year, total_tax FROM tax_billing WHERE geo_id = %s ORDER BY tax_year",
+                (geo_id,)
+            )
+            billing_rows = cur.fetchall()
+            if billing_rows:
+                for b in billing_rows:
+                    print(f"    billing tax_year={b['tax_year']} total_tax={b['total_tax']}")
+            else:
+                print("    billing: (no rows in tax_billing)")
             cur.execute("""
                 SELECT tax_year, coverage_level,
                        yoy_market_value_pct,
