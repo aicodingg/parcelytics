@@ -473,6 +473,7 @@
   {% if _ent_with_amounts %}
   <div class="card mb-4">
     <div class="card-header">2025 Tax Burden by Entity</div>
+
     <div class="card-body d-flex flex-wrap align-items-center gap-4" style="padding:16px;">
       <div style="max-width:220px; flex:0 0 220px;">
         <canvas id="entityTaxDonut" height="220"></canvas>
@@ -501,6 +502,18 @@
           </tbody>
         </table>
       </div>
+    </div>
+  </div>
+  {% else %}
+  {# No 2025 billing amounts matched — show explicit notice per Data Integrity Standard #}
+  <div class="card mb-4">
+    <div class="card-header">2025 Tax Burden by Entity</div>
+    <div class="card-body py-3 px-4">
+      <span class="na-cell">Pending historical billing data</span>
+      <span class="text-muted small ms-2">
+        2025 billing amounts for this parcel are not available in the current dataset.
+        This section will populate when billing data is matched.
+      </span>
     </div>
   </div>
   {% endif %}{# /ent_with_amounts #}
@@ -901,7 +914,12 @@
           <tbody>
             {% for row in annual_trends %}
             <tr>
-              <td class="trend-row-label">{{ row.label }}</td>
+              <td class="trend-row-label">
+                {{ row.label }}
+                {% if row.note %}
+                  <br><span class="na-cell" style="font-size:10px; font-style:italic;">⚑ {{ row.note }}</span>
+                {% endif %}
+              </td>
               <td class="text-end">{{ row.twelve_month }}</td>
               <td class="text-end text-muted">{{ row.hist_avg }}</td>
               <td class="text-end trend-forecast">{{ row.forecast_avg }}</td>

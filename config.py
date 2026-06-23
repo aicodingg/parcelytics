@@ -25,7 +25,10 @@ AJR_FILES = {
     # 2025 AJR is intentionally omitted — use Certified Export instead
 }
 
-CERT_DIR     = os.path.join(DATA_DIR, "2025 Certified Appraisal Export Supp 0_07202025")
+CERT_DIR      = os.path.join(DATA_DIR, "2025 Certified Appraisal Export Supp 0_07202025")
+CERT_DIR_2022 = os.path.join(DATA_DIR, "2022_Certified_Export")
+CERT_DIR_2023 = os.path.join(DATA_DIR, "2023_Certified_Export")
+CERT_DIR_2024 = os.path.join(DATA_DIR, "2024_Certified_Export")
 PRELIM_2026_DIR = os.path.join(DATA_DIR, "2026 Preliminary Appraisal Export Supp 0_06092026 (1)")
 TAX_CUR_CSV  = os.path.join(DATA_DIR, "TaxCurOpenData (1).csv")
 TAX_DELQ_CSV = os.path.join(DATA_DIR, "TaxDelqOpenData.csv")
