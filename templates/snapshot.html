@@ -213,7 +213,15 @@
           {% if r.ptype != 'Other' %}
           {% set delta_b = r.total_mv26_b - r.total_mv25_b %}
           <tr>
-            <td class="fw-semibold">{{ r.ptype }}</td>
+{# task5-snapshot-drill #}
+            <td class="fw-semibold">
+              <a href="/parcels?view={{ view }}&ptype={{ r.ptype | urlencode }}"
+                 class="text-decoration-none"
+                 title="View all {{ r.ptype }} parcels">
+                {{ r.ptype }}
+                <span style="font-size:10px; color:var(--text-3); margin-left:4px;">↗</span>
+              </a>
+            </td>
             <td class="text-end text-muted">{{ "{:,}".format(r.n_parcels) }}</td>
             <td class="text-end text-danger">{{ "{:,}".format(r.n_up) }}</td>
             <td class="text-end text-success">{{ "{:,}".format(r.n_down) }}</td>

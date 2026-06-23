@@ -4,7 +4,14 @@
 {% block content %}
 
 {# ── Back link ───────────────────────────────────────────────────────── #}
-<a href="/" class="back-link">&larr; New search</a>
+<div class="d-flex justify-content-between align-items-center">
+  <a href="/" class="back-link">&larr; New search</a>
+  {# task5-compare-pin #}
+  <button class="btn btn-sm btn-outline-secondary" id="comparePin"
+          onclick="pinToCompare()" title="Pin this parcel for comparison">
+    ⊞ Pin to Compare
+  </button>
+</div>
 
 {# ── CoStar KPI headline cards ────────────────────────────────────────── #}
 {% if kpi %}
@@ -2124,6 +2131,47 @@ if (rCtx) {
       const el = document.getElementById(id);
       if (el) observer.observe(el);
     });
+  }
+})();
+</script>
+
+
+<script>
+// ── Compare Pin (Task 5) — task5-compare-pin-js ──────────────────────────────
+(function () {
+  const STORE_KEY = 'parcelytics_compare';
+  const GEO_ID   = "{{ parcel.geo_id }}";
+  const ADDR      = "{{ parcel.situs_address | default('') | replace('"', '') }}";
+
+  function getC()  { try { return JSON.parse(sessionStorage.getItem(STORE_KEY) || '{}'); } catch { return {}; } }
+  function saveC(c) { sessionStorage.setItem(STORE_KEY, JSON.stringify(c)); }
+
+  window.pinToCompare = function () {
+    let c = getC();
+    const btn = document.getElementById('comparePin');
+    if (c[GEO_ID]) {
+      delete c[GEO_ID];
+      saveC(c);
+      if (btn) btn.classList.remove('btn-dark');
+      if (btn) btn.textContent = '⊞ Pin to Compare';
+    } else {
+      if (Object.keys(c).length >= 4) {
+        alert('Max 4 parcels. Remove one from the compare tray first.');
+        return;
+      }
+      c[GEO_ID] = ADDR;
+      saveC(c);
+      if (btn) btn.classList.add('btn-dark');
+      if (btn) btn.innerHTML = '✓ Pinned &nbsp;—&nbsp; <a href="/compare?ids=' + Object.keys(c).join(',') + '" target="_blank" class="text-white" style="font-size:12px;">Compare now →</a>';
+    }
+  };
+
+  // Init: check if already pinned
+  const c = getC();
+  const btn = document.getElementById('comparePin');
+  if (btn && c[GEO_ID]) {
+    btn.classList.add('btn-dark');
+    btn.innerHTML = '✓ Pinned &nbsp;—&nbsp; <a href="/compare?ids=' + Object.keys(c).join(',') + '" target="_blank" class="text-white" style="font-size:12px;">Compare now →</a>';
   }
 })();
 </script>

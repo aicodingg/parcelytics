@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}{{ ptype }} Parcels — Parcelytics{% endblock %}
+
+{% block content %}
+<a href="/snapshot?view={{ view }}" class="back-link">&larr; Back to Snapshot</a>
+
+<div class="page-header mb-3 mt-2 d-flex align-items-center gap-3 flex-wrap">
+  <div>
+    <h1 class="page-title mb-0">{{ ptype }} Parcels</h1>
+    <p class="text-muted mb-0" style="font-size:13px; margin-top:4px;">
+      {{ "{:,}".format(parcels|length) }} parcels
+      — 2025 Certified vs 2026 Preliminary
+      <span class="badge-preliminary ms-2">Preliminary</span>
+    </p>
+  </div>
+  <div class="ms-auto d-flex gap-2 align-items-center">
+    <button class="btn btn-sm btn-outline-secondary" id="sortToggle" onclick="toggleSort()">Sort: MV ↓</button>
+    <a href="/compare" id="compareLink" class="btn btn-sm btn-dark"
+       style="display:none;" target="_blank">
+       Compare (<span id="compareCt">0</span>)
+    </a>
+  </div>
+</div>
+
+{% if parcels %}
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0" id="parcelListTable">
+        <thead class="table-light small text-muted text-uppercase">
+          <tr>
+            <th style="width:26px;"></th>{# compare pin #}
+            <th>Address</th>
+            <th>Owner</th>
+            <th class="text-end">2025 MV</th>
+            <th class="text-end">2026 MV</th>
+            <th class="text-end">YoY Δ</th>
+            <th class="text-end">Geo ID</th>
+          </tr>
+        </thead>
+        <tbody id="parcelListBody">
+          {% for p in parcels %}
+          {% set yoy = ((p.mv26 - p.mv25) / p.mv25 * 100) if p.mv25 and p.mv26 else none %}
+          <tr data-geo="{{ p.geo_id }}" data-mv25="{{ p.mv25 or 0 }}">
+            <td>
+              <button class="compare-pin-btn" onclick="togglePin('{{ p.geo_id }}','{{ p.address }}')"
+                      title="Pin to compare" id="pin_{{ p.geo_id }}" aria-label="Pin {{ p.geo_id }} to compare">
+                ⊞
+              </button>
+            </td>
+            <td>
+              <a href="/parcel/{{ p.geo_id }}" class="text-decoration-none">
+                {{ p.address or "(unknown)" }}
+              </a>
+            </td>
+            <td class="text-muted small">{{ p.owner or "—" }}</td>
+            <td class="text-end" style="font-family:var(--font-mono); font-size:12px;">
+              {{ "$" + "{:,.0f}".format(p.mv25) if p.mv25 else "—" }}
+            </td>
+            <td class="text-end" style="font-family:var(--font-mono); font-size:12px;">
+              {{ "$" + "{:,.0f}".format(p.mv26) if p.mv26 else "—" }}
+            </td>
+            <td class="text-end fw-semibold {% if yoy and yoy > 0 %}text-danger{% elif yoy and yoy < 0 %}text-success{% endif %}">
+              {% if yoy is not none %}{{ "{:+.1f}%".format(yoy) }}{% else %}—{% endif %}
+            </td>
+            <td class="text-end" style="font-family:var(--font-mono); font-size:11px; color:var(--text-3);">
+              <a href="/parcel/{{ p.geo_id }}" class="text-muted text-decoration-none">{{ p.geo_id }}</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card-footer text-muted small">
+    Showing first {{ "{:,}".format(parcels|length) }} results.
+    2026 values are Preliminary — not certified.
+    Click any parcel to view its full detail page.
+  </div>
+</div>
+{% else %}
+<div class="search-error-block">No parcels found for this filter.</div>
+{% endif %}
+
+{# Compare tray #}
+<div id="compareTray" class="compare-tray" style="display:none;">
+  <div class="compare-tray-title">Compare</div>
+  <div id="compareTrayItems" class="compare-tray-items"></div>
+  <div class="compare-tray-actions">
+    <a href="#" id="compareTrayBtn" class="btn btn-sm btn-dark" onclick="openCompare(event)">
+      Compare (<span id="compareTrayCount">0</span>)
+    </a>
+    <button class="btn btn-sm btn-outline-secondary ms-2" onclick="clearCompare()">Clear</button>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Parcel list: compare pin + sessionStorage (Task 5) ───────────────────────
+const STORE_KEY = 'parcelytics_compare';
+
+function getCompare() {
+  try { return JSON.parse(sessionStorage.getItem(STORE_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function saveCompare(obj) {
+  sessionStorage.setItem(STORE_KEY, JSON.stringify(obj));
+}
+
+function togglePin(geoId, addr) {
+  let c = getCompare();
+  if (c[geoId]) {
+    delete c[geoId];
+  } else {
+    if (Object.keys(c).length >= 4) {
+      alert('Maximum 4 parcels can be compared at once. Remove one first.');
+      return;
+    }
+    c[geoId] = addr;
+  }
+  saveCompare(c);
+  renderPins();
+}
+
+function renderPins() {
+  const c = getCompare();
+  const ids = Object.keys(c);
+
+  // Update all pin buttons on the page
+  document.querySelectorAll('[id^="pin_"]').forEach(btn => {
+    const geo = btn.id.replace('pin_', '');
+    btn.classList.toggle('pinned', !!c[geo]);
+    btn.setAttribute('aria-pressed', !!c[geo]);
+  });
+
+  // Update tray
+  const tray  = document.getElementById('compareTray');
+  const items = document.getElementById('compareTrayItems');
+  const ct    = document.getElementById('compareTrayCount');
+  const link  = document.getElementById('compareLink');
+  const ctHdr = document.getElementById('compareCt');
+
+  if (ct)    ct.textContent    = ids.length;
+  if (ctHdr) ctHdr.textContent = ids.length;
+
+  if (ids.length > 0) {
+    tray.style.display  = 'flex';
+    if (link)  link.style.display = 'inline-block';
+    if (items) items.innerHTML = ids.map(id =>
+      `<span class="compare-chip">${c[id] || id}
+        <button onclick="togglePin('${id}','${c[id]}')" style="border:none;background:none;padding:0;cursor:pointer;color:var(--text-3);">×</button>
+       </span>`
+    ).join('');
+    const compareHref = '/compare?ids=' + ids.join(',');
+    document.getElementById('compareTrayBtn').href = compareHref;
+    if (link) link.href = compareHref;
+  } else {
+    tray.style.display  = 'none';
+    if (link)  link.style.display = 'none';
+  }
+}
+
+function openCompare(e) {
+  e.preventDefault();
+  const ids = Object.keys(getCompare());
+  if (ids.length < 2) { alert('Select at least 2 parcels to compare.'); return; }
+  window.open('/compare?ids=' + ids.join(','), '_blank');
+}
+
+function clearCompare() {
+  saveCompare({});
+  renderPins();
+}
+
+// Sort by MV25 descending (default) / ascending
+let _sortAsc = false;
+function toggleSort() {
+  _sortAsc = !_sortAsc;
+  const btn = document.getElementById('sortToggle');
+  btn.textContent = 'Sort: MV ' + (_sortAsc ? '↑' : '↓');
+  const tbody = document.getElementById('parcelListBody');
+  if (!tbody) return;
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  rows.sort((a, b) => {
+    const va = parseFloat(a.dataset.mv25) || 0;
+    const vb = parseFloat(b.dataset.mv25) || 0;
+    return _sortAsc ? va - vb : vb - va;
+  });
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+// Init on load
+renderPins();
+</script>
+{% endblock %}

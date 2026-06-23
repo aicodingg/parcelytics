@@ -1676,6 +1676,149 @@ def api_peer_benchmark_local(geo_id):
         "this_mv_pct_rank": mv_pct,
     })
 
+
+# ── Task 5: ptype label → SQL WHERE fragments ──────────────────────────────────
+# task5_drill_through
+_PTYPE_SC1_FILTER = {
+    # Overall
+    "Residential":            "LEFT(p.state_cd1,1) = 'A'",
+    "Multi-Family":           "LEFT(p.state_cd1,1) = 'B'",
+    "Commercial":             "LEFT(p.state_cd1,1) IN ('F','L')",
+    "Land/Vacant":            "LEFT(p.state_cd1,1) = 'C'",
+    "Agricultural":           "LEFT(p.state_cd1,1) IN ('D','E')",
+    # Residential sub-types
+    "Single-Family":          "y25.state_cd1 LIKE 'A1%'",
+    "Condo / Townhome":       "(y25.state_cd1 LIKE 'A2%' OR y25.state_cd1 LIKE 'A4%')",
+    "Other Residential":      "(LEFT(y25.state_cd1,1) = 'A' AND y25.state_cd1 NOT LIKE 'A1%' AND y25.state_cd1 NOT LIKE 'A2%' AND y25.state_cd1 NOT LIKE 'A4%')",
+    # Commercial sub-types
+    "Commercial Improved":    "LEFT(y25.state_cd1,1) = 'F'",
+    "Commercial Land / RE":   "LEFT(y25.state_cd1,1) = 'L'",
+    # Multi-family sub-types
+    "Multifamily (5+ units)": "y25.state_cd1 LIKE 'B1%'",
+    "Duplex":                 "y25.state_cd1 LIKE 'B2%'",
+    "Triplex":                "y25.state_cd1 LIKE 'B3%'",
+    "Fourplex":               "y25.state_cd1 LIKE 'B4%'",
+    "Other Multi-Family":     "LEFT(y25.state_cd1,1) = 'B'",
+    # Land sub-types
+    "Vacant Lot":             "y25.state_cd1 LIKE 'C1%'",
+    "Colonia":                "y25.state_cd1 LIKE 'C2%'",
+    "Other Vacant":           "LEFT(y25.state_cd1,1) = 'C'",
+    # Agricultural
+    "Open-Space Ag (1-d-1)":  "LEFT(y25.state_cd1,1) = 'D'",
+    "Rural Land (non-ag)":    "LEFT(y25.state_cd1,1) = 'E'",
+    "Other Agricultural":     "LEFT(y25.state_cd1,1) IN ('D','E')",
+}
+
+
+
+@app.route("/parcels")
+def parcel_list():
+    """
+    Drill-through parcel list (Task 5).
+    Query params:
+      view  str   snapshot view (residential/commercial/etc.)
+      ptype str   ptype label from snapshot rows (e.g. 'Single-Family')
+    Returns up to 500 matching parcels with 2025 + 2026 market values.
+    """
+    view  = request.args.get("view", "overall")
+    ptype = request.args.get("ptype", "").strip()
+
+    sc1_filter = _PTYPE_SC1_FILTER.get(ptype)
+    if not sc1_filter:
+        sc1_filter = "1=1"   # no filter — show all (shouldn't happen)
+
+    # Build alias-safe filter: join alias is 'y25', parcel alias is 'p'
+    rows = query(f"""
+        WITH y25 AS (
+            SELECT p.geo_id, p.state_cd1, p.situs_address, p.owner_name,
+                   t.market_value AS mv25
+            FROM   parcel p
+            JOIN   parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = 2025
+            WHERE  t.market_value > 0
+              AND  p.state_cd1 NOT LIKE 'X%%'
+              AND  p.geo_id NOT LIKE 'AJR%%'
+              AND  ({sc1_filter})
+        )
+        SELECT
+            y25.geo_id,
+            y25.situs_address  AS address,
+            y25.owner_name     AS owner,
+            y25.mv25,
+            t26.market_value   AS mv26
+        FROM  y25
+        LEFT JOIN parcel_tax_year t26
+               ON t26.geo_id = y25.geo_id AND t26.tax_year = 2026
+        ORDER BY y25.mv25 DESC NULLS LAST
+        LIMIT 500
+    """)
+
+    return render_template(
+        "parcel_list.html",
+        view=view,
+        ptype=ptype or "All",
+        parcels=[dict(r) for r in rows],
+    )
+
+
+@app.route("/compare")
+def compare_parcels():
+    """
+    Side-by-side parcel comparison (Task 5).
+    Query param:
+      ids  str   comma-separated geo_ids (2–4)
+    """
+    ids_raw = request.args.get("ids", "").strip()
+    geo_ids = [g.strip() for g in ids_raw.split(",") if g.strip()][:4]
+
+    if len(geo_ids) < 2:
+        return render_template(
+            "compare.html",
+            parcels=[],
+            error="Provide 2–4 geo_ids as ?ids=id1,id2 to compare.",
+        )
+
+    parcels = []
+    for geo_id in geo_ids:
+        parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+        if not parcel:
+            continue
+
+        current = query("""
+            SELECT market_value, assessed_value, taxable_value, hs_cap_loss, data_source, exemption_codes
+            FROM   parcel_tax_year WHERE geo_id = %s AND tax_year = 2025
+        """, (geo_id,), one=True)
+
+        current_2026 = query("""
+            SELECT market_value, assessed_value
+            FROM   parcel_tax_year WHERE geo_id = %s AND tax_year = 2026
+        """, (geo_id,), one=True)
+
+        billing = query("""
+            SELECT total_tax, total_paid, total_due, is_delinquent
+            FROM   tax_billing WHERE geo_id = %s AND tax_year = 2025
+        """, (geo_id,), one=True)
+
+        sc1 = (parcel.get("state_cd1") or "").strip()[:1]
+        type_map = {
+            "A": "Residential", "B": "Multi-Family", "C": "Land/Vacant",
+            "D": "Agricultural", "E": "Agricultural", "F": "Commercial",
+        }
+
+        parcels.append({
+            "geo_id":        geo_id,
+            "address":       parcel.get("situs_address") or "Unknown",
+            "prop_type":     type_map.get(sc1, sc1 or "Unknown"),
+            "parcel":        dict(parcel),
+            "current":       dict(current) if current else {},
+            "current_2026":  dict(current_2026) if current_2026 else {},
+            "billing":       dict(billing) if billing else {},
+        })
+
+    if not parcels:
+        return render_template("compare.html", parcels=[], error="No valid parcels found for the provided IDs.")
+
+    return render_template("compare.html", parcels=parcels, error=None)
+
 @app.route("/about")
 def about():
     return render_template("about.html")
