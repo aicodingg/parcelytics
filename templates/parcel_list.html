@@ -26,7 +26,7 @@
 <div class="card">
   <div class="card-body p-0">
     <div class="table-responsive">
-      <table class="table table-sm table-hover mb-0" id="parcelListTable">
+      <table class="table table-sm table-hover table-stack mb-0" id="parcelListTable">
         <thead class="table-light small text-muted text-uppercase">
           <tr>
             <th style="width:26px;"></th>{# compare pin #}
@@ -48,22 +48,22 @@
                 ⊞
               </button>
             </td>
-            <td>
+            <td data-label="Address">
               <a href="/parcel/{{ p.geo_id }}" class="text-decoration-none">
                 {{ p.address or "(unknown)" }}
               </a>
             </td>
-            <td class="text-muted small">{{ p.owner or "—" }}</td>
-            <td class="text-end" style="font-family:var(--font-mono); font-size:12px;">
+            <td class="text-muted small" data-label="Owner">{{ p.owner or "—" }}</td>
+            <td class="text-end" style="font-family:var(--font-mono); font-size:12px;" data-label="2025 MV">
               {{ "$" + "{:,.0f}".format(p.mv25) if p.mv25 else "—" }}
             </td>
-            <td class="text-end" style="font-family:var(--font-mono); font-size:12px;">
+            <td class="text-end" style="font-family:var(--font-mono); font-size:12px;" data-label="2026 MV">
               {{ "$" + "{:,.0f}".format(p.mv26) if p.mv26 else "—" }}
             </td>
-            <td class="text-end fw-semibold {% if yoy and yoy > 0 %}text-danger{% elif yoy and yoy < 0 %}text-success{% endif %}">
+            <td class="text-end fw-semibold {% if yoy and yoy > 0 %}text-danger{% elif yoy and yoy < 0 %}text-success{% endif %}" data-label="YoY Δ">
               {% if yoy is not none %}{{ "{:+.1f}%".format(yoy) }}{% else %}—{% endif %}
             </td>
-            <td class="text-end" style="font-family:var(--font-mono); font-size:11px; color:var(--text-3);">
+            <td class="text-end" style="font-family:var(--font-mono); font-size:11px; color:var(--text-3);" data-label="Geo ID">
               <a href="/parcel/{{ p.geo_id }}" class="text-muted text-decoration-none">{{ p.geo_id }}</a>
             </td>
           </tr>
