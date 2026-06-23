@@ -59,6 +59,19 @@ PIR_BILLING_FILES = {
     # 2024: os.path.join(DATA_DIR, "TaxCurOpenData_2024.csv"),
 }
 
+# ── Feature flags ─────────────────────────────────────────────────────────────
+# When True, the 5-Year History table shows a "Computed" tax column for
+# tax years 2021–2024 where no billing data is available. The value is
+# derived as:  taxable_value × combined_rate / 100
+# and is clearly labelled "computed from certified value × rate; billing
+# unconfirmed" — it is NOT the actual billed amount.
+#
+# Keep OFF until the Travis County billing PIR response arrives (Jun 30 2026).
+# If the response is a "no" or partial, flip to True to surface the estimate.
+# The label already makes the uncertainty explicit so there is no risk of
+# misleading users — but hold off until confirmed billing data is not coming.
+COMPUTED_HIST_TAX_ENABLED = os.environ.get("COMPUTED_HIST_TAX", "0") == "1"
+
 # ── App ───────────────────────────────────────────────────────────────────────
 FLASK_SECRET = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
 DEBUG        = os.environ.get("FLASK_DEBUG", "1") == "1"

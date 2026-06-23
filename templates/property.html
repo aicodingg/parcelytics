@@ -958,6 +958,11 @@
                   ${{ "{:,.2f}".format(r.total_tax) }}
                 {% elif r.data_source == 'preliminary' %}
                   <span class="na-cell">Not yet — post-cert</span>
+                {% elif r.computed_total_tax %}
+                  <span title="computed from certified value × rate; billing unconfirmed"
+                        style="font-style:italic; color:var(--text-muted); cursor:help;">
+                    ~${{ "{:,.2f}".format(r.computed_total_tax) }}
+                  </span>
                 {% else %}
                   <span class="na-cell">Not available yet</span>
                 {% endif %}
