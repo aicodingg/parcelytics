@@ -1,5 +1,45 @@
 # Parcelytics — Design & UI Overhaul
 
+---
+
+## MORNING WORK (attended, 2026-06-23) — estimator wired up + logo swap
+
+**A. Post-acquisition estimator now works (was a dead button).**
+- Backend: the route imported `tax_logic.texas`, but the corrected logic was sitting unwired in
+  `task_staging/task1/`. Copied it into the real module path `tax_logic/texas.py` (canonical logic
+  no longer lives in staging). Also fixed a separate pre-existing crash: the route used `re.fullmatch`
+  but `app.py` never imported `re` — added `import re`. Corrected constants now in effect: school-district
+  HS exemption **$140,000**, TY2026 circuit-breaker threshold **$5,320,000**, tax = Σ(per-entity taxable ×
+  entity rate), base = max(market, purchase price), owner-occupant Year-1 gap year + Year-2+ school HS.
+- Client: implemented `runEstimator()` — reads price + buyer toggle, calls
+  `GET /api/estimate_acq/<geo_id>?price&buyer`, renders summary chips, per-entity breakdown, delta vs
+  seller's bill, and gap-year / circuit-breaker notes. Rendered as an explicit **estimate** (`~` prefix,
+  muted italic figures, "Estimate · Not a prediction" badge, disclaimer). Loading, API-error, and
+  invalid-input states handled — no more `ReferenceError`.
+- **Verification (HTTP, against the Round 2 hand-calc):**
+  - `0204063005` investor @ $763,384 → **$15,622**, Δ **+$5,619.46** ✓
+  - `0204063005` owner-occupant Yr 2+ → **$14,327**, Δ **+$4,324**; gap-year **$15,622** ✓ (±$1 rounding)
+  - `0100030105` buy-at-market $4,332,066 → **$88,655**, Δ **−$0.07** ✓ (per-entity summation invariant holds)
+  - Verified end-to-end in the browser for both buyer types + invalid-input guard; console clean.
+
+**B. Header now uses the uploaded logo files.**
+- `Logo design.jpg` = the map/trend **symbol mark**; `Logo Name.jpg` = the **"Parcelytics" wordmark**.
+- Converted each to a trimmed, transparent PNG (corner flood-fill at ~12–14% fuzz so interior whites
+  and anti-aliased edges survive; exported ~2× for retina): `parcelytics-mark.png`,
+  `parcelytics-wordmark.png` (two-tone original, light-bg asset), `parcelytics-wordmark-white.png`.
+- Contrast: both files are dark-on-white, so on the dark navy nav the wordmark wouldn't read and the
+  mark's navy outline would vanish. Resolution: the colourful **mark sits on a small white chip** (full
+  fidelity) and the nav uses the **white-inverted wordmark**. The two-tone wordmark is kept as the
+  light-background asset. Retired the placeholder accent-"P" mark + text wordmark from the design pass.
+  (The old `parcelytics-logo.png` was already unreferenced; it remains in `static/` only because the
+  working-tree mount blocks file deletion — safe to delete on your side.)
+
+*(Original overhaul notes below.)*
+
+---
+
+# Parcelytics — Design & UI Overhaul
+
 **Run:** overnight, unattended · 2026-06-23
 **Branch:** `integration/all-tasks` (all feature work + this design work). `main` untouched.
 **Goal:** move the look from soft / pale-blue / govtech-adjacent ("Netgiro") to confident,
