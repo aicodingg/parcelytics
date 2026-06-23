@@ -293,6 +293,44 @@
     </div>
   </div>
 
+  {# ── How this value is derived (value build-up) ─────────────────────────── #}
+  {% if current and current.market_value %}
+  {% set _mv  = current.market_value %}
+  {% set _av  = current.assessed_value or _mv %}
+  {% set _tv  = current.taxable_value or _av %}
+  {% set _cap = (_mv - _av) if _mv > _av else 0 %}
+  {% set _exe = (_av - _tv) if _av > _tv else 0 %}
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>How This Value Is Derived</span>
+      {% if current.data_source == 'certified' %}<span class="badge-verified" style="font-size:9px;">2025 Certified</span>{% endif %}
+    </div>
+    <div class="card-body p-3">
+      <div class="derivation">
+        <div class="drow"><span class="lbl">Market value</span><span class="val">${{ "{:,.0f}".format(_mv) }}</span></div>
+        {% if current.land_value and current.imprv_value %}
+        <div class="drow sub"><span class="lbl">Land</span><span class="val">${{ "{:,.0f}".format(current.land_value) }}</span></div>
+        <div class="drow sub"><span class="lbl">+ Improvements</span><span class="val">${{ "{:,.0f}".format(current.imprv_value) }}</span></div>
+        {% endif %}
+        {% if _cap > 0 %}
+        <div class="drow deduct"><span class="lbl">− Value-limitation adjustment <span class="text-muted" style="font-size:11px;">(homestead cap)</span></span><span class="val">−${{ "{:,.0f}".format(_cap) }}</span></div>
+        {% endif %}
+        <div class="drow total"><span class="lbl">= Net appraised <span class="text-muted" style="font-size:11px;">(assessed)</span></span><span class="val">${{ "{:,.0f}".format(_av) }}</span></div>
+        {% if _exe > 0 %}
+        <div class="drow deduct"><span class="lbl">− Exemptions{% if current.exemption_codes %} <span class="text-muted" style="font-size:11px;">({{ current.exemption_codes }})</span>{% endif %}</span><span class="val">−${{ "{:,.0f}".format(_exe) }}</span></div>
+        {% elif current.exemption_codes %}
+        <div class="drow sub"><span class="lbl">Exemptions on file</span><span class="val" style="font-family:var(--font-sans);">{{ current.exemption_codes }}</span></div>
+        {% endif %}
+        <div class="drow grand total"><span class="lbl">= Taxable value</span><span class="val">${{ "{:,.0f}".format(_tv) }}</span></div>
+      </div>
+      <div class="derivation-note">
+        Build-up from 2025 TCAD certified values. Deductions reduce the taxable base.
+        Special-use / productivity (agricultural) valuation is not in the current dataset and is omitted.
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {# Delinquency detail #}
   {% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
   <div class="card mb-4 delinquency-card">

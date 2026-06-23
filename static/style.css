@@ -826,6 +826,32 @@ tfoot .combined-rate-row td:first-child { padding-top: 11px; }
   font-variant-numeric: tabular-nums;
 }
 
+/* ── Value-derivation breakdown (How this value is derived) ───────────────── */
+.derivation { font-size: var(--fs-sm); }
+.derivation .drow {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 6px 0;
+}
+.derivation .drow .lbl { color: var(--text-2); }
+.derivation .drow .val {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  color: var(--text); white-space: nowrap;
+}
+.derivation .drow.sub { padding: 3px 0; }
+.derivation .drow.sub .lbl { color: var(--text-3); padding-left: 12px; font-size: 12px; }
+.derivation .drow.sub .val { color: var(--text-3); font-size: 12px; }
+/* deductions reduce the taxable base → relief → green, consistent with app semantics */
+.derivation .drow.deduct .val { color: var(--down); }
+.derivation .drow.total {
+  border-top: 1px solid var(--border-strong);
+  margin-top: 2px; padding-top: 8px; font-weight: var(--fw-semibold);
+}
+.derivation .drow.grand { border-top: 2px solid var(--border-strong); }
+.derivation .drow.grand .lbl, .derivation .drow.grand .val {
+  font-weight: var(--fw-bold); color: var(--text);
+}
+.derivation-note { font-size: 11px; color: var(--text-3); margin-top: 10px; line-height: 1.5; }
+
 /* ════════════════════════════════════════════════════════════════════════════
    PROPERTY HEADER
    ════════════════════════════════════════════════════════════════════════════ */
