@@ -5,6 +5,7 @@ Phase 1: Parcel search + 5-year history + tax rate trends
 import os
 import sys
 import json
+import re
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 import psycopg2
 import psycopg2.extras
