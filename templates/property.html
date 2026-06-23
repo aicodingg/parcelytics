@@ -1514,6 +1514,22 @@
   </div>
   {% endif %}
 
+  {# ── Per-SF Peer Benchmark (Task B) ─────────────────────────────────── #}
+  <div id="peerBenchSfSection" class="mb-4" style="display:none;">
+    <div class="section-hdr">Per-SF Peer Benchmark</div>
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Assessed &amp; Market $/SF vs Peers
+          <span id="sfBandNote" class="text-muted" style="font-size:11.5px; font-weight:400;"></span>
+        </span>
+        <span class="estimates-badge">2025 Certified</span>
+      </div>
+      <div class="card-body" id="peerBenchSfBody">
+        <div class="text-muted small" style="font-size:12px;">Loading SF data…</div>
+      </div>
+    </div>
+  </div>
+
   {# ── Peer Benchmark (Task 3) ─────────────────────────────────────────── #}
   <div id="peerBenchSection" class="mb-4" style="display:none;">
     <div class="section-hdr">Peer Set Position</div>
@@ -2111,8 +2127,8 @@ if (rCtx) {
           </table>
         </div>
         <p class="text-muted mt-2 mb-0" style="font-size:10.5px;">
-          Peer selection: same neighbourhood + property type, ±50% of 2025 market value (size proxy — not assessment-equity signal).
-          Building-area SF available in TCAD IMP_DET.TXT export; per-SF normalisation pending loader ingestion.
+          Peer selection: same neighbourhood + property type, ±50% of 2025 market value.
+          For improved SF-normalised comparison see the Per-SF section above (available when living-area sqft is on record).
         </p>
       `;
       section.style.display = '';
@@ -2126,6 +2142,91 @@ if (rCtx) {
 
 
 <script>
+// ── Per-SF Peer Benchmark (Task B) ──────────────────────────────────────────
+(function() {
+  const GEO_ID  = "{{ parcel.geo_id }}";
+  const section = document.getElementById('peerBenchSfSection');
+  const body    = document.getElementById('peerBenchSfBody');
+  const noteEl  = document.getElementById('sfBandNote');
+  if (!section || !body) return;
+
+  const _fmtPsf = n => (n == null) ? '—' : '$' + Number(n).toFixed(2) + '/SF';
+  function _rank(r) {
+    if (r == null) return '—';
+    const clr = r >= 75 ? 'var(--up)' : (r <= 25 ? 'var(--down)' : 'var(--text)');
+    return `<span style="color:${clr}; font-weight:600;">${r}th pct</span>`;
+  }
+
+  fetch(`/api/peer_benchmark_sf/${encodeURIComponent(GEO_ID)}`)
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) {
+        // No SF basis (vacant land, exempt-only, no sqft record) — hide section silently.
+        // MV-based benchmark below still renders.
+        return;
+      }
+      if (noteEl) noteEl.textContent = '— ' + (d.band_note || '');
+      body.innerHTML = `
+        <div class="d-flex flex-wrap gap-3 mb-3">
+          <div class="estimator-chip">
+            <div class="estimator-chip-label">Living Area</div>
+            <div class="estimator-chip-val">${d.this_sqft != null ? Number(d.this_sqft).toLocaleString() + ' SF' : '—'}</div>
+          </div>
+          <div class="estimator-chip">
+            <div class="estimator-chip-label">Market \$/SF Rank</div>
+            <div class="estimator-chip-val">${_rank(d.this_market_psf_rank)}</div>
+          </div>
+          <div class="estimator-chip">
+            <div class="estimator-chip-label">Assessed \$/SF Rank</div>
+            <div class="estimator-chip-val">${_rank(d.this_assessed_psf_rank)}</div>
+          </div>
+          <div class="estimator-chip">
+            <div class="estimator-chip-label">Peer Count</div>
+            <div class="estimator-chip-val">${d.peer_count}</div>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 small">
+            <thead class="table-light text-muted text-uppercase" style="font-size:10.5px;">
+              <tr>
+                <th>Metric</th>
+                <th class="text-end">P25</th>
+                <th class="text-end">Median</th>
+                <th class="text-end">P75</th>
+                <th class="text-end">This Parcel</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Market \$/SF (2025)</td>
+                <td class="text-end">${_fmtPsf(d.peer_market_psf.p25)}</td>
+                <td class="text-end fw-semibold">${_fmtPsf(d.peer_market_psf.median)}</td>
+                <td class="text-end">${_fmtPsf(d.peer_market_psf.p75)}</td>
+                <td class="text-end fw-bold">${_fmtPsf(d.this_market_psf)}</td>
+              </tr>
+              <tr>
+                <td>Assessed \$/SF (2025)</td>
+                <td class="text-end">${_fmtPsf(d.peer_assessed_psf.p25)}</td>
+                <td class="text-end fw-semibold">${_fmtPsf(d.peer_assessed_psf.median)}</td>
+                <td class="text-end">${_fmtPsf(d.peer_assessed_psf.p75)}</td>
+                <td class="text-end fw-bold">${_fmtPsf(d.this_assessed_psf)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="text-muted mt-2 mb-0" style="font-size:10.5px;">
+          ${d.band_note}.
+          Living-area SF from TCAD IMP_DET.TXT (components: 1ST, 2ND, 3RD, 1/2, RSBLW, FBSMT — heated/cooled area only; excludes garages, unfinished basements, decks).
+          2025 certified market and assessed values. Assessed \$/SF reflects current appraisal; market \$/SF reflects TCAD's estimated market value per SF.
+        </p>
+      `;
+      section.style.display = '';
+    })
+    .catch(() => {
+      // Silently fail — MV-based benchmark still renders below.
+    });
+})();
+
 // ── Task 4: Sticky section nav + active link tracking ────────────────────────
 // task4-sticky-nav-js
 (function () {
@@ -2271,16 +2372,20 @@ if (rCtx) {
   function render(d, buyer) {
     // ── Summary chips ─────────────────────────────────────────────────────────
     const isOwner = buyer === 'owner_occupant';
+    // PID pass-through helpers (ENTITY_CODE_AUDIT.md fix)
+    const hasPid       = (d.pid_passthrough || 0) > 0;
+    const totalDisplay = hasPid ? d.estimated_total_incl_pid : d.estimated_total_tax;
+    const deltaDisplay = hasPid ? d.delta_incl_pid           : d.delta;
     const chips = [];
     chips.push(`
       <div class="estimator-chip is-primary">
-        <div class="estimator-chip-label">${isOwner ? '~Est. Annual Tax · Yr 2+' : '~Est. Annual Tax'}</div>
-        <div class="estimator-chip-val">~${fmt0(d.estimated_total_tax)}</div>
+        <div class="estimator-chip-label">${isOwner ? '~Est. Annual Tax · Yr 2+' : '~Est. Annual Tax'}${hasPid ? ' · incl. PID/Special' : ''}</div>
+        <div class="estimator-chip-val">~${fmt0(totalDisplay)}</div>
       </div>`);
     chips.push(`
       <div class="estimator-chip">
         <div class="estimator-chip-label">~Δ vs Seller's Current Bill</div>
-        <div class="estimator-chip-val">${deltaHtml(d.delta, true)}</div>
+        <div class="estimator-chip-val">${deltaHtml(deltaDisplay, true)}</div>
       </div>`);
     if (isOwner && d.gap_year_tax != null) {
       chips.push(`
@@ -2299,6 +2404,14 @@ if (rCtx) {
         <div class="estimator-chip-label">Seller's 2025 Bill</div>
         <div class="estimator-chip-val">${fmt0(d.seller_total_tax)}</div>
       </div>`);
+    if (hasPid) {
+      chips.push(`
+        <div class="estimator-chip" style="border-color:var(--accent-border); background:var(--accent-soft);">
+          <div class="estimator-chip-label">+ PID / Special Districts</div>
+          <div class="estimator-chip-val" style="color:var(--text-2);">~${fmt0(d.pid_passthrough)}</div>
+          <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">prior-year billing · not rate-computed</div>
+        </div>`);
+    }
     $('acqSummary').innerHTML = chips.join('');
 
     // ── Entity breakdown rows ─────────────────────────────────────────────────
@@ -2317,14 +2430,25 @@ if (rCtx) {
       </tr>`).join('');
     $('acqTbody').innerHTML = rows;
 
-    $('acqTfoot').innerHTML = `
+    $('acqTfoot').innerHTML = (hasPid ? `
+      <tr style="background:var(--surface-2);">
+        <td colspan="2" style="font-size:11.5px; color:var(--text-2); padding-top:6px;">
+          <span class="badge-estimated" style="font-size:9px;">billing-derived</span>
+          <span class="ms-1">PID / Special Districts</span>
+          <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">${(d.pid_entity_codes || []).join(', ')} — prior-year billing; no certified rate available</div>
+        </td>
+        <td></td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2); padding-top:6px;">~${fmt0(d.pid_passthrough)}</td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums; padding-top:6px;">${fmtSeller(d.pid_passthrough)}</td>
+        <td></td>
+      </tr>` : '') + `
       <tr>
         <td class="fw-bold">Total</td>
         <td></td>
         <td></td>
-        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text);">~${fmt0(d.estimated_total_tax)}</td>
+        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text);">~${fmt0(totalDisplay)}</td>
         <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${fmtSeller(d.seller_total_tax)}</td>
-        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${deltaHtml(d.delta, true)}</td>
+        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${deltaHtml(deltaDisplay, true)}</td>
       </tr>`;
 
     // ── Rate-vintage label ────────────────────────────────────────────────────
@@ -2365,6 +2489,7 @@ if (rCtx) {
           ${isOwner
             ? 'Owner-occupant: Year 1 is the gap year; Year 2+ applies the homestead exemption and the 10%/yr assessed-value cap.'
             : 'Investor: no homestead exemption; 20%/yr circuit-breaker cap through TY' + (d.first_tax_year) + ' (where it applies), uncapped after.'}
+          ${hasPid ? 'Note: PID/special district charges (~$' + Math.round(d.pid_passthrough).toLocaleString() + '/yr from prior-year billing) are not included in the projection — no rate history available. Add approximately this amount to each year’s estimated tax.' : ''}
         </div>`;
     } else {
       $('acqMultiyear').innerHTML = '';

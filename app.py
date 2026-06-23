@@ -1567,6 +1567,37 @@ def api_estimate_acq(geo_id):
     )
     result["ok"] = True
 
+    # ── PID / billing-only pass-through ──────────────────────────────────────
+    # Entity codes in 2025 billing but absent from county_tax_rate (PIDs, WCIDs,
+    # special districts) carry rate=NULL in the LEFT JOIN and are silently skipped
+    # by texas.py.  Pass them through at prior-year billing amount — the only
+    # available basis.  See ENTITY_CODE_AUDIT.md for the full finding and impact.
+    billing_only = [
+        e for e in entity_detail
+        if e.get("amount_due") and not e.get("rate")
+    ]
+    if billing_only:
+        pid_passthrough = round(sum(float(e["amount_due"]) for e in billing_only), 2)
+        result["pid_passthrough"]          = pid_passthrough
+        result["pid_entity_codes"]         = [e["entity_code"] for e in billing_only]
+        result["pid_entity_names"]         = [
+            e.get("entity_name") or e["entity_code"] for e in billing_only
+        ]
+        result["estimated_total_incl_pid"] = round(
+            result["estimated_total_tax"] + pid_passthrough, 2
+        )
+        # Corrected delta: buyer estimate (rate + PID) vs seller actual (already
+        # includes PID via seller_total_tax sum in texas.py)
+        result["delta_incl_pid"] = round(
+            result["estimated_total_incl_pid"] - result["seller_total_tax"], 2
+        )
+    else:
+        result["pid_passthrough"]          = 0.0
+        result["pid_entity_codes"]         = []
+        result["pid_entity_names"]         = []
+        result["estimated_total_incl_pid"] = result["estimated_total_tax"]
+        result["delta_incl_pid"]           = result["delta"]
+
     # Convert any Decimal/non-serialisable types to float/int
     def _clean(v):
         if hasattr(v, "__float__"):
@@ -1725,6 +1756,151 @@ def api_peer_benchmark_local(geo_id):
             "p75":    pct(taxes, 75),
         },
         "this_mv_pct_rank": mv_pct,
+    })
+
+
+@app.route("/api/peer_benchmark_sf/<geo_id>")
+def api_peer_benchmark_sf(geo_id):
+    """
+    Per-SF peer benchmark (Task B).
+    Peer set: same neighborhood_cd + state_cd1 prefix + living_area_sqft size band.
+    Size band starts at ±40%; relaxes to ±60% then unconstrained if fewer than 5 peers.
+    Returns assessed $/SF and market $/SF percentiles for this parcel vs peers.
+    Parcels with null/zero living_area_sqft return ok=False with error='no_sf_basis'.
+    """
+    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    if not parcel:
+        return jsonify({"ok": False, "error": "Parcel not found"})
+
+    parcel_data = query("""
+        SELECT p.living_area_sqft,
+               pty.market_value,
+               pty.assessed_value
+        FROM   parcel p
+        JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+        WHERE  p.geo_id = %s
+    """, (geo_id,), one=True)
+
+    if not parcel_data:
+        return jsonify({"ok": False, "error": "No 2025 data for this parcel"})
+
+    sqft    = float(parcel_data["living_area_sqft"]) if parcel_data.get("living_area_sqft") else None
+    this_mv = float(parcel_data["market_value"])     if parcel_data.get("market_value")     else None
+    this_av = float(parcel_data["assessed_value"])   if parcel_data.get("assessed_value")   else None
+
+    if not sqft or sqft <= 0:
+        return jsonify({
+            "ok": False, "error": "no_sf_basis",
+            "message": "No living area SF for this parcel (vacant land, exempt-only, or loader not run)"
+        })
+
+    neighborhood = (parcel.get("neighborhood_cd") or "").strip()
+    state_cd1    = (parcel.get("state_cd1") or "").strip()[:1]
+
+    if not neighborhood:
+        return jsonify({"ok": False, "error": "No neighbourhood code for this parcel"})
+
+    this_market_psf   = round(this_mv / sqft, 2) if this_mv   else None
+    this_assessed_psf = round(this_av / sqft, 2) if this_av   else None
+
+    # Progressively relax size band until ≥ 5 peers
+    band_attempts = [0.40, 0.60, None]   # ±40%, ±60%, unconstrained
+    peers = []
+    band_note = ""
+
+    for band in band_attempts:
+        if band is not None:
+            sqft_lo = sqft * (1.0 - band)
+            sqft_hi = sqft * (1.0 + band)
+            size_clause = "AND p.living_area_sqft BETWEEN %(sqft_lo)s AND %(sqft_hi)s"
+            params = {
+                "nb": neighborhood, "sc1": state_cd1,
+                "sqft_lo": sqft_lo, "sqft_hi": sqft_hi,
+            }
+        else:
+            size_clause = ""
+            params = {"nb": neighborhood, "sc1": state_cd1}
+
+        peers = query(f"""
+            SELECT
+                p.geo_id,
+                pty.market_value,
+                pty.assessed_value,
+                CAST(p.living_area_sqft AS FLOAT)                               AS sqft,
+                CAST(pty.market_value   AS FLOAT) / p.living_area_sqft          AS market_psf,
+                CAST(pty.assessed_value AS FLOAT) / p.living_area_sqft          AS assessed_psf
+            FROM   parcel p
+            JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+            WHERE  p.neighborhood_cd  = %(nb)s
+              AND  LEFT(p.state_cd1, 1) = %(sc1)s
+              AND  p.living_area_sqft > 0
+              AND  p.geo_id NOT LIKE 'AJR%%'
+              AND  pty.market_value   > 0
+              AND  pty.assessed_value > 0
+              {size_clause}
+            ORDER  BY p.living_area_sqft
+        """, params)
+
+        n = len(peers)
+        if n >= 5:
+            if band is not None:
+                band_note = (
+                    f"Neighbourhood {neighborhood}, {state_cd1}-type, "
+                    f"SF within ±{int(band * 100)}% of {sqft:,.0f} SF"
+                )
+            else:
+                band_note = (
+                    f"Neighbourhood {neighborhood}, {state_cd1}-type, "
+                    f"all SF sizes (size band relaxed — fewer than 5 peers in ±60% band)"
+                )
+            break
+
+    n = len(peers)
+    if n < 3:
+        return jsonify({
+            "ok": False,
+            "error": "Fewer than 3 SF peers in this neighbourhood + property type",
+        })
+
+    market_psf_vals   = sorted(float(r["market_psf"])   for r in peers if r.get("market_psf"))
+    assessed_psf_vals = sorted(float(r["assessed_psf"]) for r in peers if r.get("assessed_psf"))
+
+    def _pct(lst, p):
+        if not lst:
+            return None
+        i = (len(lst) - 1) * p / 100.0
+        lo_, hi_ = int(i), min(int(i) + 1, len(lst) - 1)
+        return round(lst[lo_] + (lst[hi_] - lst[lo_]) * (i - lo_), 2)
+
+    this_market_psf_rank   = None
+    this_assessed_psf_rank = None
+    if this_market_psf and market_psf_vals:
+        rk = sum(1 for v in market_psf_vals if v < this_market_psf) + 1
+        this_market_psf_rank = round(rk / n * 100)
+    if this_assessed_psf and assessed_psf_vals:
+        rk = sum(1 for v in assessed_psf_vals if v < this_assessed_psf) + 1
+        this_assessed_psf_rank = round(rk / n * 100)
+
+    return jsonify({
+        "ok":                     True,
+        "geo_id":                 geo_id,
+        "peer_count":             n,
+        "band_note":              band_note,
+        "this_sqft":              round(sqft),
+        "this_market_psf":        this_market_psf,
+        "this_assessed_psf":      this_assessed_psf,
+        "this_market_psf_rank":   this_market_psf_rank,
+        "this_assessed_psf_rank": this_assessed_psf_rank,
+        "peer_market_psf": {
+            "p25":    _pct(market_psf_vals, 25),
+            "median": _pct(market_psf_vals, 50),
+            "p75":    _pct(market_psf_vals, 75),
+        },
+        "peer_assessed_psf": {
+            "p25":    _pct(assessed_psf_vals, 25),
+            "median": _pct(assessed_psf_vals, 50),
+            "p75":    _pct(assessed_psf_vals, 75),
+        },
     })
 
 
