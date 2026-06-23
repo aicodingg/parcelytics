@@ -92,6 +92,14 @@ HOMESTEAD_CAP_PCT = 0.10
 # Current reference tax year for rates
 RATE_YEAR = 2025
 
+# First full tax year the estimate represents (the post-acquisition cycle).
+# A sale now is reflected in the next Jan 1 valuation / current appraisal cycle.
+FIRST_TAX_YEAR = 2026
+
+# Default annual market-appreciation assumption for multi-year projection,
+# used only when a parcel-specific clamped CAGR isn't supplied by the caller.
+DEFAULT_MARKET_GROWTH = 0.035
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -126,6 +134,87 @@ def _circuit_breaker_eligible(market_value: int) -> bool:
     return 0 < market_value < CIRCUIT_BREAKER_THRESHOLD_2026
 
 
+def _project_entity_rate(year_rates: dict, current_rate: float) -> float:
+    """
+    Project one forward per-entity rate from its recent trajectory.
+
+    Recency-weighted mean of consecutive year-over-year deltas (more weight on
+    recent years), added to the latest certified rate.  Texas rates have broadly
+    been FALLING (school-M&O compression + the 3.5% voter-approval cap), so this
+    is intentionally compression-aware: declines pass through, but any projected
+    RISE is clamped to a small drift (≤ +2%) — we never assume a jump upward.
+    Returns a single rate held flat across the projection horizon (not a
+    certified rate).
+    """
+    if not year_rates or len([r for r in year_rates.values() if r is not None]) < 3:
+        return current_rate
+    yrs = sorted(year_rates.keys())
+    deltas = []
+    for i in range(1, len(yrs)):
+        r0, r1 = year_rates[yrs[i - 1]], year_rates[yrs[i]]
+        if r0 is not None and r1 is not None:
+            deltas.append(float(r1) - float(r0))
+    if not deltas:
+        return current_rate
+    # recency weights: oldest delta weight 1 … newest weight n
+    acc = sum((i + 1) * d for i, d in enumerate(deltas))
+    wsum = sum(i + 1 for i in range(len(deltas)))
+    wdelta = acc / wsum if wsum else 0.0
+    proj = current_rate + wdelta
+    lo, hi = current_rate * 0.85, current_rate * 1.02   # allow decline; cap rise
+    return max(lo, min(hi, proj))
+
+
+def _project_multiyear(base_value, entities, buyer_status, market_growth,
+                       horizon_years, first_tax_year):
+    """
+    Year-by-year projected recurring tax. Honest per-buyer mechanics:
+
+      Owner-occupant: Year 1 = gap (no exemption, no cap, assessed = base).
+                      Year 2+ = school HS exemption + 10%/yr assessed-growth cap.
+      Investor:       no exemption ever; 20%/yr circuit-breaker cap while it
+                      applies (non-HS, market < threshold, through TY2026),
+                      uncapped thereafter.
+
+    `entities` items carry: rate_used (float, %/$100) and is_school (bool).
+    Returns a list of {year_index, tax_year, market, assessed, est_tax}.
+    Rates are held flat at whatever vintage the caller resolved (rate_used).
+    """
+    rows = []
+    prev_assessed = float(base_value)
+    for n in range(1, horizon_years + 1):
+        tax_year = first_tax_year + (n - 1)
+        market_n = float(base_value) * ((1.0 + market_growth) ** (n - 1))
+        if n == 1:
+            assessed_n = float(base_value)            # gap / acquisition year
+        elif buyer_status == "owner_occupant":
+            assessed_n = min(market_n, prev_assessed * (1.0 + HOMESTEAD_CAP_PCT))
+        else:  # investor
+            cb_applies = (tax_year <= max(CIRCUIT_BREAKER_TAX_YEARS)
+                          and market_n < CIRCUIT_BREAKER_THRESHOLD_2026)
+            assessed_n = (min(market_n, prev_assessed * (1.0 + CIRCUIT_BREAKER_CAP_PCT))
+                          if cb_applies else market_n)
+        prev_assessed = assessed_n
+
+        total = 0
+        for e in entities:
+            rate = e.get("rate_used")
+            if not rate:
+                continue
+            exempt = SCHOOL_HS_EXEMPTION if (buyer_status == "owner_occupant"
+                                             and n >= 2 and e.get("is_school")) else 0
+            taxable = max(0.0, assessed_n - exempt)
+            total += round(taxable * rate / 100)
+        rows.append({
+            "year_index": n,
+            "tax_year":   tax_year,
+            "market":     round(market_n),
+            "assessed":   round(assessed_n),
+            "est_tax":    int(total),
+        })
+    return rows
+
+
 # ── Public interface ──────────────────────────────────────────────────────────
 
 def estimate_post_acquisition(
@@ -134,6 +223,11 @@ def estimate_post_acquisition(
     entity_detail:  List[dict],
     purchase_price: int,
     buyer_status:   str,   # 'non_owner_occupant' | 'owner_occupant'
+    *,
+    rate_mode:           str   = "certified",   # 'certified' | 'projected'
+    entity_rate_history: dict  = None,          # {entity_code: {year: rate}}
+    market_growth:       float = None,          # annual appreciation assumption
+    horizon_years:       int   = 5,
 ) -> dict:
     """
     Estimate Year-1 / Year-2+ post-acquisition tax under Texas law.
@@ -153,6 +247,13 @@ def estimate_post_acquisition(
     """
     if buyer_status not in ("non_owner_occupant", "owner_occupant"):
         buyer_status = "non_owner_occupant"
+    if rate_mode not in ("certified", "projected"):
+        rate_mode = "certified"
+    entity_rate_history = entity_rate_history or {}
+    if market_growth is None:
+        market_growth = DEFAULT_MARKET_GROWTH
+    # keep the growth assumption in a sane band regardless of source
+    market_growth = max(0.0, min(0.10, float(market_growth)))
 
     # ── Pull 2025 certified values ────────────────────────────────────────────
     market_value   = int(current_yr_row.get("market_value")   or 0)
@@ -179,6 +280,7 @@ def estimate_post_acquisition(
     entity_breakdown = []
     total_est_yr2 = 0     # main estimate (Year-2+ for owner-occ; Year-1 for investor)
     total_est_yr1 = 0     # Year-1 gap-year total (all buyers pay this in Year 1)
+    proj_entities = []    # for multi-year projection (carries rate_used + is_school)
 
     for e in entity_detail:
         if not e.get("rate"):
@@ -188,6 +290,13 @@ def estimate_post_acquisition(
         seller_tax  = float(e["amount_due"]) if e.get("amount_due") else None
         entity_name = e.get("entity_name") or e["entity_code"]
         is_school   = _is_school_entity(entity_name)
+
+        # Rate vintage: certified 2025 (default, verified) or a forward trend
+        # projection. Default path leaves rate_used == rate → numbers unchanged.
+        if rate_mode == "projected":
+            rate_used = _project_entity_rate(entity_rate_history.get(e["entity_code"]) or {}, rate)
+        else:
+            rate_used = rate
 
         # Per-entity HS exemption for owner-occupant Year 2+
         if buyer_status == "owner_occupant" and is_school:
@@ -201,16 +310,20 @@ def estimate_post_acquisition(
         # est_tax = taxable * rate / 100
         # Invariant: when base_value==MV and seller has no exemptions,
         # round(MV * rate / 100) == round(amount_due) within $1 rounding.
-        est_tax_yr2 = round(buyer_taxable_yr2 * rate / 100)
-        est_tax_yr1 = round(buyer_taxable_yr1 * rate / 100)
+        est_tax_yr2 = round(buyer_taxable_yr2 * rate_used / 100)
+        est_tax_yr1 = round(buyer_taxable_yr1 * rate_used / 100)
 
         total_est_yr2 += est_tax_yr2
         total_est_yr1 += est_tax_yr1
+
+        proj_entities.append({"rate_used": rate_used, "is_school": is_school})
 
         entity_breakdown.append({
             "entity_code":      e["entity_code"],
             "entity_name":      entity_name,
             "rate":             rate,
+            "rate_used":        round(rate_used, 6),
+            "rate_projected":   (rate_mode == "projected" and abs(rate_used - rate) > 1e-9),
             "is_school":        is_school,
             "taxable":          buyer_taxable_yr2,      # primary (Year 2+ or investor)
             "yr1_taxable":      buyer_taxable_yr1,
@@ -272,17 +385,47 @@ def estimate_post_acquisition(
             "Buyer faces double exposure: cap loss at sale + potential post-2026 rate increase."
         )
 
+    # ── Combined rates (certified vs resolved) for display ────────────────────
+    certified_combined_rate = round(sum(float(e["rate"]) for e in entity_detail if e.get("rate")), 6)
+    used_combined_rate      = round(sum(b["rate_used"] for b in entity_breakdown), 6)
+
+    # ── Rate vintage label ────────────────────────────────────────────────────
+    if rate_mode == "projected":
+        rate_vintage = (
+            f"Projected rates (trend) — combined {used_combined_rate:.4f}% vs "
+            f"{certified_combined_rate:.4f}% certified. Not a certified rate."
+        )
+    else:
+        rate_vintage = f"2025 certified rates — combined {certified_combined_rate:.4f}%."
+
+    # ── Multi-year projection (Year 1 … horizon) ──────────────────────────────
+    multiyear = _project_multiyear(
+        base_value, proj_entities, buyer_status,
+        market_growth, horizon_years, FIRST_TAX_YEAR,
+    )
+
     # ── Assumption strings for display ────────────────────────────────────────
     assumptions = [
+        f"Estimate represents the first full post-acquisition tax year (TY{FIRST_TAX_YEAR}).",
         f"Base value = max(2025 certified market ${market_value:,.0f}, "
         f"purchase price ${purchase_price:,.0f}) = ${base_value:,.0f}",
-        "Rates: 2025 certified entity rates from county_tax_rate -- change each year",
+        (
+            f"Rates: 2025 certified entity rates, held flat — combined {certified_combined_rate:.4f}%."
+            if rate_mode == "certified"
+            else (f"Rates: per-entity recency-weighted trend projection (compression-aware; "
+                  f"Texas rates have broadly fallen), held flat — combined {used_combined_rate:.4f}% "
+                  f"vs {certified_combined_rate:.4f}% certified. A projection, not a certified rate.")
+        ),
         (
             f"Cap reset: seller's HS cap loss ${hs_cap_loss:,.0f} does NOT transfer to buyer"
             if cap_was_active
             else "Cap: no active homestead cap on this parcel (hs_cap_loss = $0)"
         ),
         exemption_note,
+        (f"Multi-year: assumes {market_growth*100:.1f}%/yr market appreciation. "
+         + ("Owner-occupant assessed growth capped at 10%/yr (Year 2+)."
+            if buyer_status == "owner_occupant"
+            else f"Investor assessed growth capped at 20%/yr through TY{max(CIRCUIT_BREAKER_TAX_YEARS)} (circuit-breaker), uncapped after.")),
     ]
     if buyer_status == "owner_occupant":
         assumptions.append(
@@ -310,6 +453,15 @@ def estimate_post_acquisition(
         "estimated_total_tax":       estimated_total_tax,
         "gap_year_tax":              gap_year_tax,
         "delta":                     delta,
+        # Rate handling
+        "rate_mode":                 rate_mode,
+        "rate_vintage":              rate_vintage,
+        "first_tax_year":            FIRST_TAX_YEAR,
+        "certified_combined_rate":   certified_combined_rate,
+        "used_combined_rate":        used_combined_rate,
+        # Multi-year projection
+        "market_growth":             round(market_growth, 4),
+        "multiyear":                 multiyear,
         # Notes
         "assumptions":               assumptions,
         "gap_year_note":             gap_year_note,

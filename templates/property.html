@@ -121,6 +121,15 @@
           <label class="btn btn-outline-secondary" for="buyerOwner">Owner-Occupant</label>
         </div>
       </div>
+      <div>
+        <label class="form-label small text-muted mb-1">Tax Rates</label>
+        <div class="btn-group btn-group-sm" role="group" id="rateToggle">
+          <input type="radio" class="btn-check" name="rateMode" id="rateCertified" value="certified" checked>
+          <label class="btn btn-outline-secondary" for="rateCertified">2025 Certified</label>
+          <input type="radio" class="btn-check" name="rateMode" id="rateProjected" value="projected">
+          <label class="btn btn-outline-secondary" for="rateProjected">Projected trend</label>
+        </div>
+      </div>
       <button class="btn btn-sm btn-dark" id="acqRunBtn" onclick="runEstimator()">
         Estimate
       </button>
@@ -137,6 +146,9 @@
 
     {# Results pane (hidden until first run) #}
     <div id="acqResults" style="display:none;">
+
+      {# Tax-year + rate-vintage label #}
+      <div id="acqRateVintage" class="mb-3" style="font-size:12px;"></div>
 
       {# Summary row #}
       <div class="d-flex flex-wrap gap-3 mb-3" id="acqSummary"></div>
@@ -159,11 +171,17 @@
         </table>
       </div>
 
-      {# Assumptions list #}
-      <div id="acqAssumptions" class="mt-3"></div>
+      {# Multi-year projection #}
+      <div id="acqMultiyear" class="mt-4"></div>
+
+      {# Homestead-exemption explainer (owner-occupant) #}
+      <div id="acqHsExplainer" class="mt-4"></div>
 
       {# Circuit-breaker / gap-year notes #}
-      <div id="acqNotes" class="mt-2"></div>
+      <div id="acqNotes" class="mt-3"></div>
+
+      {# Assumptions list #}
+      <div id="acqAssumptions" class="mt-3"></div>
 
     </div>{# /acqResults #}
 
@@ -2224,11 +2242,13 @@ if (rCtx) {
     }
     const checked = document.querySelector('input[name="buyerType"]:checked');
     const buyer = checked ? checked.value : 'non_owner_occupant';
+    const rmEl = document.querySelector('input[name="rateMode"]:checked');
+    const rateMode = rmEl ? rmEl.value : 'certified';
 
     if (sp) sp.style.display = 'inline';
     const btn = $('acqRunBtn'); if (btn) btn.disabled = true;
 
-    fetch(`/api/estimate_acq/${encodeURIComponent(GEO_ID)}?price=${encodeURIComponent(raw)}&buyer=${encodeURIComponent(buyer)}`)
+    fetch(`/api/estimate_acq/${encodeURIComponent(GEO_ID)}?price=${encodeURIComponent(raw)}&buyer=${encodeURIComponent(buyer)}&rate_mode=${encodeURIComponent(rateMode)}`)
       .then(r => r.json())
       .then(d => {
         if (sp) sp.style.display = 'none';
@@ -2284,7 +2304,7 @@ if (rCtx) {
           <span style="font-size:12px; color:var(--text-2);">${e.entity_name || ''}</span>
           ${e.is_school && isOwner ? '<span class="badge-estimated ms-1" style="font-size:9px;">HS −$140k</span>' : ''}
         </td>
-        <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">${Number(e.rate).toFixed(4)}%</td>
+        <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">${Number(e.rate_used != null ? e.rate_used : e.rate).toFixed(4)}%${e.rate_projected ? ' <span class="badge-estimated" style="font-size:8px; padding:0 4px;">proj</span>' : ''}</td>
         <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(e.taxable)}</td>
         <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(e.est_tax)}</td>
         <td class="text-end" style="font-variant-numeric:tabular-nums;">${fmtSeller(e.seller_tax)}</td>
@@ -2301,6 +2321,68 @@ if (rCtx) {
         <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${fmtSeller(d.seller_total_tax)}</td>
         <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${deltaHtml(d.delta, true)}</td>
       </tr>`;
+
+    // ── Rate-vintage label ────────────────────────────────────────────────────
+    const projected = d.rate_mode === 'projected';
+    $('acqRateVintage').innerHTML = `
+      <span class="badge-${projected ? 'estimated' : 'verified'}" style="font-size:10px;">
+        ${projected ? 'Projected rates' : '2025 certified rates'}</span>
+      <span class="text-muted ms-2">Tax year ${d.first_tax_year} · ${d.rate_vintage}</span>`;
+
+    // ── Multi-year projection table ───────────────────────────────────────────
+    const my = d.multiyear || [];
+    if (my.length) {
+      const highlight = new Set([1, 3, 5]);
+      const myRows = my.map(r => {
+        const hl = highlight.has(r.year_index);
+        const labelMap = { 1: isOwner ? 'Year 1 (gap)' : 'Year 1', 2: 'Year 2', 3: 'Year 3', 4: 'Year 4', 5: 'Year 5' };
+        return `
+          <tr${hl ? ' style="background:var(--surface-2);"' : ''}>
+            <td${hl ? ' class="fw-semibold"' : ''}>${labelMap[r.year_index] || ('Year ' + r.year_index)}
+              <span class="text-muted" style="font-size:11px;">TY${r.tax_year}</span></td>
+            <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(r.assessed)}</td>
+            <td class="text-end${hl ? ' fw-semibold' : ''}" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text);">~${fmt0(r.est_tax)}</td>
+          </tr>`;
+      }).join('');
+      $('acqMultiyear').innerHTML = `
+        <div class="section-hdr" style="font-size:13px; margin:0 0 8px;">Multi-Year Projection
+          <span class="estimates-badge">Projection</span></div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead class="table-light small text-muted text-uppercase">
+              <tr><th>Year</th><th class="text-end">~Assessed Base</th><th class="text-end">~Est. Tax</th></tr>
+            </thead>
+            <tbody>${myRows}</tbody>
+          </table>
+        </div>
+        <div class="text-muted" style="font-size:11px; margin-top:6px; line-height:1.5;">
+          Projection only — assumes ${(d.market_growth * 100).toFixed(1)}%/yr market appreciation${projected ? ' and projected (trend) rates' : ' and 2025 rates held flat'}.
+          ${isOwner
+            ? 'Owner-occupant: Year 1 is the gap year; Year 2+ applies the homestead exemption and the 10%/yr assessed-value cap.'
+            : 'Investor: no homestead exemption; 20%/yr circuit-breaker cap through TY' + (d.first_tax_year) + ' (where it applies), uncapped after.'}
+        </div>`;
+    } else {
+      $('acqMultiyear').innerHTML = '';
+    }
+
+    // ── Homestead-exemption explainer (owner-occupant only) ───────────────────
+    if (isOwner) {
+      $('acqHsExplainer').innerHTML = `
+        <div class="card" style="background:var(--accent-soft); border-color:var(--accent-border);">
+          <div class="card-body p-3">
+            <div class="label-caps mb-2" style="color:var(--accent-active);">Residence Homestead Exemption — how it works</div>
+            <div class="hs-grid">
+              <div><span class="hs-k">What it is</span><span class="hs-v">A reduction in the taxable value of your primary residence. Requires you to own <em>and occupy</em> the home.</span></div>
+              <div><span class="hs-k">School exemption</span><span class="hs-v">$140,000 off the school-district (ISD) taxable value — state-mandated (§11.13(b)(1), 2025).</span></div>
+              <div><span class="hs-k">10% appraisal cap</span><span class="hs-v">Once homesteaded, assessed value can rise at most 10%/yr regardless of market — caps your tax growth.</span></div>
+              <div><span class="hs-k">Filing</span><span class="hs-v">File with TCAD by April 30 of the year after purchase. Free; no annual refiling needed.</span></div>
+              <div><span class="hs-k">Year-1 gap</span><span class="hs-v">Neither the exemption nor the cap applies in the purchase year — full value is taxable until they activate.</span></div>
+            </div>
+          </div>
+        </div>`;
+    } else {
+      $('acqHsExplainer').innerHTML = '';
+    }
 
     // ── Notes (gap-year + circuit-breaker) as risk blocks ─────────────────────
     let notes = '';
@@ -2326,7 +2408,7 @@ if (rCtx) {
   document.addEventListener('DOMContentLoaded', function () {
     const priceEl = document.getElementById('acqPrice');
     if (priceEl) priceEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); window.runEstimator(); } });
-    document.querySelectorAll('input[name="buyerType"]').forEach(r =>
+    document.querySelectorAll('input[name="buyerType"], input[name="rateMode"]').forEach(r =>
       r.addEventListener('change', () => {
         const res = document.getElementById('acqResults');
         if (res && res.style.display === 'block') window.runEstimator();

@@ -1472,9 +1472,12 @@ def api_estimate_acq(geo_id):
     """
     price_raw    = request.args.get("price", "").strip().replace(",", "").replace("$", "")
     buyer_status = request.args.get("buyer", "non_owner_occupant").strip()
+    rate_mode    = request.args.get("rate_mode", "certified").strip()
 
     if buyer_status not in ("non_owner_occupant", "owner_occupant"):
         buyer_status = "non_owner_occupant"
+    if rate_mode not in ("certified", "projected"):
+        rate_mode = "certified"
 
     if not price_raw or not re.fullmatch(r"\d+", price_raw):
         return jsonify({"ok": False, "error": "price must be a positive integer (no commas or $)"})
@@ -1508,12 +1511,42 @@ def api_estimate_acq(geo_id):
     if not entity_detail:
         return jsonify({"ok": False, "error": "No 2025 entity billing data for this parcel"})
 
+    # Per-entity rate history (for the projected-rate scenario)
+    codes = tuple({e["entity_code"] for e in entity_detail})
+    entity_rate_history = {}
+    if codes:
+        for r in query(
+            "SELECT entity_code, tax_year, rate FROM county_tax_rate "
+            "WHERE entity_code IN %s AND tax_year >= 2016 ORDER BY tax_year",
+            (codes,),
+        ):
+            entity_rate_history.setdefault(r["entity_code"], {})[r["tax_year"]] = (
+                float(r["rate"]) if r["rate"] is not None else None
+            )
+
+    # Parcel market-growth assumption from its own certified history (clamped)
+    mkt_hist = query("""
+        SELECT tax_year, market_value FROM parcel_tax_year
+        WHERE geo_id = %s AND market_value IS NOT NULL AND tax_year <= 2025
+        ORDER BY tax_year
+    """, (geo_id,))
+    market_growth = None
+    pts = [(r["tax_year"], float(r["market_value"])) for r in mkt_hist if r["market_value"]]
+    if len(pts) >= 2 and pts[0][1] > 0:
+        span = pts[-1][0] - pts[0][0]
+        if span > 0:
+            cagr = (pts[-1][1] / pts[0][1]) ** (1.0 / span) - 1.0
+            market_growth = max(0.0, min(0.08, cagr))   # clamp 0–8%
+
     result = _tx_estimate(
         dict(parcel),
         dict(current_yr_row),
         [dict(e) for e in entity_detail],
         purchase_price,
         buyer_status,
+        rate_mode=rate_mode,
+        entity_rate_history=entity_rate_history,
+        market_growth=market_growth,
     )
     result["ok"] = True
 
