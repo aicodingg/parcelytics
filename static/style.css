@@ -217,6 +217,9 @@ main.container.is-frontdoor { max-width: var(--maxw); }
   padding: 0 var(--s-5) !important;
   min-height: 56px;
   align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 1030;
 }
 
 .navbar-brand {
@@ -1043,7 +1046,8 @@ canvas { max-height: 440px; }
 }
 .section-nav-bar::-webkit-scrollbar { display: none; }
 .section-nav-bar.stuck {
-  position: sticky; top: 0;
+  position: sticky; top: 56px;
+  background: var(--bg);
   box-shadow: 0 4px 16px rgba(11,18,32,0.08);
   margin-left: calc(-1 * var(--s-4)); margin-right: calc(-1 * var(--s-4));
   padding-left: var(--s-4); padding-right: var(--s-4);
@@ -1063,7 +1067,7 @@ canvas { max-height: 440px; }
 
 .section-anchor {
   display: block; height: 0;
-  margin-top: -64px; padding-top: 64px;
+  margin-top: -116px; padding-top: 116px;
   visibility: hidden; pointer-events: none;
 }
 
