@@ -184,30 +184,49 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5, state
     base_market   = float(base_row["market_value"])
     base_year     = base_row["tax_year"]
 
-    rows = []
-    for i in range(1, years_ahead + 1):
-        proj_year   = base_year + i
-        proj_market = round(base_market * (1 + value_cagr) ** i)
-        proj_rate   = max(0, current_rate + avg_rate_change * i)
+    # scenario_banded_projection_task3
+    # CAGR offsets for scenario bands
+    # Low  : CAGR − 2 pp, floored at −5%; rate holds flat
+    # Base : existing CAGR; existing rate trend
+    # High : CAGR + 2 pp; rate trend amplified 1.5x
+    cagr_low  = max(-0.05, value_cagr - 0.02)
+    cagr_base = value_cagr
+    cagr_high = value_cagr + 0.02
 
-        if has_hs_cap:
-            # Assessed capped at 10% per year increase
-            proj_assessed = round(min(base_assessed * (1.10 ** i), proj_market))
-        else:
-            proj_assessed = proj_market
+    def _make_rows(cagr, rate_delta_mult):
+        out = []
+        for i in range(1, years_ahead + 1):
+            py  = base_year + i
+            pmv = round(base_market * (1 + cagr) ** i)
+            pr  = max(0, current_rate + avg_rate_change * rate_delta_mult * i)
+            if has_hs_cap:
+                pav = round(min(base_assessed * (1.10 ** i), pmv))
+            else:
+                pav = pmv
+            et = round(pav * pr / 100)
+            out.append({
+                "year":         py,
+                "market":       pmv,
+                "assessed":     pav,
+                "rate":         round(pr, 6),
+                "est_tax":      et,
+                "value_change": round((pmv - base_market) / base_market * 100, 1),
+            })
+        return out
 
-        est_tax = round(proj_assessed * proj_rate / 100)
+    rows      = _make_rows(cagr_base, 1.0)      # base (unchanged from previous behaviour)
+    rows_low  = _make_rows(cagr_low,  0.0)      # low: flat rates
+    rows_high = _make_rows(cagr_high, 1.5)      # high: steeper rate trend
 
-        rows.append({
-            "year":         proj_year,
-            "market":       proj_market,
-            "assessed":     proj_assessed,
-            "rate":         round(proj_rate, 6),
-            "est_tax":      est_tax,
-            "value_change": round((proj_market - base_market) / base_market * 100, 1),
-        })
+    bands = {
+        "low":  rows_low,
+        "high": rows_high,
+        "cagr_low":   round(cagr_low  * 100, 2),
+        "cagr_base":  round(cagr_base * 100, 2),
+        "cagr_high":  round(cagr_high * 100, 2),
+    }
 
-    return rows, baseline_label
+    return rows, baseline_label, bands
 
 
 # ── CoStar-style property narrative generator ────────────────────────────────
@@ -845,7 +864,7 @@ def property_detail(geo_id):
             chart_entity_data[code] = pts
 
     insights    = build_insights(parcel, history, entity_detail, delinquent)
-    projections, proj_baseline = build_projections(
+    projections, proj_baseline, proj_bands = build_projections(
         history, rate_history, entity_detail,
         state_cd1=parcel.get("state_cd1")
     )
@@ -939,6 +958,7 @@ def property_detail(geo_id):
         delinquent=delinquent,
         insights=insights,
         projections=projections,
+        proj_bands=proj_bands,
         proj_baseline=proj_baseline,
         metrics_by_year=metrics_by_year,
         benchmark_by_year=benchmark_by_year,
@@ -1546,6 +1566,115 @@ def api_address_search():
         for r in rows
     ]
     return jsonify({"ok": True, "results": results})
+
+
+
+@app.route("/api/peer_benchmark_local/<geo_id>")
+def api_peer_benchmark_local(geo_id):
+    """
+    Neighborhood + type + size-band peer benchmark (Task 3).
+    Peer set: same neighborhood_cd, same state_cd1 prefix, 2025 MV within ±50%.
+    Returns peer count, median MV, p25/p75 MV, median total_tax, this parcel's rank.
+    """
+    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    if not parcel:
+        return jsonify({"ok": False, "error": "Parcel not found"})
+
+    mv_row = query("""
+        SELECT market_value FROM parcel_tax_year WHERE geo_id = %s AND tax_year = 2025
+    """, (geo_id,), one=True)
+
+    neighborhood = (parcel.get("neighborhood_cd") or "").strip()
+    state_cd1    = (parcel.get("state_cd1") or "").strip()[:1]
+    this_mv      = float(mv_row["market_value"]) if mv_row and mv_row.get("market_value") else None
+
+    if not neighborhood or not this_mv:
+        return jsonify({"ok": False, "error":
+            "Peer benchmark requires neighborhood code and 2025 market value"})
+
+    mv_lo = this_mv * 0.50
+    mv_hi = this_mv * 1.50
+
+    # Peer set: same neighborhood, same state_cd1 prefix, MV band ±50%
+    peers = query("""
+        SELECT
+            p.geo_id,
+            pty.market_value,
+            pty.assessed_value,
+            tb.total_tax
+        FROM   parcel p
+        JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+        LEFT JOIN tax_billing  tb  ON tb.geo_id  = p.geo_id AND tb.tax_year  = 2025
+        WHERE  p.neighborhood_cd = %(nb)s
+          AND  LEFT(p.state_cd1, 1) = %(sc1)s
+          AND  pty.market_value BETWEEN %(lo)s AND %(hi)s
+          AND  p.geo_id NOT LIKE 'AJR%%'
+          AND  pty.market_value > 0
+        ORDER  BY pty.market_value
+    """, {"nb": neighborhood, "sc1": state_cd1, "lo": mv_lo, "hi": mv_hi})
+
+    n = len(peers)
+    if n < 3:
+        # Fallback: relax to neighborhood + type only, drop MV band
+        peers = query("""
+            SELECT p.geo_id, pty.market_value, pty.assessed_value, tb.total_tax
+            FROM   parcel p
+            JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+            LEFT JOIN tax_billing  tb  ON tb.geo_id  = p.geo_id AND tb.tax_year  = 2025
+            WHERE  p.neighborhood_cd = %(nb)s
+              AND  LEFT(p.state_cd1, 1) = %(sc1)s
+              AND  p.geo_id NOT LIKE 'AJR%%'
+              AND  pty.market_value > 0
+            ORDER  BY pty.market_value
+        """, {"nb": neighborhood, "sc1": state_cd1})
+        n = len(peers)
+        band_note = "Size band relaxed (neighbourhood + type only — fewer than 3 ±50% MV peers)"
+    else:
+        band_note = f"Neighbourhood {neighborhood}, {state_cd1}-type, MV within ±50% of this parcel"
+
+    if n == 0:
+        return jsonify({"ok": False, "error": "No peers found in this neighbourhood + property type"})
+
+    mvs   = sorted([float(r["market_value"]) for r in peers if r.get("market_value")])
+    avs   = sorted([float(r["assessed_value"]) for r in peers if r.get("assessed_value")])
+    taxes = sorted([float(r["total_tax"]) for r in peers if r.get("total_tax")])
+
+    def pct(lst, p):
+        if not lst: return None
+        i = (len(lst) - 1) * p / 100
+        lo_, hi_ = int(i), min(int(i) + 1, len(lst) - 1)
+        return round(lst[lo_] + (lst[hi_] - lst[lo_]) * (i - lo_))
+
+    def median(lst):
+        return pct(lst, 50)
+
+    # Where does this parcel rank by MV among peers?
+    mv_rank = sum(1 for v in mvs if v < this_mv) + 1
+    mv_pct  = round(mv_rank / n * 100) if n else None
+
+    return jsonify({
+        "ok":           True,
+        "geo_id":       geo_id,
+        "peer_count":   n,
+        "band_note":    band_note,
+        "this_mv":      round(this_mv),
+        "peer_mv": {
+            "p25":    pct(mvs, 25),
+            "median": median(mvs),
+            "p75":    pct(mvs, 75),
+        },
+        "peer_av": {
+            "p25":    pct(avs, 25),
+            "median": median(avs),
+            "p75":    pct(avs, 75),
+        },
+        "peer_tax": {
+            "p25":    pct(taxes, 25),
+            "median": median(taxes),
+            "p75":    pct(taxes, 75),
+        },
+        "this_mv_pct_rank": mv_pct,
+    })
 
 @app.route("/about")
 def about():

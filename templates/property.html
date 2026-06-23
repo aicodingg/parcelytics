@@ -1151,48 +1151,100 @@
   </div>
   {% endif %}
 
-  {# ── 5. Tax Projection ────────────────────────────────────────────── #}
+  {# ── 5. Tax Projection — Scenario Bands (Task 3) ──────────────── #}
+  {# scenario-band-task3 #}
   <div class="section-hdr">6-Year Projection <span class="section-hdr-badge">Estimates Only</span></div>
   {% if projections %}
   <div class="card mb-4 projection-card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span>5-Year Tax Projection</span>
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span>5-Year Tax Projection — Scenario Bands</span>
       <span class="estimates-badge">Estimates Only</span>
     </div>
     <div class="card-body p-0">
+      {# Band selector #}
+      <div class="d-flex gap-2 align-items-center px-3 pt-3 pb-2">
+        <span class="small text-muted" style="font-size:11.5px;">Show scenario:</span>
+        <div class="btn-group btn-group-sm" role="group" id="projBandToggle">
+          <input type="radio" class="btn-check" name="projBand" id="pbLow"  value="low">
+          <label class="btn btn-outline-secondary btn-sm" for="pbLow" style="font-size:11.5px;">
+            Low
+            {% if proj_bands %}<span class="text-muted" style="font-size:10px;">
+              ({{ "{:+.1f}%".format(proj_bands.cagr_low) }} CAGR, flat rates)</span>{% endif %}
+          </label>
+          <input type="radio" class="btn-check" name="projBand" id="pbBase" value="base" checked>
+          <label class="btn btn-outline-secondary btn-sm" for="pbBase" style="font-size:11.5px;">
+            Base
+            {% if proj_bands %}<span class="text-muted" style="font-size:10px;">
+              ({{ "{:+.1f}%".format(proj_bands.cagr_base) }} CAGR)</span>{% endif %}
+          </label>
+          <input type="radio" class="btn-check" name="projBand" id="pbHigh" value="high">
+          <label class="btn btn-outline-secondary btn-sm" for="pbHigh" style="font-size:11.5px;">
+            High
+            {% if proj_bands %}<span class="text-muted" style="font-size:10px;">
+              ({{ "{:+.1f}%".format(proj_bands.cagr_high) }} CAGR)</span>{% endif %}
+          </label>
+        </div>
+      </div>
       <div class="table-responsive">
         <table class="table table-sm table-hover mb-0">
           <thead class="table-light small text-muted text-uppercase">
             <tr>
               <th>Year</th>
-              <th class="text-end">Est. Market Value ¹</th>
-              <th class="text-end">Est. Assessed Value ²</th>
-              <th class="text-end">Est. Rate ³</th>
-              <th class="text-end">Est. Annual Tax</th>
-              <th class="text-end">Value Δ vs 2025</th>
+              <th class="text-end">~Mkt Value</th>
+              <th class="text-end">~Assessed</th>
+              <th class="text-end">~Rate</th>
+              <th class="text-end">~Ann. Tax</th>
+              <th class="text-end">Value Δ</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="projBandBase">
             {% for p in projections %}
             <tr class="projection-row">
               <td class="proj-year">{{ p.year }}</td>
               <td class="text-end">~${{ "{:,.0f}".format(p.market) }}</td>
               <td class="text-end">~${{ "{:,.0f}".format(p.assessed) }}</td>
               <td class="text-end small">~{{ "{:.4f}%".format(p.rate) }}</td>
-              <td class="text-end">~${{ "{:,.0f}".format(p.est_tax) }}</td>
+              <td class="text-end"><em style="color:var(--estimated-text)">~${{ "{:,.0f}".format(p.est_tax) }}</em></td>
               <td class="text-end">{{ "{:+.1f}%".format(p.value_change) }}</td>
             </tr>
             {% endfor %}
           </tbody>
+          {% if proj_bands %}
+          <tbody id="projBandLow" style="display:none;">
+            {% for p in proj_bands.low %}
+            <tr class="projection-row">
+              <td class="proj-year">{{ p.year }}</td>
+              <td class="text-end">~${{ "{:,.0f}".format(p.market) }}</td>
+              <td class="text-end">~${{ "{:,.0f}".format(p.assessed) }}</td>
+              <td class="text-end small">~{{ "{:.4f}%".format(p.rate) }}</td>
+              <td class="text-end"><em style="color:var(--down)">~${{ "{:,.0f}".format(p.est_tax) }}</em></td>
+              <td class="text-end">{{ "{:+.1f}%".format(p.value_change) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tbody id="projBandHigh" style="display:none;">
+            {% for p in proj_bands.high %}
+            <tr class="projection-row">
+              <td class="proj-year">{{ p.year }}</td>
+              <td class="text-end">~${{ "{:,.0f}".format(p.market) }}</td>
+              <td class="text-end">~${{ "{:,.0f}".format(p.assessed) }}</td>
+              <td class="text-end small">~{{ "{:.4f}%".format(p.rate) }}</td>
+              <td class="text-end"><em style="color:var(--up)">~${{ "{:,.0f}".format(p.est_tax) }}</em></td>
+              <td class="text-end">{{ "{:+.1f}%".format(p.value_change) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          {% endif %}
         </table>
       </div>
     </div>
     <div class="card-footer text-muted small">
       <strong>These are estimates, not recorded values.</strong>
-      ¹ Market value projected using historical CAGR. {{ proj_baseline or "Based on 2021–2025 certified trend" }}.
-      ² Assessed value applies Texas 10%/yr homestead cap if applicable; otherwise tracks market.
-      ³ Rate projected using average annual change from available entity rate history.
-      Actual values will be set by TCAD appraisal and taxing entity budgets each year.
+      ¹ {{ proj_baseline or "Based on 2021–2025 certified trend" }}.
+      <strong>Low</strong>: CAGR −2 pp, rates flat.
+      <strong>Base</strong>: historical CAGR + rate trend.
+      <strong>High</strong>: CAGR +2 pp, rates trend ×1.5.
+      Actual values set by TCAD appraisal and taxing budgets each year.
     </div>
   </div>
   {% endif %}
@@ -1330,6 +1382,21 @@
     </div>
   </div>
   {% endif %}
+
+  {# ── Peer Benchmark (Task 3) ─────────────────────────────────────────── #}
+  <div id="peerBenchSection" class="mb-4" style="display:none;">
+    <div class="section-hdr">Peer Set Position</div>
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Neighbourhood Peer Comparison <span id="peerBandNote" class="text-muted" style="font-size:11.5px; font-weight:400;"></span></span>
+        <span class="estimates-badge">2025 Certified</span>
+      </div>
+      <div class="card-body" id="peerBenchBody">
+        <div class="text-muted small" style="font-size:12px;">Loading peer data…</div>
+      </div>
+    </div>
+  </div>
+
 
 </div>{# /col-12 full-width tables #}
 </div>{# /row full-width #}
@@ -1858,4 +1925,110 @@ if (rCtx) {
 })();
 </script>
 {% endif %}
+
+<script>
+// ── Scenario Band Toggle (Task 3) ── projBandToggle-task3-js ────────────────
+(function() {
+  const toggle  = document.getElementById('projBandToggle');
+  if (!toggle) return;
+  const bodyIds = { low: 'projBandLow', base: 'projBandBase', high: 'projBandHigh' };
+
+  function showBand(band) {
+    Object.keys(bodyIds).forEach(b => {
+      const el = document.getElementById(bodyIds[b]);
+      if (el) el.style.display = (b === band) ? '' : 'none';
+    });
+  }
+
+  toggle.addEventListener('change', function(e) {
+    if (e.target.name === 'projBand') showBand(e.target.value);
+  });
+})();
+
+// ── Peer Benchmark (Task 3) ──────────────────────────────────────────────────
+(function() {
+  const GEO_ID = "{{ parcel.geo_id }}";
+  const section = document.getElementById('peerBenchSection');
+  const body    = document.getElementById('peerBenchBody');
+  const noteEl  = document.getElementById('peerBandNote');
+  if (!section || !body) return;
+
+  function _fmtM(n) { return n == null ? '—' : '$' + Math.round(n).toLocaleString(); }
+
+  fetch(`/api/peer_benchmark_local/${GEO_ID}`)
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) {
+        section.style.display = '';
+        body.innerHTML = `<div class="text-muted small" style="font-size:12px;">${d.error || 'Peer data unavailable.'}</div>`;
+        return;
+      }
+      if (noteEl) noteEl.textContent = '— ' + (d.band_note || '');
+      const clr = d.this_mv_pct_rank != null ? (
+        d.this_mv_pct_rank >= 75 ? 'var(--up)' :
+        d.this_mv_pct_rank <= 25 ? 'var(--down)' : 'var(--text)'
+      ) : 'var(--text)';
+      body.innerHTML = `
+        <div class="d-flex flex-wrap gap-3 mb-3">
+          <div class="estimator-chip">
+            <div class="estimator-chip-label">Peer Count</div>
+            <div class="estimator-chip-val">${d.peer_count}</div>
+          </div>
+          <div class="estimator-chip">
+            <div class="estimator-chip-label">~This Parcel MV Rank</div>
+            <div class="estimator-chip-val" style="color:${clr}">${d.this_mv_pct_rank != null ? d.this_mv_pct_rank + "th pct" : "—"}</div>
+          </div>
+          <div class="estimator-chip">
+            <div class="estimator-chip-label">Peer Median MV</div>
+            <div class="estimator-chip-val">${_fmtM(d.peer_mv.median)}</div>
+          </div>
+          <div class="estimator-chip">
+            <div class="estimator-chip-label">Peer Median Tax</div>
+            <div class="estimator-chip-val">${_fmtM(d.peer_tax.median)}</div>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 small">
+            <thead class="table-light text-muted text-uppercase" style="font-size:10.5px;">
+              <tr><th>Metric</th><th class="text-end">P25</th><th class="text-end">Median</th><th class="text-end">P75</th><th class="text-end">This Parcel</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="small">Market Value (2025)</td>
+                <td class="text-end">${_fmtM(d.peer_mv.p25)}</td>
+                <td class="text-end fw-semibold">${_fmtM(d.peer_mv.median)}</td>
+                <td class="text-end">${_fmtM(d.peer_mv.p75)}</td>
+                <td class="text-end fw-bold" style="color:${clr}">${_fmtM(d.this_mv)}</td>
+              </tr>
+              <tr>
+                <td class="small">Assessed Value (2025)</td>
+                <td class="text-end">${_fmtM(d.peer_av.p25)}</td>
+                <td class="text-end fw-semibold">${_fmtM(d.peer_av.median)}</td>
+                <td class="text-end">${_fmtM(d.peer_av.p75)}</td>
+                <td class="text-end">—</td>
+              </tr>
+              <tr>
+                <td class="small">Total Tax (2025)</td>
+                <td class="text-end">${_fmtM(d.peer_tax.p25)}</td>
+                <td class="text-end fw-semibold">${_fmtM(d.peer_tax.median)}</td>
+                <td class="text-end">${_fmtM(d.peer_tax.p75)}</td>
+                <td class="text-end">—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="text-muted mt-2 mb-0" style="font-size:10.5px;">
+          Size proxy: ±50% of this parcel's 2025 market value (no living-area SF in public data).
+          No SF normalisation available — see KNOWN_LIMITATIONS.md.
+        </p>
+      `;
+      section.style.display = '';
+    })
+    .catch(() => {
+      section.style.display = '';
+      body.innerHTML = '<div class="text-muted small">Peer data unavailable.</div>';
+    });
+})();
+</script>
+
 {% endblock %}
