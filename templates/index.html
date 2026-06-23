@@ -1,6 +1,76 @@
 {% extends "base.html" %}
 {% block title %}Parcel Search — Parcelytics{% endblock %}
 
+{% block scripts %}
+{# ── Address typeahead JS (Task 2) ───────────────────────────────────────── #}
+<script>
+(function () {
+  const inp  = document.querySelector('input[name="q"]');
+  const wrap = document.getElementById('addrTaWrap');
+  const list = document.getElementById('addrTaList');
+
+  if (!inp || !wrap || !list) return;
+
+  let _timer = null;
+  let _last  = "";
+
+  function isAddressLike(v) {
+    // Has at least one letter = likely address, not parcel ID
+    return /[a-zA-Z]/.test(v);
+  }
+
+  function showSuggestions(results) {
+    list.innerHTML = "";
+    if (!results || results.length === 0) {
+      wrap.style.display = "none";
+      return;
+    }
+    results.forEach(r => {
+      const opt = document.createElement("div");
+      opt.className = "ta-opt";
+      opt.innerHTML =
+        `<span style="font-size:13px;">${r.address || '(unknown)'}</span>` +
+        `<span style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-3); margin-left:12px;">${r.geo_id}</span>`;
+      opt.addEventListener("mousedown", e => {
+        e.preventDefault();
+        window.location.href = "/parcel/" + r.geo_id;
+      });
+      list.appendChild(opt);
+    });
+    wrap.style.display = "block";
+  }
+
+  inp.addEventListener("input", function () {
+    const val = inp.value.trim();
+    if (!isAddressLike(val) || val.length < 3) {
+      wrap.style.display = "none";
+      return;
+    }
+    if (val === _last) return;
+    _last = val;
+    clearTimeout(_timer);
+    _timer = setTimeout(() => {
+      fetch("/api/address_search?q=" + encodeURIComponent(val))
+        .then(r => r.json())
+        .then(d => { if (d.ok) showSuggestions(d.results); })
+        .catch(() => {});
+    }, 220);
+  });
+
+  inp.addEventListener("blur", function () {
+    setTimeout(() => { wrap.style.display = "none"; }, 200);
+  });
+
+  inp.addEventListener("focus", function () {
+    if (inp.value.trim().length >= 3 && isAddressLike(inp.value)) {
+      inp.dispatchEvent(new Event("input"));
+    }
+  });
+})();
+</script>
+{% endblock %}
+
+
 {% block content %}
 <div class="row justify-content-center" style="margin-top: 9vh;">
   <div class="col-md-8 col-lg-5">
@@ -22,7 +92,7 @@
           type="text"
           name="q"
           class="search-input{% if error %} is-error{% endif %}"
-          placeholder="Parcel ID — e.g. 0100030105"
+          placeholder="Parcel ID or street address — e.g. 0100030105 or 1201 S Lamar"
           value="{{ q }}"
           autofocus
           autocomplete="off"
@@ -31,6 +101,33 @@
         <button class="search-btn" type="submit">Search</button>
       </div>
     </form>
+
+    {# Address typeahead — Task 2 — address-typeahead-task2 #}
+    <div class="ta-wrap" id="addrTaWrap" style="display:none; margin-top:-2px;">
+      <div class="ta-list" id="addrTaList"></div>
+    </div>
+
+    {# Disambiguation list (server-rendered when address_matches is set) #}
+    {% if addr_matches %}
+    <div class="card mt-3 p-0" style="border:1px solid var(--border);">
+      <div class="card-header" style="font-size:13px; font-weight:600;">
+        {{ addr_matches|length }} matching parcel{{ 's' if addr_matches|length != 1 }} — select one
+      </div>
+      <ul class="list-group list-group-flush mb-0" style="font-size:13px;">
+        {% for m in addr_matches %}
+        <li class="list-group-item py-2 px-3">
+          <a href="/parcel/{{ m.geo_id }}" class="text-decoration-none d-flex justify-content-between align-items-center">
+            <span>{{ m.situs_address or '(address unknown)' }}</span>
+            <span class="text-muted ms-3" style="font-family:var(--font-mono); font-size:11.5px; white-space:nowrap;">{{ m.geo_id }}</span>
+          </a>
+          {% if m.owner_name %}
+          <div class="text-muted" style="font-size:11px; margin-top:1px;">{{ m.owner_name }}</div>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
 
     {# Error state — styled block, not inline Bootstrap feedback #}
     {% if error %}
@@ -41,7 +138,7 @@
 
     {# Helper text #}
     <p class="text-center mt-3" style="font-size: 12px; color: var(--text-3);">
-      Accepts 10-digit TCAD account, 14-digit Tax Office account, or short prop_id.
+      Accepts 10-digit TCAD account, 14-digit Tax Office account, prop_id, or street address.
     </p>
 
     {# Example parcels #}

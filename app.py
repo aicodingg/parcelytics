@@ -702,6 +702,29 @@ def index():
 
         if parcel:
             return redirect(url_for("property_detail", geo_id=parcel["geo_id"]))
+
+        # Address-like query (contains letters) — show disambiguation list
+        elif any(c.isalpha() for c in q):
+            q_norm = " ".join(q.upper().split())
+            addr_matches = query("""
+                SELECT geo_id, situs_address, owner_name
+                FROM   parcel
+                WHERE  UPPER(situs_address) ILIKE %(pattern)s
+                ORDER  BY situs_address
+                LIMIT  20
+            """, {"pattern": f"%{q_norm}%"})
+            if addr_matches:
+                return render_template(
+                    "index.html",
+                    q=q,
+                    error=None,
+                    addr_matches=[dict(r) for r in addr_matches],
+                )
+            error = (
+                f"No parcels found matching address \"{q}\". "
+                "Try a shorter street name or use the 10-digit TCAD account number. "
+            )
+
         else:
             error = (
                 f"We couldn't find a parcel matching \"{q}\". "
@@ -1484,6 +1507,45 @@ def api_estimate_acq(geo_id):
         for row in result["entity_breakdown"]
     ]
     return jsonify(result)
+
+
+
+@app.route("/api/address_search")
+def api_address_search():
+    """
+    Address typeahead API (Task 2).
+    Returns up to 10 matching parcels for a partial address query.
+    Query params:
+      q   str   partial address string (min 3 chars)
+    """
+    q = request.args.get("q", "").strip()
+    if len(q) < 3:
+        return jsonify({"ok": True, "results": []})
+
+    # Normalise: collapse whitespace, uppercase for consistent matching
+    q_norm = " ".join(q.upper().split())
+
+    # pg_trgm index (idx_parcel_situs_trgm) will be used if installed;
+    # ILIKE works correctly either way — just slower without the index.
+    rows = query("""
+        SELECT geo_id, situs_address, owner_name, state_cd1, neighborhood_cd
+        FROM   parcel
+        WHERE  UPPER(situs_address) ILIKE %(pattern)s
+        ORDER  BY situs_address
+        LIMIT  10
+    """, {"pattern": f"%{q_norm}%"})
+
+    results = [
+        {
+            "geo_id":       r["geo_id"],
+            "address":      r["situs_address"] or "",
+            "owner":        r["owner_name"] or "",
+            "state_cd1":    r["state_cd1"] or "",
+            "neighborhood": r["neighborhood_cd"] or "",
+        }
+        for r in rows
+    ]
+    return jsonify({"ok": True, "results": results})
 
 @app.route("/about")
 def about():
