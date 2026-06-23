@@ -19,10 +19,28 @@
          style="border-radius:4px; object-fit:contain;">
     <span class="fw-semibold">Parcelytics</span>
   </a>
-  <div class="navbar-nav ms-auto">
+  <div class="navbar-nav ms-auto d-flex align-items-center">
     <a class="nav-link" href="/">Search</a>
     <a class="nav-link" href="/rates">Rate Trends</a>
-    <a class="nav-link" href="/snapshot">Market Snapshot</a>
+
+    {# Sector dropdown — links to Market Snapshot with appropriate view #}
+    <div class="nav-item dropdown">
+      <a class="nav-link dropdown-toggle" href="/snapshot" role="button"
+         data-bs-toggle="dropdown" aria-expanded="false"
+         id="sectorDropdown">
+        Market Snapshot
+      </a>
+      <ul class="dropdown-menu dropdown-menu-end sector-dropdown" aria-labelledby="sectorDropdown">
+        <li class="dropdown-header">Sector</li>
+        <li><a class="dropdown-item" href="/snapshot?view=overall">All Property Types</a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li><a class="dropdown-item" href="/snapshot?view=residential">Residential (SFR)</a></li>
+        <li><a class="dropdown-item" href="/snapshot?view=multifamily">Multi-Family</a></li>
+        <li><a class="dropdown-item" href="/snapshot?view=commercial">Commercial</a></li>
+        <li><a class="dropdown-item" href="/snapshot?view=land">Land / Vacant</a></li>
+        <li><a class="dropdown-item" href="/snapshot?view=agricultural">Agricultural</a></li>
+      </ul>
+    </div>
   </div>
 </nav>
 

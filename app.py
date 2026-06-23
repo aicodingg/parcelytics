@@ -207,6 +207,232 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5, state
 
     return rows, baseline_label
 
+
+# ── CoStar-style property narrative generator ────────────────────────────────
+def generate_property_narrative(parcel, history, metrics_by_year, benchmark_by_year,
+                                insights, projections):
+    """
+    Assemble a 2–3 paragraph investor-facing narrative from actual parcel data.
+    Text is fully data-driven — no AI generation.
+    Returns a list of paragraph strings.
+    """
+    sc1 = (parcel.get("state_cd1") or "").strip()[:1]
+    type_map = {
+        "A": "single-family residential", "B": "multi-family residential",
+        "C": "vacant land", "D": "agricultural land", "E": "rural land",
+        "F": "commercial real property",
+    }
+    prop_type = type_map.get(sc1, "real property")
+    address = parcel.get("situs_address") or "This parcel"
+
+    hist = sorted([r for r in history if r.get("market_value")], key=lambda r: r["tax_year"])
+    r2025 = next((r for r in hist if r["tax_year"] == 2025), None)
+    r2026 = next((r for r in hist if r["tax_year"] == 2026), None)
+    m25   = metrics_by_year.get(2025)
+    paragraphs = []
+
+    # ── Para 1: property identity + value trajectory ──────────────────────────
+    p1 = [f"{address} is a {prop_type} parcel in Travis County, Texas."]
+    if r2026 and r2026.get("market_value") and r2025 and r2025.get("market_value"):
+        mv26, mv25 = r2026["market_value"], r2025["market_value"]
+        pct = (mv26 - mv25) / mv25 * 100
+        p1.append(
+            f"The 2026 preliminary appraisal values the property at ${mv26:,.0f}, "
+            f"{'up' if pct >= 0 else 'down'} {abs(pct):.1f}% from the 2025 "
+            f"certified value of ${mv25:,.0f}."
+        )
+    elif r2025 and r2025.get("market_value"):
+        p1.append(f"The 2025 certified market value is ${r2025['market_value']:,.0f}.")
+        if insights and insights.get("value_change_pct") is not None and insights.get("span", 0) > 1:
+            pct  = insights["value_change_pct"]
+            cagr = insights.get("value_cagr", 0)
+            p1.append(
+                f"Market value has {'appreciated' if pct > 0 else 'declined'} "
+                f"{abs(pct):.1f}% from {insights['earliest_year']} to "
+                f"{insights['latest_year']} (CAGR {cagr:.1f}%)."
+            )
+    paragraphs.append(" ".join(p1))
+
+    # ── Para 2: assessment ratio + tax burden ──────────────────────────────────
+    p2 = []
+    if r2025 and r2025.get("assessed_value") and r2025.get("market_value"):
+        ratio = r2025["assessed_value"] / r2025["market_value"] * 100
+        p2.append(
+            f"For 2025, the assessed value is ${r2025['assessed_value']:,.0f} "
+            f"({ratio:.1f}% of market value)."
+        )
+    if m25 and m25.get("effective_tax_rate") is not None:
+        etr = float(m25["effective_tax_rate"]) * 100
+        bench_str = ""
+        b25 = benchmark_by_year.get(2025)
+        if b25 and b25.get("median_assessment_ratio") is not None:
+            try:
+                county_ratio = float(b25["median_assessment_ratio"]) * 100
+                bench_str = (
+                    f" The county median assessment ratio for this property type is "
+                    f"{county_ratio:.1f}%."
+                )
+            except Exception:
+                pass
+        p2.append(f"The effective tax rate in 2025 is {etr:.4f}%.{bench_str}")
+    elif insights and insights.get("total_rate_2025"):
+        rate = insights["total_rate_2025"]
+        est  = insights.get("est_annual_tax")
+        n    = insights.get("entity_count", "multiple")
+        p2.append(
+            f"The combined rate across {n} taxing entities is {rate:.4f}% in 2025"
+            + (f", with estimated annual taxes of ${est:,.0f}." if est else ".")
+        )
+    if p2:
+        paragraphs.append(" ".join(p2))
+
+    # ── Para 3: risk flags or forward outlook ──────────────────────────────────
+    p3 = []
+    if m25:
+        if m25.get("risk_homestead_cap_expiry"):
+            p3.append(
+                "An active homestead cap is in place — assessed value is below market. "
+                "A buyer loses this benefit at purchase and the assessed value resets to full market."
+            )
+        if m25.get("risk_large_value_jump"):
+            flag_pct = m25.get("risk_large_value_jump_pct", 0)
+            p3.append(
+                f"A large year-over-year value change ({flag_pct:.0f}%) was flagged — "
+                "verify against comparable sales before underwriting."
+            )
+        if m25.get("risk_delinquent"):
+            p3.append(
+                "Delinquent taxes are on record. These constitute a lien on the property "
+                "and transfer to the buyer at closing unless negotiated otherwise."
+            )
+    if not p3 and projections:
+        pl = projections[-1]
+        p3.append(
+            f"Based on the historical value trend, market value is projected at approximately "
+            f"${pl['market']:,.0f} by {pl['year']}, with an estimated annual tax burden "
+            f"of ${pl['est_tax']:,.0f}."
+        )
+    if p3:
+        paragraphs.append(" ".join(p3))
+
+    return paragraphs
+
+
+# ── Annual Trends table computation ─────────────────────────────────────────
+def compute_annual_trends(history, metrics_by_year, projections):
+    """
+    Compute the CoStar-style Annual Trends table rows for the property detail page.
+    Returns a list of row dicts (label, twelve_month, hist_avg, forecast_avg,
+    peak, peak_when, trough, trough_when).
+    """
+    hist = sorted([r for r in history if r.get("market_value") and r["tax_year"] <= 2026],
+                  key=lambda r: r["tax_year"])
+
+    # ── Market Value Growth ───────────────────────────────────────────────────
+    yoy_list, peak_g, trough_g = [], None, None
+    for i in range(1, len(hist)):
+        prev, curr = hist[i-1], hist[i]
+        if prev["market_value"] and curr["market_value"]:
+            pct = (curr["market_value"] - prev["market_value"]) / prev["market_value"] * 100
+            yoy_list.append((curr["tax_year"], round(pct, 1)))
+            if peak_g is None or pct > peak_g[0]:
+                peak_g = (round(pct, 1), curr["tax_year"])
+            if trough_g is None or pct < trough_g[0]:
+                trough_g = (round(pct, 1), curr["tax_year"])
+
+    recent_yoy = yoy_list[-1][1] if yoy_list else None
+    hist_avg_g = round(sum(v for _, v in yoy_list) / len(yoy_list), 1) if yoy_list else None
+    proj_avg_g = None
+    if projections:
+        base_mv = hist[-1]["market_value"] if hist else None
+        if base_mv:
+            proj_avg_g = round(
+                sum(p["value_change"] for p in projections) / len(projections), 1
+            )
+
+    def _fmt_pct(v):
+        return f"{'+' if v >= 0 else ''}{v:.1f}%" if v is not None else "—"
+
+    rows = [dict(
+        label="Market Value Growth",
+        twelve_month=_fmt_pct(recent_yoy),
+        hist_avg=_fmt_pct(hist_avg_g),
+        forecast_avg=_fmt_pct(proj_avg_g) if proj_avg_g is not None else "—",
+        peak=_fmt_pct(peak_g[0]) if peak_g else "—",
+        peak_when=str(peak_g[1]) if peak_g else "—",
+        trough=_fmt_pct(trough_g[0]) if trough_g else "—",
+        trough_when=str(trough_g[1]) if trough_g else "—",
+        note="",
+    )]
+
+    # ── Assessment Ratio ──────────────────────────────────────────────────────
+    ratios = []
+    for r in hist:
+        if r.get("assessed_value") and r.get("market_value") and r["market_value"] > 0:
+            ratios.append((r["tax_year"], round(r["assessed_value"] / r["market_value"] * 100, 1)))
+
+    curr_ratio = ratios[-1][1] if ratios else None
+    avg_ratio  = round(sum(v for _, v in ratios) / len(ratios), 1) if ratios else None
+    peak_r     = max(ratios, key=lambda x: x[1]) if ratios else None
+    trough_r   = min(ratios, key=lambda x: x[1]) if ratios else None
+
+    def _fmt_ratio(v):
+        return f"{v:.1f}%" if v is not None else "—"
+
+    rows.append(dict(
+        label="Assessment Ratio",
+        twelve_month=_fmt_ratio(curr_ratio),
+        hist_avg=_fmt_ratio(avg_ratio),
+        forecast_avg="—",
+        peak=_fmt_ratio(peak_r[1]) if peak_r else "—",
+        peak_when=str(peak_r[0]) if peak_r else "—",
+        trough=_fmt_ratio(trough_r[1]) if trough_r else "—",
+        trough_when=str(trough_r[0]) if trough_r else "—",
+        note="",
+    ))
+
+    # ── Effective Tax Rate ────────────────────────────────────────────────────
+    m25  = metrics_by_year.get(2025)
+    etr  = float(m25["effective_tax_rate"]) * 100 if (m25 and m25.get("effective_tax_rate") is not None) else None
+
+    rows.append(dict(
+        label="Effective Tax Rate",
+        twelve_month=f"{etr:.4f}%" if etr is not None else "—",
+        hist_avg=f"{etr:.4f}%" if etr is not None else "—",
+        forecast_avg="—",
+        peak=f"{etr:.4f}%" if etr is not None else "—",
+        peak_when="2025" if etr is not None else "—",
+        trough=f"{etr:.4f}%" if etr is not None else "—",
+        trough_when="2025" if etr is not None else "—",
+        note="Billing data available for 2025 only" if etr is None else "",
+    ))
+
+    # ── Tax Amount ────────────────────────────────────────────────────────────
+    tax_pts = [(r["tax_year"], float(r["total_tax"])) for r in hist if r.get("total_tax")]
+    curr_tax = next((t for yr, t in tax_pts if yr == 2025), None)
+    avg_tax  = round(sum(t for _, t in tax_pts) / len(tax_pts)) if tax_pts else None
+    peak_t   = max(tax_pts, key=lambda x: x[1]) if tax_pts else None
+    trough_t = min(tax_pts, key=lambda x: x[1]) if tax_pts else None
+    proj_tax = round(sum(p["est_tax"] for p in projections) / len(projections)) if projections else None
+
+    def _fmt_usd(v):
+        return f"${v:,.0f}" if v is not None else "—"
+
+    rows.append(dict(
+        label="Tax Amount",
+        twelve_month=_fmt_usd(curr_tax),
+        hist_avg=_fmt_usd(avg_tax),
+        forecast_avg=f"~{_fmt_usd(proj_tax)}" if proj_tax else "—",
+        peak=_fmt_usd(peak_t[1]) if peak_t else "—",
+        peak_when=str(peak_t[0]) if peak_t else "—",
+        trough=_fmt_usd(trough_t[1]) if trough_t else "—",
+        trough_when=str(trough_t[0]) if trough_t else "—",
+        note="Billing data available for 2025 only" if not tax_pts else "",
+    ))
+
+    return rows
+
+
 # ── Texas Comptroller state property use code descriptions ────────────────────
 # Source: Texas Property Tax Code, Comptroller Rule 9.4001
 STATE_CD_DESCRIPTIONS = {
@@ -640,6 +866,44 @@ def property_detail(geo_id):
         if blended_rate_2025 > 0:
             estimated_tax_2026 = round(tv26 * blended_rate_2025 / 100.0, 2)
 
+    # ── CoStar-style KPI cards ─────────────────────────────────────────────────
+    kpi = {}
+    if current_2026 and current_2026.get("market_value"):
+        kpi["market_value"]        = current_2026["market_value"]
+        kpi["market_value_year"]   = 2026
+        kpi["market_value_source"] = "preliminary"
+    elif current and current.get("market_value"):
+        kpi["market_value"]        = current["market_value"]
+        kpi["market_value_year"]   = 2025
+        kpi["market_value_source"] = "certified"
+
+    if current_2026 and current_2026.get("market_value") and current and current.get("market_value"):
+        kpi["yoy_pct"]   = round((current_2026["market_value"] - current["market_value"])
+                                  / current["market_value"] * 100, 1)
+        kpi["yoy_label"] = "2025 → 2026"
+    elif metrics_by_year.get(2025) and metrics_by_year[2025].get("yoy_market_value_pct") is not None:
+        kpi["yoy_pct"]   = round(float(metrics_by_year[2025]["yoy_market_value_pct"]), 1)
+        kpi["yoy_label"] = "2024 → 2025"
+
+    if current and current.get("assessed_value") and current.get("market_value"):
+        kpi["assessment_ratio"]      = round(current["assessed_value"] / current["market_value"] * 100, 1)
+        kpi["assessment_ratio_year"] = 2025
+    elif current_2026 and current_2026.get("assessed_value") and current_2026.get("market_value"):
+        kpi["assessment_ratio"]      = round(current_2026["assessed_value"] / current_2026["market_value"] * 100, 1)
+        kpi["assessment_ratio_year"] = 2026
+
+    _m25 = metrics_by_year.get(2025)
+    if _m25 and _m25.get("effective_tax_rate") is not None:
+        kpi["effective_tax_rate"]   = round(float(_m25["effective_tax_rate"]) * 100, 4)
+    elif insights and insights.get("total_rate_2025"):
+        # Fallback: if no billing data, show the combined rate as an approximation
+        kpi["rate_approx"] = round(float(insights["total_rate_2025"]), 4)
+
+    # ── Narrative + annual trends ──────────────────────────────────────────────
+    narrative     = generate_property_narrative(parcel, history, metrics_by_year,
+                                                benchmark_by_year, insights, projections)
+    annual_trends = compute_annual_trends(history, metrics_by_year, projections)
+
     return render_template(
         "property.html",
         parcel=parcel,
@@ -664,6 +928,9 @@ def property_detail(geo_id):
         chart_entity_data=chart_entity_data,
         chart_years=chart_years,
         estimated_tax_2026=estimated_tax_2026,
+        kpi=kpi,
+        narrative=narrative,
+        annual_trends=annual_trends,
     )
 
 
@@ -712,18 +979,18 @@ def county_snapshot():
     Supports ?view=overall|residential|commercial (default: overall).
     """
     view = request.args.get("view", "overall")
-    if view not in ("overall", "residential", "commercial"):
+    if view not in ("overall", "residential", "commercial", "multifamily", "land", "agricultural"):
         view = "overall"
 
     # ── View-specific WHERE clause applied to the y25 CTE ───────────────────
     # Base exclusions always apply: X-prefix (exempt), AJR* (personal property supplements).
     if view == "residential":
-        view_where = "AND LEFT(p.state_cd1,1) = 'A'"
+        view_where    = "AND LEFT(p.state_cd1,1) = 'A'"
+        bench_labels  = ["Residential"]
         ptype_case = """
             CASE
                 WHEN y25.state_cd1 LIKE 'A1%%' THEN 'Single-Family'
-                WHEN y25.state_cd1 LIKE 'A2%%' THEN 'Condo / Townhome'
-                WHEN y25.state_cd1 LIKE 'A4%%' THEN 'Condo / Townhome'
+                WHEN y25.state_cd1 LIKE 'A2%%' OR y25.state_cd1 LIKE 'A4%%' THEN 'Condo / Townhome'
                 ELSE 'Other Residential'
             END"""
         sort_case = """
@@ -733,7 +1000,8 @@ def county_snapshot():
                 ELSE 3
             END"""
     elif view == "commercial":
-        view_where = "AND LEFT(p.state_cd1,1) IN ('F','L')"
+        view_where    = "AND LEFT(p.state_cd1,1) IN ('F','L')"
+        bench_labels  = ["Commercial"]
         ptype_case = """
             CASE
                 WHEN LEFT(y25.state_cd1,1) = 'F' THEN 'Commercial Improved'
@@ -746,8 +1014,58 @@ def county_snapshot():
                 WHEN LEFT(y25.state_cd1,1) = 'L' THEN 2
                 ELSE 3
             END"""
+    elif view == "multifamily":
+        view_where    = "AND LEFT(p.state_cd1,1) = 'B'"
+        bench_labels  = ["Multi-Family"]
+        ptype_case = """
+            CASE
+                WHEN y25.state_cd1 LIKE 'B1%%' THEN 'Multifamily (5+ units)'
+                WHEN y25.state_cd1 LIKE 'B2%%' THEN 'Duplex'
+                WHEN y25.state_cd1 LIKE 'B3%%' THEN 'Triplex'
+                WHEN y25.state_cd1 LIKE 'B4%%' THEN 'Fourplex'
+                ELSE 'Other Multi-Family'
+            END"""
+        sort_case = """
+            CASE
+                WHEN y25.state_cd1 LIKE 'B1%%' THEN 1
+                WHEN y25.state_cd1 LIKE 'B2%%' THEN 2
+                WHEN y25.state_cd1 LIKE 'B3%%' THEN 3
+                WHEN y25.state_cd1 LIKE 'B4%%' THEN 4
+                ELSE 5
+            END"""
+    elif view == "land":
+        view_where    = "AND LEFT(p.state_cd1,1) = 'C'"
+        bench_labels  = ["Land/Vacant"]
+        ptype_case = """
+            CASE
+                WHEN y25.state_cd1 LIKE 'C1%%' THEN 'Vacant Lot'
+                WHEN y25.state_cd1 LIKE 'C2%%' THEN 'Colonia'
+                ELSE 'Other Vacant'
+            END"""
+        sort_case = """
+            CASE
+                WHEN y25.state_cd1 LIKE 'C1%%' THEN 1
+                WHEN y25.state_cd1 LIKE 'C2%%' THEN 2
+                ELSE 3
+            END"""
+    elif view == "agricultural":
+        view_where    = "AND LEFT(p.state_cd1,1) IN ('D','E')"
+        bench_labels  = ["Agricultural"]
+        ptype_case = """
+            CASE
+                WHEN LEFT(y25.state_cd1,1) = 'D' THEN 'Open-Space Ag (1-d-1)'
+                WHEN LEFT(y25.state_cd1,1) = 'E' THEN 'Rural Land (non-ag)'
+                ELSE 'Other Agricultural'
+            END"""
+        sort_case = """
+            CASE
+                WHEN LEFT(y25.state_cd1,1) = 'D' THEN 1
+                WHEN LEFT(y25.state_cd1,1) = 'E' THEN 2
+                ELSE 3
+            END"""
     else:  # overall
-        view_where = "AND p.state_cd1 NOT LIKE 'N%%'"
+        view_where    = "AND p.state_cd1 NOT LIKE 'N%%'"
+        bench_labels  = ["Residential", "Multi-Family", "Commercial", "Land/Vacant", "Agricultural"]
         ptype_case = """
             CASE
                 WHEN LEFT(y25.state_cd1,1) = 'A'        THEN 'Residential'
@@ -839,11 +1157,32 @@ def county_snapshot():
         FROM y25 JOIN y26 USING (geo_id)
     """, one=True)
 
+    # ── County Benchmark Annual Trends for the selected view ─────────────────
+    # Pull from county_benchmark for the relevant property_type_label(s).
+    bench_trends = []
+    if bench_labels:
+        fmt_labels = ", ".join(f"'{lb}'" for lb in bench_labels)
+        bench_trends = query(f"""
+            SELECT
+                tax_year,
+                property_type_label,
+                parcel_count,
+                median_market_value,
+                p25_market_value,
+                p75_market_value,
+                median_assessment_ratio,
+                median_yoy_value_change_pct
+            FROM county_benchmark
+            WHERE property_type_label IN ({fmt_labels})
+            ORDER BY tax_year, property_type_label
+        """)
+
     return render_template(
         "snapshot.html",
         rows=rows,
         totals=totals,
         view=view,
+        bench_trends=bench_trends,
     )
 
 

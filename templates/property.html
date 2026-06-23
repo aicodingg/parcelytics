@@ -6,6 +6,83 @@
 {# ── Back link ───────────────────────────────────────────────────────── #}
 <a href="/" class="back-link">&larr; New search</a>
 
+{# ── CoStar KPI headline cards ────────────────────────────────────────── #}
+{% if kpi %}
+<div class="kpi-row mt-3">
+
+  {# Card 1: Market Value #}
+  <div class="kpi-card">
+    <div class="kpi-label">Market Value</div>
+    <div class="kpi-value">
+      {% if kpi.market_value %}
+        ${{ "{:,.0f}".format(kpi.market_value) if kpi.market_value < 1e6
+            else "${:,.2f}M".format(kpi.market_value / 1e6) }}
+      {% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      {% if kpi.market_value_year %}
+        {{ kpi.market_value_year }}
+        {% if kpi.market_value_source == 'preliminary' %}
+          <span class="badge-preliminary" style="font-size:9px; padding:1px 5px;">Pre</span>
+        {% else %}
+          <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+
+  {# Card 2: YoY Value Change #}
+  <div class="kpi-card">
+    <div class="kpi-label">YoY Value Change</div>
+    <div class="kpi-value {% if kpi.yoy_pct is defined %}{% if kpi.yoy_pct > 0 %}text-danger{% elif kpi.yoy_pct < 0 %}text-success{% endif %}{% endif %}">
+      {% if kpi.yoy_pct is defined %}
+        {{ "{:+.1f}%".format(kpi.yoy_pct) }}
+      {% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      {{ kpi.yoy_label if kpi.yoy_label is defined else "—" }}
+    </div>
+  </div>
+
+  {# Card 3: Assessment Ratio #}
+  <div class="kpi-card">
+    <div class="kpi-label">Assessment Ratio</div>
+    <div class="kpi-value">
+      {% if kpi.assessment_ratio is defined %}
+        {{ "{:.1f}%".format(kpi.assessment_ratio) }}
+      {% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      Assessed ÷ Market
+      {% if kpi.assessment_ratio_year is defined %}· {{ kpi.assessment_ratio_year }}{% endif %}
+    </div>
+  </div>
+
+  {# Card 4: Effective Tax Rate (or combined rate approx) #}
+  <div class="kpi-card">
+    <div class="kpi-label">Effective Tax Rate</div>
+    <div class="kpi-value">
+      {% if kpi.effective_tax_rate is defined %}
+        {{ "{:.4f}%".format(kpi.effective_tax_rate) }}
+      {% elif kpi.rate_approx is defined %}
+        {{ "{:.4f}%".format(kpi.rate_approx) }}
+      {% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      {% if kpi.effective_tax_rate is defined %}
+        2025 · Tax ÷ Market Value
+      {% elif kpi.rate_approx is defined %}
+        2025 Combined Rate
+        <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Est.</span>
+      {% else %}
+        No billing data
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endif %}
+
 {# ── Property header ─────────────────────────────────────────────────── #}
 {# Property type label derived from state_cd1 (A/B/C/D/E/F prefix) #}
 {% set _sc = (parcel.state_cd1 or "")|trim %}
@@ -253,12 +330,23 @@
 </div>{# /col-lg-8 — insight report #}
 </div>{# /row — top two-column section #}
 
+{# ── Overview narrative ───────────────────────────────────────────────────── #}
+{% if narrative %}
+<div class="section-hdr">Overview</div>
+<div class="overview-narrative">
+  {% for para in narrative %}
+  <p>{{ para }}</p>
+  {% endfor %}
+</div>
+{% endif %}
+
 {# ── Full-width section: all tables + metrics ──────────────────────────────── #}
 <div class="row mt-2">
 <div class="col-12">
 
-  {# ── 1. Historical Tax Rates by Entity (rate context first) ──────── #}
+  {# ── 1. Historical Tax Rates by Entity ───────────────────────────── #}
   {% if entity_detail %}
+  <div class="section-hdr">Rate Environment</div>
   <div class="card mb-4">
     <div class="card-header">
       Historical Tax Rates by Entity (Travis County)
@@ -380,7 +468,45 @@
   </div>
   {% endif %}
 
+  {# ── 1b. 2025 Tax Breakdown by Entity (donut chart) ───────────────── #}
+  {% set _ent_with_amounts = entity_detail | selectattr('amount_due') | list %}
+  {% if _ent_with_amounts %}
+  <div class="card mb-4">
+    <div class="card-header">2025 Tax Burden by Entity</div>
+    <div class="card-body d-flex flex-wrap align-items-center gap-4" style="padding:16px;">
+      <div style="max-width:220px; flex:0 0 220px;">
+        <canvas id="entityTaxDonut" height="220"></canvas>
+      </div>
+      <div style="flex:1; min-width:220px;">
+        <table class="table table-sm mb-0">
+          <thead class="table-light small text-muted text-uppercase">
+            <tr>
+              <th>Entity</th><th class="text-end">Amount Due</th><th class="text-end">Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% set _total_due = _ent_with_amounts | sum(attribute='amount_due') %}
+            {% for e in _ent_with_amounts %}
+            <tr>
+              <td>
+                <span class="entity-badge me-1">{{ e.entity_code }}</span>
+                <span style="font-size:12px; color:var(--text-2);">{{ e.entity_name or "" }}</span>
+              </td>
+              <td class="text-end">${{ "{:,.2f}".format(e.amount_due) }}</td>
+              <td class="text-end text-muted small">
+                {{ "{:.1f}%".format(e.amount_due / _total_due * 100) if _total_due else "—" }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}{# /ent_with_amounts #}
+
   {# ── 2. Unified Current & Preliminary Values ──────────────────────── #}
+  <div class="section-hdr">Value History <span class="section-hdr-badge">2021–2026</span></div>
   {% if current or current_2026 %}
   <div class="card mb-4">
     <div class="card-header">
@@ -750,7 +876,55 @@
   </div>
   {% endif %}
 
-  {# Value trend chart #}
+  {# ── Annual Trends (CoStar-style) ───────────────────────────────── #}
+  {% if annual_trends %}
+  <div class="card mb-4">
+    <div class="card-header d-flex align-items-center gap-2">
+      Annual Trends
+      <span class="badge-partial" style="font-size:9.5px; padding:2px 6px;">Tax billing 2025 only</span>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 annual-trends-table">
+          <thead class="table-light">
+            <tr>
+              <th style="min-width:140px;"></th>
+              <th class="text-end">12 Month</th>
+              <th class="text-end">Hist. Avg</th>
+              <th class="text-end trend-forecast">Forecast Avg</th>
+              <th class="text-end trend-peak">Peak</th>
+              <th class="text-end" style="font-size:10px !important; color:var(--text-3);">When</th>
+              <th class="text-end trend-trough">Trough</th>
+              <th class="text-end" style="font-size:10px !important; color:var(--text-3);">When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in annual_trends %}
+            <tr>
+              <td class="trend-row-label">{{ row.label }}</td>
+              <td class="text-end">{{ row.twelve_month }}</td>
+              <td class="text-end text-muted">{{ row.hist_avg }}</td>
+              <td class="text-end trend-forecast">{{ row.forecast_avg }}</td>
+              <td class="text-end trend-peak">{{ row.peak }}</td>
+              <td class="text-end text-muted small">{{ row.peak_when }}</td>
+              <td class="text-end trend-trough">{{ row.trough }}</td>
+              <td class="text-end text-muted small">{{ row.trough_when }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card-footer text-muted small">
+      12 Month = most recent available year-over-year figure (2025→2026 preliminary if loaded, else 2024→2025).
+      Hist. Avg = average across available AJR 2021–2026 data.
+      Forecast Avg = average of 5-year projection (estimated, not a recorded value).
+      Peak / Trough = highest / lowest observed in the dataset; "When" = year it occurred.
+    </div>
+  </div>
+  {% endif %}
+
+  {# Value trend chart — upgraded bar+line with forecast divider #}
   {% if history %}
   <div class="card mb-4">
     <div class="card-header">
@@ -763,6 +937,7 @@
   {% endif %}
 
   {# ── Phase 2: Risk Indicators ────────────────────────────────────── #}
+  <div class="section-hdr">Risk Indicators</div>
   {% if metrics_by_year %}
   <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -865,6 +1040,7 @@
   {% endif %}
 
   {# ── 5. Tax Projection ────────────────────────────────────────────── #}
+  <div class="section-hdr">6-Year Projection <span class="section-hdr-badge">Estimates Only</span></div>
   {% if projections %}
   <div class="card mb-4 projection-card">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -909,8 +1085,9 @@
   </div>
   {% endif %}
 
-  {# ── 6. County Benchmark Comparison ──────────────────────────────── #}
+  {# ── 6. Submarket Position ────────────────────────────────────────── #}
   {% if benchmark_by_year and bench_label %}
+  <div class="section-hdr">Submarket Position</div>
   {% set _b25 = benchmark_by_year.get(2025) %}
   {% set _r25 = history | selectattr('tax_year', 'equalto', 2025) | list | first | default(none) %}
   <div class="card mb-4" id="benchmarkCard">
@@ -1085,26 +1262,202 @@ const CHART_OPTS = {
   }
 };
 
+// ── Upgraded Value History Chart: bar + YoY% line + forecast divider ────────
+const projData       = {{ projections | tojson }};
+const histSorted     = historyData.slice().sort((a,b) => a.tax_year - b.tax_year);
+const histYears      = histSorted.map(r => r.tax_year);
+const projYears      = projData.map(p => p.year).filter(y => !histYears.includes(y));
+const allYears       = [...histYears, ...projYears];
+const nActual        = histYears.length;  // forecast divider index
+
+// Market value: history values then projected
+const mvData = allYears.map(y => {
+  const h = histSorted.find(r => r.tax_year === y);
+  if (h && h.market_value) return h.market_value;
+  const p = projData.find(p => p.year === y);
+  return p ? p.market : null;
+});
+
+// YoY % per year (null for first year)
+function getMv(y) {
+  const h = histSorted.find(r => r.tax_year === y);
+  if (h && h.market_value) return h.market_value;
+  const p = projData.find(p => p.year === y);
+  return p ? p.market : null;
+}
+const yoyData = allYears.map((y, i) => {
+  if (i === 0) return null;
+  const curr = getMv(y), prev = getMv(allYears[i-1]);
+  if (curr == null || prev == null || prev === 0) return null;
+  return parseFloat(((curr - prev) / prev * 100).toFixed(1));
+});
+
+// Colour scheme: actual history = solid brand blue, 2026 preliminary = lighter, forecast = very light
+const lastActualYear = histYears[histYears.length - 1];
+const barBg = allYears.map(y => {
+  if (projYears.includes(y)) return 'rgba(46,109,164,0.22)';
+  if (y === 2026) return 'rgba(148,176,218,0.55)';   // preliminary
+  return 'rgba(46,109,164,0.72)';
+});
+const barBorder = allYears.map(y => {
+  if (projYears.includes(y)) return 'rgba(46,109,164,0.45)';
+  if (y === 2026) return 'rgba(148,176,218,0.9)';
+  return 'rgba(46,109,164,1)';
+});
+const yoyColor = allYears.map(y => projYears.includes(y) ? 'rgba(192,86,64,0.4)' : '#C05640');
+
+// Custom plugin: vertical forecast divider line
+const forecastDivider = {
+  id: 'forecastDivider',
+  afterDraw(chart) {
+    if (projYears.length === 0 || nActual >= allYears.length) return;
+    const meta = chart.getDatasetMeta(0);
+    if (!meta.data[nActual]) return;
+    const fBar  = meta.data[nActual];
+    const pBar  = meta.data[nActual - 1];
+    const x     = (fBar.x + pBar.x) / 2;
+    const {ctx, chartArea: {top, bottom}} = chart;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+    ctx.lineWidth   = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(x, top - 6); ctx.lineTo(x, bottom + 6); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(0,0,0,0.30)';
+    ctx.font      = '10px Inter, sans-serif';
+    ctx.fillText('Forecast ›', x + 5, top + 14);
+    ctx.restore();
+  }
+};
+
 new Chart(document.getElementById('valueTrendChart'), {
-  type: 'line',
+  type: 'bar',
+  plugins: [forecastDivider],
   data: {
-    labels: years,
+    labels: allYears,
     datasets: [
-      { label: 'Market Value',   data: market,   borderColor: '#2E6DA4', backgroundColor: 'rgba(46,109,164,0.07)', tension: 0.3, fill: true, borderWidth: 1.75, pointRadius: 2, pointHoverRadius: 4, spanGaps: true },
-      { label: 'Assessed Value', data: assessed, borderColor: '#3B8A57', backgroundColor: 'transparent', borderDash: [5,4], tension: 0.3, borderWidth: 1.75, pointRadius: 2, spanGaps: true },
-      { label: 'Taxable Value',  data: taxable,  borderColor: '#B07830', backgroundColor: 'transparent', borderDash: [2,3], tension: 0.3, borderWidth: 1.75, pointRadius: 2, spanGaps: true },
+      {
+        label: 'Market Value',
+        data: mvData,
+        backgroundColor: barBg,
+        borderColor: barBorder,
+        borderWidth: 1,
+        yAxisID: 'y',
+        order: 2,
+      },
+      {
+        label: 'YoY Change %',
+        data: yoyData,
+        type: 'line',
+        borderColor: '#C05640',
+        backgroundColor: 'transparent',
+        pointBackgroundColor: yoyColor,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+        borderWidth: 1.75,
+        tension: 0.25,
+        spanGaps: true,
+        yAxisID: 'y2',
+        order: 1,
+        segment: {
+          borderDash: ctx => projYears.includes(allYears[ctx.p1DataIndex]) ? [4,3] : undefined,
+        },
+      }
     ]
   },
   options: {
-    ...CHART_OPTS,
-    plugins: { ...CHART_OPTS.plugins, tooltip: { ...CHART_OPTS.plugins.tooltip,
-      callbacks: { label: item => `${item.dataset.label}: $${item.parsed.y != null ? item.parsed.y.toLocaleString() : '—'}` }
-    }},
-    scales: { ...CHART_OPTS.scales, y: { ...CHART_OPTS.scales.y, ticks: { ...CHART_OPTS.scales.y.ticks,
-      callback: v => '$' + (v >= 1e6 ? (v/1e6).toFixed(1)+'M' : (v/1e3).toFixed(0)+'K')
-    }}}
+    responsive: true,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { position: 'bottom', labels: { boxWidth: 10, padding: 14, font: { size: 11, family: "'Inter', sans-serif" } } },
+      tooltip: {
+        backgroundColor: '#fff', borderColor: 'rgba(0,0,0,0.1)', borderWidth: 1,
+        titleColor: '#111116', bodyColor: '#505A5B', padding: 10,
+        callbacks: {
+          label: item => {
+            if (item.dataset.label === 'Market Value') {
+              const v = item.parsed.y;
+              const pre = projYears.includes(item.label) ? '~' : '';
+              return `${pre}Market Value: $${v >= 1e6 ? (v/1e6).toFixed(2)+'M' : Math.round(v).toLocaleString()}`;
+            }
+            const v = item.parsed.y;
+            return `YoY Change: ${v != null ? (v >= 0 ? '+' : '') + v.toFixed(1) + '%' : '—'}`;
+          },
+          afterBody: items => {
+            const yr = items[0]?.label;
+            if (yr == 2026) return ['⚡ 2026 Preliminary'];
+            if (projYears.includes(yr)) return ['📊 Forecast (estimated)'];
+            return [];
+          }
+        }
+      }
+    },
+    scales: {
+      y: {
+        position: 'left',
+        border: { display: false },
+        grid: { color: 'rgba(0,0,0,0.04)' },
+        ticks: { font: { size: 11 }, color: '#8F91A2',
+          callback: v => '$' + (v >= 1e6 ? (v/1e6).toFixed(1)+'M' : (v/1e3).toFixed(0)+'K')
+        }
+      },
+      y2: {
+        position: 'right',
+        border: { display: false },
+        grid: { display: false },
+        ticks: { font: { size: 11 }, color: '#C05640',
+          callback: v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%'
+        }
+      },
+      x: {
+        border: { display: false },
+        grid: { display: false },
+        ticks: { font: { size: 11 }, color: '#8F91A2', maxRotation: 0 }
+      }
+    }
   }
 });
+
+// ── Entity tax breakdown donut (2025 billing) ─────────────────────────────
+const entityAmounts = [
+  {% for e in entity_detail %}{% if e.amount_due and e.amount_due > 0 %}
+  { code: {{ e.entity_code | tojson }}, amount: {{ e.amount_due | float }}, name: {{ (e.entity_name or e.entity_code) | tojson }} },
+  {% endif %}{% endfor %}
+];
+const donutCtx = document.getElementById('entityTaxDonut');
+if (donutCtx && entityAmounts.length > 0) {
+  const donutPalette = [
+    '#2E6DA4','#C05640','#3B8A57','#7B5EA7','#B07830',
+    '#2E8A8A','#A04870','#5B7FA6','#6B8C3E','#8A5C3E',
+  ];
+  new Chart(donutCtx, {
+    type: 'doughnut',
+    data: {
+      labels: entityAmounts.map(e => e.code),
+      datasets: [{
+        data: entityAmounts.map(e => e.amount),
+        backgroundColor: entityAmounts.map((_, i) => donutPalette[i % donutPalette.length]),
+        borderColor: '#fff',
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 }, padding: 8 } },
+        tooltip: {
+          callbacks: {
+            label: item => {
+              const total = item.dataset.data.reduce((a,b) => a+b, 0);
+              const pct   = (item.parsed / total * 100).toFixed(1);
+              return `${entityAmounts[item.dataIndex].name}: $${item.parsed.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')} (${pct}%)`;
+            }
+          }
+        }
+      }
+    }
+  });
+}
 
 // ── Entity rate trend chart (compact) ─────────────────────────────────────
 {% if chart_entity_data %}

@@ -23,15 +23,30 @@
        class="btn {% if view == 'residential' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Residential
     </a>
+    <a href="/snapshot?view=multifamily"
+       class="btn {% if view == 'multifamily' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+      Multi-Family
+    </a>
     <a href="/snapshot?view=commercial"
        class="btn {% if view == 'commercial' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Commercial
+    </a>
+    <a href="/snapshot?view=land"
+       class="btn {% if view == 'land' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+      Land
+    </a>
+    <a href="/snapshot?view=agricultural"
+       class="btn {% if view == 'agricultural' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+      Agricultural
     </a>
   </div>
   <span class="text-muted ms-3" style="font-size:12px;">
     {% if view == 'overall' %}All taxable real property — single-family, multi-family, commercial, land, ag
     {% elif view == 'residential' %}A-prefix parcels (single-family, condos, townhomes)
-    {% else %}F/L-prefix parcels (commercial improved + commercial land/RE) — personal property supplements excluded
+    {% elif view == 'multifamily' %}B-prefix parcels (duplex, triplex, fourplex, large multifamily)
+    {% elif view == 'commercial' %}F/L-prefix parcels (commercial improved + commercial land/RE) — AJR* excluded
+    {% elif view == 'land' %}C-prefix parcels (vacant lots, tracts)
+    {% elif view == 'agricultural' %}D/E-prefix parcels (open-space ag, rural land)
     {% endif %}
   </span>
 </div>
@@ -93,7 +108,10 @@
     {% if rows %}
     <strong>
       {% if view == 'residential' %}Homeowner takeaway:
+      {% elif view == 'multifamily' %}Multifamily investor takeaway:
       {% elif view == 'commercial' %}Investor / developer takeaway:
+      {% elif view == 'land' %}Land investor takeaway:
+      {% elif view == 'agricultural' %}Agricultural landowner takeaway:
       {% else %}Investor takeaway:
       {% endif %}
     </strong>
@@ -133,6 +151,15 @@
       {% endif %}
       Note: 26 non-supplement commercial parcels had >500% increases (genuine TCAD reappraisals);
       the median is the reliable central-tendency statistic.
+
+    {% elif view in ('multifamily', 'land', 'agricultural') %}
+      Travis County <strong>{{ {'multifamily':'multi-family','land':'vacant land','agricultural':'agricultural'}[view] }}</strong>
+      values show a median change of
+      <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+        {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
+      </strong>
+      ({{ "{:,}".format(totals.n_total) }} parcels, {{ "{:,}".format(totals.n_up) }} up / {{ "{:,}".format(totals.n_down) }} down).
+      Total market value: ${{ "{:,.2f}B".format(totals.total_mv25_b) }} → ${{ "{:,.2f}B".format(totals.total_mv26_b) }}.
 
     {% else %} {# overall #}
       {% set res = rows | selectattr('ptype', 'equalto', 'Residential')  | list | first | default(none) %}
@@ -212,7 +239,10 @@
           <tr class="fw-bold table-light">
             <td>
               {% if view == 'residential' %}All Residential
+              {% elif view == 'multifamily' %}All Multi-Family
               {% elif view == 'commercial' %}All Commercial
+              {% elif view == 'land' %}All Land / Vacant
+              {% elif view == 'agricultural' %}All Agricultural
               {% else %}All Real Property
               {% endif %}
             </td>
@@ -244,6 +274,110 @@
     Red = increasing burden, green = decreasing.
   </div>
 </div>
+
+{# ── Annual Trends (county-level from county_benchmark) ────────────── #}
+{% if bench_trends %}
+{% set _bt_years = bench_trends | map(attribute='tax_year') | list | unique | sort | list %}
+{% if _bt_years | length >= 2 %}
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center gap-2">
+    Annual Trends — County Median
+    <span class="badge-partial" style="font-size:9.5px; padding:2px 6px;">Certified 2021–2025</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0 annual-trends-table">
+        <thead class="table-light">
+          <tr>
+            <th style="min-width:160px;"></th>
+            {% for yr in _bt_years %}
+            <th class="text-end">{{ yr }}{% if yr == 2025 %} <span class="badge-verified" style="font-size:8px; padding:1px 4px;">V</span>{% endif %}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+
+          {# Median Market Value row #}
+          <tr>
+            <td class="trend-row-label">Median Market Value</td>
+            {% for yr in _bt_years %}
+            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+            <td class="text-end">
+              {% if _row and _row.median_market_value %}
+                ${{ "{:,.0f}".format(_row.median_market_value) }}
+              {% else %}—{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+
+          {# P25 / P75 row #}
+          <tr>
+            <td class="trend-row-label text-muted fw-normal" style="font-size:11px;">P25 / P75</td>
+            {% for yr in _bt_years %}
+            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+            <td class="text-end text-muted small">
+              {% if _row and _row.p25_market_value and _row.p75_market_value %}
+                ${{ "{:,.0f}".format(_row.p25_market_value // 1000) }}K / ${{ "{:,.0f}".format(_row.p75_market_value // 1000) }}K
+              {% else %}—{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+
+          {# Median Assessment Ratio row #}
+          <tr>
+            <td class="trend-row-label">Median Asmt. Ratio</td>
+            {% for yr in _bt_years %}
+            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+            <td class="text-end">
+              {% if _row and _row.median_assessment_ratio is not none %}
+                {{ "{:.1f}%".format(_row.median_assessment_ratio * 100) }}
+              {% else %}—{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+
+          {# Median YoY Change row #}
+          <tr>
+            <td class="trend-row-label">Median YoY Change</td>
+            {% for yr in _bt_years %}
+            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+            <td class="text-end">
+              {% if _row and _row.median_yoy_value_change_pct is not none %}
+                <span class="{% if _row.median_yoy_value_change_pct > 0 %}text-danger{% elif _row.median_yoy_value_change_pct < 0 %}text-success{% endif %}">
+                  {{ "{:+.1f}%".format(_row.median_yoy_value_change_pct) }}
+                </span>
+              {% else %}<span class="text-muted small">base yr</span>{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+
+          {# Parcel Count row #}
+          <tr>
+            <td class="trend-row-label text-muted fw-normal" style="font-size:11px;">Parcel Count</td>
+            {% for yr in _bt_years %}
+            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+            <td class="text-end text-muted small">
+              {% if _row and _row.parcel_count %}
+                {{ "{:,}".format(_row.parcel_count) }}
+              {% else %}—{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card-footer text-muted small">
+    County-wide medians from <code>county_benchmark</code> table.
+    Assessment ratio = median(assessed ÷ market) across all parcels in this category.
+    YoY Change = median parcel-level year-over-year % change.
+    <span class="badge-partial" style="font-size:9.5px;">Partial</span> = AJR data.
+    <span class="badge-verified" style="font-size:9.5px;">V</span> = Certified 2025 data.
+  </div>
+</div>
+{% endif %}
+{% endif %}
 
 {# ── Chart ─────────────────────────────────────────────────────── #}
 <div class="card mb-4">
