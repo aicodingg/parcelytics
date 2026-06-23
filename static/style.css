@@ -213,10 +213,11 @@ main.container.is-frontdoor { max-width: var(--maxw); }
    NAVBAR — clean dark top bar, wordmark + clear labels + one primary CTA
    ════════════════════════════════════════════════════════════════════════════ */
 .navbar {
-  background: var(--ink) !important;
-  border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+  background: var(--surface) !important;       /* light, investment-grade Stripe-style bar */
+  border-bottom: 1px solid var(--border) !important;
+  box-shadow: var(--shadow-1) !important;
   padding: 0 var(--s-5) !important;
-  min-height: 56px;
+  min-height: 58px;
   align-items: center;
   position: sticky;
   top: 0;
@@ -224,49 +225,37 @@ main.container.is-frontdoor { max-width: var(--maxw); }
 }
 
 .navbar-brand {
-  font-size: 16px !important;
-  font-weight: var(--fw-bold) !important;
-  letter-spacing: -0.02em !important;
-  color: #fff !important;
-  gap: 9px;
+  gap: 10px;
   display: flex;
   align-items: center;
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
-/* Uploaded logo lockup: colourful map mark on a white chip + white wordmark.
-   The mark's navy outline would vanish on the dark navy nav, so it sits on a
-   small white chip to keep full fidelity; the wordmark uses the white-inverted
-   variant (the two-tone original is the light-background asset). */
-.navbar-brand .brand-chip {
-  display: inline-flex; align-items: center; justify-content: center;
-  background: #fff;
-  border-radius: var(--r-sm);
-  padding: 4px 5px;
-  flex-shrink: 0;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.18);
-}
-.navbar-brand .brand-mark-img { height: 24px; width: auto; display: block; }
-.navbar-brand .brand-wordmark-img { height: 17px; width: auto; display: block; }
+/* Uploaded logos in their original colours on the light bar — mark on
+   transparency (no chip), two-tone wordmark as supplied. */
+.navbar-brand .brand-mark-img { height: 30px; width: auto; display: block; }
+.navbar-brand .brand-wordmark-img { height: 19px; width: auto; display: block; }
 @media (max-width: 576px) {
-  .navbar-brand .brand-mark-img { height: 22px; }
-  .navbar-brand .brand-wordmark-img { height: 15px; }
+  .navbar-brand .brand-mark-img { height: 27px; }
+  .navbar-brand .brand-wordmark-img { height: 17px; }
 }
 
 .navbar .nav-link {
   font-size: 13.5px;
   font-weight: var(--fw-medium);
-  color: var(--text-on-dark-2) !important;
+  color: var(--text-2) !important;            /* crisp dark link text on light bar */
   padding: 0.4rem 0.75rem !important;
   border-radius: var(--r-sm);
   transition: color var(--t-fast), background var(--t-fast);
 }
 .navbar .nav-link:hover,
 .navbar .nav-link:focus {
-  color: #fff !important;
-  background: rgba(255,255,255,0.08);
+  color: var(--text) !important;
+  background: var(--surface-2);
 }
-.navbar .nav-link.active { color: #fff !important; }
+.navbar .nav-link.active { color: var(--accent) !important; font-weight: var(--fw-semibold); }
 
-/* Primary CTA living in the nav (e.g. Request access) */
+/* Primary CTA living in the nav — accent reserved for this */
 .navbar .nav-cta {
   background: var(--accent);
   color: #fff !important;
@@ -274,43 +263,58 @@ main.container.is-frontdoor { max-width: var(--maxw); }
   padding: 0.42rem 0.95rem !important;
   border-radius: var(--r-sm);
   margin-left: var(--s-2);
+  box-shadow: 0 1px 2px rgba(11,18,32,0.12);
   transition: background var(--t-fast), transform var(--t-fast);
 }
 .navbar .nav-cta:hover { background: var(--accent-hover); color: #fff !important; }
+.navbar .nav-cta.active { color: #fff !important; }
 
-/* Mobile collapse toggler */
+/* Mobile collapse toggler — dark icon for the light bar */
 .navbar-toggler {
-  border-color: rgba(255,255,255,0.25) !important;
+  border-color: var(--border-strong) !important;
   padding: 4px 8px;
 }
-.navbar-toggler:focus { box-shadow: 0 0 0 3px rgba(255,255,255,0.12) !important; }
+.navbar-toggler:focus { box-shadow: 0 0 0 3px var(--accent-ring) !important; }
+.navbar-toggler .navbar-toggler-icon {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='%2310182A' stroke-width='2.2' stroke-linecap='round' stroke-miterlimit='10' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+/* On mobile the collapsed menu drops as a light panel */
+@media (max-width: 991.98px) {
+  .navbar .navbar-collapse {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    margin: 0 calc(-1 * var(--s-5));
+    padding: 8px var(--s-5) 12px;
+  }
+  .navbar .nav-cta { display: inline-block; margin-left: 0; margin-top: 6px; }
+}
 
-/* Sector dropdown in dark navbar */
+/* Sector dropdown — light surface */
 .sector-dropdown {
-  background: var(--ink-2) !important;
-  border: 1px solid rgba(255,255,255,0.12) !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
   border-radius: var(--r-sm) !important;
   padding: 6px 0 !important;
   min-width: 200px;
   box-shadow: var(--shadow-3) !important;
 }
 .sector-dropdown .dropdown-item {
-  color: var(--text-on-dark-2) !important;
+  color: var(--text-2) !important;
   font-size: 13px;
   padding: 6px 16px !important;
   transition: background var(--t-fast), color var(--t-fast);
 }
 .sector-dropdown .dropdown-item:hover,
 .sector-dropdown .dropdown-item:focus {
-  background: rgba(255,255,255,0.10) !important;
-  color: #fff !important;
+  background: var(--surface-2) !important;
+  color: var(--accent) !important;
 }
 .sector-dropdown .dropdown-divider {
-  border-color: rgba(255,255,255,0.10) !important;
+  border-color: var(--border) !important;
   margin: 4px 0 !important;
 }
 .sector-dropdown .dropdown-header {
-  color: var(--text-on-dark-3) !important;
+  color: var(--text-3) !important;
   font-size: 10px !important;
   font-weight: var(--fw-bold) !important;
   letter-spacing: var(--track-caps) !important;
