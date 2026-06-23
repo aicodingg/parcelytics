@@ -2146,4 +2146,156 @@ if (rCtx) {
 })();
 </script>
 
+<script>
+// ── Post-Acquisition Tax Estimator (Task 1) — client logic ───────────────────
+// Calls GET /api/estimate_acq/<geo_id>?price&buyer and renders the result as an
+// explicit ESTIMATE (~ prefix, muted/estimate styling) — never as recorded fact.
+(function () {
+  const GEO_ID = {{ parcel.geo_id | tojson }};
+
+  const $ = id => document.getElementById(id);
+  const fmt0  = n => '$' + Math.round(n).toLocaleString('en-US');
+  const fmtSeller = n => (n === null || n === undefined) ? '<span class="na-cell">—</span>'
+                                                         : '$' + Number(n).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  // Signed delta, with tax-context colour (more tax = risk/red, less = relief/green)
+  function deltaHtml(d, approx) {
+    if (d === null || d === undefined) return '<span class="na-cell">—</span>';
+    const sign = d > 0 ? '+' : (d < 0 ? '−' : '');
+    const cls  = d > 0.5 ? 'text-danger' : (d < -0.5 ? 'text-success' : 'text-muted');
+    const pre  = approx ? '~' : '';
+    return `<span class="${cls}">${pre}${sign}$${Math.abs(Math.round(d)).toLocaleString('en-US')}</span>`;
+  }
+
+  function showError(msg) {
+    const err = $('acqError'); const res = $('acqResults'); const sp = $('acqSpinner');
+    if (sp)  sp.style.display  = 'none';
+    if (res) res.style.display = 'none';
+    if (err) { err.textContent = msg; err.style.display = 'block'; }
+  }
+
+  window.runEstimator = function () {
+    const priceEl = $('acqPrice');
+    const err = $('acqError'); const res = $('acqResults'); const sp = $('acqSpinner');
+    if (err) err.style.display = 'none';
+
+    const raw = (priceEl ? priceEl.value : '').replace(/[$,\s]/g, '');
+    if (!raw || !/^\d+$/.test(raw) || parseInt(raw, 10) <= 0) {
+      showError('Enter a purchase price as a positive whole number (e.g. 4500000).');
+      if (priceEl) priceEl.focus();
+      return;
+    }
+    const checked = document.querySelector('input[name="buyerType"]:checked');
+    const buyer = checked ? checked.value : 'non_owner_occupant';
+
+    if (sp) sp.style.display = 'inline';
+    const btn = $('acqRunBtn'); if (btn) btn.disabled = true;
+
+    fetch(`/api/estimate_acq/${encodeURIComponent(GEO_ID)}?price=${encodeURIComponent(raw)}&buyer=${encodeURIComponent(buyer)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (sp) sp.style.display = 'none';
+        if (btn) btn.disabled = false;
+        if (!d || !d.ok) { showError((d && d.error) ? d.error : 'Could not compute an estimate for this parcel.'); return; }
+        render(d, buyer);
+      })
+      .catch(() => {
+        if (sp) sp.style.display = 'none';
+        if (btn) btn.disabled = false;
+        showError('Estimator service is unavailable right now. Please try again.');
+      });
+  };
+
+  function render(d, buyer) {
+    // ── Summary chips ─────────────────────────────────────────────────────────
+    const isOwner = buyer === 'owner_occupant';
+    const chips = [];
+    chips.push(`
+      <div class="estimator-chip is-primary">
+        <div class="estimator-chip-label">${isOwner ? '~Est. Annual Tax · Yr 2+' : '~Est. Annual Tax'}</div>
+        <div class="estimator-chip-val">~${fmt0(d.estimated_total_tax)}</div>
+      </div>`);
+    chips.push(`
+      <div class="estimator-chip">
+        <div class="estimator-chip-label">~Δ vs Seller's Current Bill</div>
+        <div class="estimator-chip-val">${deltaHtml(d.delta, true)}</div>
+      </div>`);
+    if (isOwner && d.gap_year_tax != null) {
+      chips.push(`
+        <div class="estimator-chip">
+          <div class="estimator-chip-label">~Year 1 (Gap Year)</div>
+          <div class="estimator-chip-val">~${fmt0(d.gap_year_tax)}</div>
+        </div>`);
+    }
+    chips.push(`
+      <div class="estimator-chip">
+        <div class="estimator-chip-label">Base Value</div>
+        <div class="estimator-chip-val">${fmt0(d.base_value)}</div>
+      </div>`);
+    chips.push(`
+      <div class="estimator-chip">
+        <div class="estimator-chip-label">Seller's 2025 Bill</div>
+        <div class="estimator-chip-val">${fmt0(d.seller_total_tax)}</div>
+      </div>`);
+    $('acqSummary').innerHTML = chips.join('');
+
+    // ── Entity breakdown rows ─────────────────────────────────────────────────
+    const rows = (d.entity_breakdown || []).map(e => `
+      <tr>
+        <td>
+          <span class="entity-badge me-1">${e.entity_code}</span>
+          <span style="font-size:12px; color:var(--text-2);">${e.entity_name || ''}</span>
+          ${e.is_school && isOwner ? '<span class="badge-estimated ms-1" style="font-size:9px;">HS −$140k</span>' : ''}
+        </td>
+        <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">${Number(e.rate).toFixed(4)}%</td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(e.taxable)}</td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(e.est_tax)}</td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums;">${fmtSeller(e.seller_tax)}</td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums;">${deltaHtml(e.delta, true)}</td>
+      </tr>`).join('');
+    $('acqTbody').innerHTML = rows;
+
+    $('acqTfoot').innerHTML = `
+      <tr>
+        <td class="fw-bold">Total</td>
+        <td></td>
+        <td></td>
+        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text);">~${fmt0(d.estimated_total_tax)}</td>
+        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${fmtSeller(d.seller_total_tax)}</td>
+        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${deltaHtml(d.delta, true)}</td>
+      </tr>`;
+
+    // ── Notes (gap-year + circuit-breaker) as risk blocks ─────────────────────
+    let notes = '';
+    if (d.gap_year_note) {
+      notes += `<div class="risk-block info"><div class="risk-icon">i</div><div class="risk-desc">${d.gap_year_note}</div></div>`;
+    }
+    if (d.circuit_breaker_note) {
+      notes += `<div class="risk-block warn"><div class="risk-icon">!</div><div class="risk-desc">${d.circuit_breaker_note}</div></div>`;
+    }
+    $('acqNotes').innerHTML = notes;
+
+    // ── Assumptions ───────────────────────────────────────────────────────────
+    const asum = (d.assumptions || []).map(a => `<li style="margin-bottom:3px;">${a}</li>`).join('');
+    $('acqAssumptions').innerHTML = asum
+      ? `<div class="label-caps mb-1">Assumptions</div><ul class="text-muted" style="font-size:11.5px; line-height:1.5; padding-left:18px; margin-bottom:0;">${asum}</ul>`
+      : '';
+
+    $('acqResults').style.display = 'block';
+  }
+
+  // Convenience: Enter in the price field runs the estimate; toggling buyer
+  // re-runs only if a result is already shown.
+  document.addEventListener('DOMContentLoaded', function () {
+    const priceEl = document.getElementById('acqPrice');
+    if (priceEl) priceEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); window.runEstimator(); } });
+    document.querySelectorAll('input[name="buyerType"]').forEach(r =>
+      r.addEventListener('change', () => {
+        const res = document.getElementById('acqResults');
+        if (res && res.style.display === 'block') window.runEstimator();
+      })
+    );
+  });
+})();
+</script>
+
 {% endblock %}
