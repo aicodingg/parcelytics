@@ -600,45 +600,41 @@
   {% set _ent_sorted = entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
   {% if _ent_sorted %}
   {% set _total_tax_bar = _ent_sorted | sum(attribute='amount_due') | float %}
-  <div class="card mb-3">
+  <div class="card mb-4">
     <div class="card-header">2025 Tax Burden — Entity Split</div>
     <div class="card-body pt-3 pb-2">
       {% for e in _ent_sorted %}
         {% if e.amount_due and _total_tax_bar > 0 %}
         {% set _pct = e.amount_due | float / _total_tax_bar * 100 %}
-        <div class="d-flex align-items-center gap-2 mb-2" style="font-size:12px;">
-          <span style="min-width:70px; color:var(--text-3); font-size:11px; white-space:nowrap;">{{ e.entity_code }}</span>
-          <div style="flex:1; background:var(--surface-2); border-radius:3px; height:10px; overflow:hidden;">
-            <div style="width:{{ '{:.1f}'.format(_pct) }}%; background:var(--accent); height:100%; border-radius:3px; transition:width 0.3s;"></div>
-          </div>
-          <span style="min-width:48px; text-align:right; font-family:var(--font-mono); font-size:11px; color:var(--text-3);">{{ '{:.1f}'.format(_pct) }}%</span>
-          <span style="min-width:88px; text-align:right; font-family:var(--font-mono); font-size:11.5px; font-weight:600;">${{ '{:,.0f}'.format(e.amount_due | float) }}</span>
+        <div class="entity-bar-row">
+          <span class="entity-bar-code">{{ e.entity_code }}</span>
+          <div class="entity-bar-track"><div class="entity-bar-fill" style="width:{{ '{:.1f}'.format(_pct) }}%;"></div></div>
+          <span class="entity-bar-pct">{{ '{:.1f}'.format(_pct) }}%</span>
+          <span class="entity-bar-amt">${{ '{:,.0f}'.format(e.amount_due | float) }}</span>
         </div>
         {% endif %}
       {% endfor %}
-      <div class="d-flex justify-content-end mt-1 pt-1" style="border-top:1px solid var(--border); font-family:var(--font-mono); font-size:12px; font-weight:700;">
+      <div class="d-flex justify-content-end mt-2 pt-2" style="border-top:1px solid var(--border-strong); font-family:var(--font-mono); font-size:12.5px; font-weight:700;">
         Total: ${{ '{:,.0f}'.format(_total_tax_bar) }}
       </div>
     </div>
+    <div class="card-footer">2025 billing by taxing entity, ranked by share of total. From Travis County Tax Office open data.</div>
   </div>
   {% endif %}
 
-  {# ── 1b. 2025 Tax Breakdown by Entity (donut chart) ───────────────── #}
+  {# ── 1b. 2025 Tax by Entity — detail table (donut removed; the ranked
+         horizontal bar above is the single visual per design brief) ──────── #}
   {% set _ent_with_amounts = entity_detail | selectattr('amount_due') | list %}
   {% if _ent_with_amounts %}
   <div class="card mb-4">
-    <div class="card-header">2025 Tax Burden by Entity</div>
-
-    <div class="card-body d-flex flex-wrap align-items-center gap-4" style="padding:16px;">
-      <div style="max-width:220px; flex:0 0 220px;">
-        <canvas id="entityTaxDonut" height="220"></canvas>
-      </div>
-      <div style="flex:1; min-width:220px;">
-        <table class="table table-sm mb-0">
-          <thead class="table-light small text-muted text-uppercase">
+    <div class="card-header">2025 Tax by Entity — Rate, Amount &amp; Share</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table mb-0">
+          <thead>
             <tr>
               <th>Entity</th>
-              <th class="text-end" style="font-variant-numeric:tabular-nums;">Tax Rate</th>
+              <th class="text-end">Tax Rate</th>
               <th class="text-end">Amount Due</th>
               <th class="text-end">Share</th>
             </tr>
@@ -651,11 +647,11 @@
                 <span class="entity-badge me-1">{{ e.entity_code }}</span>
                 <span style="font-size:12px; color:var(--text-2);">{{ e.entity_name or "" }}</span>
               </td>
-              <td class="text-end text-muted small" style="font-variant-numeric:tabular-nums;">
+              <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">
                 {{ "{:.4f}%".format(e.rate) if e.rate else "—" }}
               </td>
-              <td class="text-end">${{ "{:,.2f}".format(e.amount_due) }}</td>
-              <td class="text-end text-muted small">
+              <td class="text-end" style="font-variant-numeric:tabular-nums;">${{ "{:,.2f}".format(e.amount_due) }}</td>
+              <td class="text-end text-muted">
                 {{ "{:.1f}%".format(e.amount_due / _total_due * 100) if _total_due else "—" }}
               </td>
             </tr>
@@ -1671,46 +1667,8 @@ new Chart(document.getElementById('valueTrendChart'), {
   }
 });
 
-// ── Entity tax breakdown donut (2025 billing) ─────────────────────────────
-const entityAmounts = [
-  {% for e in entity_detail %}{% if e.amount_due and e.amount_due > 0 %}
-  { code: {{ e.entity_code | tojson }}, amount: {{ e.amount_due | float }}, name: {{ (e.entity_name or e.entity_code) | tojson }} },
-  {% endif %}{% endfor %}
-];
-const donutCtx = document.getElementById('entityTaxDonut');
-if (donutCtx && entityAmounts.length > 0) {
-  const donutPalette = [
-    '#2E6DA4','#C05640','#3B8A57','#7B5EA7','#B07830',
-    '#2E8A8A','#A04870','#5B7FA6','#6B8C3E','#8A5C3E',
-  ];
-  new Chart(donutCtx, {
-    type: 'doughnut',
-    data: {
-      labels: entityAmounts.map(e => e.code),
-      datasets: [{
-        data: entityAmounts.map(e => e.amount),
-        backgroundColor: entityAmounts.map((_, i) => donutPalette[i % donutPalette.length]),
-        borderColor: '#fff',
-        borderWidth: 2,
-      }]
-    },
-    options: {
-      responsive: false,
-      plugins: {
-        legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 }, padding: 8 } },
-        tooltip: {
-          callbacks: {
-            label: item => {
-              const total = item.dataset.data.reduce((a,b) => a+b, 0);
-              const pct   = (item.parsed / total * 100).toFixed(1);
-              return `${entityAmounts[item.dataIndex].name}: $${item.parsed.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')} (${pct}%)`;
-            }
-          }
-        }
-      }
-    }
-  });
-}
+// ── Entity tax breakdown donut removed per design brief — the ranked
+//    horizontal bar (above) is the single 2025 burden visual. ──────────────
 
 // ── Entity rate trend chart (compact) ─────────────────────────────────────
 {% if chart_entity_data %}
