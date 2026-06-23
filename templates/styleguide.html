@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% block title %}Style Guide — Parcelytics{% endblock %}
+
+{% block content %}
+<div class="mb-5">
+  <div class="fd-kicker">Design System</div>
+  <h1 class="page-title" style="font-size:var(--fs-2xl);">Parcelytics Style Guide</h1>
+  <p class="fd-lead">One source of truth for color, type, spacing, radius, elevation, motion, and every shared component. Investment-grade craft, data-integrity as the brand.</p>
+</div>
+
+{# ── Color ──────────────────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Color</div>
+
+  <p class="label-caps mb-2">Ink &amp; canvas</p>
+  <div class="sg-row mb-4">
+    {% for name, val in [('--ink','#0B1220'),('--ink-2','#10182A'),('--bg','#F7F8FA'),('--surface','#FFFFFF'),('--surface-2','#F4F5F8'),('--border-strong','#CBD0DC')] %}
+    <div>
+      <div class="sg-swatch" style="background:{{ val }};"></div>
+      <div class="sg-swatch-name">{{ name }}</div>
+      <div class="sg-swatch-label">{{ val }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <p class="label-caps mb-2">Accent — single confident indigo, reserved for CTA + signal</p>
+  <div class="sg-row mb-4">
+    {% for name, val in [('--accent','#4263EB'),('--accent-hover','#3550C8'),('--accent-active','#2C44AB'),('--accent-soft','#EEF1FE')] %}
+    <div>
+      <div class="sg-swatch" style="background:{{ val }};"></div>
+      <div class="sg-swatch-name">{{ name }}</div>
+      <div class="sg-swatch-label">{{ val }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <p class="label-caps mb-2">Functional signal — data meaning only, never decoration</p>
+  <div class="sg-row">
+    {% for name, val in [('--up (risk)','#D92D20'),('--down (relief)','#067647'),('--partial','#B54708'),('--estimated','#6938EF'),('--preliminary','#175CD3'),('--na','#98A0AE')] %}
+    <div>
+      <div class="sg-swatch" style="background:{{ val }};"></div>
+      <div class="sg-swatch-name">{{ name }}</div>
+      <div class="sg-swatch-label">{{ val }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{# ── Type scale ─────────────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Type scale <span class="section-hdr-badge">Inter + JetBrains Mono</span></div>
+  <div class="sg-card">
+    <div class="sg-type-row"><span class="sg-type-meta">56 / 800 display</span><span style="font-size:var(--fs-3xl); font-weight:800; letter-spacing:-0.03em; line-height:1;">Verified intelligence</span></div>
+    <div class="sg-type-row"><span class="sg-type-meta">40 / 800</span><span style="font-size:var(--fs-2xl); font-weight:800; letter-spacing:-0.03em;">Section headline</span></div>
+    <div class="sg-type-row"><span class="sg-type-meta">28 / 700</span><span style="font-size:var(--fs-xl); font-weight:700; letter-spacing:-0.018em;">Page title</span></div>
+    <div class="sg-type-row"><span class="sg-type-meta">20 / 700</span><span style="font-size:var(--fs-lg); font-weight:700;">Card heading</span></div>
+    <div class="sg-type-row"><span class="sg-type-meta">16 / 600</span><span style="font-size:var(--fs-md); font-weight:600;">Lead / subhead</span></div>
+    <div class="sg-type-row"><span class="sg-type-meta">14 / 400 body</span><span style="font-size:var(--fs-base);">Body copy — the workhorse. Precise, plain-language microcopy that explains tax concepts without jargon.</span></div>
+    <div class="sg-type-row"><span class="sg-type-meta">13 / 400</span><span style="font-size:var(--fs-sm); color:var(--text-2);">Secondary / table body</span></div>
+    <div class="sg-type-row"><span class="sg-type-meta">11 / 700 caps</span><span class="label-caps">Small-caps label</span></div>
+    <div class="sg-type-row" style="border-bottom:none;"><span class="sg-type-meta">mono / tabnum</span><span style="font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-weight:700;">$4,336,640 · 2.0465%</span></div>
+  </div>
+</section>
+
+{# ── Spacing & radius ───────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Spacing &amp; radius</div>
+  <div class="sg-card">
+    <p class="label-caps mb-3">8px-based scale</p>
+    <div class="d-flex align-items-end gap-3 flex-wrap mb-4">
+      {% for n, px in [('1',4),('2',8),('3',12),('4',16),('5',24),('6',32),('7',48),('8',64)] %}
+      <div class="text-center">
+        <div style="width:{{ px }}px; height:{{ px }}px; background:var(--accent); border-radius:3px;"></div>
+        <div class="sg-swatch-label">s-{{ n }}<br>{{ px }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="label-caps mb-3">Radius</p>
+    <div class="d-flex align-items-end gap-4 flex-wrap">
+      {% for name, px in [('xs',4),('sm',6),('base',10),('lg',14),('pill',999)] %}
+      <div class="text-center">
+        <div style="width:64px; height:48px; background:var(--surface-3); border:1px solid var(--border-strong); border-radius:{{ px }}px;"></div>
+        <div class="sg-swatch-label">--r-{{ name }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+{# ── Elevation ──────────────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Elevation</div>
+  <div class="sg-row" style="grid-template-columns:repeat(3,1fr);">
+    {% for name, sh in [('shadow-1','var(--shadow-1)'),('shadow-2','var(--shadow-2)'),('shadow-3','var(--shadow-3)')] %}
+    <div style="background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:24px; box-shadow:{{ sh }};">
+      <div class="sg-swatch-name">--{{ name }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{# ── Buttons ────────────────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Buttons</div>
+  <div class="sg-card d-flex flex-wrap align-items-center gap-3">
+    <button class="btn btn-primary">Primary — accent</button>
+    <button class="btn btn-dark">Ink action</button>
+    <button class="btn btn-outline-secondary">Secondary</button>
+    <button class="btn-cta">Estimate my taxes after purchase →</button>
+    <button class="btn btn-primary btn-sm">Small primary</button>
+    <button class="btn btn-outline-secondary btn-sm">Small secondary</button>
+  </div>
+</section>
+
+{# ── Confidence system ──────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Confidence system <span class="section-hdr-badge">data-integrity signature</span></div>
+  <div class="sg-card">
+    <p class="fd-lead mb-3" style="font-size:var(--fs-sm);">Every figure carries a visible confidence level. This is the moat — honesty, made premium.</p>
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      <span class="badge-verified">Verified</span>
+      <span class="badge-preliminary">Preliminary</span>
+      <span class="badge-partial">Partial</span>
+      <span class="badge-estimated">Estimated</span>
+      <span class="badge-na">Not Available</span>
+      <span class="estimates-badge">Estimate · Not a prediction</span>
+      <span class="badge-delinquent">Delinquent</span>
+      <span class="entity-badge">AISD</span>
+    </div>
+    <p class="label-caps mb-2">"Not Available" is an explicit styled state — never blank, never zero</p>
+    <table class="table" style="max-width:420px;">
+      <tbody>
+        <tr><td>2025 Market Value</td><td class="text-end">$4,336,640 <span class="badge-verified" style="font-size:9px;">Verified</span></td></tr>
+        <tr><td>2021–24 Billing</td><td class="text-end"><span class="na-cell">Not Available</span></td></tr>
+        <tr><td>2030 Projection</td><td class="text-end" style="font-style:italic; color:var(--text-2);">~$5,900,000 <span class="badge-estimated" style="font-size:9px;">Estimated</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{# ── KPI cards ──────────────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">KPI headline cards</div>
+  <div class="kpi-row">
+    <div class="kpi-card"><div class="kpi-label">Market Value</div><div class="kpi-value">$4,336,640</div><div class="kpi-sub">2026 <span class="badge-preliminary" style="font-size:9px;">Pre</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">YoY Value Change</div><div class="kpi-value text-danger">+0.1%</div><div class="kpi-sub">2025 → 2026</div></div>
+    <div class="kpi-card"><div class="kpi-label">Assessment Ratio</div><div class="kpi-value">100.0%</div><div class="kpi-sub">Assessed ÷ Market · 2025</div></div>
+    <div class="kpi-card"><div class="kpi-label">Effective Tax Rate</div><div class="kpi-value">2.0500%</div><div class="kpi-sub">2025 · Tax ÷ Market Value</div></div>
+  </div>
+</section>
+
+{# ── Tables ─────────────────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Table craft</div>
+  <div class="card">
+    <div class="card-header">Historical Tax Rates by Entity</div>
+    <div class="card-body p-0">
+      <table class="table table-hover mb-0">
+        <thead><tr><th>Entity</th><th class="text-end">2024 Rate</th><th class="text-end">2025 Rate</th><th class="text-end">YoY</th><th class="text-end">Amount Due</th></tr></thead>
+        <tbody>
+          <tr><td><span class="entity-badge me-1">AISD</span> Austin ISD</td><td class="text-end">0.8595%</td><td class="text-end">0.8540%</td><td class="text-end text-success">−0.0055%</td><td class="text-end">$37,021.40</td></tr>
+          <tr><td><span class="entity-badge me-1">CITY</span> City of Austin</td><td class="text-end">0.4458%</td><td class="text-end">0.4627%</td><td class="text-end text-danger">+0.0169%</td><td class="text-end">$20,061.18</td></tr>
+          <tr><td><span class="entity-badge me-1">COUNTY</span> Travis County</td><td class="text-end">0.3044%</td><td class="text-end">0.2980%</td><td class="text-end text-success">−0.0064%</td><td class="text-end">$12,923.39</td></tr>
+        </tbody>
+        <tfoot><tr class="combined-rate-row"><td>Combined</td><td class="text-end">1.6097%</td><td class="text-end">2.0465%</td><td class="text-end text-danger">+0.0647%</td><td class="text-end">$88,655.00</td></tr></tfoot>
+      </table>
+    </div>
+    <div class="card-footer">Rates from Travis County tax rate records. Billing from Travis County Tax Office open data.</div>
+  </div>
+</section>
+
+{# ── Entity bar ─────────────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Entity split — horizontal bar</div>
+  <div class="card"><div class="card-header">2025 Tax Burden — Entity Split</div><div class="card-body pt-3 pb-2">
+    {% for code, pct, amt in [('AISD',41.8,37021),('CITY',22.6,20061),('COUNTY',14.6,12923),('ACC',6.3,5544),('HEALTH',5.1,4520)] %}
+    <div class="entity-bar-row">
+      <span class="entity-bar-code">{{ code }}</span>
+      <div class="entity-bar-track"><div class="entity-bar-fill" style="width:{{ pct }}%;"></div></div>
+      <span class="entity-bar-pct">{{ pct }}%</span>
+      <span class="entity-bar-amt">${{ "{:,}".format(amt) }}</span>
+    </div>
+    {% endfor %}
+  </div></div>
+</section>
+
+{# ── Forms ──────────────────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Forms</div>
+  <div class="sg-card" style="max-width:520px;">
+    <label class="form-label" for="sgPrice">Purchase Price</label>
+    <div class="input-group input-group-sm mb-3" style="max-width:240px;">
+      <span class="input-group-text">$</span>
+      <input type="text" id="sgPrice" class="form-control" value="4,332,066" style="font-family:var(--font-mono);">
+    </div>
+    <label class="form-label">Search field</label>
+    <div class="search-input-wrap" style="max-width:480px;">
+      <input class="search-input" placeholder="Parcel ID or street address">
+      <button class="search-btn">Search</button>
+    </div>
+  </div>
+</section>
+
+{# ── Risk blocks ────────────────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Risk callouts</div>
+  <div class="sg-card">
+    <div class="risk-block warn"><div class="risk-icon">!</div><div><div class="risk-title">Homestead cap may reset at sale</div><div class="risk-desc">Buyer should verify which exemptions carry and which reset on transfer.</div></div></div>
+    <div class="risk-block error"><div class="risk-icon">×</div><div><div class="risk-title">Delinquent taxes on record</div><div class="risk-desc">Unpaid taxes become a lien and transfer to the buyer at closing unless negotiated.</div></div></div>
+    <div class="risk-block info"><div class="risk-icon">i</div><div><div class="risk-title">2026 values are preliminary</div><div class="risk-desc">Subject to change at certification (July 25, 2026).</div></div></div>
+    <div class="risk-block ok"><div class="risk-icon">✓</div><div><div class="risk-title">No delinquent taxes</div><div class="risk-desc">All recorded billing is paid in full.</div></div></div>
+  </div>
+</section>
+
+{# ── Projection treatment ───────────────────────────────────────────────── #}
+<section class="sg-section">
+  <div class="section-hdr">Projection treatment <span class="section-hdr-badge">Estimates Only</span></div>
+  <div class="card projection-card">
+    <div class="card-header d-flex justify-content-between align-items-center"><span>6-Year Projection</span><span class="estimates-badge">Estimates Only</span></div>
+    <div class="card-body p-0">
+      <table class="table mb-0">
+        <thead><tr><th>Year</th><th class="text-end">Projected Market Value</th><th class="text-end">Projected Tax</th></tr></thead>
+        <tbody>
+          <tr class="projection-row"><td class="proj-year">2027</td><td class="text-end">~$4,550,000</td><td class="text-end">~$93,100</td></tr>
+          <tr class="projection-row"><td class="proj-year">2028</td><td class="text-end">~$4,780,000</td><td class="text-end">~$97,800</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card-footer"><strong>These are illustrative scenarios, not statistical confidence ranges.</strong> Dashed border, muted italic figures, and the ~ prefix all signal estimate.</div>
+  </div>
+</section>
+
+<p class="text-muted small mt-5 mb-4">Parcelytics design system · light app + dark front door · accent {{ "#4263EB" }} · review this page before restyling production surfaces.</p>
+{% endblock %}

@@ -1824,5 +1824,13 @@ def about():
     return render_template("about.html")
 
 
+@app.route("/styleguide")
+def styleguide():
+    """Design-system reference: renders every token and component.
+    Single source of truth for the visual language — review here before
+    restyling real pages. Not linked in primary nav."""
+    return render_template("styleguide.html")
+
+
 if __name__ == "__main__":
     app.run(debug=config.DEBUG, port=config.PORT)
