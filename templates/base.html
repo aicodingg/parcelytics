@@ -15,9 +15,11 @@
 
 <nav class="navbar navbar-expand-lg">
   <div class="container-fluid px-0">
-    <a class="navbar-brand" href="/">
-      <span class="brand-mark">P</span>
-      <span class="brand-word">Parcel<b>ytics</b></span>
+    <a class="navbar-brand" href="/" aria-label="Parcelytics home">
+      <span class="brand-chip">
+        <img src="{{ url_for('static', filename='parcelytics-mark.png') }}" alt="" class="brand-mark-img">
+      </span>
+      <img src="{{ url_for('static', filename='parcelytics-wordmark-white.png') }}" alt="Parcelytics" class="brand-wordmark-img">
     </a>
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse"

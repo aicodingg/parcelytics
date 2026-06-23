@@ -232,18 +232,24 @@ main.container.is-frontdoor { max-width: var(--maxw); }
   display: flex;
   align-items: center;
 }
-.navbar-brand .brand-mark {
-  width: 22px; height: 22px;
-  border-radius: var(--r-xs);
-  background: var(--accent);
+/* Uploaded logo lockup: colourful map mark on a white chip + white wordmark.
+   The mark's navy outline would vanish on the dark navy nav, so it sits on a
+   small white chip to keep full fidelity; the wordmark uses the white-inverted
+   variant (the two-tone original is the light-background asset). */
+.navbar-brand .brand-chip {
   display: inline-flex; align-items: center; justify-content: center;
-  color: #fff; font-weight: var(--fw-black); font-size: 13px;
-  letter-spacing: -0.04em;
+  background: #fff;
+  border-radius: var(--r-sm);
+  padding: 4px 5px;
   flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.18);
 }
-.navbar-brand img { border-radius: var(--r-xs) !important; }
-.navbar-brand .brand-word { color: #fff; }
-.navbar-brand .brand-word b { color: var(--accent); font-weight: var(--fw-bold); }
+.navbar-brand .brand-mark-img { height: 24px; width: auto; display: block; }
+.navbar-brand .brand-wordmark-img { height: 17px; width: auto; display: block; }
+@media (max-width: 576px) {
+  .navbar-brand .brand-mark-img { height: 22px; }
+  .navbar-brand .brand-wordmark-img { height: 15px; }
+}
 
 .navbar .nav-link {
   font-size: 13.5px;
