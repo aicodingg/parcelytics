@@ -1,5 +1,194 @@
 {% extends "base.html" %}
-{% block title %}Parcel Search — Parcelytics{% endblock %}
+{% block title %}Parcelytics — Verified Travis County Property-Tax Intelligence{% endblock %}
+{% block container_class %} is-frontdoor{% endblock %}
+
+{% block content %}
+
+{# ══ HERO ══════════════════════════════════════════════════════════════════ #}
+<section class="hero">
+  <div class="hero-inner">
+    <div class="row align-items-center g-5">
+      <div class="col-lg-7">
+        <span class="hero-eyebrow"><span class="dot"></span> Verified government data — honestly labeled</span>
+        <h1>Verified Travis County <span class="accent">property-tax intelligence</span>, sourced directly from government records.</h1>
+        <p class="hero-sub">
+          Certified TCAD appraisals and Travis County Tax Office billing — parcel-level values,
+          tax history, benchmarks, and post-acquisition estimates. Every figure traceable to its
+          source, with a visible confidence level. No third-party aggregators. No guesses dressed as facts.
+        </p>
+
+        {# Search — same behavior + typeahead as before #}
+        <form method="get" action="/" class="hero-search">
+          <div class="search-input-wrap">
+            <input
+              type="text" name="q"
+              class="search-input{% if error %} is-error{% endif %}"
+              placeholder="Search a parcel ID or street address — e.g. 1201 S Lamar"
+              value="{{ q or '' }}" autocomplete="off" spellcheck="false">
+            <button class="search-btn" type="submit">Search</button>
+          </div>
+          <div class="ta-wrap" id="addrTaWrap" style="display:none;">
+            <div class="ta-list" id="addrTaList"></div>
+          </div>
+        </form>
+        <div class="hero-search-hint">Accepts 10-digit TCAD account, 14-digit Tax Office account, prop_id, or street address.</div>
+
+        {% if addr_matches %}
+        <div class="card mt-3" style="text-align:left;">
+          <div class="card-header">{{ addr_matches|length }} matching parcel{{ 's' if addr_matches|length != 1 }} — select one</div>
+          <ul class="list-group list-group-flush mb-0" style="font-size:13px;">
+            {% for m in addr_matches %}
+            <li class="list-group-item py-2 px-3">
+              <a href="/parcel/{{ m.geo_id }}" class="text-decoration-none d-flex justify-content-between align-items-center">
+                <span>{{ m.situs_address or '(address unknown)' }}</span>
+                <span class="text-muted ms-3" style="font-family:var(--font-mono); font-size:11.5px; white-space:nowrap;">{{ m.geo_id }}</span>
+              </a>
+              {% if m.owner_name %}<div class="text-muted" style="font-size:11px; margin-top:1px;">{{ m.owner_name }}</div>{% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        {% if error %}<div class="search-error-block mt-3" style="text-align:left;">{{ error }}</div>{% endif %}
+      </div>
+
+      {# Product visual — a credible data motif, not stock art #}
+      <div class="col-lg-5 d-none d-lg-block">
+        <div class="product-frame">
+          <div class="pf-bar"><span class="pf-dot"></span><span class="pf-dot"></span><span class="pf-dot"></span>
+            <span style="margin-left:8px; font-size:11px; color:var(--text-on-dark-3); font-family:var(--font-mono);">parcelytics.app/parcel/0100030105</span>
+          </div>
+          <div style="background:var(--surface); padding:18px;">
+            <div style="font-size:15px; font-weight:700; color:var(--ink);">1201 S Lamar Blvd</div>
+            <div class="confidence-cluster mt-1 mb-3">
+              <span class="badge-verified" style="font-size:10px;">2025 Verified</span>
+              <span class="badge-preliminary" style="font-size:10px;">2026 Preliminary</span>
+            </div>
+            <div class="kpi-row" style="grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
+              <div class="kpi-card" style="padding:11px 13px;"><div class="kpi-label">Market Value</div><div class="kpi-value" style="font-size:1.15rem;">$4,336,640</div></div>
+              <div class="kpi-card" style="padding:11px 13px;"><div class="kpi-label">Eff. Tax Rate</div><div class="kpi-value" style="font-size:1.15rem;">2.0465%</div></div>
+            </div>
+            <div class="entity-bar-row" style="margin-bottom:7px;"><span class="entity-bar-code">AISD</span><div class="entity-bar-track"><div class="entity-bar-fill" style="width:42%;"></div></div><span class="entity-bar-amt">$37,021</span></div>
+            <div class="entity-bar-row" style="margin-bottom:7px;"><span class="entity-bar-code">CITY</span><div class="entity-bar-track"><div class="entity-bar-fill" style="width:23%;"></div></div><span class="entity-bar-amt">$20,061</span></div>
+            <div class="entity-bar-row" style="margin-bottom:0;"><span class="entity-bar-code">COUNTY</span><div class="entity-bar-track"><div class="entity-bar-fill" style="width:15%;"></div></div><span class="entity-bar-amt">$12,923</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# Trust strip #}
+    <div class="trust-strip">
+      <div class="trust-stat"><div class="num">508K+</div><div class="lbl">Travis County parcels</div></div>
+      <div class="trust-stat"><div class="num">1990</div><div class="lbl">Tax rates tracked since</div></div>
+      <div class="trust-stat"><div class="num">2021–26</div><div class="lbl">Certified + preliminary appraisals</div></div>
+      <div class="trust-stat"><div class="num">2</div><div class="lbl">Government sources, zero aggregators</div></div>
+    </div>
+  </div>
+</section>
+
+{# ══ HOW IT'S DIFFERENT ════════════════════════════════════════════════════ #}
+<section class="fd-section">
+  <div class="fd-kicker">What makes it different</div>
+  <h2 class="fd-h2">Built on verified records, not estimates dressed as facts.</h2>
+  <p class="fd-lead mb-5">The data integrity is the product. Three principles run through every screen.</p>
+  <div class="row g-4">
+    <div class="col-md-4">
+      <div class="fd-card">
+        <div class="fd-card-num">1</div>
+        <h3>Directly sourced</h3>
+        <p>Certified TCAD appraisal rolls and Travis County Tax Office billing — loaded straight from official government exports. No third-party aggregators sitting between you and the record.</p>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="fd-card">
+        <div class="fd-card-num">2</div>
+        <h3>Confidence on every figure</h3>
+        <p>Each number carries a visible label — Verified, Preliminary, Partial, Estimated, or Not&nbsp;Available. We never blend a guess with a recorded value, and missing data is shown as missing.</p>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="fd-card">
+        <div class="fd-card-num">3</div>
+        <h3>Traceable &amp; dated</h3>
+        <p>Every value points back to its source and as-of date. Estimates are visually distinct — dashed, muted, prefixed with ~ — so a projection is never mistaken for a recorded fact.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# ══ TRUST PANEL (dark) ════════════════════════════════════════════════════ #}
+<section class="fd-section-tight">
+  <div class="fd-trust-panel">
+    <div class="row g-5 align-items-center">
+      <div class="col-lg-6">
+        <div class="fd-kicker">Provenance</div>
+        <h2 class="fd-h2" style="color:#fff;">Certified data, shown proudly.</h2>
+        <p class="fd-lead" style="color:var(--text-on-dark-2);">Two official sources. Both named on every figure, with coverage and as-of dates stated plainly.</p>
+      </div>
+      <div class="col-lg-6">
+        <div class="provenance-row">
+          <span class="provenance-check">✓</span>
+          <div><div class="src">Travis Central Appraisal District (TCAD)</div><div class="desc">Certified appraisal rolls — values, exemptions, ownership · 2021–2025 verified, 2026 preliminary</div></div>
+        </div>
+        <div class="provenance-row">
+          <span class="provenance-check">✓</span>
+          <div><div class="src">Travis County Tax Office</div><div class="desc">Tax rates by entity (1990–2025) and 2025 billing &amp; delinquency open data</div></div>
+        </div>
+        <div class="mt-4">
+          <div class="label-caps mb-2" style="color:var(--text-on-dark-3);">The confidence system, previewed</div>
+          <div class="confidence-legend">
+            <span class="item"><span class="badge-verified" style="font-size:10px;">Verified</span></span>
+            <span class="item"><span class="badge-preliminary" style="font-size:10px;">Preliminary</span></span>
+            <span class="item"><span class="badge-partial" style="font-size:10px;">Partial</span></span>
+            <span class="item"><span class="badge-estimated" style="font-size:10px;">Estimated</span></span>
+            <span class="item"><span class="na-cell">Not Available</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# ══ AUDIENCES ═════════════════════════════════════════════════════════════ #}
+<section class="fd-section">
+  <div class="fd-kicker">Who it's for</div>
+  <h2 class="fd-h2">Investment-grade, whatever you're underwriting.</h2>
+  <div class="row g-4 mt-2">
+    <div class="col-md-4">
+      <div class="audience-card">
+        <h3>Real estate investors</h3>
+        <p>Underwrite acquisitions on certified value, tax history, and peer benchmarks. Estimate the post-purchase tax burden and flag homestead-cap and delinquency risk before closing.</p>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="audience-card">
+        <h3>Developers</h3>
+        <p>Track value trends by neighborhood and property type, and monitor the rate environment across every Travis County taxing entity — with 2026 preliminary values ahead of certification.</p>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="audience-card">
+        <h3>Homeowners</h3>
+        <p>See how your assessment compares to your neighbors, review your full exemption and cap history, and verify the tax amounts on record against your bills.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# ══ REQUEST ACCESS / CTA ══════════════════════════════════════════════════ #}
+<section class="fd-section-tight" id="request">
+  <div class="fd-cta-band">
+    <h2>Request access or send feedback</h2>
+    <p>Parcelytics is in active development, starting with Travis County. Tell us what you're underwriting and we'll get you set up.</p>
+    <a class="btn-cta" href="mailto:parcelytics@gmail.com?subject=Parcelytics%20access%20request">Request access →</a>
+  </div>
+  <p class="text-center text-muted small mt-4">
+    Coverage expands from Travis County across the Austin metro and Texas over time.
+    Questions? <a href="mailto:parcelytics@gmail.com">parcelytics@gmail.com</a>
+  </p>
+</section>
+
+{% endblock %}
 
 {% block scripts %}
 {# ── Address typeahead JS (Task 2) ───────────────────────────────────────── #}
@@ -8,33 +197,21 @@
   const inp  = document.querySelector('input[name="q"]');
   const wrap = document.getElementById('addrTaWrap');
   const list = document.getElementById('addrTaList');
-
   if (!inp || !wrap || !list) return;
 
-  let _timer = null;
-  let _last  = "";
-
-  function isAddressLike(v) {
-    // Has at least one letter = likely address, not parcel ID
-    return /[a-zA-Z]/.test(v);
-  }
+  let _timer = null, _last = "";
+  function isAddressLike(v) { return /[a-zA-Z]/.test(v); }
 
   function showSuggestions(results) {
     list.innerHTML = "";
-    if (!results || results.length === 0) {
-      wrap.style.display = "none";
-      return;
-    }
+    if (!results || results.length === 0) { wrap.style.display = "none"; return; }
     results.forEach(r => {
       const opt = document.createElement("div");
       opt.className = "ta-opt";
       opt.innerHTML =
         `<span style="font-size:13px;">${r.address || '(unknown)'}</span>` +
         `<span style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-3); margin-left:12px;">${r.geo_id}</span>`;
-      opt.addEventListener("mousedown", e => {
-        e.preventDefault();
-        window.location.href = "/parcel/" + r.geo_id;
-      });
+      opt.addEventListener("mousedown", e => { e.preventDefault(); window.location.href = "/parcel/" + r.geo_id; });
       list.appendChild(opt);
     });
     wrap.style.display = "block";
@@ -42,10 +219,7 @@
 
   inp.addEventListener("input", function () {
     const val = inp.value.trim();
-    if (!isAddressLike(val) || val.length < 3) {
-      wrap.style.display = "none";
-      return;
-    }
+    if (!isAddressLike(val) || val.length < 3) { wrap.style.display = "none"; return; }
     if (val === _last) return;
     _last = val;
     clearTimeout(_timer);
@@ -56,101 +230,10 @@
         .catch(() => {});
     }, 220);
   });
-
-  inp.addEventListener("blur", function () {
-    setTimeout(() => { wrap.style.display = "none"; }, 200);
-  });
-
+  inp.addEventListener("blur", function () { setTimeout(() => { wrap.style.display = "none"; }, 200); });
   inp.addEventListener("focus", function () {
-    if (inp.value.trim().length >= 3 && isAddressLike(inp.value)) {
-      inp.dispatchEvent(new Event("input"));
-    }
+    if (inp.value.trim().length >= 3 && isAddressLike(inp.value)) inp.dispatchEvent(new Event("input"));
   });
 })();
 </script>
-{% endblock %}
-
-
-{% block content %}
-<div class="row justify-content-center" style="margin-top: 9vh;">
-  <div class="col-md-8 col-lg-5">
-
-    {# Title #}
-    <div class="text-center mb-5">
-      <h1 class="fw-bold mb-2" style="font-size: 1.8rem; letter-spacing: -0.035em;">
-        Property Tax Search
-      </h1>
-      <p style="font-size: 13.5px; color: var(--text-3); margin: 0;">
-        Travis County, TX &bull; 2021–2025 appraisal &amp; billing history
-      </p>
-    </div>
-
-    {# Search form #}
-    <form method="get" action="/" class="mb-2">
-      <div class="search-input-wrap">
-        <input
-          type="text"
-          name="q"
-          class="search-input{% if error %} is-error{% endif %}"
-          placeholder="Parcel ID or street address — e.g. 0100030105 or 1201 S Lamar"
-          value="{{ q }}"
-          autofocus
-          autocomplete="off"
-          spellcheck="false"
-        >
-        <button class="search-btn" type="submit">Search</button>
-      </div>
-    </form>
-
-    {# Address typeahead — Task 2 — address-typeahead-task2 #}
-    <div class="ta-wrap" id="addrTaWrap" style="display:none; margin-top:-2px;">
-      <div class="ta-list" id="addrTaList"></div>
-    </div>
-
-    {# Disambiguation list (server-rendered when address_matches is set) #}
-    {% if addr_matches %}
-    <div class="card mt-3 p-0" style="border:1px solid var(--border);">
-      <div class="card-header" style="font-size:13px; font-weight:600;">
-        {{ addr_matches|length }} matching parcel{{ 's' if addr_matches|length != 1 }} — select one
-      </div>
-      <ul class="list-group list-group-flush mb-0" style="font-size:13px;">
-        {% for m in addr_matches %}
-        <li class="list-group-item py-2 px-3">
-          <a href="/parcel/{{ m.geo_id }}" class="text-decoration-none d-flex justify-content-between align-items-center">
-            <span>{{ m.situs_address or '(address unknown)' }}</span>
-            <span class="text-muted ms-3" style="font-family:var(--font-mono); font-size:11.5px; white-space:nowrap;">{{ m.geo_id }}</span>
-          </a>
-          {% if m.owner_name %}
-          <div class="text-muted" style="font-size:11px; margin-top:1px;">{{ m.owner_name }}</div>
-          {% endif %}
-        </li>
-        {% endfor %}
-      </ul>
-    </div>
-    {% endif %}
-
-    {# Error state — styled block, not inline Bootstrap feedback #}
-    {% if error %}
-    <div class="search-error-block">
-      {{ error }}
-    </div>
-    {% endif %}
-
-    {# Helper text #}
-    <p class="text-center mt-3" style="font-size: 12px; color: var(--text-3);">
-      Accepts 10-digit TCAD account, 14-digit Tax Office account, prop_id, or street address.
-    </p>
-
-    {# Example parcels #}
-    <div class="search-examples">
-      <span class="examples-label">Try an example</span>
-      <div class="examples-list">
-        <a class="example-link" href="/?q=0100030105">0100030105</a>
-        <a class="example-link" href="/?q=0100060160">0100060160</a>
-        <a class="example-link" href="/?q=0205000100">0205000100</a>
-      </div>
-    </div>
-
-  </div>
-</div>
 {% endblock %}

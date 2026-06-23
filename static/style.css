@@ -1231,6 +1231,8 @@ footer:not(.site-footer) {
   border-color: transparent;
   box-shadow: var(--shadow-3);
 }
+.hero-search .search-btn { background: var(--accent); }
+.hero-search .search-btn:hover { background: var(--accent-hover); }
 .hero-search-hint { margin-top: 10px; font-size: 12px; color: var(--text-on-dark-3); }
 
 /* Trust strip under hero */
