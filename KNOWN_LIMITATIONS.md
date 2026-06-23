@@ -1,5 +1,5 @@
 # Known Limitations — Parcelytics Platform
-*Last updated: June 22, 2026*
+*Last updated: June 23, 2026*
 
 ## Data Coverage
 
@@ -29,6 +29,50 @@ The 2021 PDF constraint (90% vs 99.9%) is a one-time limitation. TCAD only had a
 - **Request status:** Open Records Request submitted **June 21, 2026** via email to TaxOffice@TravisCountyTX.gov. Requesting TaxCurOpenData-format billing records for tax years 2021, 2022, 2023, and 2024. **Follow-up scheduled: June 30, 2026.**
 - This is separate from and independent of the TCAD PIR above — TCAD and the Travis County Tax Office are different agencies.
 - Do not attempt to backfill billing from delinquent data or AJR sources — they are structurally different datasets. When billing files arrive, load via `load_pir_billing.py` (already written and tested).
+
+### living_area_sqft: Available from IMP_DET.TXT (loader written, pending run)
+Building-area square footage by component is available in `IMP_DET.TXT` from the TCAD
+Certified Export. Living-area component codes included: `1ST` (1st Floor), `2ND` (2nd Floor),
+`3RD` (3rd Floor), `1/2` (Half Floor), `RSBLW` (Residence Below Grade), `FBSMT` (Finished
+Basement). Excluded: `UBSMT` (unfinished basement) and all non-living components (garage,
+carport, deck, etc.).
+
+**Status:** `loaders/load_imp_det_sqft.py` + `loaders/migrate_add_sqft.py` written.
+The migration adds `parcel.living_area_sqft NUMERIC(10,2)` (additive, IF NOT EXISTS).
+Run order: `migrate_add_sqft.py` → `load_imp_det_sqft.py` (needs DB and CERT_DIR path).
+After loading, the peer benchmark can be extended to per-SF comparisons.
+The peer benchmark footnote in the property detail page notes "per-SF normalisation pending
+loader ingestion" — remove that note once the column is populated.
+
+### PID/Special-District entity codes missing from county_tax_rate (CORRECTNESS-CRITICAL)
+**49 entity codes** in TaxCurOpenData billing data (2025) are absent from `county_tax_rate`.
+These are primarily Public Improvement Districts (PIDs) administered by City of Austin and
+Water Control and Improvement Districts (WCIDs) not in the rates XLSX.
+
+**Impact:** The rate-based post-acquisition estimator (`/api/estimate_acq`) silently skips
+entities with NULL rate. For ~12,142 parcels with PID charges, the buyer's estimated tax
+is understated. The total missing billing in 2025 is **$38.05M** across 49 codes.
+
+**What is CORRECT:** Historical billing display (amount_due from TaxCurOpenData) is correct
+for all entities including PIDs. Seller's current tax in the estimator is correct
+(sums amount_due directly). Only rate-based projections and buyer estimates are affected.
+
+**Top missing codes by billing volume:**
+
+| Code | Parcels | 2025 Billed | Category |
+|------|--------:|------------:|----------|
+| P2U | 2,558 | $14.1M | PID — Downtown Austin / 2nd Street |
+| P2P | 806 | $2.7M | PID |
+| P10T | 428 | $2.5M | PID |
+| PWV | 942 | $2.3M | WCID — Point Venture |
+| P11L | 222 | $2.2M | PID |
+
+See `ENTITY_CODE_AUDIT.md` for the full table and recommended fix.
+
+**Fix:** After the estimator session merges, apply a "billing-only pass-through" in
+`api_estimate_acq`: for entities with `amount_due` but NULL `rate`, carry the prior-year
+billed amount forward as a pass-through estimate labeled "PID/Special District assessments
+(from prior billing, not rate-computed)". See `ENTITY_CODE_AUDIT.md` for implementation.
 
 ## Out of Scope for Phase 1
 

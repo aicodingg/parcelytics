@@ -836,6 +836,23 @@ def property_detail(geo_id):
         ORDER  BY ctr.tax_year
     """, (geo_id,))
 
+    # ── Computed historical tax (feature flag: COMPUTED_HIST_TAX_ENABLED) ────────
+    # When enabled, rows where total_tax is NULL (2021–2024 without billing data)
+    # receive a computed estimate: taxable_value × combined_rate / 100.
+    # Stored as computed_total_tax (separate key) — never overwrites real billing data.
+    # Label: "computed from certified value × rate; billing unconfirmed"
+    if config.COMPUTED_HIST_TAX_ENABLED:
+        _rate_map = {r["tax_year"]: float(r["total_rate"])
+                     for r in rate_history if r.get("total_rate")}
+        for row in history:
+            if row.get("total_tax") is not None:
+                continue  # real billing data present — do not overlay
+            yr = row.get("tax_year")
+            tv = row.get("taxable_value")
+            rate = _rate_map.get(yr)
+            if tv and rate and rate > 0:
+                row["computed_total_tax"] = round(float(tv) * rate / 100.0, 2)
+
     # Entity rate history for trend chart + rate columns (2016–2025 for 10-year chart context)
     rate_history_rows = query("""
         SELECT ctr.entity_code, ctr.tax_year, ctr.rate
