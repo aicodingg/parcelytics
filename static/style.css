@@ -987,3 +987,79 @@ footer {
   .property-header h2 { font-size: 1.3rem; }
   main.container { padding-top: 1.25rem; }
 }
+
+/* ── Task 4: Section navigation bar ────────────────────────────────────────── */
+/* task4-section-nav */
+.section-nav-bar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1.5px solid var(--border);
+  padding-bottom: 0;
+  background: var(--bg);
+  z-index: 10;
+  transition: box-shadow 0.15s ease;
+}
+
+.section-nav-bar.stuck {
+  position: sticky;
+  top: 0;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  padding: 0 0 2px;
+  margin-left: -1rem;
+  margin-right: -1rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+.section-nav-link {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-decoration: none;
+  border-bottom: 2.5px solid transparent;
+  margin-bottom: -1.5px;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.section-nav-link:hover {
+  color: var(--text);
+}
+
+.section-nav-link.active {
+  color: var(--accent-dark, var(--text));
+  border-bottom-color: var(--accent, var(--text));
+}
+
+/* Scroll anchors — offset so sticky nav doesn't cover section heading */
+.section-anchor {
+  display: block;
+  height: 0;
+  margin-top: -56px;
+  padding-top: 56px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ── Task 4: Narrative collapse ─────────────────────────────────────────────── */
+.overview-narrative-collapse {
+  border-radius: 8px;
+}
+
+.overview-collapse-summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  user-select: none;
+}
+
+.overview-collapse-summary::-webkit-details-marker { display: none; }
+
+.overview-narrative-collapse[open] .overview-collapse-summary {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
+}
+

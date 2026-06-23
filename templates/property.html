@@ -180,7 +180,8 @@
 {% else %}{% set _prop_type = "" %}
 {% endif %}
 
-<div class="property-header mt-2">
+{# task4-hierarchy-restructure #}
+<div class="property-header mt-2" id="propertyHeaderAnchor">
   <h2 class="fw-bold mb-1">
     {{ parcel.situs_address or "Address unknown" }}
   </h2>
@@ -190,10 +191,28 @@
       <span class="sep">&middot;</span>
       <span>{{ _prop_type }}</span>
     {% endif %}
+    {# Property-level confidence badge — derived from data source of 2025 row #}
+    {% if current and current.data_source == "certified" %}
+      <span class="badge-verified ms-2">Verified</span>
+    {% elif current and current.data_source == "preliminary" %}
+      <span class="badge-preliminary ms-2">Preliminary</span>
+    {% elif current %}
+      <span class="badge-partial ms-2">Partial</span>
+    {% else %}
+      <span class="badge-estimated ms-2" style="font-style:italic; color:var(--text-3);">Not Available</span>
+    {% endif %}
     {% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
       <span class="badge-delinquent">Delinquent</span>
     {% endif %}
   </div>
+</div>
+
+{# ── Scroll-anchor section nav (Task 4) ───────────────────────────────────── #}
+<div id="sectionNavBar" class="section-nav-bar mb-2">
+  <a class="section-nav-link active" href="#sectionOverview">Overview</a>
+  <a class="section-nav-link" href="#sectionHistory">History</a>
+  <a class="section-nav-link" href="#sectionProjection">Projection</a>
+  <a class="section-nav-link" href="#sectionPosition">Position</a>
 </div>
 
 <div class="row g-4">
@@ -414,14 +433,19 @@
 </div>{# /col-lg-8 — insight report #}
 </div>{# /row — top two-column section #}
 
-{# ── Overview narrative ───────────────────────────────────────────────────── #}
+{# ── Overview narrative — collapsed (Task 4) ─────────────────────────────── #}
 {% if narrative %}
-<div class="section-hdr">Overview</div>
-<div class="overview-narrative">
-  {% for para in narrative %}
-  <p>{{ para }}</p>
-  {% endfor %}
-</div>
+<details class="overview-narrative-collapse mb-4" id="sectionOverview">
+  <summary class="overview-collapse-summary">
+    <span class="section-hdr d-inline-block mb-0" style="margin-bottom:0 !important;">Overview</span>
+    <span class="text-muted ms-2" style="font-size:12px; font-weight:400;">(click to expand narrative)</span>
+  </summary>
+  <div class="overview-narrative pt-3">
+    {% for para in narrative %}
+    <p>{{ para }}</p>
+    {% endfor %}
+  </div>
+</details>
 {% endif %}
 
 {# ── Full-width section: all tables + metrics ──────────────────────────────── #}
@@ -429,6 +453,7 @@
 <div class="col-12">
 
   {# ── 1. Historical Tax Rates by Entity ───────────────────────────── #}
+  <div id="sectionHistory" class="section-anchor"></div>
   {% if entity_detail %}
   <div class="section-hdr">Rate Environment</div>
   <div class="card mb-4">
@@ -548,6 +573,33 @@
       Rate columns (2021–2025) from Travis County tax rate records.
       2025 billing from Travis County Tax Office open data.
       <span class="na-cell">—</span> = entity not in rate records for that year.
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Entity Amount Horizontal Bar (Task 4) ─────────────────────────── #}
+  {% set _ent_sorted = entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
+  {% if _ent_sorted %}
+  {% set _total_tax_bar = _ent_sorted | sum(attribute='amount_due') | float %}
+  <div class="card mb-3">
+    <div class="card-header">2025 Tax Burden — Entity Split</div>
+    <div class="card-body pt-3 pb-2">
+      {% for e in _ent_sorted %}
+        {% if e.amount_due and _total_tax_bar > 0 %}
+        {% set _pct = e.amount_due | float / _total_tax_bar * 100 %}
+        <div class="d-flex align-items-center gap-2 mb-2" style="font-size:12px;">
+          <span style="min-width:70px; color:var(--text-3); font-size:11px; white-space:nowrap;">{{ e.entity_code }}</span>
+          <div style="flex:1; background:var(--surface-2); border-radius:3px; height:10px; overflow:hidden;">
+            <div style="width:{{ '{:.1f}'.format(_pct) }}%; background:var(--accent); height:100%; border-radius:3px; transition:width 0.3s;"></div>
+          </div>
+          <span style="min-width:48px; text-align:right; font-family:var(--font-mono); font-size:11px; color:var(--text-3);">{{ '{:.1f}'.format(_pct) }}%</span>
+          <span style="min-width:88px; text-align:right; font-family:var(--font-mono); font-size:11.5px; font-weight:600;">${{ '{:,.0f}'.format(e.amount_due | float) }}</span>
+        </div>
+        {% endif %}
+      {% endfor %}
+      <div class="d-flex justify-content-end mt-1 pt-1" style="border-top:1px solid var(--border); font-family:var(--font-mono); font-size:12px; font-weight:700;">
+        Total: ${{ '{:,.0f}'.format(_total_tax_bar) }}
+      </div>
     </div>
   </div>
   {% endif %}
@@ -1151,6 +1203,8 @@
   </div>
   {% endif %}
 
+  <div id="sectionProjection" class="section-anchor"></div>
+  <div id="sectionProjection" class="section-anchor"></div>
   {# ── 5. Tax Projection — Scenario Bands (Task 3) ──────────────── #}
   {# scenario-band-task3 #}
   <div class="section-hdr">6-Year Projection <span class="section-hdr-badge">Estimates Only</span></div>
@@ -1249,6 +1303,7 @@
   </div>
   {% endif %}
 
+  <div id="sectionPosition" class="section-anchor"></div>
   {# ── 6. Submarket Position ────────────────────────────────────────── #}
   {% if benchmark_by_year and bench_label %}
   <div class="section-hdr">Submarket Position</div>
@@ -2028,6 +2083,48 @@ if (rCtx) {
       section.style.display = '';
       body.innerHTML = '<div class="text-muted small">Peer data unavailable.</div>';
     });
+})();
+</script>
+
+
+<script>
+// ── Task 4: Sticky section nav + active link tracking ────────────────────────
+// task4-sticky-nav-js
+(function () {
+  const nav = document.getElementById('sectionNavBar');
+  const anchors = ['sectionOverview','sectionHistory','sectionProjection','sectionPosition'];
+  const links   = nav ? nav.querySelectorAll('.section-nav-link') : [];
+
+  // Sticky: add .stuck class to nav when page scrolls past it
+  if (nav) {
+    const navTop = nav.getBoundingClientRect().top + window.scrollY;
+    window.addEventListener('scroll', function () {
+      if (window.scrollY > navTop) {
+        nav.classList.add('stuck');
+      } else {
+        nav.classList.remove('stuck');
+      }
+    }, { passive: true });
+  }
+
+  // Active link: highlight link for visible section
+  if (links.length) {
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          const id = e.target.id;
+          links.forEach(l => {
+            l.classList.toggle('active', l.getAttribute('href') === '#' + id);
+          });
+        }
+      });
+    }, { rootMargin: '0px 0px -60% 0px', threshold: 0.01 });
+
+    anchors.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+  }
 })();
 </script>
 
