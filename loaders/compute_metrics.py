@@ -223,16 +223,35 @@ def compute_parcel_metrics(conn):
                     THEN ROUND(pty.assessed_value::NUMERIC / pty.market_value, 4)
                 END,
 
-                -- Effective tax rate: real billing for 2025 only; Not Available otherwise
-                -- Uses LATERAL join (tb_bill) so it works even if TAXYEAR in tax_billing
-                -- differs from parcel_tax_year tax_year (e.g. stored as 2024 vs 2025).
-                -- Cap at 1.0 (100% effective rate) — values above that are bad data.
+                -- Effective tax rate: real billing for 2025 only; Not Available otherwise.
+                -- Uses SUM(amount_due) from tax_billing_entity rather than tax_billing.total_tax,
+                -- because TOTAL_TAX in TaxCurOpenData is 0 for some property types (commercial,
+                -- multi-family) even when entity-level DUE amounts are correct.
+                -- Cap at 1.0 (100%) — values above that are bad data.
                 CASE
                     WHEN pty.tax_year = 2025
-                     AND COALESCE(tb_bill.total_tax, 0) > 0
                      AND pty.market_value > 0
-                     AND tb_bill.total_tax::NUMERIC / pty.market_value <= 1
-                    THEN ROUND(tb_bill.total_tax::NUMERIC / pty.market_value, 6)
+                     AND (
+                         SELECT SUM(tbe.amount_due)
+                         FROM   tax_billing_entity tbe
+                         WHERE  tbe.geo_id    = pty.geo_id
+                           AND  tbe.tax_year  = 2025
+                     ) > 0
+                     AND (
+                         SELECT SUM(tbe.amount_due)
+                         FROM   tax_billing_entity tbe
+                         WHERE  tbe.geo_id    = pty.geo_id
+                           AND  tbe.tax_year  = 2025
+                     )::NUMERIC / pty.market_value <= 1
+                    THEN ROUND(
+                        (
+                            SELECT SUM(tbe.amount_due)
+                            FROM   tax_billing_entity tbe
+                            WHERE  tbe.geo_id    = pty.geo_id
+                              AND  tbe.tax_year  = 2025
+                        )::NUMERIC / pty.market_value,
+                        6
+                    )
                 END,
 
                 -- Delinquency flag
@@ -247,15 +266,6 @@ def compute_parcel_metrics(conn):
             JOIN parcel p ON p.geo_id = pty.geo_id
             LEFT JOIN tax_billing tb
               ON tb.geo_id = pty.geo_id AND tb.tax_year = pty.tax_year
-            -- tb_bill: year-agnostic billing for eff_rate; handles TAXYEAR mismatch
-            -- between the source CSV and what parcel_tax_year considers "2025".
-            LEFT JOIN LATERAL (
-                SELECT total_tax
-                FROM   tax_billing
-                WHERE  geo_id = pty.geo_id
-                ORDER  BY tax_year DESC
-                LIMIT  1
-            ) tb_bill ON (pty.tax_year = 2025)
             LEFT JOIN tax_delinquent td
               ON td.geo_id = pty.geo_id
             WINDOW w AS (PARTITION BY pty.geo_id ORDER BY pty.tax_year)
@@ -439,6 +449,16 @@ def print_sample(conn):
                     print(f"    billing tax_year={b['tax_year']} total_tax={b['total_tax']}")
             else:
                 print("    billing: (no rows in tax_billing)")
+            cur.execute(
+                "SELECT tax_year, SUM(amount_due) as entity_total FROM tax_billing_entity WHERE geo_id = %s GROUP BY tax_year ORDER BY tax_year",
+                (geo_id,)
+            )
+            entity_rows = cur.fetchall()
+            if entity_rows:
+                for e in entity_rows:
+                    print(f"    entity_total tax_year={e['tax_year']} sum(amount_due)={e['entity_total']}")
+            else:
+                print("    entity: (no rows in tax_billing_entity)")
             cur.execute("""
                 SELECT tax_year, coverage_level,
                        yoy_market_value_pct,
