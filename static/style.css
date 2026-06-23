@@ -137,6 +137,7 @@ body {
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;   /* contain the full-bleed hero's 100vw breakout */
 }
 
 ::selection { background: var(--accent-ring); color: var(--ink); }
