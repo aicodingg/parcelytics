@@ -940,6 +940,47 @@ footer {
 }
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
+
+/* ── Post-Acquisition Estimator card (Task 1) ───────────────────────────────── */
+.estimator-card {
+  border-style: dashed !important;
+  border-color: var(--estimated-border) !important;
+  background: var(--estimated-bg) !important;
+}
+
+.estimator-card > .card-header {
+  background: var(--estimated-bg) !important;
+  border-bottom: 1px dashed var(--estimated-border) !important;
+  color: var(--estimated-text) !important;
+}
+
+/* Summary stat chips inside the estimator result */
+.estimator-chip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 16px;
+  min-width: 140px;
+  flex: 0 1 auto;
+}
+
+.estimator-chip-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 3px;
+}
+
+.estimator-chip-val {
+  font-family: var(--font-mono);
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
 @media (max-width: 576px) {
   body { font-size: 13px; }
   .table td, .table th { padding: 6px 8px; }

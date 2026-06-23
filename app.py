@@ -12,6 +12,8 @@ import psycopg2.extras
 sys.path.insert(0, os.path.dirname(__file__))
 import config
 
+from tax_logic.texas import estimate_post_acquisition as _tx_estimate
+
 
 # ── Investor insight generator ────────────────────────────────────────────────
 def build_insights(parcel, history, entity_detail, delinquent):
@@ -1413,6 +1415,75 @@ def api_benchmark_meta():
         "neighborhood_coverage_pct": nb_coverage_pct,
     })
 
+
+
+
+@app.route("/api/estimate_acq/<geo_id>")
+def api_estimate_acq(geo_id):
+    """
+    Post-acquisition tax estimator API (Task 1).
+    Query params:
+      price  int   purchase price (required, no commas)
+      buyer  str   'non_owner_occupant' (default) | 'owner_occupant'
+    """
+    price_raw    = request.args.get("price", "").strip().replace(",", "").replace("$", "")
+    buyer_status = request.args.get("buyer", "non_owner_occupant").strip()
+
+    if buyer_status not in ("non_owner_occupant", "owner_occupant"):
+        buyer_status = "non_owner_occupant"
+
+    if not price_raw or not re.fullmatch(r"\d+", price_raw):
+        return jsonify({"ok": False, "error": "price must be a positive integer (no commas or $)"})
+
+    purchase_price = int(price_raw)
+    if purchase_price <= 0:
+        return jsonify({"ok": False, "error": "price must be positive"})
+
+    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    if not parcel:
+        return jsonify({"ok": False, "error": "Parcel not found"})
+
+    current_yr_row = query("""
+        SELECT market_value, assessed_value, taxable_value, hs_cap_loss, exemption_codes
+        FROM   parcel_tax_year
+        WHERE  geo_id = %s AND tax_year = 2025
+    """, (geo_id,), one=True)
+
+    if not current_yr_row or not current_yr_row.get("market_value"):
+        return jsonify({"ok": False, "error": "No 2025 certified market value for this parcel"})
+
+    entity_detail = query("""
+        SELECT tbe.entity_code, ctr.entity_name, ctr.rate, tbe.amount_due
+        FROM   tax_billing_entity tbe
+        LEFT JOIN county_tax_rate ctr
+               ON ctr.entity_code = tbe.entity_code AND ctr.tax_year = 2025
+        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2025
+        ORDER  BY tbe.amount_due DESC NULLS LAST
+    """, (geo_id,))
+
+    if not entity_detail:
+        return jsonify({"ok": False, "error": "No 2025 entity billing data for this parcel"})
+
+    result = _tx_estimate(
+        dict(parcel),
+        dict(current_yr_row),
+        [dict(e) for e in entity_detail],
+        purchase_price,
+        buyer_status,
+    )
+    result["ok"] = True
+
+    # Convert any Decimal/non-serialisable types to float/int
+    def _clean(v):
+        if hasattr(v, "__float__"):
+            return float(v)
+        return v
+
+    result["entity_breakdown"] = [
+        {k: _clean(val) for k, val in row.items()}
+        for row in result["entity_breakdown"]
+    ]
+    return jsonify(result)
 
 @app.route("/about")
 def about():

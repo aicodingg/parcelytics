@@ -82,6 +82,91 @@
 </div>
 {% endif %}
 
+
+{# ── Post-Acquisition Tax Estimator (Task 1) ─────────────────────────── #}
+{# post-acq-estimator-card #}
+{% if entity_detail and current %}
+<div class="card mb-4 estimator-card" id="postAcqEstimator">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Post-Acquisition Tax Estimate</span>
+    <span class="estimates-badge">Estimate · Not a prediction</span>
+  </div>
+  <div class="card-body">
+
+    {# Input row #}
+    <div class="d-flex flex-wrap gap-3 align-items-end mb-3">
+      <div>
+        <label class="form-label small text-muted mb-1" for="acqPrice">Purchase Price</label>
+        <div class="input-group input-group-sm" style="max-width:200px;">
+          <span class="input-group-text">$</span>
+          <input type="text" id="acqPrice" class="form-control"
+                 placeholder="e.g. 4500000"
+                 value="{{ current.market_value | int if current.market_value else '' }}"
+                 style="font-family:var(--font-mono); font-size:13px;">
+        </div>
+      </div>
+      <div>
+        <label class="form-label small text-muted mb-1">Buyer Type</label>
+        <div class="btn-group btn-group-sm" role="group" id="buyerToggle">
+          <input type="radio" class="btn-check" name="buyerType" id="buyerInvestor" value="non_owner_occupant" checked>
+          <label class="btn btn-outline-secondary" for="buyerInvestor">Investor</label>
+          <input type="radio" class="btn-check" name="buyerType" id="buyerOwner" value="owner_occupant">
+          <label class="btn btn-outline-secondary" for="buyerOwner">Owner-Occupant</label>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-dark" id="acqRunBtn" onclick="runEstimator()">
+        Estimate
+      </button>
+      <span id="acqSpinner" class="text-muted small" style="display:none;">Calculating…</span>
+    </div>
+
+    {# Disclaimer #}
+    <p class="small text-muted mb-3" style="font-size:11.5px; line-height:1.5;">
+      Estimate only. The appraisal district sets value as of Jan 1 (not at sale price).
+      A sale is strong evidence of market value and is typically reflected in the next
+      Jan 1 valuation. Taxing units set rates annually. Modeled from government data —
+      not a legal or tax opinion.
+    </p>
+
+    {# Results pane (hidden until first run) #}
+    <div id="acqResults" style="display:none;">
+
+      {# Summary row #}
+      <div class="d-flex flex-wrap gap-3 mb-3" id="acqSummary"></div>
+
+      {# Entity breakdown table #}
+      <div class="table-responsive">
+        <table class="table table-sm mb-0" id="acqTable">
+          <thead class="table-light small text-muted text-uppercase">
+            <tr>
+              <th>Entity</th>
+              <th class="text-end">Rate</th>
+              <th class="text-end">~Taxable Base</th>
+              <th class="text-end">~Est. Tax</th>
+              <th class="text-end">Seller Tax</th>
+              <th class="text-end">~Delta</th>
+            </tr>
+          </thead>
+          <tbody id="acqTbody"></tbody>
+          <tfoot id="acqTfoot"></tfoot>
+        </table>
+      </div>
+
+      {# Assumptions list #}
+      <div id="acqAssumptions" class="mt-3"></div>
+
+      {# Circuit-breaker / gap-year notes #}
+      <div id="acqNotes" class="mt-2"></div>
+
+    </div>{# /acqResults #}
+
+    {# Error pane #}
+    <div id="acqError" class="search-error-block" style="display:none;"></div>
+
+  </div>{# /card-body #}
+</div>
+{% endif %}
+
 {# ── Property header ─────────────────────────────────────────────────── #}
 {# Property type label derived from state_cd1 (A/B/C/D/E/F prefix) #}
 {% set _sc = (parcel.state_cd1 or "")|trim %}
