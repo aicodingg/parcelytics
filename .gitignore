@@ -82,3 +82,5 @@ Step5_*.md
 *.docx
 investigate_*.py
 validate_*.py
+*.command
+MORNING_REVIEW.md
