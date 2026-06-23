@@ -198,9 +198,21 @@
       <span class="sep">&middot;</span>
       <span>{{ _prop_type }}</span>
     {% endif %}
-    {# Property-level confidence badge — derived from data source of 2025 row #}
+    {# Property-level confidence badge — 2025 data_source + 2021-24 billing completeness (Fix 3) #}
+    {%- set _hist_prior  = history | rejectattr('tax_year', 'equalto', 2025) | list -%}
+    {%- set _hist_billed = _hist_prior | selectattr('total_tax') | list | length -%}
+    {%- set _hist_total  = _hist_prior | length -%}
     {% if current and current.data_source == "certified" %}
-      <span class="badge-verified ms-2">Verified</span>
+      <span class="badge-verified ms-2">2025 Verified</span>
+      {% if _hist_total > 0 %}
+        {% if _hist_billed == _hist_total %}
+          <span class="badge-verified ms-1" style="font-size:9px; padding:1px 5px;">2021–24 billing ✓</span>
+        {% elif _hist_billed > 0 %}
+          <span class="badge-partial ms-1" style="font-size:9px; padding:1px 5px;">2021–24 billing partial</span>
+        {% else %}
+          <span class="badge-partial ms-1" style="font-size:9px; padding:1px 5px;">2021–24 billing unavailable</span>
+        {% endif %}
+      {% endif %}
     {% elif current and current.data_source == "preliminary" %}
       <span class="badge-preliminary ms-2">Preliminary</span>
     {% elif current %}
@@ -1224,7 +1236,7 @@
     <div class="card-body p-0">
       {# Band selector #}
       <div class="d-flex gap-2 align-items-center px-3 pt-3 pb-2">
-        <span class="small text-muted" style="font-size:11.5px;">Show scenario:</span>
+        <span class="small text-muted" style="font-size:11.5px;">Show illustrative scenario:</span>
         <div class="btn-group btn-group-sm" role="group" id="projBandToggle">
           <input type="radio" class="btn-check" name="projBand" id="pbLow"  value="low">
           <label class="btn btn-outline-secondary btn-sm" for="pbLow" style="font-size:11.5px;">
@@ -1300,7 +1312,7 @@
       </div>
     </div>
     <div class="card-footer text-muted small">
-      <strong>These are estimates, not recorded values.</strong>
+      <strong>These are illustrative scenarios, not statistical confidence ranges.</strong>
       ¹ {{ proj_baseline or "Based on 2021–2025 certified trend" }}.
       <strong>Low</strong>: CAGR −2 pp, rates flat.
       <strong>Base</strong>: historical CAGR + rate trend.
@@ -2080,8 +2092,8 @@ if (rCtx) {
           </table>
         </div>
         <p class="text-muted mt-2 mb-0" style="font-size:10.5px;">
-          Size proxy: ±50% of this parcel's 2025 market value (no living-area SF in public data).
-          No SF normalisation available — see KNOWN_LIMITATIONS.md.
+          Peer selection: same neighbourhood + property type, ±50% of 2025 market value (size proxy — not assessment-equity signal).
+          Building-area SF available in TCAD IMP_DET.TXT export; per-SF normalisation pending loader ingestion.
         </p>
       `;
       section.style.display = '';
