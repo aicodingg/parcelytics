@@ -2,6 +2,52 @@
 
 ---
 
+## SESSION 3 (attended, 2026-06-23) — estimator polish + branding
+
+**1. Lightened nav + original-color logos.** Nav is now a white, Stripe-style bar
+(`--surface`, hairline border + `shadow-1`); links are crisp dark text, active link +
+"Request access" CTA carry the accent. Both uploaded logos now show in their **original
+colors on transparency** — the map mark sits directly on the bar (no white chip), the
+two-tone wordmark as supplied (no inversion). Dropdown + mobile collapse panel re-tuned to
+the light bar; dark hamburger icon. Retired the chip/inverted-wordmark and placeholder
+accent-"P". (`static/parcelytics-logo.png` still unreferenced; mount blocks deletion.)
+
+**2. Value-derivation card (property page, left column).** "How This Value Is Derived":
+Market value → (Land + Improvements composition) → − Value-limitation adjustment (homestead
+cap) → Net appraised (assessed) → − Exemptions (codes) → Taxable. Derived from the
+authoritative stored 2025-certified values (`market − assessed` for the cap line, since the
+`hs_cap_loss` column is empty on 2025 certified rows; `assessed − taxable` for exemptions).
+Verified pill, plain-language labels.
+> **DATA GAP flagged for the data session:** there is no special-use / agricultural
+> *productivity* field in `parcel_tax_year` — that derivation line is omitted and noted on
+> the card. `land_value`/`imprv_value` exist (2025 certified) and are shown.
+
+**3. Estimator — multi-year, HS explainer, rate handling.**
+- *Multi-year (3a):* backend projects Years 1–5 per buyer type. Owner-occupant: Year 1 gap
+  (no exemption/cap), Year 2+ applies the $140k school HS exemption and the 10%/yr
+  assessed-cap; investor: no exemption, 20%/yr circuit-breaker cap through TY2026 then
+  uncapped. Market-growth assumption = the parcel's own certified CAGR, clamped 0–8% (shown).
+  UI renders a projection table (Years 1/3/5 highlighted), unmistakably labeled a projection.
+- *HS explainer (3b):* compact accent-tinted card (owner-occupant) — what the exemption is,
+  $140k school exemption, 10% appraisal cap, owner-occupancy + file by Apr 30 of the
+  following year, and the Year-1 gap.
+- *Rate handling (3c):* the estimate now **states the tax year (TY2026)** and **labels the
+  rate vintage**. A "2025 Certified" baseline (default) and a "Projected trend" scenario are
+  offered as a labeled toggle. Projected rates are computed **per entity**, recency-weighted
+  from `county_tax_rate` history, and **compression-aware**: declines pass through, any
+  projected rise is clamped to ≤ +2% (we do not assume rates rise). Projected rate is shown
+  with a "proj" marker + assumptions note; labeled a projection, not a certified rate.
+- *Base case re-verified after the rate changes:* `0204063005` investor (certified)
+  **$15,622 / Δ +$5,619.46**; `0100030105` buy-at-market (certified) **$88,655 / Δ −$0.07**. ✓
+
+> **DATA GAP (per the brief's note):** estimator accuracy depends on the per-entity taxing-unit
+> rate table being complete; a separate data session is reconciling units. These numbers will
+> shift (upward) once missing units land — **re-verify the hand-calc base cases then.**
+
+*(Earlier sessions' notes below.)*
+
+---
+
 ## MORNING WORK (attended, 2026-06-23) — estimator wired up + logo swap
 
 **A. Post-acquisition estimator now works (was a dead button).**
