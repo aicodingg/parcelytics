@@ -76,7 +76,7 @@ PIR_BILLING_FILES = {
 #   2. Portal payment receipt (portal_scrape)  — shown as ~$X,XXX · Partial
 #   3. Computed levy (taxable_value × rate)    — shown as ~$X,XXX (computed)
 #   4. No data                                 — shown as "Not available yet"
-COMPUTED_HIST_TAX_ENABLED = os.environ.get("COMPUTED_HIST_TAX", "1") == "1"
+COMPUTED_HIST_TAX_ENABLED = os.environ.get("COMPUTED_HIST_TAX", "0") == "1"
 
 # ── App ───────────────────────────────────────────────────────────────────────
 FLASK_SECRET = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
