@@ -60,17 +60,23 @@ PIR_BILLING_FILES = {
 }
 
 # ── Feature flags ─────────────────────────────────────────────────────────────
-# When True, the 5-Year History table shows a "Computed" tax column for
-# tax years 2021–2024 where no billing data is available. The value is
+# When True, the 5-Year History table shows a computed tax estimate for
+# tax years 2021–2024 where no real billing data is available. The value is
 # derived as:  taxable_value × combined_rate / 100
-# and is clearly labelled "computed from certified value × rate; billing
-# unconfirmed" — it is NOT the actual billed amount.
+# and is clearly labelled "~$X,XXX (computed)" — NOT the actual billed amount.
 #
-# Keep OFF until the Travis County billing PIR response arrives (Jun 30 2026).
-# If the response is a "no" or partial, flip to True to surface the estimate.
-# The label already makes the uncertainty explicit so there is no risk of
-# misleading users — but hold off until confirmed billing data is not coming.
-COMPUTED_HIST_TAX_ENABLED = os.environ.get("COMPUTED_HIST_TAX", "0") == "1"
+# Enabled (Jun 23 2026): Travis County Tax Office confirmed they do not retain
+# historical snapshots of TaxCurOpenData. Computed levy is the best available
+# estimate for the full 430K parcel dataset. Where real billing data exists
+# (portal_scrape rows or future PIR bulk data), it takes priority automatically
+# — computed_total_tax is only filled when total_tax IS NULL.
+#
+# Priority order in the UI:
+#   1. Verified billing (taxcur / pir_billing) — shown as $X,XXX
+#   2. Portal payment receipt (portal_scrape)  — shown as ~$X,XXX · Partial
+#   3. Computed levy (taxable_value × rate)    — shown as ~$X,XXX (computed)
+#   4. No data                                 — shown as "Not available yet"
+COMPUTED_HIST_TAX_ENABLED = os.environ.get("COMPUTED_HIST_TAX", "1") == "1"
 
 # ── App ───────────────────────────────────────────────────────────────────────
 FLASK_SECRET = os.environ.get("FLASK_SECRET", "dev-secret-change-me")

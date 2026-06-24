@@ -783,7 +783,9 @@ def property_detail(geo_id):
                tb.total_tax,
                tb.total_due,
                tb.is_delinquent,
-               tb.exemption_codes  AS billing_exemptions
+               tb.exemption_codes  AS billing_exemptions,
+               tb.data_source      AS billing_source,
+               tb.confidence_level AS billing_confidence
         FROM   parcel_tax_year pty
         LEFT JOIN tax_billing   tb  ON tb.geo_id   = pty.geo_id
                                    AND tb.tax_year = pty.tax_year

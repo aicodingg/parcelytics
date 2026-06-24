@@ -954,12 +954,19 @@
               <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.imprv_value)) if r.imprv_value else "—" }}</td>
               <td class="text-end">${{ "{:,.0f}".format(r.taxable_value) if r.taxable_value else "—" }}</td>
               <td class="text-end">
-                {% if r.total_tax %}
+                {% if r.total_tax and r.billing_source == 'portal_scrape' %}
+                  {# Payment receipt from portal — amount paid, not necessarily levied #}
+                  <span title="Amount paid per portal receipt — reflects payment, not necessarily levy; entity breakdown unavailable"
+                        style="font-style:italic; color:var(--text-muted); cursor:help;">
+                    ~${{ "{:,.2f}".format(r.total_tax) }}
+                  </span>
+                  <span class="badge-partial ms-1" style="font-size:9px;">Partial</span>
+                {% elif r.total_tax %}
                   ${{ "{:,.2f}".format(r.total_tax) }}
                 {% elif r.data_source == 'preliminary' %}
                   <span class="na-cell">Not yet — post-cert</span>
                 {% elif r.computed_total_tax %}
-                  <span title="computed from certified value × rate; billing unconfirmed"
+                  <span title="Computed: taxable value × combined entity rate — billing data not available for this year"
                         style="font-style:italic; color:var(--text-muted); cursor:help;">
                     ~${{ "{:,.2f}".format(r.computed_total_tax) }}
                   </span>
@@ -972,6 +979,10 @@
                   <span class="badge-verified">Verified</span>
                 {% elif r.data_source == 'preliminary' %}
                   <span class="badge-preliminary">Preliminary</span>
+                {% elif r.billing_source == 'portal_scrape' %}
+                  <span class="badge-partial" title="Payment receipt from Travis County portal — amount paid, not levied; entity breakdown unavailable">Partial</span>
+                {% elif r.computed_total_tax %}
+                  <span class="badge-estimated" title="Computed from certified taxable value × combined entity rate — not actual billing data">Computed</span>
                 {% elif r.data_source %}
                   <span class="badge-partial">Partial</span>
                 {% else %}
@@ -989,7 +1000,9 @@
     <div class="card-footer text-muted small">
       <strong>Data sources:</strong>
       2025 — TCAD Certified Appraisal Export (Verified).
-      2021–2024 — Texas Comptroller Annual Jurisdiction Roll (AJR, Partial).
+      2021–2024 values — Texas Comptroller Annual Jurisdiction Roll (AJR).
+      2021–2024 tax — computed from certified taxable value × entity rates (levy estimate); or portal payment receipt where available (Partial).
+      Authoritative billing history pending Travis County Tax Office response.
       {% if _has_2026 %}2026 — TCAD Preliminary Export, June 9, 2026 (Preliminary — subject to change until July 25, 2026 certification).{% endif %}
       Billing detail is only available for 2025.
       <span class="badge-data-anomaly" title="AV > MV flag" style="margin-left:6px;">!</span> = assessed value exceeds market value in source data — known AJR data quality issue.
