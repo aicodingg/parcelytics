@@ -1,219 +1,134 @@
 {% extends "base.html" %}
 {% block title %}About — Parcelytics{% endblock %}
+{% block container_class %} is-frontdoor{% endblock %}
 
 {% block content %}
 
-{# ── Hero ────────────────────────────────────────────────────────────────── #}
-<div class="about-hero mb-5">
-  <h1 class="about-hero-headline">Travis County Property Tax Intelligence</h1>
-  <p class="about-hero-sub">
-    Verified appraisal data, tax rate history, and market analytics —
-    sourced directly from TCAD and the Travis County Tax Office.
-  </p>
-  <a href="/" class="btn btn-primary about-cta">Search a Parcel &rarr;</a>
-</div>
-
-{# ── What Parcelytics Covers ─────────────────────────────────────────────── #}
-<div class="section-hdr">What Parcelytics Covers</div>
-<div class="row g-3 mb-5">
-
-  <div class="col-lg-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="about-feature-icon">&#9632;</div>
-        <h5 class="about-feature-title">Property Tax Intelligence</h5>
-        <p class="about-feature-body">
-          Full certified appraisal history for every Travis County parcel —
-          market value, assessed value, taxable value, land and improvement
-          breakdown, exemptions, and ownership. Data sourced directly from
-          TCAD certified appraisal rolls, 2021–2026.
-        </p>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-lg-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="about-feature-icon">&#9632;</div>
-        <h5 class="about-feature-title">Tax Rate History</h5>
-        <p class="about-feature-body">
-          35 years of entity-level tax rates (1990–2025) across all Travis
-          County taxing jurisdictions — Travis County, Austin ISD, City of
-          Austin, municipal utility districts, and more. Track how each
-          entity's rate has changed over time.
-        </p>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-lg-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="about-feature-icon">&#9632;</div>
-        <h5 class="about-feature-title">Investor Insight Reports</h5>
-        <p class="about-feature-body">
-          Automated insight reports for every parcel: year-over-year value
-          growth, assessment ratio trends, homestead cap risk, large value
-          jump detection, and 5-year tax projections. Built for acquisition
-          underwriting, not casual browsing.
-        </p>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-lg-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="about-feature-icon">&#9632;</div>
-        <h5 class="about-feature-title">County Market Snapshot</h5>
-        <p class="about-feature-body">
-          County-wide preliminary market intelligence updated with each TCAD
-          appraisal cycle. Median value changes by property type, county
-          aggregate trends, and sector-specific breakdowns — Residential,
-          Multi-Family, Commercial, Land, Agricultural.
-        </p>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-lg-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="about-feature-icon">&#9632;</div>
-        <h5 class="about-feature-title">Submarket Benchmarking</h5>
-        <p class="about-feature-body">
-          Compare any parcel against county medians and percentiles for its
-          property type, use code, and neighborhood. Filter by sector, use
-          code, year, and geography to understand where a parcel sits in the
-          market.
-        </p>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-lg-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="about-feature-icon">&#9632;</div>
-        <h5 class="about-feature-title">2026 Preliminary Values</h5>
-        <p class="about-feature-body">
-          First-look at 2026 TCAD preliminary appraisal values for every
-          Travis County parcel — clearly labeled as preliminary, subject to
-          change at certification (July 25, 2026). Get ahead of the next
-          appraisal cycle before values are locked.
-        </p>
-      </div>
-    </div>
-  </div>
-
-</div>
-
-{# ── Data Sources ────────────────────────────────────────────────────────── #}
-<div class="section-hdr">Data Sources</div>
-<div class="card mb-5">
-  <div class="card-body p-0">
-    <div class="table-responsive">
-      <table class="table table-sm mb-0">
-        <thead class="table-light small text-muted text-uppercase">
-          <tr>
-            <th style="width:32%">Source</th>
-            <th style="width:42%">What It Provides</th>
-            <th style="width:26%">Coverage</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="fw-semibold">Travis Central Appraisal District (TCAD)</td>
-            <td>Certified appraisal rolls — values, exemptions, ownership, land/improvement detail</td>
-            <td><span class="badge-verified">Verified</span> 2021–2025 certified<br>
-                <span class="badge-preliminary ms-0 mt-1 d-inline-block">Preliminary</span> 2026 preliminary</td>
-          </tr>
-          <tr>
-            <td class="fw-semibold">Travis County Tax Office</td>
-            <td>Tax rates by entity across all Travis County taxing jurisdictions</td>
-            <td>1990–2025</td>
-          </tr>
-          <tr>
-            <td class="fw-semibold">Travis County Tax Office</td>
-            <td>Billing and delinquency data — total tax billed, paid, and outstanding</td>
-            <td>2025 current year<br><span class="na-cell">2021–2024 pending</span></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <div class="card-footer text-muted small">
-    All data sourced directly from official government records. No third-party aggregators.
-    Values verified against TCAD's certified appraisal rolls.
-  </div>
-</div>
-
-{# ── Who It's For ────────────────────────────────────────────────────────── #}
-<div class="section-hdr">Who It&rsquo;s For</div>
-<div class="row g-3 mb-5">
-
-  <div class="col-lg-4">
-    <div class="card h-100 about-audience-card">
-      <div class="card-body">
-        <h5 class="about-audience-title">Real Estate Investors</h5>
-        <p class="about-feature-body">
-          Underwrite acquisitions with confidence. See exactly what a property
-          is assessed at, what its tax burden has been, and how it compares to
-          similar properties in the county. Identify homestead cap expiry risk
-          before closing.
-        </p>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-lg-4">
-    <div class="card h-100 about-audience-card">
-      <div class="card-body">
-        <h5 class="about-audience-title">Developers</h5>
-        <p class="about-feature-body">
-          Track value trends by neighborhood and property type. Monitor the
-          tax rate environment across all Travis County taxing entities. Use
-          2026 preliminary values to get ahead of the next appraisal cycle.
-        </p>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-lg-4">
-    <div class="card h-100 about-audience-card">
-      <div class="card-body">
-        <h5 class="about-audience-title">Homeowners</h5>
-        <p class="about-feature-body">
-          Understand how your property's assessed value compares to your
-          neighbors. See your full exemption history, track your homestead
-          cap, and verify the tax amounts on record match your bills.
-        </p>
-      </div>
-    </div>
-  </div>
-
-</div>
-
-{# ── Data Integrity ──────────────────────────────────────────────────────── #}
-<div class="card mb-5 about-integrity-card">
-  <div class="card-body">
-    <h5 class="fw-semibold mb-2">Data Integrity Standard</h5>
-    <p class="mb-0 text-muted">
-      Every figure on Parcelytics carries a confidence label —
-      <span class="badge-verified">Verified</span>
-      <span class="badge-preliminary ms-1">Preliminary</span>
-      <span class="badge-estimated ms-1">Estimated</span>
-      or <span class="na-cell ms-1">Not Available</span>.
-      We never blend a guess with a real number. When data is missing, we say so.
+{# ══ HERO ══════════════════════════════════════════════════════════════════ #}
+<section class="hero">
+  <div class="hero-inner" style="max-width:760px;">
+    <span class="hero-eyebrow"><span class="dot"></span> Travis County, Texas</span>
+    <h1 style="max-width:20ch;">Property-tax intelligence you can <span class="accent">cite</span>.</h1>
+    <p class="hero-sub">
+      Parcelytics turns certified government records into investment-grade analysis —
+      verified appraisal data, 35 years of tax-rate history, and parcel-level benchmarks,
+      every figure traceable to its source.
     </p>
+    <div class="hero-actions">
+      <a href="/" class="btn-cta">Search a parcel →</a>
+      <a href="#request" class="btn-ghost-light">Request access</a>
+    </div>
   </div>
-</div>
+</section>
 
-{# ── Footer note ─────────────────────────────────────────────────────────── #}
-<p class="text-muted small text-center mb-4">
-  Parcelytics is currently in development, covering Travis County, Texas.
-  Expansion to additional Texas counties and Sunbelt states is planned.
-</p>
+{# ══ WHAT IT COVERS ════════════════════════════════════════════════════════ #}
+<section class="fd-section">
+  <div class="fd-kicker">What Parcelytics covers</div>
+  <h2 class="fd-h2">Everything you need to underwrite a Travis County parcel.</h2>
+  <div class="row g-4 mt-2">
+    {% set features = [
+      ('Property tax intelligence','Full certified appraisal history for every Travis County parcel — market, assessed, and taxable value, land/improvement breakdown, exemptions, and ownership. Sourced from TCAD certified rolls, 2021–2026.'),
+      ('Tax rate history','35 years of entity-level rates (1990–2025) across every Travis County jurisdiction — county, school districts, City of Austin, MUDs and more. Track how each entity has moved.'),
+      ('Investor insight reports','Per-parcel analysis: year-over-year growth, assessment-ratio trends, homestead-cap risk, large-jump detection, and illustrative multi-year tax projections — built for underwriting.'),
+      ('County market snapshot','County-wide intelligence each appraisal cycle: median value change by property type, aggregate trends, and sector breakdowns across residential, multi-family, commercial, land and ag.'),
+      ('Submarket benchmarking','Compare any parcel against county medians and percentiles for its type, use code, and neighborhood. Filter by sector, use code, year, and geography.'),
+      ('2026 preliminary values','First-look at 2026 TCAD preliminary appraisals for every parcel — clearly labeled preliminary, subject to change at certification (July 25, 2026).')
+    ] %}
+    {% for title, body in features %}
+    <div class="col-md-6 col-lg-4">
+      <div class="fd-card">
+        <h3>{{ title }}</h3>
+        <p>{{ body }}</p>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{# ══ DATA SOURCES ══════════════════════════════════════════════════════════ #}
+<section class="fd-section-tight">
+  <div class="fd-kicker">Data sources</div>
+  <h2 class="fd-h2">Two government sources. Zero aggregators.</h2>
+  <div class="card mt-3">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table mb-0">
+          <thead>
+            <tr><th style="width:32%">Source</th><th style="width:42%">What it provides</th><th style="width:26%">Coverage</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="fw-semibold">Travis Central Appraisal District (TCAD)</td>
+              <td>Certified appraisal rolls — values, exemptions, ownership, land/improvement detail</td>
+              <td><span class="badge-verified">Verified</span> 2021–2025<br><span class="badge-preliminary mt-1 d-inline-block">Preliminary</span> 2026</td>
+            </tr>
+            <tr>
+              <td class="fw-semibold">Travis County Tax Office</td>
+              <td>Tax rates by entity across all Travis County taxing jurisdictions</td>
+              <td>1990–2025</td>
+            </tr>
+            <tr>
+              <td class="fw-semibold">Travis County Tax Office</td>
+              <td>Billing &amp; delinquency — total tax billed, paid, and outstanding</td>
+              <td>2025 current<br><span class="na-cell">2021–2024 pending</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card-footer">All data sourced directly from official government records. No third-party aggregators. Values verified against TCAD's certified appraisal rolls.</div>
+  </div>
+</section>
+
+{# ══ DATA INTEGRITY STANDARD ═══════════════════════════════════════════════ #}
+<section class="fd-section-tight">
+  <div class="fd-trust-panel">
+    <div class="row g-5">
+      <div class="col-lg-5">
+        <div class="fd-kicker">The standard</div>
+        <h2 class="fd-h2" style="color:#fff;">Honesty, made premium.</h2>
+        <p class="fd-lead" style="color:var(--text-on-dark-2);">Every figure carries a confidence label. We never blend a guess with a real number — and when data is missing, we say so.</p>
+      </div>
+      <div class="col-lg-7">
+        {% set rules = [
+          'No estimate or interpolation is ever presented as fact.',
+          'Every figure shows a visible confidence level.',
+          'Every figure is traceable to its source and as-of date.',
+          '"Not Available" is an explicit state — never blank, never zero.',
+          'Estimates carry distinct treatment: dashed, muted, ~ prefixed.'
+        ] %}
+        {% for r in rules %}
+        <div class="provenance-row"><span class="provenance-check">✓</span><div class="src" style="font-weight:500;">{{ r }}</div></div>
+        {% endfor %}
+        <div class="mt-4 confidence-legend">
+          <span class="item"><span class="badge-verified" style="font-size:10px;">Verified</span></span>
+          <span class="item"><span class="badge-preliminary" style="font-size:10px;">Preliminary</span></span>
+          <span class="item"><span class="badge-partial" style="font-size:10px;">Partial</span></span>
+          <span class="item"><span class="badge-estimated" style="font-size:10px;">Estimated</span></span>
+          <span class="item"><span class="na-cell">Not Available</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# ══ WHO IT'S FOR ══════════════════════════════════════════════════════════ #}
+<section class="fd-section">
+  <div class="fd-kicker">Who it's for</div>
+  <div class="row g-4 mt-2">
+    <div class="col-md-4"><div class="audience-card"><h3>Real estate investors</h3><p>Underwrite acquisitions with confidence — exact assessment, tax-burden history, and peer comparison. Identify homestead-cap expiry and delinquency risk before closing.</p></div></div>
+    <div class="col-md-4"><div class="audience-card"><h3>Developers</h3><p>Track value trends by neighborhood and property type, monitor the rate environment across entities, and use 2026 preliminary values to get ahead of the cycle.</p></div></div>
+    <div class="col-md-4"><div class="audience-card"><h3>Homeowners</h3><p>Understand how your value compares to neighbors, review your exemption and homestead-cap history, and verify the tax amounts on record match your bills.</p></div></div>
+  </div>
+</section>
+
+{# ══ REQUEST ACCESS ════════════════════════════════════════════════════════ #}
+<section class="fd-section-tight" id="request">
+  <div class="fd-cta-band">
+    <h2>Request access or send feedback</h2>
+    <p>Parcelytics is in active development, covering Travis County today — expanding across the Austin metro and Texas over time. Tell us what you're working on.</p>
+    <a class="btn-cta" href="mailto:parcelytics@gmail.com?subject=Parcelytics%20access%20request">Request access →</a>
+  </div>
+</section>
 
 {% endblock %}

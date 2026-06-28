@@ -82,3 +82,16 @@ Step5_*.md
 *.docx
 investigate_*.py
 validate_*.py
+*.command
+MORNING_REVIEW.md
+
+# Per-task staging / scratch area (verification tooling lives here)
+task_staging/
+
+# Runtime state (scraper checkpoint/errors)
+loaders/.scrape_checkpoint.json
+loaders/.scrape_errors.log
+
+# FUSE in-use placeholder files (from the mounted volume)
+.fuse_hidden*
+**/.fuse_hidden*

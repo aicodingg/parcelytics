@@ -1,5 +1,5 @@
 # Known Limitations — Parcelytics Platform
-*Last updated: June 22, 2026*
+*Last updated: June 23, 2026*
 
 ## Data Coverage
 
@@ -22,13 +22,68 @@ The 2021 PDF constraint (90% vs 99.9%) is a one-time limitation. TCAD only had a
 - `hs_cap_loss` is populated for **2021–2024** from AJR field[35].
 - The investor insight report and projection engine look for the most recent year with hs_cap_loss data rather than hardcoding to 2025, so homestead cap warnings still fire correctly from AJR data.
 
-### tax_billing detail (2021–2024): Pending — Travis County request submitted
-- Full billing detail (`total_tax`, `total_paid`, `total_due`, effective tax rate) is only available for **2025** (source: Travis County Tax Office TaxCurOpenData).
-- Pre-2025 rows in `tax_billing` are delinquent-only records sourced from TaxDelqOpenData — they do not represent the full billing population for those years.
-- **The Travis County Tax Office does not publish historical billing snapshots.** The open data portal (traviscountytx.gov/open-data-portal) provides only current-year billing and rolling delinquent data.
-- **Request status:** Open Records Request submitted **June 21, 2026** via email to TaxOffice@TravisCountyTX.gov. Requesting TaxCurOpenData-format billing records for tax years 2021, 2022, 2023, and 2024. **Follow-up scheduled: June 30, 2026.**
-- This is separate from and independent of the TCAD PIR above — TCAD and the Travis County Tax Office are different agencies.
-- Do not attempt to backfill billing from delinquent data or AJR sources — they are structurally different datasets. When billing files arrive, load via `load_pir_billing.py` (already written and tested).
+### tax_billing detail (2021–2024): Partially available via portal scrape
+
+Two sources available — use the better one when it arrives:
+
+#### Source 1 — Portal payment receipts (`data_source = 'portal_scrape'`, `confidence_level = 'partial'`)
+- The Travis County Tax Office portal at `travis.go2gov.net` exposes per-property payment receipt history going back to at least 2012.
+- `loaders/scrape_billing_history.py` scrapes `total_tax = total_paid = payment_amount` for 2021–2024 using a single-threaded, rate-limited (~0.75 s/request) approach.
+- **Data integrity caveat:** Payment amounts reflect what was *paid*, not necessarily what was *levied*. Deferrals, partial payments, and supplemental billings can cause them to differ. Stored with `confidence_level = 'partial'` — the UI should show an amber "Partial" badge for these rows, not a green "Verified" badge.
+- **Entity-level breakdown not available** from this source — only the total paid amount per year. `total_due`, `billing_num`, and `exemption_codes` are NULL on portal_scrape rows.
+- The upsert in `scrape_billing_history.py` protects existing better-quality rows: any row with `data_source NOT IN (NULL, 'portal_scrape')` (i.e. `'taxcur'` or `'pir_billing'`) is never overwritten.
+- Run order: `--test` (500 parcels, verify sanity check) → full run → `--resume` if interrupted.
+
+#### Source 2 — Travis County Tax Office bulk export (when received)
+- Open Records Request submitted **June 21, 2026** via email to TaxOffice@TravisCountyTX.gov. Requesting TaxCurOpenData-format billing records for tax years 2021–2024. **Follow-up scheduled: June 30, 2026.**
+- When bulk files arrive, load via `load_pir_billing.py` (already written and tested). That loader's upsert will replace any `portal_scrape` rows with authoritative data, and will also populate `tax_billing_entity` with entity-level breakdown.
+- This is separate from the TCAD PIR — TCAD and the Travis County Tax Office are different agencies.
+
+**Do not backfill from delinquent data or AJR sources** — they are structurally different datasets.
+
+### living_area_sqft: Available from IMP_DET.TXT (loader written, pending run)
+Building-area square footage by component is available in `IMP_DET.TXT` from the TCAD
+Certified Export. Living-area component codes included: `1ST` (1st Floor), `2ND` (2nd Floor),
+`3RD` (3rd Floor), `1/2` (Half Floor), `RSBLW` (Residence Below Grade), `FBSMT` (Finished
+Basement). Excluded: `UBSMT` (unfinished basement) and all non-living components (garage,
+carport, deck, etc.).
+
+**Status:** `loaders/load_imp_det_sqft.py` + `loaders/migrate_add_sqft.py` written.
+The migration adds `parcel.living_area_sqft NUMERIC(10,2)` (additive, IF NOT EXISTS).
+Run order: `migrate_add_sqft.py` → `load_imp_det_sqft.py` (needs DB and CERT_DIR path).
+After loading, the peer benchmark can be extended to per-SF comparisons.
+The peer benchmark footnote in the property detail page notes "per-SF normalisation pending
+loader ingestion" — remove that note once the column is populated.
+
+### PID/Special-District entity codes missing from county_tax_rate (CORRECTNESS-CRITICAL)
+**49 entity codes** in TaxCurOpenData billing data (2025) are absent from `county_tax_rate`.
+These are primarily Public Improvement Districts (PIDs) administered by City of Austin and
+Water Control and Improvement Districts (WCIDs) not in the rates XLSX.
+
+**Impact:** The rate-based post-acquisition estimator (`/api/estimate_acq`) silently skips
+entities with NULL rate. For ~12,142 parcels with PID charges, the buyer's estimated tax
+is understated. The total missing billing in 2025 is **$38.05M** across 49 codes.
+
+**What is CORRECT:** Historical billing display (amount_due from TaxCurOpenData) is correct
+for all entities including PIDs. Seller's current tax in the estimator is correct
+(sums amount_due directly). Only rate-based projections and buyer estimates are affected.
+
+**Top missing codes by billing volume:**
+
+| Code | Parcels | 2025 Billed | Category |
+|------|--------:|------------:|----------|
+| P2U | 2,558 | $14.1M | PID — Downtown Austin / 2nd Street |
+| P2P | 806 | $2.7M | PID |
+| P10T | 428 | $2.5M | PID |
+| PWV | 942 | $2.3M | WCID — Point Venture |
+| P11L | 222 | $2.2M | PID |
+
+See `ENTITY_CODE_AUDIT.md` for the full table and recommended fix.
+
+**Fix:** After the estimator session merges, apply a "billing-only pass-through" in
+`api_estimate_acq`: for entities with `amount_due` but NULL `rate`, carry the prior-year
+billed amount forward as a pass-through estimate labeled "PID/Special District assessments
+(from prior billing, not rate-computed)". See `ENTITY_CODE_AUDIT.md` for implementation.
 
 ## Out of Scope for Phase 1
 
@@ -36,7 +91,7 @@ The following were explicitly excluded from this phase and should not be backfil
 
 - ~~Historical taxable values (2021–2024)~~ — **RESOLVED** via cert_2021–cert_2024 loads
 - ~~Historical land/improvement breakdown (2021–2024)~~ — **RESOLVED** via cert_2021–cert_2024 loads
-- Historical full billing detail (2021–2024) — **pending Travis County response** (request submitted June 21, 2026)
+- Historical full billing detail (2021–2024) — **partially covered via portal scrape** (`portal_scrape`/`partial`); authoritative bulk data pending Travis County response (request submitted June 21, 2026)
 - AJR supplemental roll data (supplements to the main certified roll)
 - Protest/ARB history (available in Certified Export ARB.TXT but not loaded)
 - Agent/owner contact data (available in Certified Export AGENT.TXT but not loaded)

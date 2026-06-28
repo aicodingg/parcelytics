@@ -22,6 +22,7 @@ import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn, execute_schema
+from tax_logic.classify import label_case_sql
 import psycopg2.extras
 
 COMPUTATION_VERSION = "2.0"
@@ -361,9 +362,11 @@ def compute_county_benchmarks(conn):
     conn.commit()
 
     excl = _exclude_clause()
+    # classi_cd-first label (Task 1): apartments carrying a multi-family
+    # improvement code are bucketed as Multi-Family even when state_cd1 says 'A'.
+    label_expr = label_case_sql("p.classi_cd", "p.state_cd1")
     with conn.cursor() as cur:
         for prefixes, label, prefix_key in TYPE_GROUPS:
-            like_cond = _like_clause(prefixes)
             cur.execute(f"""
                 INSERT INTO county_benchmark (
                     county_code, tax_year, property_type_label, state_cd1_prefix,
@@ -396,7 +399,7 @@ def compute_county_benchmarks(conn):
                 JOIN parcel p ON p.geo_id = pty.geo_id
                 LEFT JOIN parcel_metrics pm
                   ON pm.geo_id = pty.geo_id AND pm.tax_year = pty.tax_year
-                WHERE {like_cond}
+                WHERE ({label_expr}) = %s
                   {excl}
                   AND p.geo_id NOT LIKE 'AJR%%'
                   AND pty.market_value > 0
@@ -411,7 +414,7 @@ def compute_county_benchmarks(conn):
                         median_assessment_ratio     = EXCLUDED.median_assessment_ratio,
                         median_yoy_value_change_pct = EXCLUDED.median_yoy_value_change_pct,
                         computed_at                 = NOW()
-            """, (label, prefix_key))
+            """, (label, prefix_key, label))
             n = cur.rowcount
             print(f"    {label}: {n} year rows")
     conn.commit()
@@ -505,6 +508,9 @@ def main():
     parser = argparse.ArgumentParser(description="Phase 2 metric computation")
     parser.add_argument("--analyze", action="store_true",
                         help="Print threshold distribution analysis only; skip compute")
+    parser.add_argument("--benchmarks-only", action="store_true",
+                        help="Rebuild county_benchmark only (skip the parcel_metrics "
+                             "recompute). Use after a classification-only change.")
     args = parser.parse_args()
 
     conn = get_conn()
@@ -516,6 +522,14 @@ def main():
         # Apply any new schema additions (parcel_metrics, county_benchmark, rate_trend view)
         print("Applying schema…")
         execute_schema(conn)
+
+        if args.benchmarks_only:
+            # Task 1: classification-only change touches county_benchmark bucketing,
+            # not the per-parcel YoY rows — rebuild just the benchmark.
+            compute_county_benchmarks(conn)
+            print_sample(conn)
+            print("\nDone (benchmarks only).")
+            return
 
         # Threshold analysis runs first so you can see what the current setting flags
         analyze_threshold(conn)

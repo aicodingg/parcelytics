@@ -64,9 +64,16 @@
     </div>
   </div>
 
-  {# Card 4: Effective Tax Rate (or combined rate approx) #}
+  {# Card 4: Effective Tax Rate (2025) — year-specific, same-year basis #}
   <div class="kpi-card">
-    <div class="kpi-label">Effective Tax Rate</div>
+    <div class="kpi-label"
+         title="Total 2025 tax paid ÷ 2025 certified market value">
+      {% if kpi.effective_tax_rate is defined %}
+        Effective Tax Rate ({{ kpi.effective_tax_rate_year | default(2025) }})
+      {% else %}
+        Effective Tax Rate
+      {% endif %}
+    </div>
     <div class="kpi-value">
       {% if kpi.effective_tax_rate is defined %}
         {{ "{:.4f}%".format(kpi.effective_tax_rate) }}
@@ -76,7 +83,8 @@
     </div>
     <div class="kpi-sub">
       {% if kpi.effective_tax_rate is defined %}
-        2025 · Tax ÷ Market Value
+        2025 Tax ÷ 2025 Market Value
+        <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
       {% elif kpi.rate_approx is defined %}
         2025 Combined Rate
         <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Est.</span>
@@ -84,6 +92,14 @@
         No billing data
       {% endif %}
     </div>
+    {% if kpi.effective_tax_rate_2026_est is defined %}
+    <div class="kpi-sub" style="margin-top:6px; border-top:1px solid var(--border, #e5e7eb); padding-top:5px;"
+         title="Estimated 2026 tax (2026 taxable value × 2025 blended entity rate) ÷ 2026 preliminary market value">
+      <span style="font-variant-numeric:tabular-nums; font-weight:600;">{{ "{:.4f}%".format(kpi.effective_tax_rate_2026_est) }}</span>
+      Est. 2026 ETR
+      <span class="badge-estimated" style="font-size:9px; padding:1px 5px;">Estimated</span>
+    </div>
+    {% endif %}
   </div>
 
 </div>
