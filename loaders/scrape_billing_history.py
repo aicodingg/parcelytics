@@ -206,7 +206,7 @@ def get_eligible_geo_ids(
 
     # Commercial-priority filter: multi-family (B*), commercial (F*/L*)
     commercial_clause = (
-        "AND LEFT(pty.state_cd1, 1) IN ('B', 'F', 'L')"
+        "AND LEFT(p.state_cd1, 1) IN ('B', 'F', 'L')"
         if commercial_only else ""
     )
 
