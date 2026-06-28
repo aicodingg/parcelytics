@@ -29,7 +29,9 @@ Usage
   python3 loaders/scrape_billing_history.py --test --resume
 """
 
-import os, sys, json, time, random, argparse, urllib.request, urllib.error
+from __future__ import annotations  # allows X | Y union hints on Python 3.7–3.9
+
+import os, sys, json, time, random, argparse, urllib.request, urllib.error, ssl
 from html.parser import HTMLParser
 from datetime import datetime
 
@@ -45,9 +47,11 @@ TARGET_YEARS        = {2021, 2022, 2023, 2024}
 CHECKPOINT_FILE     = os.path.join(os.path.dirname(__file__), ".scrape_checkpoint.json")
 ERROR_LOG_FILE      = os.path.join(os.path.dirname(__file__), ".scrape_errors.log")
 CHECKPOINT_INTERVAL = 1_000   # save checkpoint every N parcels
-DELAY_MIN           = 0.5     # seconds between requests
-DELAY_MAX           = 1.0
-REQUEST_TIMEOUT     = 15      # seconds per request
+DELAY_MIN           = 2.0     # seconds between requests — stays under portal rate limit (~30 req/min)
+DELAY_MAX           = 3.0
+REQUEST_TIMEOUT     = 20      # seconds per request
+RATE_LIMIT_BACKOFF  = 15      # seconds to pause after a 429 (short — just let the window reset)
+MAX_RETRIES         = 3       # retry count for transient errors (not 404)
 # Transparent User-Agent identifies the scraper and provides contact info
 USER_AGENT = (
     "Parcelytics/1.0 Tax Research Tool "
@@ -181,6 +185,7 @@ def get_eligible_geo_ids(
     limit: int | None = None,
     exclude: set[str] | None = None,
     random_order: bool = False,
+    commercial_only: bool = False,
 ) -> list[str]:
     """Return geo_ids that have parcel_tax_year rows for 2021–2024.
 
@@ -199,20 +204,43 @@ def get_eligible_geo_ids(
         quoted = ", ".join(f"'{g}'" for g in exclude)
         exclude_clause = f"AND p.geo_id NOT IN ({quoted})"
 
-    order_clause = "ORDER BY RANDOM()" if random_order else "ORDER BY p.geo_id"
+    # Commercial-priority filter: multi-family (B*), commercial (F*/L*)
+    commercial_clause = (
+        "AND LEFT(pty.state_cd1, 1) IN ('B', 'F', 'L')"
+        if commercial_only else ""
+    )
+
     limit_clause = f"LIMIT {int(limit)}" if limit else ""
 
-    sql = f"""
-        SELECT DISTINCT p.geo_id
-        FROM   parcel p
-        JOIN   parcel_tax_year pty
-               ON pty.geo_id = p.geo_id
-               AND pty.tax_year BETWEEN 2021 AND 2024
-        WHERE  p.geo_id NOT LIKE 'AJR%%'
-        {exclude_clause}
-        {order_clause}
-        {limit_clause}
-    """
+    if random_order:
+        # RANDOM() can't appear in ORDER BY with SELECT DISTINCT — wrap in subquery
+        sql = f"""
+            SELECT geo_id FROM (
+                SELECT DISTINCT p.geo_id
+                FROM   parcel p
+                JOIN   parcel_tax_year pty
+                       ON pty.geo_id = p.geo_id
+                       AND pty.tax_year BETWEEN 2021 AND 2024
+                WHERE  p.geo_id NOT LIKE 'AJR%%'
+                {exclude_clause}
+                {commercial_clause}
+            ) sub
+            ORDER BY RANDOM()
+            {limit_clause}
+        """
+    else:
+        sql = f"""
+            SELECT DISTINCT p.geo_id
+            FROM   parcel p
+            JOIN   parcel_tax_year pty
+                   ON pty.geo_id = p.geo_id
+                   AND pty.tax_year BETWEEN 2021 AND 2024
+            WHERE  p.geo_id NOT LIKE 'AJR%%'
+            {exclude_clause}
+            {commercial_clause}
+            ORDER BY p.geo_id
+            {limit_clause}
+        """
     with conn.cursor() as cur:
         cur.execute(sql)
         return [row[0] for row in cur.fetchall()]
@@ -251,21 +279,60 @@ def save_checkpoint(completed: list[str], stats: dict) -> None:
 
 # ── HTTP fetch ────────────────────────────────────────────────────────────────
 
-def fetch_html(geo_id: str) -> str | None:
+# Build an SSL context. On macOS + Python.org install the default context may
+# fail certificate verification; try certifi first, then system certs, then
+# fall back to unverified (acceptable for read-only public government data).
+def _make_ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+    ctx = ssl.create_default_context()
+    try:
+        ctx.load_verify_locations(capath="/etc/ssl/certs")   # Linux
+    except (FileNotFoundError, ssl.SSLError):
+        pass
+    # Last resort — disable verification (public read-only portal, low risk)
+    ctx.check_hostname = False
+    ctx.verify_mode    = ssl.CERT_NONE
+    return ctx
+
+_SSL_CTX = _make_ssl_context()
+
+# Return codes from fetch_html (makes error handling in the loop explicit)
+HTTP_OK          = 0
+HTTP_NOT_FOUND   = 404   # account doesn't exist in portal → treat as "no data"
+HTTP_RATE_LIMIT  = 429   # server asking us to slow down → back off + retry
+HTTP_SERVER_ERR  = 500
+HTTP_NETWORK_ERR = -1    # connection-level failure (timeout, DNS, etc.)
+
+
+def fetch_html(geo_id: str) -> tuple[str | None, int]:
     """Fetch the payment-receipts page for one geo_id.
 
-    Returns raw HTML string, or None on any network/HTTP error.
-    Portal uses ISO-8859-1 encoding.
+    Returns (html_string, status) where:
+      - status = HTTP_OK (0)           → html is the page content
+      - status = HTTP_NOT_FOUND (404)  → account not in portal, html is None
+      - status = HTTP_RATE_LIMIT (429) → caller should back off and retry
+      - status = HTTP_SERVER_ERR (5xx) → transient server error
+      - status = HTTP_NETWORK_ERR (-1) → network/SSL error, html is None
+
+    Portal returns ISO-8859-1 encoded HTML.
     """
-    account = geo_id + "0000"   # 10-digit geo_id → 14-digit account number
+    account = geo_id + "0000"   # 10-digit geo_id → 14-digit portal account
     url     = BASE_URL.format(account=account)
     req     = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT,
+                                    context=_SSL_CTX) as resp:
             raw = resp.read()
-            return raw.decode("iso-8859-1", errors="replace")
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError):
-        return None
+            return raw.decode("iso-8859-1", errors="replace"), HTTP_OK
+    except urllib.error.HTTPError as e:
+        # Server responded with an error code — capture it for smarter handling
+        return None, e.code
+    except (urllib.error.URLError, OSError):
+        return None, HTTP_NETWORK_ERR
 
 
 # ── reporting ─────────────────────────────────────────────────────────────────
@@ -335,7 +402,52 @@ def main() -> None:
         "--resume", action="store_true",
         help="Resume from checkpoint file, skipping already-processed geo_ids.",
     )
+    ap.add_argument(
+        "--priority-commercial", action="store_true",
+        help=(
+            "Only scrape commercial, industrial, and multi-family parcels "
+            "(state_cd1 starting with B, F, or L). "
+            "~15,000-20,000 parcels — designed for weekend batch runs."
+        ),
+    )
+    ap.add_argument(
+        "--diagnose", action="store_true",
+        help="Fetch 20 parcels from the error log with verbose output — use to identify error types.",
+    )
     args = ap.parse_args()
+
+    # ── Diagnostic mode ───────────────────────────────────────────────────────
+    if args.diagnose:
+        print("=" * 65)
+        print("  DIAGNOSTIC MODE — fetching 20 parcels from error log")
+        print("=" * 65)
+        if not os.path.exists(ERROR_LOG_FILE):
+            print("  No error log found. Run --test first.")
+            return
+        with open(ERROR_LOG_FILE) as f:
+            lines = [l.strip() for l in f if l.strip() and not l.startswith("---")]
+        geo_ids_to_check = [l.split(":")[0] for l in lines[:20]]
+        print(f"  Checking: {geo_ids_to_check}\n")
+        for geo_id in geo_ids_to_check:
+            account = geo_id + "0000"
+            url     = BASE_URL.format(account=account)
+            req     = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            try:
+                with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT,
+                                            context=_SSL_CTX) as resp:
+                    body = resp.read().decode("iso-8859-1", errors="replace")
+                    receipts = parse_receipts(body)
+                    years    = [r["tax_year"] for r in receipts]
+                    print(f"  {geo_id}  HTTP 200  years={years}")
+            except urllib.error.HTTPError as e:
+                print(f"  {geo_id}  HTTP {e.code}  reason={e.reason}")
+            except urllib.error.URLError as e:
+                print(f"  {geo_id}  URLError  reason={e.reason}")
+            except OSError as e:
+                print(f"  {geo_id}  OSError   {e!r}")
+            time.sleep(DELAY_MIN)
+        print("\nDone. Paste this output and we'll diagnose from it.")
+        return
 
     mode_label = (f"TEST ({TEST_LIMIT} parcels)" if args.test else "FULL")
     print("=" * 65)
@@ -372,6 +484,7 @@ def main() -> None:
             limit=n_random,
             exclude=(set(KNOWN_PARCELS) | already_done),
             random_order=True,
+            commercial_only=args.priority_commercial,
         )
         geo_ids = known_to_run + random_geo_ids
         geo_ids = geo_ids[:TEST_LIMIT]
@@ -379,8 +492,13 @@ def main() -> None:
               f"= {len(geo_ids):,} parcels to process.")
     else:
         print(f"  Querying eligible geo_ids (parcel_tax_year 2021–2024, not AJR*) …")
-        geo_ids = get_eligible_geo_ids(conn, exclude=already_done)
-        print(f"  → {len(geo_ids):,} eligible geo_ids to process.")
+        geo_ids = get_eligible_geo_ids(
+            conn,
+            exclude=already_done,
+            commercial_only=args.priority_commercial,
+        )
+        label = "commercial/MF" if args.priority_commercial else "all eligible"
+        print(f"  → {len(geo_ids):,} {label} geo_ids to process.")
 
     print()
 
@@ -409,13 +527,31 @@ def main() -> None:
                 f"ETA {eta_min:.0f}m"
             )
 
-        # ── Fetch ──────────────────────────────────────────────────────────────
-        html = fetch_html(geo_id)
+        # ── Fetch (with retry for transient errors) ────────────────────────────
+        html, status = None, HTTP_NETWORK_ERR
+        for attempt in range(MAX_RETRIES):
+            html, status = fetch_html(geo_id)
+            if html is not None:
+                break                            # success
+            if status == HTTP_NOT_FOUND:
+                break                            # 404 → no data, don't retry
+            if status == HTTP_RATE_LIMIT:
+                wait = RATE_LIMIT_BACKOFF * (attempt + 1)
+                print(f"  [rate-limit] 429 received — waiting {wait}s before retry …")
+                time.sleep(wait)
+            else:
+                # Network error / 5xx — short pause, then retry
+                time.sleep(DELAY_MIN * (attempt + 1))
+
         stats["scraped"] += 1
 
         if html is None:
-            stats["errors"] += 1
-            error_lines.append(f"{geo_id}: network/HTTP error")
+            if status == HTTP_NOT_FOUND:
+                # Account not in portal — not a true error, just no data
+                pass
+            else:
+                stats["errors"] += 1
+                error_lines.append(f"{geo_id}: HTTP {status}")
             completed.append(geo_id)
             time.sleep(DELAY_MIN)
             continue

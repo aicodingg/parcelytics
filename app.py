@@ -14,6 +14,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 import config
 
 from tax_logic.texas import estimate_post_acquisition as _tx_estimate
+from loaders.scrape_billing_history import fetch_html, parse_receipts, upsert_billing_rows, HTTP_OK
+
+_BILLING_TARGET_YEARS  = {2021, 2022, 2023, 2024}
+_BILLING_SENTINEL_YEAR = 9999   # stored when portal returns no target-year data
 
 
 # ── Investor insight generator ────────────────────────────────────────────────
@@ -1904,6 +1908,90 @@ def api_peer_benchmark_sf(geo_id):
             "p75":    _pct(assessed_psf_vals, 75),
         },
     })
+
+
+
+# ── On-demand billing fetch ────────────────────────────────────────────────────
+@app.route("/api/billing/<geo_id>")
+def api_billing(geo_id):
+    """Fetch + cache 2021-2024 billing data for one parcel from the portal.
+
+    Called asynchronously by the property page after initial load.
+    First call: hits the portal (~5-7 s), stores results, returns data.
+    Subsequent calls: DB-only lookup, returns in <100 ms.
+
+    Sentinel row (tax_year=9999): stored when portal responds but has no
+    2021-2024 receipts, so we don't re-fetch on every page view.
+    Network errors are NOT cached — the next visit will retry.
+    """
+    geo_id = geo_id.strip()
+    conn = get_db()
+    try:
+        # 1. Already fetched? (real data or sentinel both count)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM tax_billing "
+                "WHERE geo_id = %s AND data_source = 'portal_scrape'",
+                (geo_id,)
+            )
+            already_fetched = cur.fetchone()["cnt"] > 0
+
+        # 2. Portal fetch (only if not cached)
+        if not already_fetched:
+            html, status = fetch_html(geo_id)
+            if html is not None and status == HTTP_OK:
+                receipts = parse_receipts(html)
+                target   = [r for r in receipts if r["tax_year"] in _BILLING_TARGET_YEARS]
+                if target:
+                    records = [
+                        {
+                            "geo_id":     geo_id,
+                            "tax_year":   r["tax_year"],
+                            "total_tax":  r["payment_amount"],
+                            "total_paid": r["payment_amount"],
+                        }
+                        for r in target
+                    ]
+                    upsert_billing_rows(conn, records)
+                else:
+                    # Portal has this account but no 2021-2024 receipts — sentinel
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO tax_billing "
+                            "  (geo_id, tax_year, data_source, confidence_level) "
+                            "VALUES (%s, %s, 'portal_scrape', 'partial') "
+                            "ON CONFLICT (geo_id, tax_year) DO NOTHING",
+                            (geo_id, _BILLING_SENTINEL_YEAR)
+                        )
+                    conn.commit()
+            # Network/429/5xx → don't cache, let next page visit retry
+
+        # 3. Return 2021-2024 portal_scrape rows (sentinel excluded by year range)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT tax_year, total_tax, total_paid, data_source, confidence_level "
+                "FROM tax_billing "
+                "WHERE geo_id = %s "
+                "  AND tax_year BETWEEN 2021 AND 2024 "
+                "  AND data_source = 'portal_scrape' "
+                "ORDER BY tax_year",
+                (geo_id,)
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+
+        # psycopg2 returns Decimal — convert for JSON
+        for row in rows:
+            for k in ("total_tax", "total_paid"):
+                if row[k] is not None:
+                    row[k] = float(row[k])
+
+        return jsonify({"status": "ok", "cached": already_fetched, "rows": rows})
+
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc), "rows": []})
+    finally:
+        conn.close()
+
 
 
 # ── Task 5: ptype label → SQL WHERE fragments ──────────────────────────────────

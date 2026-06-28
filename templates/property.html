@@ -933,7 +933,7 @@
           <tbody>
             {% for r in history | sort(attribute='tax_year', reverse=True) %}
             {% set _av_anomaly = r.assessed_value and r.market_value and r.assessed_value > r.market_value %}
-            <tr>
+            <tr data-year="{{ r.tax_year }}">
               <td>
                 {{ r.tax_year }}
                 {% if r.data_source == 'preliminary' %}
@@ -953,7 +953,7 @@
               <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.land_value)) if r.land_value else "—" }}</td>
               <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.imprv_value)) if r.imprv_value else "—" }}</td>
               <td class="text-end">${{ "{:,.0f}".format(r.taxable_value) if r.taxable_value else "—" }}</td>
-              <td class="text-end">
+              <td class="text-end" {% if r.tax_year in [2021,2022,2023,2024] %}id="btax-{{ r.tax_year }}"{% endif %}>
                 {% if r.total_tax and r.billing_source == 'portal_scrape' %}
                   {# Payment receipt from portal — amount paid, not necessarily levied #}
                   <span title="Amount paid per portal receipt — reflects payment, not necessarily levy; entity breakdown unavailable"
@@ -971,10 +971,10 @@
                     ~${{ "{:,.2f}".format(r.computed_total_tax) }}
                   </span>
                 {% else %}
-                  <span class="na-cell">Not available yet</span>
+                  <span class="na-cell" id="bna-{{ r.tax_year }}">Not available yet</span>
                 {% endif %}
               </td>
-              <td>
+              <td {% if r.tax_year in [2021,2022,2023,2024] %}id="bsrc-{{ r.tax_year }}"{% endif %}>
                 {% if r.tax_year == 2025 %}
                   <span class="badge-verified">Verified</span>
                 {% elif r.data_source == 'preliminary' %}
@@ -2558,6 +2558,78 @@ if (rCtx) {
       })
     );
   });
+})();
+</script>
+
+
+<script>
+/* ── On-demand billing fetch ─────────────────────────────────────────────────
+   Fires once after page load. Calls /api/billing/<geo_id> which:
+     - Returns cached data instantly if already stored (~100ms)
+     - Fetches from the portal on first visit (~5-7s), stores permanently
+   Updates the 5-Year History table without blocking the initial page render.
+*/
+(function () {
+  var GEO_ID = {{ geo_id | tojson }};
+  var TARGET = [2021, 2022, 2023, 2024];
+
+  // Show spinner in uncached cells while we wait
+  TARGET.forEach(function (yr) {
+    var naEl = document.getElementById("bna-" + yr);
+    if (naEl) {
+      naEl.innerHTML = '<span style="color:var(--text-muted);font-size:11px;">fetching…</span>';
+    }
+  });
+
+  fetch("/api/billing/" + GEO_ID)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.status !== "ok" || !data.rows.length) {
+        // Restore "Not available yet" if fetch returned nothing
+        TARGET.forEach(function (yr) {
+          var naEl = document.getElementById("bna-" + yr);
+          if (naEl) { naEl.textContent = "Not available yet"; }
+        });
+        return;
+      }
+
+      // Build lookup: year → row
+      var byYear = {};
+      data.rows.forEach(function (r) { byYear[r.tax_year] = r; });
+
+      TARGET.forEach(function (yr) {
+        var taxCell = document.getElementById("btax-" + yr);
+        var srcCell = document.getElementById("bsrc-" + yr);
+        var row     = byYear[yr];
+
+        if (!taxCell) return;   // row not in table (e.g. 2026-only view)
+
+        if (row && row.total_tax !== null) {
+          // Format as ~$X,XXX.XX with Partial badge
+          var amt = row.total_tax.toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2});
+          taxCell.innerHTML =
+            "<span title='Amount paid per portal receipt — reflects payment, not necessarily levy; entity breakdown unavailable'" +
+            " style='font-style:italic;color:var(--text-muted);cursor:help;'>~$" + amt + "</span>" +
+            " <span class='badge-partial ms-1' style='font-size:9px;'>Partial</span>";
+          if (srcCell) {
+            srcCell.innerHTML =
+              "<span class='badge-partial' title='Payment receipt from Travis County portal — amount paid, not levied; entity breakdown unavailable'>Partial</span>";
+          }
+        } else {
+          // No receipt for this year — restore na-cell
+          if (taxCell.querySelector("#bna-" + yr) || taxCell.querySelector("span")) {
+            taxCell.innerHTML = "<span class='na-cell'>Not available yet</span>";
+          }
+        }
+      });
+    })
+    .catch(function () {
+      // Network error — restore na-cell labels silently
+      TARGET.forEach(function (yr) {
+        var naEl = document.getElementById("bna-" + yr);
+        if (naEl) { naEl.textContent = "Not available yet"; }
+      });
+    });
 })();
 </script>
 
