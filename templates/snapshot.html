@@ -55,30 +55,50 @@
 {# ── Headline cards ────────────────────────────────────────────── #}
 {% set mv_delta_b = (totals.total_mv26_b - totals.total_mv25_b) | round(2) %}
 {% set mv_delta_pct = ((totals.total_mv26_b - totals.total_mv25_b) / totals.total_mv25_b * 100) | round(1) %}
-<div class="kpi-row mb-4">
-  <div class="kpi-card">
-    <div class="kpi-label">2025 Total MV (Certified)</div>
-    <div class="kpi-value">${{ "{:,.2f}B".format(totals.total_mv25_b) }}</div>
-    <div class="kpi-sub"><span class="badge-verified" style="font-size:9px;">Verified</span></div>
-  </div>
-  <div class="kpi-card">
-    <div class="kpi-label">2026 Total MV (Preliminary)</div>
-    <div class="kpi-value">${{ "{:,.2f}B".format(totals.total_mv26_b) }}</div>
-    <div class="kpi-sub"><span class="badge-preliminary" style="font-size:9px;">Preliminary</span></div>
-  </div>
-  <div class="kpi-card">
-    <div class="kpi-label">Net Change</div>
-    <div class="kpi-value {% if mv_delta_b >= 0 %}text-danger{% else %}text-success{% endif %}">
-      {{ "+" if mv_delta_b >= 0 else "" }}${{ "{:,.2f}B".format(mv_delta_b) }}
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="card h-100">
+      <div class="card-body text-center">
+        <div class="text-muted small text-uppercase mb-1">2025 Total MV (Certified)</div>
+        <div style="font-size:1.6rem; font-weight:700; font-family:var(--font-mono);">
+          ${{ "{:,.2f}B".format(totals.total_mv25_b) }}
+        </div>
+      </div>
     </div>
-    <div class="kpi-sub">{{ "+" if mv_delta_pct >= 0 else "" }}{{ mv_delta_pct }}% vs 2025</div>
   </div>
-  <div class="kpi-card">
-    <div class="kpi-label">Median Parcel Change</div>
-    <div class="kpi-value {% if totals.median_pct >= 0 %}text-danger{% else %}text-success{% endif %}">
-      {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
+  <div class="col-md-3">
+    <div class="card h-100">
+      <div class="card-body text-center">
+        <div class="text-muted small text-uppercase mb-1">2026 Total MV (Preliminary)</div>
+        <div style="font-size:1.6rem; font-weight:700; font-family:var(--font-mono);">
+          ${{ "{:,.2f}B".format(totals.total_mv26_b) }}
+        </div>
+      </div>
     </div>
-    <div class="kpi-sub">{{ "{:,}".format(totals.n_up) }} ↑&nbsp;&nbsp;{{ "{:,}".format(totals.n_down) }} ↓</div>
+  </div>
+  <div class="col-md-3">
+    <div class="card h-100">
+      <div class="card-body text-center">
+        <div class="text-muted small text-uppercase mb-1">Net Change</div>
+        <div style="font-size:1.6rem; font-weight:700; font-family:var(--font-mono);"
+             class="{% if mv_delta_b >= 0 %}text-danger{% else %}text-success{% endif %}">
+          {{ "+" if mv_delta_b >= 0 else "" }}${{ "{:,.2f}B".format(mv_delta_b) }}
+        </div>
+        <div class="text-muted small">{{ "+" if mv_delta_pct >= 0 else "" }}{{ mv_delta_pct }}%</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card h-100">
+      <div class="card-body text-center">
+        <div class="text-muted small text-uppercase mb-1">Median Parcel Change</div>
+        <div style="font-size:1.6rem; font-weight:700; font-family:var(--font-mono);"
+             class="{% if totals.median_pct >= 0 %}text-danger{% else %}text-success{% endif %}">
+          {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
+        </div>
+        <div class="text-muted small">{{ "{:,}".format(totals.n_up) }} ↑ &nbsp; {{ "{:,}".format(totals.n_down) }} ↓</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -173,7 +193,7 @@
   </div>
   <div class="card-body p-0">
     <div class="table-responsive">
-      <table class="table table-sm table-hover table-stack mb-0">
+      <table class="table table-sm table-hover mb-0">
         <thead class="table-light small text-muted text-uppercase">
           <tr>
             <th>Property Type</th>
@@ -193,28 +213,20 @@
           {% if r.ptype != 'Other' %}
           {% set delta_b = r.total_mv26_b - r.total_mv25_b %}
           <tr>
-{# task5-snapshot-drill #}
-            <td class="fw-semibold" data-label="Type">
-              <a href="/parcels?view={{ view }}&ptype={{ r.ptype | urlencode }}"
-                 class="text-decoration-none"
-                 title="View all {{ r.ptype }} parcels">
-                {{ r.ptype }}
-                <span style="font-size:10px; color:var(--text-3); margin-left:4px;">↗</span>
-              </a>
-            </td>
-            <td class="text-end text-muted" data-label="Parcels">{{ "{:,}".format(r.n_parcels) }}</td>
-            <td class="text-end text-danger" data-label="↑ Up">{{ "{:,}".format(r.n_up) }}</td>
-            <td class="text-end text-success" data-label="↓ Down">{{ "{:,}".format(r.n_down) }}</td>
-            <td class="text-end text-muted" data-label="= Flat">{{ "{:,}".format(r.n_flat) }}</td>
-            <td class="text-end fw-semibold {% if r.median_pct > 0 %}text-danger{% elif r.median_pct < 0 %}text-success{% endif %}" data-label="Median Δ">
+            <td class="fw-semibold">{{ r.ptype }}</td>
+            <td class="text-end text-muted">{{ "{:,}".format(r.n_parcels) }}</td>
+            <td class="text-end text-danger">{{ "{:,}".format(r.n_up) }}</td>
+            <td class="text-end text-success">{{ "{:,}".format(r.n_down) }}</td>
+            <td class="text-end text-muted">{{ "{:,}".format(r.n_flat) }}</td>
+            <td class="text-end fw-semibold {% if r.median_pct > 0 %}text-danger{% elif r.median_pct < 0 %}text-success{% endif %}">
               {{ "+" if r.median_pct >= 0 else "" }}{{ r.median_pct }}%
             </td>
-            <td class="text-end text-muted small" data-label="P25 / P75">
+            <td class="text-end text-muted small">
               {{ "+" if r.p25_pct >= 0 else "" }}{{ r.p25_pct }}% / {{ "+" if r.p75_pct >= 0 else "" }}{{ r.p75_pct }}%
             </td>
-            <td class="text-end text-muted" data-label="2025 Total MV">${{ "{:,.2f}B".format(r.total_mv25_b) }}</td>
-            <td class="text-end" data-label="2026 Total MV">${{ "{:,.2f}B".format(r.total_mv26_b) }}</td>
-            <td class="text-end fw-semibold {% if delta_b > 0 %}text-danger{% elif delta_b < 0 %}text-success{% endif %}" data-label="Net Δ ($B)">
+            <td class="text-end text-muted">${{ "{:,.2f}B".format(r.total_mv25_b) }}</td>
+            <td class="text-end">${{ "{:,.2f}B".format(r.total_mv26_b) }}</td>
+            <td class="text-end fw-semibold {% if delta_b > 0 %}text-danger{% elif delta_b < 0 %}text-success{% endif %}">
               {{ "+" if delta_b >= 0 else "" }}${{ "{:,.2f}B".format(delta_b) }}
             </td>
           </tr>
@@ -389,7 +401,7 @@ const snapLabels = {{ rows | selectattr('ptype', 'ne', 'Other') | map(attribute=
 const snapDeltas = [
   {% for r in rows %}{% if r.ptype != 'Other' %}{{ (r.total_mv26_b - r.total_mv25_b) | round(2) }},{% endif %}{% endfor %}
 ];
-const snapColors = snapDeltas.map(v => v >= 0 ? 'rgba(217,45,32,0.78)' : 'rgba(6,118,71,0.78)');
+const snapColors = snapDeltas.map(v => v >= 0 ? 'rgba(220,53,69,0.7)' : 'rgba(25,135,84,0.7)');
 
 new Chart(document.getElementById('snapshotChart'), {
   type: 'bar',

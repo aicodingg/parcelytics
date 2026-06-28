@@ -2570,7 +2570,7 @@ if (rCtx) {
    Updates the 5-Year History table without blocking the initial page render.
 */
 (function () {
-  var GEO_ID = {{ geo_id | tojson }};
+  var GEO_ID = {{ parcel.geo_id | tojson }};
   var TARGET = [2021, 2022, 2023, 2024];
 
   // Show spinner in uncached cells while we wait

@@ -59,25 +59,6 @@ PIR_BILLING_FILES = {
     # 2024: os.path.join(DATA_DIR, "TaxCurOpenData_2024.csv"),
 }
 
-# ── Feature flags ─────────────────────────────────────────────────────────────
-# When True, the 5-Year History table shows a computed tax estimate for
-# tax years 2021–2024 where no real billing data is available. The value is
-# derived as:  taxable_value × combined_rate / 100
-# and is clearly labelled "~$X,XXX (computed)" — NOT the actual billed amount.
-#
-# Enabled (Jun 23 2026): Travis County Tax Office confirmed they do not retain
-# historical snapshots of TaxCurOpenData. Computed levy is the best available
-# estimate for the full 430K parcel dataset. Where real billing data exists
-# (portal_scrape rows or future PIR bulk data), it takes priority automatically
-# — computed_total_tax is only filled when total_tax IS NULL.
-#
-# Priority order in the UI:
-#   1. Verified billing (taxcur / pir_billing) — shown as $X,XXX
-#   2. Portal payment receipt (portal_scrape)  — shown as ~$X,XXX · Partial
-#   3. Computed levy (taxable_value × rate)    — shown as ~$X,XXX (computed)
-#   4. No data                                 — shown as "Not available yet"
-COMPUTED_HIST_TAX_ENABLED = os.environ.get("COMPUTED_HIST_TAX", "0") == "1"
-
 # ── App ───────────────────────────────────────────────────────────────────────
 FLASK_SECRET = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
 DEBUG        = os.environ.get("FLASK_DEBUG", "1") == "1"

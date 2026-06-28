@@ -5,19 +5,12 @@ Phase 1: Parcel search + 5-year history + tax rate trends
 import os
 import sys
 import json
-import re
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 import psycopg2
 import psycopg2.extras
 
 sys.path.insert(0, os.path.dirname(__file__))
 import config
-
-from tax_logic.texas import estimate_post_acquisition as _tx_estimate
-from loaders.scrape_billing_history import fetch_html, parse_receipts, upsert_billing_rows, HTTP_OK
-
-_BILLING_TARGET_YEARS  = {2021, 2022, 2023, 2024}
-_BILLING_SENTINEL_YEAR = 9999   # stored when portal returns no target-year data
 
 
 # ── Investor insight generator ────────────────────────────────────────────────
@@ -189,49 +182,30 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5, state
     base_market   = float(base_row["market_value"])
     base_year     = base_row["tax_year"]
 
-    # scenario_banded_projection_task3
-    # CAGR offsets for scenario bands
-    # Low  : CAGR − 2 pp, floored at −5%; rate holds flat
-    # Base : existing CAGR; existing rate trend
-    # High : CAGR + 2 pp; rate trend amplified 1.5x
-    cagr_low  = max(-0.05, value_cagr - 0.02)
-    cagr_base = value_cagr
-    cagr_high = value_cagr + 0.02
+    rows = []
+    for i in range(1, years_ahead + 1):
+        proj_year   = base_year + i
+        proj_market = round(base_market * (1 + value_cagr) ** i)
+        proj_rate   = max(0, current_rate + avg_rate_change * i)
 
-    def _make_rows(cagr, rate_delta_mult):
-        out = []
-        for i in range(1, years_ahead + 1):
-            py  = base_year + i
-            pmv = round(base_market * (1 + cagr) ** i)
-            pr  = max(0, current_rate + avg_rate_change * rate_delta_mult * i)
-            if has_hs_cap:
-                pav = round(min(base_assessed * (1.10 ** i), pmv))
-            else:
-                pav = pmv
-            et = round(pav * pr / 100)
-            out.append({
-                "year":         py,
-                "market":       pmv,
-                "assessed":     pav,
-                "rate":         round(pr, 6),
-                "est_tax":      et,
-                "value_change": round((pmv - base_market) / base_market * 100, 1),
-            })
-        return out
+        if has_hs_cap:
+            # Assessed capped at 10% per year increase
+            proj_assessed = round(min(base_assessed * (1.10 ** i), proj_market))
+        else:
+            proj_assessed = proj_market
 
-    rows      = _make_rows(cagr_base, 1.0)      # base (unchanged from previous behaviour)
-    rows_low  = _make_rows(cagr_low,  0.0)      # low: flat rates
-    rows_high = _make_rows(cagr_high, 1.5)      # high: steeper rate trend
+        est_tax = round(proj_assessed * proj_rate / 100)
 
-    bands = {
-        "low":  rows_low,
-        "high": rows_high,
-        "cagr_low":   round(cagr_low  * 100, 2),
-        "cagr_base":  round(cagr_base * 100, 2),
-        "cagr_high":  round(cagr_high * 100, 2),
-    }
+        rows.append({
+            "year":         proj_year,
+            "market":       proj_market,
+            "assessed":     proj_assessed,
+            "rate":         round(proj_rate, 6),
+            "est_tax":      est_tax,
+            "value_change": round((proj_market - base_market) / base_market * 100, 1),
+        })
 
-    return rows, baseline_label, bands
+    return rows, baseline_label
 
 
 # ── CoStar-style property narrative generator ────────────────────────────────
@@ -726,29 +700,6 @@ def index():
 
         if parcel:
             return redirect(url_for("property_detail", geo_id=parcel["geo_id"]))
-
-        # Address-like query (contains letters) — show disambiguation list
-        elif any(c.isalpha() for c in q):
-            q_norm = " ".join(q.upper().split())
-            addr_matches = query("""
-                SELECT geo_id, situs_address, owner_name
-                FROM   parcel
-                WHERE  UPPER(situs_address) ILIKE %(pattern)s
-                ORDER  BY situs_address
-                LIMIT  20
-            """, {"pattern": f"%{q_norm}%"})
-            if addr_matches:
-                return render_template(
-                    "index.html",
-                    q=q,
-                    error=None,
-                    addr_matches=[dict(r) for r in addr_matches],
-                )
-            error = (
-                f"No parcels found matching address \"{q}\". "
-                "Try a shorter street name or use the 10-digit TCAD account number. "
-            )
-
         else:
             error = (
                 f"We couldn't find a parcel matching \"{q}\". "
@@ -787,9 +738,7 @@ def property_detail(geo_id):
                tb.total_tax,
                tb.total_due,
                tb.is_delinquent,
-               tb.exemption_codes  AS billing_exemptions,
-               tb.data_source      AS billing_source,
-               tb.confidence_level AS billing_confidence
+               tb.exemption_codes  AS billing_exemptions
         FROM   parcel_tax_year pty
         LEFT JOIN tax_billing   tb  ON tb.geo_id   = pty.geo_id
                                    AND tb.tax_year = pty.tax_year
@@ -842,23 +791,6 @@ def property_detail(geo_id):
         ORDER  BY ctr.tax_year
     """, (geo_id,))
 
-    # ── Computed historical tax (feature flag: COMPUTED_HIST_TAX_ENABLED) ────────
-    # When enabled, rows where total_tax is NULL (2021–2024 without billing data)
-    # receive a computed estimate: taxable_value × combined_rate / 100.
-    # Stored as computed_total_tax (separate key) — never overwrites real billing data.
-    # Label: "computed from certified value × rate; billing unconfirmed"
-    if config.COMPUTED_HIST_TAX_ENABLED:
-        _rate_map = {r["tax_year"]: float(r["total_rate"])
-                     for r in rate_history if r.get("total_rate")}
-        for row in history:
-            if row.get("total_tax") is not None:
-                continue  # real billing data present — do not overlay
-            yr = row.get("tax_year")
-            tv = row.get("taxable_value")
-            rate = _rate_map.get(yr)
-            if tv and rate and rate > 0:
-                row["computed_total_tax"] = round(float(tv) * rate / 100.0, 2)
-
     # Entity rate history for trend chart + rate columns (2016–2025 for 10-year chart context)
     rate_history_rows = query("""
         SELECT ctr.entity_code, ctr.tax_year, ctr.rate
@@ -888,7 +820,7 @@ def property_detail(geo_id):
             chart_entity_data[code] = pts
 
     insights    = build_insights(parcel, history, entity_detail, delinquent)
-    projections, proj_baseline, proj_bands = build_projections(
+    projections, proj_baseline = build_projections(
         history, rate_history, entity_detail,
         state_cd1=parcel.get("state_cd1")
     )
@@ -982,7 +914,6 @@ def property_detail(geo_id):
         delinquent=delinquent,
         insights=insights,
         projections=projections,
-        proj_bands=proj_bands,
         proj_baseline=proj_baseline,
         metrics_by_year=metrics_by_year,
         benchmark_by_year=benchmark_by_year,
@@ -1483,670 +1414,9 @@ def api_benchmark_meta():
     })
 
 
-
-
-@app.route("/api/estimate_acq/<geo_id>")
-def api_estimate_acq(geo_id):
-    """
-    Post-acquisition tax estimator API (Task 1).
-    Query params:
-      price  int   purchase price (required, no commas)
-      buyer  str   'non_owner_occupant' (default) | 'owner_occupant'
-    """
-    price_raw    = request.args.get("price", "").strip().replace(",", "").replace("$", "")
-    buyer_status = request.args.get("buyer", "non_owner_occupant").strip()
-    rate_mode    = request.args.get("rate_mode", "certified").strip()
-
-    if buyer_status not in ("non_owner_occupant", "owner_occupant"):
-        buyer_status = "non_owner_occupant"
-    if rate_mode not in ("certified", "projected"):
-        rate_mode = "certified"
-
-    if not price_raw or not re.fullmatch(r"\d+", price_raw):
-        return jsonify({"ok": False, "error": "price must be a positive integer (no commas or $)"})
-
-    purchase_price = int(price_raw)
-    if purchase_price <= 0:
-        return jsonify({"ok": False, "error": "price must be positive"})
-
-    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
-    if not parcel:
-        return jsonify({"ok": False, "error": "Parcel not found"})
-
-    current_yr_row = query("""
-        SELECT market_value, assessed_value, taxable_value, hs_cap_loss, exemption_codes
-        FROM   parcel_tax_year
-        WHERE  geo_id = %s AND tax_year = 2025
-    """, (geo_id,), one=True)
-
-    if not current_yr_row or not current_yr_row.get("market_value"):
-        return jsonify({"ok": False, "error": "No 2025 certified market value for this parcel"})
-
-    entity_detail = query("""
-        SELECT tbe.entity_code, ctr.entity_name, ctr.rate, tbe.amount_due
-        FROM   tax_billing_entity tbe
-        LEFT JOIN county_tax_rate ctr
-               ON ctr.entity_code = tbe.entity_code AND ctr.tax_year = 2025
-        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2025
-        ORDER  BY tbe.amount_due DESC NULLS LAST
-    """, (geo_id,))
-
-    if not entity_detail:
-        return jsonify({"ok": False, "error": "No 2025 entity billing data for this parcel"})
-
-    # Per-entity rate history (for the projected-rate scenario)
-    codes = tuple({e["entity_code"] for e in entity_detail})
-    entity_rate_history = {}
-    if codes:
-        for r in query(
-            "SELECT entity_code, tax_year, rate FROM county_tax_rate "
-            "WHERE entity_code IN %s AND tax_year >= 2016 ORDER BY tax_year",
-            (codes,),
-        ):
-            entity_rate_history.setdefault(r["entity_code"], {})[r["tax_year"]] = (
-                float(r["rate"]) if r["rate"] is not None else None
-            )
-
-    # Parcel market-growth assumption from its own certified history (clamped)
-    mkt_hist = query("""
-        SELECT tax_year, market_value FROM parcel_tax_year
-        WHERE geo_id = %s AND market_value IS NOT NULL AND tax_year <= 2025
-        ORDER BY tax_year
-    """, (geo_id,))
-    market_growth = None
-    pts = [(r["tax_year"], float(r["market_value"])) for r in mkt_hist if r["market_value"]]
-    if len(pts) >= 2 and pts[0][1] > 0:
-        span = pts[-1][0] - pts[0][0]
-        if span > 0:
-            cagr = (pts[-1][1] / pts[0][1]) ** (1.0 / span) - 1.0
-            market_growth = max(0.0, min(0.08, cagr))   # clamp 0–8%
-
-    result = _tx_estimate(
-        dict(parcel),
-        dict(current_yr_row),
-        [dict(e) for e in entity_detail],
-        purchase_price,
-        buyer_status,
-        rate_mode=rate_mode,
-        entity_rate_history=entity_rate_history,
-        market_growth=market_growth,
-    )
-    result["ok"] = True
-
-    # ── PID / billing-only pass-through ──────────────────────────────────────
-    # Entity codes in 2025 billing but absent from county_tax_rate (PIDs, WCIDs,
-    # special districts) carry rate=NULL in the LEFT JOIN and are silently skipped
-    # by texas.py.  Pass them through at prior-year billing amount — the only
-    # available basis.  See ENTITY_CODE_AUDIT.md for the full finding and impact.
-    billing_only = [
-        e for e in entity_detail
-        if e.get("amount_due") and not e.get("rate")
-    ]
-    if billing_only:
-        pid_passthrough = round(sum(float(e["amount_due"]) for e in billing_only), 2)
-        result["pid_passthrough"]          = pid_passthrough
-        result["pid_entity_codes"]         = [e["entity_code"] for e in billing_only]
-        result["pid_entity_names"]         = [
-            e.get("entity_name") or e["entity_code"] for e in billing_only
-        ]
-        result["estimated_total_incl_pid"] = round(
-            result["estimated_total_tax"] + pid_passthrough, 2
-        )
-        # Corrected delta: buyer estimate (rate + PID) vs seller actual (already
-        # includes PID via seller_total_tax sum in texas.py)
-        result["delta_incl_pid"] = round(
-            result["estimated_total_incl_pid"] - result["seller_total_tax"], 2
-        )
-    else:
-        result["pid_passthrough"]          = 0.0
-        result["pid_entity_codes"]         = []
-        result["pid_entity_names"]         = []
-        result["estimated_total_incl_pid"] = result["estimated_total_tax"]
-        result["delta_incl_pid"]           = result["delta"]
-
-    # Convert any Decimal/non-serialisable types to float/int
-    def _clean(v):
-        if hasattr(v, "__float__"):
-            return float(v)
-        return v
-
-    result["entity_breakdown"] = [
-        {k: _clean(val) for k, val in row.items()}
-        for row in result["entity_breakdown"]
-    ]
-    return jsonify(result)
-
-
-
-@app.route("/api/address_search")
-def api_address_search():
-    """
-    Address typeahead API (Task 2).
-    Returns up to 10 matching parcels for a partial address query.
-    Query params:
-      q   str   partial address string (min 3 chars)
-    """
-    q = request.args.get("q", "").strip()
-    if len(q) < 3:
-        return jsonify({"ok": True, "results": []})
-
-    # Normalise: collapse whitespace, uppercase for consistent matching
-    q_norm = " ".join(q.upper().split())
-
-    # pg_trgm index (idx_parcel_situs_trgm) will be used if installed;
-    # ILIKE works correctly either way — just slower without the index.
-    rows = query("""
-        SELECT geo_id, situs_address, owner_name, state_cd1, neighborhood_cd
-        FROM   parcel
-        WHERE  UPPER(situs_address) ILIKE %(pattern)s
-        ORDER  BY situs_address
-        LIMIT  10
-    """, {"pattern": f"%{q_norm}%"})
-
-    results = [
-        {
-            "geo_id":       r["geo_id"],
-            "address":      r["situs_address"] or "",
-            "owner":        r["owner_name"] or "",
-            "state_cd1":    r["state_cd1"] or "",
-            "neighborhood": r["neighborhood_cd"] or "",
-        }
-        for r in rows
-    ]
-    return jsonify({"ok": True, "results": results})
-
-
-
-@app.route("/api/peer_benchmark_local/<geo_id>")
-def api_peer_benchmark_local(geo_id):
-    """
-    Neighborhood + type + size-band peer benchmark (Task 3).
-    Peer set: same neighborhood_cd, same state_cd1 prefix, 2025 MV within ±50%.
-    Returns peer count, median MV, p25/p75 MV, median total_tax, this parcel's rank.
-    """
-    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
-    if not parcel:
-        return jsonify({"ok": False, "error": "Parcel not found"})
-
-    mv_row = query("""
-        SELECT market_value FROM parcel_tax_year WHERE geo_id = %s AND tax_year = 2025
-    """, (geo_id,), one=True)
-
-    neighborhood = (parcel.get("neighborhood_cd") or "").strip()
-    state_cd1    = (parcel.get("state_cd1") or "").strip()[:1]
-    this_mv      = float(mv_row["market_value"]) if mv_row and mv_row.get("market_value") else None
-
-    if not neighborhood or not this_mv:
-        return jsonify({"ok": False, "error":
-            "Peer benchmark requires neighborhood code and 2025 market value"})
-
-    mv_lo = this_mv * 0.50
-    mv_hi = this_mv * 1.50
-
-    # Peer set: same neighborhood, same state_cd1 prefix, MV band ±50%
-    peers = query("""
-        SELECT
-            p.geo_id,
-            pty.market_value,
-            pty.assessed_value,
-            tb.total_tax
-        FROM   parcel p
-        JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
-        LEFT JOIN tax_billing  tb  ON tb.geo_id  = p.geo_id AND tb.tax_year  = 2025
-        WHERE  p.neighborhood_cd = %(nb)s
-          AND  LEFT(p.state_cd1, 1) = %(sc1)s
-          AND  pty.market_value BETWEEN %(lo)s AND %(hi)s
-          AND  p.geo_id NOT LIKE 'AJR%%'
-          AND  pty.market_value > 0
-        ORDER  BY pty.market_value
-    """, {"nb": neighborhood, "sc1": state_cd1, "lo": mv_lo, "hi": mv_hi})
-
-    n = len(peers)
-    if n < 3:
-        # Fallback: relax to neighborhood + type only, drop MV band
-        peers = query("""
-            SELECT p.geo_id, pty.market_value, pty.assessed_value, tb.total_tax
-            FROM   parcel p
-            JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
-            LEFT JOIN tax_billing  tb  ON tb.geo_id  = p.geo_id AND tb.tax_year  = 2025
-            WHERE  p.neighborhood_cd = %(nb)s
-              AND  LEFT(p.state_cd1, 1) = %(sc1)s
-              AND  p.geo_id NOT LIKE 'AJR%%'
-              AND  pty.market_value > 0
-            ORDER  BY pty.market_value
-        """, {"nb": neighborhood, "sc1": state_cd1})
-        n = len(peers)
-        band_note = "Size band relaxed (neighbourhood + type only — fewer than 3 ±50% MV peers)"
-    else:
-        band_note = f"Neighbourhood {neighborhood}, {state_cd1}-type, MV within ±50% of this parcel"
-
-    if n == 0:
-        return jsonify({"ok": False, "error": "No peers found in this neighbourhood + property type"})
-
-    mvs   = sorted([float(r["market_value"]) for r in peers if r.get("market_value")])
-    avs   = sorted([float(r["assessed_value"]) for r in peers if r.get("assessed_value")])
-    taxes = sorted([float(r["total_tax"]) for r in peers if r.get("total_tax")])
-
-    def pct(lst, p):
-        if not lst: return None
-        i = (len(lst) - 1) * p / 100
-        lo_, hi_ = int(i), min(int(i) + 1, len(lst) - 1)
-        return round(lst[lo_] + (lst[hi_] - lst[lo_]) * (i - lo_))
-
-    def median(lst):
-        return pct(lst, 50)
-
-    # Where does this parcel rank by MV among peers?
-    mv_rank = sum(1 for v in mvs if v < this_mv) + 1
-    mv_pct  = round(mv_rank / n * 100) if n else None
-
-    return jsonify({
-        "ok":           True,
-        "geo_id":       geo_id,
-        "peer_count":   n,
-        "band_note":    band_note,
-        "this_mv":      round(this_mv),
-        "peer_mv": {
-            "p25":    pct(mvs, 25),
-            "median": median(mvs),
-            "p75":    pct(mvs, 75),
-        },
-        "peer_av": {
-            "p25":    pct(avs, 25),
-            "median": median(avs),
-            "p75":    pct(avs, 75),
-        },
-        "peer_tax": {
-            "p25":    pct(taxes, 25),
-            "median": median(taxes),
-            "p75":    pct(taxes, 75),
-        },
-        "this_mv_pct_rank": mv_pct,
-    })
-
-
-@app.route("/api/peer_benchmark_sf/<geo_id>")
-def api_peer_benchmark_sf(geo_id):
-    """
-    Per-SF peer benchmark (Task B).
-    Peer set: same neighborhood_cd + state_cd1 prefix + living_area_sqft size band.
-    Size band starts at ±40%; relaxes to ±60% then unconstrained if fewer than 5 peers.
-    Returns assessed $/SF and market $/SF percentiles for this parcel vs peers.
-    Parcels with null/zero living_area_sqft return ok=False with error='no_sf_basis'.
-    """
-    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
-    if not parcel:
-        return jsonify({"ok": False, "error": "Parcel not found"})
-
-    parcel_data = query("""
-        SELECT p.living_area_sqft,
-               pty.market_value,
-               pty.assessed_value
-        FROM   parcel p
-        JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
-        WHERE  p.geo_id = %s
-    """, (geo_id,), one=True)
-
-    if not parcel_data:
-        return jsonify({"ok": False, "error": "No 2025 data for this parcel"})
-
-    sqft    = float(parcel_data["living_area_sqft"]) if parcel_data.get("living_area_sqft") else None
-    this_mv = float(parcel_data["market_value"])     if parcel_data.get("market_value")     else None
-    this_av = float(parcel_data["assessed_value"])   if parcel_data.get("assessed_value")   else None
-
-    if not sqft or sqft <= 0:
-        return jsonify({
-            "ok": False, "error": "no_sf_basis",
-            "message": "No living area SF for this parcel (vacant land, exempt-only, or loader not run)"
-        })
-
-    neighborhood = (parcel.get("neighborhood_cd") or "").strip()
-    state_cd1    = (parcel.get("state_cd1") or "").strip()[:1]
-
-    if not neighborhood:
-        return jsonify({"ok": False, "error": "No neighbourhood code for this parcel"})
-
-    this_market_psf   = round(this_mv / sqft, 2) if this_mv   else None
-    this_assessed_psf = round(this_av / sqft, 2) if this_av   else None
-
-    # Progressively relax size band until ≥ 5 peers
-    band_attempts = [0.40, 0.60, None]   # ±40%, ±60%, unconstrained
-    peers = []
-    band_note = ""
-
-    for band in band_attempts:
-        if band is not None:
-            sqft_lo = sqft * (1.0 - band)
-            sqft_hi = sqft * (1.0 + band)
-            size_clause = "AND p.living_area_sqft BETWEEN %(sqft_lo)s AND %(sqft_hi)s"
-            params = {
-                "nb": neighborhood, "sc1": state_cd1,
-                "sqft_lo": sqft_lo, "sqft_hi": sqft_hi,
-            }
-        else:
-            size_clause = ""
-            params = {"nb": neighborhood, "sc1": state_cd1}
-
-        peers = query(f"""
-            SELECT
-                p.geo_id,
-                pty.market_value,
-                pty.assessed_value,
-                CAST(p.living_area_sqft AS FLOAT)                               AS sqft,
-                CAST(pty.market_value   AS FLOAT) / p.living_area_sqft          AS market_psf,
-                CAST(pty.assessed_value AS FLOAT) / p.living_area_sqft          AS assessed_psf
-            FROM   parcel p
-            JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
-            WHERE  p.neighborhood_cd  = %(nb)s
-              AND  LEFT(p.state_cd1, 1) = %(sc1)s
-              AND  p.living_area_sqft > 0
-              AND  p.geo_id NOT LIKE 'AJR%%'
-              AND  pty.market_value   > 0
-              AND  pty.assessed_value > 0
-              {size_clause}
-            ORDER  BY p.living_area_sqft
-        """, params)
-
-        n = len(peers)
-        if n >= 5:
-            if band is not None:
-                band_note = (
-                    f"Neighbourhood {neighborhood}, {state_cd1}-type, "
-                    f"SF within ±{int(band * 100)}% of {sqft:,.0f} SF"
-                )
-            else:
-                band_note = (
-                    f"Neighbourhood {neighborhood}, {state_cd1}-type, "
-                    f"all SF sizes (size band relaxed — fewer than 5 peers in ±60% band)"
-                )
-            break
-
-    n = len(peers)
-    if n < 3:
-        return jsonify({
-            "ok": False,
-            "error": "Fewer than 3 SF peers in this neighbourhood + property type",
-        })
-
-    market_psf_vals   = sorted(float(r["market_psf"])   for r in peers if r.get("market_psf"))
-    assessed_psf_vals = sorted(float(r["assessed_psf"]) for r in peers if r.get("assessed_psf"))
-
-    def _pct(lst, p):
-        if not lst:
-            return None
-        i = (len(lst) - 1) * p / 100.0
-        lo_, hi_ = int(i), min(int(i) + 1, len(lst) - 1)
-        return round(lst[lo_] + (lst[hi_] - lst[lo_]) * (i - lo_), 2)
-
-    this_market_psf_rank   = None
-    this_assessed_psf_rank = None
-    if this_market_psf and market_psf_vals:
-        rk = sum(1 for v in market_psf_vals if v < this_market_psf) + 1
-        this_market_psf_rank = round(rk / n * 100)
-    if this_assessed_psf and assessed_psf_vals:
-        rk = sum(1 for v in assessed_psf_vals if v < this_assessed_psf) + 1
-        this_assessed_psf_rank = round(rk / n * 100)
-
-    return jsonify({
-        "ok":                     True,
-        "geo_id":                 geo_id,
-        "peer_count":             n,
-        "band_note":              band_note,
-        "this_sqft":              round(sqft),
-        "this_market_psf":        this_market_psf,
-        "this_assessed_psf":      this_assessed_psf,
-        "this_market_psf_rank":   this_market_psf_rank,
-        "this_assessed_psf_rank": this_assessed_psf_rank,
-        "peer_market_psf": {
-            "p25":    _pct(market_psf_vals, 25),
-            "median": _pct(market_psf_vals, 50),
-            "p75":    _pct(market_psf_vals, 75),
-        },
-        "peer_assessed_psf": {
-            "p25":    _pct(assessed_psf_vals, 25),
-            "median": _pct(assessed_psf_vals, 50),
-            "p75":    _pct(assessed_psf_vals, 75),
-        },
-    })
-
-
-
-# ── On-demand billing fetch ────────────────────────────────────────────────────
-@app.route("/api/billing/<geo_id>")
-def api_billing(geo_id):
-    """Fetch + cache 2021-2024 billing data for one parcel from the portal.
-
-    Called asynchronously by the property page after initial load.
-    First call: hits the portal (~5-7 s), stores results, returns data.
-    Subsequent calls: DB-only lookup, returns in <100 ms.
-
-    Sentinel row (tax_year=9999): stored when portal responds but has no
-    2021-2024 receipts, so we don't re-fetch on every page view.
-    Network errors are NOT cached — the next visit will retry.
-    """
-    geo_id = geo_id.strip()
-    conn = get_db()
-    try:
-        # 1. Already fetched? (real data or sentinel both count)
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT COUNT(*) AS cnt FROM tax_billing "
-                "WHERE geo_id = %s AND data_source = 'portal_scrape'",
-                (geo_id,)
-            )
-            already_fetched = cur.fetchone()["cnt"] > 0
-
-        # 2. Portal fetch (only if not cached)
-        if not already_fetched:
-            html, status = fetch_html(geo_id)
-            if html is not None and status == HTTP_OK:
-                receipts = parse_receipts(html)
-                target   = [r for r in receipts if r["tax_year"] in _BILLING_TARGET_YEARS]
-                if target:
-                    records = [
-                        {
-                            "geo_id":     geo_id,
-                            "tax_year":   r["tax_year"],
-                            "total_tax":  r["payment_amount"],
-                            "total_paid": r["payment_amount"],
-                        }
-                        for r in target
-                    ]
-                    upsert_billing_rows(conn, records)
-                else:
-                    # Portal has this account but no 2021-2024 receipts — sentinel
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "INSERT INTO tax_billing "
-                            "  (geo_id, tax_year, data_source, confidence_level) "
-                            "VALUES (%s, %s, 'portal_scrape', 'partial') "
-                            "ON CONFLICT (geo_id, tax_year) DO NOTHING",
-                            (geo_id, _BILLING_SENTINEL_YEAR)
-                        )
-                    conn.commit()
-            # Network/429/5xx → don't cache, let next page visit retry
-
-        # 3. Return 2021-2024 portal_scrape rows (sentinel excluded by year range)
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT tax_year, total_tax, total_paid, data_source, confidence_level "
-                "FROM tax_billing "
-                "WHERE geo_id = %s "
-                "  AND tax_year BETWEEN 2021 AND 2024 "
-                "  AND data_source = 'portal_scrape' "
-                "ORDER BY tax_year",
-                (geo_id,)
-            )
-            rows = [dict(r) for r in cur.fetchall()]
-
-        # psycopg2 returns Decimal — convert for JSON
-        for row in rows:
-            for k in ("total_tax", "total_paid"):
-                if row[k] is not None:
-                    row[k] = float(row[k])
-
-        return jsonify({"status": "ok", "cached": already_fetched, "rows": rows})
-
-    except Exception as exc:
-        return jsonify({"status": "error", "message": str(exc), "rows": []})
-    finally:
-        conn.close()
-
-
-
-# ── Task 5: ptype label → SQL WHERE fragments ──────────────────────────────────
-# task5_drill_through
-_PTYPE_SC1_FILTER = {
-    # Overall
-    "Residential":            "LEFT(p.state_cd1,1) = 'A'",
-    "Multi-Family":           "LEFT(p.state_cd1,1) = 'B'",
-    "Commercial":             "LEFT(p.state_cd1,1) IN ('F','L')",
-    "Land/Vacant":            "LEFT(p.state_cd1,1) = 'C'",
-    "Agricultural":           "LEFT(p.state_cd1,1) IN ('D','E')",
-    # Residential sub-types
-    "Single-Family":          "y25.state_cd1 LIKE 'A1%'",
-    "Condo / Townhome":       "(y25.state_cd1 LIKE 'A2%' OR y25.state_cd1 LIKE 'A4%')",
-    "Other Residential":      "(LEFT(y25.state_cd1,1) = 'A' AND y25.state_cd1 NOT LIKE 'A1%' AND y25.state_cd1 NOT LIKE 'A2%' AND y25.state_cd1 NOT LIKE 'A4%')",
-    # Commercial sub-types
-    "Commercial Improved":    "LEFT(y25.state_cd1,1) = 'F'",
-    "Commercial Land / RE":   "LEFT(y25.state_cd1,1) = 'L'",
-    # Multi-family sub-types
-    "Multifamily (5+ units)": "y25.state_cd1 LIKE 'B1%'",
-    "Duplex":                 "y25.state_cd1 LIKE 'B2%'",
-    "Triplex":                "y25.state_cd1 LIKE 'B3%'",
-    "Fourplex":               "y25.state_cd1 LIKE 'B4%'",
-    "Other Multi-Family":     "LEFT(y25.state_cd1,1) = 'B'",
-    # Land sub-types
-    "Vacant Lot":             "y25.state_cd1 LIKE 'C1%'",
-    "Colonia":                "y25.state_cd1 LIKE 'C2%'",
-    "Other Vacant":           "LEFT(y25.state_cd1,1) = 'C'",
-    # Agricultural
-    "Open-Space Ag (1-d-1)":  "LEFT(y25.state_cd1,1) = 'D'",
-    "Rural Land (non-ag)":    "LEFT(y25.state_cd1,1) = 'E'",
-    "Other Agricultural":     "LEFT(y25.state_cd1,1) IN ('D','E')",
-}
-
-
-
-@app.route("/parcels")
-def parcel_list():
-    """
-    Drill-through parcel list (Task 5).
-    Query params:
-      view  str   snapshot view (residential/commercial/etc.)
-      ptype str   ptype label from snapshot rows (e.g. 'Single-Family')
-    Returns up to 500 matching parcels with 2025 + 2026 market values.
-    """
-    view  = request.args.get("view", "overall")
-    ptype = request.args.get("ptype", "").strip()
-
-    sc1_filter = _PTYPE_SC1_FILTER.get(ptype)
-    if not sc1_filter:
-        sc1_filter = "1=1"   # no filter — show all (shouldn't happen)
-
-    # Build alias-safe filter: join alias is 'y25', parcel alias is 'p'
-    rows = query(f"""
-        WITH y25 AS (
-            SELECT p.geo_id, p.state_cd1, p.situs_address, p.owner_name,
-                   t.market_value AS mv25
-            FROM   parcel p
-            JOIN   parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = 2025
-            WHERE  t.market_value > 0
-              AND  p.state_cd1 NOT LIKE 'X%%'
-              AND  p.geo_id NOT LIKE 'AJR%%'
-              AND  ({sc1_filter})
-        )
-        SELECT
-            y25.geo_id,
-            y25.situs_address  AS address,
-            y25.owner_name     AS owner,
-            y25.mv25,
-            t26.market_value   AS mv26
-        FROM  y25
-        LEFT JOIN parcel_tax_year t26
-               ON t26.geo_id = y25.geo_id AND t26.tax_year = 2026
-        ORDER BY y25.mv25 DESC NULLS LAST
-        LIMIT 500
-    """)
-
-    return render_template(
-        "parcel_list.html",
-        view=view,
-        ptype=ptype or "All",
-        parcels=[dict(r) for r in rows],
-    )
-
-
-@app.route("/compare")
-def compare_parcels():
-    """
-    Side-by-side parcel comparison (Task 5).
-    Query param:
-      ids  str   comma-separated geo_ids (2–4)
-    """
-    ids_raw = request.args.get("ids", "").strip()
-    geo_ids = [g.strip() for g in ids_raw.split(",") if g.strip()][:4]
-
-    if len(geo_ids) < 2:
-        return render_template(
-            "compare.html",
-            parcels=[],
-            error="Provide 2–4 geo_ids as ?ids=id1,id2 to compare.",
-        )
-
-    parcels = []
-    for geo_id in geo_ids:
-        parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
-        if not parcel:
-            continue
-
-        current = query("""
-            SELECT market_value, assessed_value, taxable_value, hs_cap_loss, data_source, exemption_codes
-            FROM   parcel_tax_year WHERE geo_id = %s AND tax_year = 2025
-        """, (geo_id,), one=True)
-
-        current_2026 = query("""
-            SELECT market_value, assessed_value
-            FROM   parcel_tax_year WHERE geo_id = %s AND tax_year = 2026
-        """, (geo_id,), one=True)
-
-        billing = query("""
-            SELECT total_tax, total_paid, total_due, is_delinquent
-            FROM   tax_billing WHERE geo_id = %s AND tax_year = 2025
-        """, (geo_id,), one=True)
-
-        sc1 = (parcel.get("state_cd1") or "").strip()[:1]
-        type_map = {
-            "A": "Residential", "B": "Multi-Family", "C": "Land/Vacant",
-            "D": "Agricultural", "E": "Agricultural", "F": "Commercial",
-        }
-
-        parcels.append({
-            "geo_id":        geo_id,
-            "address":       parcel.get("situs_address") or "Unknown",
-            "prop_type":     type_map.get(sc1, sc1 or "Unknown"),
-            "parcel":        dict(parcel),
-            "current":       dict(current) if current else {},
-            "current_2026":  dict(current_2026) if current_2026 else {},
-            "billing":       dict(billing) if billing else {},
-        })
-
-    if not parcels:
-        return render_template("compare.html", parcels=[], error="No valid parcels found for the provided IDs.")
-
-    return render_template("compare.html", parcels=parcels, error=None)
-
 @app.route("/about")
 def about():
     return render_template("about.html")
-
-
-@app.route("/styleguide")
-def styleguide():
-    """Design-system reference: renders every token and component.
-    Single source of truth for the visual language — review here before
-    restyling real pages. Not linked in primary nav."""
-    return render_template("styleguide.html")
 
 
 if __name__ == "__main__":
