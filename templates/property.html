@@ -3,6 +3,176 @@
 
 {% block content %}
 
+{% if mode == 'homeowner' %}
+{# ═══════════════ HOMEOWNER MODE — plain-language view ═══════════════ #}
+{% set mv25 = current.market_value if current else none %}
+{% set mv26 = current_2026.market_value if current_2026 else none %}
+{% set tv25 = current.taxable_value if current else none %}
+{% set tax25 = current.total_tax if current else none %}
+{% set rate = insights.total_rate_2025 if insights else none %}
+{% set excodes = (current.exemption_codes or "") if current else "" %}
+{% set has_hs = "HS" in excodes %}
+{% set _exmap = {"HS":"Homestead", "OV65":"Over-65", "O65":"Over-65", "DP":"Disabled Person",
+                 "DV":"Disabled Veteran", "DVHS":"Disabled Veteran (Homestead)",
+                 "DV1":"Disabled Veteran 10–29%", "DV2":"Disabled Veteran 30–49%",
+                 "DV3":"Disabled Veteran 50–69%", "DV4":"Disabled Veteran 70–100%",
+                 "SS":"Surviving Spouse", "EX":"Total (Charitable/Govt)"} %}
+{% set excodes_list = excodes.replace(";", ",").split(",") | map("trim") | select | list %}
+
+<div class="d-flex justify-content-between align-items-center mt-2">
+  <a href="/" class="back-link">&larr; New search</a>
+</div>
+
+<div class="mb-4 mt-2">
+  <h2 class="fw-bold mb-1">{{ parcel.situs_address or "Your home" }}</h2>
+  <div class="text-muted">Travis County, TX · Parcel {{ parcel.geo_id }}</div>
+</div>
+
+{# ── Section 1 — Your Home ───────────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card h-100"><div class="card-body">
+      <div class="text-muted" style="font-size:13px; font-weight:600;">What your home is worth</div>
+      <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">{% if mv25 %}${{ "{:,.0f}".format(mv25) }}{% else %}—{% endif %}</div>
+      <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+        Your home's 2025 certified value.
+        {% if mv25 and mv26 and ((mv26 - mv25) / mv25)|abs > 0.05 %}
+        TCAD's 2026 preliminary estimate is <strong>${{ "{:,.0f}".format(mv26) }}</strong>
+        ({{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }}).
+        {% endif %}
+      </div>
+    </div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100"><div class="card-body">
+      <div class="text-muted" style="font-size:13px; font-weight:600;">What you paid in taxes</div>
+      <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">
+        {% if tax25 %}${{ "{:,.0f}".format(tax25) }}{% else %}<span style="font-size:18px; font-weight:700;">Not available yet</span>{% endif %}
+      </div>
+      <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+        {% if tax25 %}You paid this in property taxes in 2025.{% else %}We don't have your 2025 tax bill on record yet.{% endif %}
+      </div>
+    </div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100"><div class="card-body">
+      <div class="text-muted" style="font-size:13px; font-weight:600;">Your homestead savings</div>
+      {% if has_hs and mv25 and tv25 and rate and mv25 > tv25 %}
+      {% set savings = (mv25 - tv25) * rate / 100 %}
+      <div style="font-size:27px; font-weight:800; color:#2e7d32; font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(savings) }}</div>
+      <div class="text-muted" style="font-size:12.5px; line-height:1.5;">Your homestead exemption saved you an estimated <strong>${{ "{:,.0f}".format(savings) }}</strong> in 2025.</div>
+      {% if tax25 and savings > tax25 %}
+      <div class="text-muted" style="font-size:11px; line-height:1.45; margin-top:6px;">
+        Estimated savings may exceed your tax bill if a senior freeze, disability freeze, or other ceiling applies to your account. Your actual savings depend on your specific exemption history.
+      </div>
+      {% endif %}
+      {% else %}
+      <div style="font-size:18px; font-weight:700;">No homestead exemption on record</div>
+      <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+        If this is your primary residence, you may be eligible —
+        <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">apply at traviscad.org ↗</a>.
+      </div>
+      {% endif %}
+    </div></div>
+  </div>
+</div>
+
+{# ── Section 2 — Your Exemptions ─────────────────────────────────────── #}
+<div class="card mb-4"><div class="card-header">Your Exemptions</div>
+  <div class="card-body">
+    {% if excodes_list %}
+    <p class="mb-2">You have <strong>{{ excodes_list | length }}</strong> exemption{{ "s" if excodes_list|length != 1 }} applied to this property:</p>
+    <table class="table table-sm mb-0" style="max-width:420px;">
+      <tbody>
+        {% for code in excodes_list %}
+        <tr>
+          <td style="font-weight:600;">{{ _exmap.get(code, code) }}</td>
+          <td class="text-muted">{{ code }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="mb-0">No exemptions are currently applied. If this is your primary residence, you may qualify for a homestead exemption —
+      <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">visit traviscad.org to apply ↗</a>.</p>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Section 3 — How you compare to your neighborhood ────────────────── #}
+{% set _b25 = benchmark_by_year.get(2025) if benchmark_by_year else none %}
+{% if _b25 and _b25.median_market_value and mv25 %}
+{% set _med = _b25.median_market_value %}
+{% set _ratio = mv25 / _med %}
+{% if _ratio > 1.1 %}{% set _cmp = "higher than" %}{% set _taxcmp = "higher than" %}
+{% elif _ratio < 0.9 %}{% set _cmp = "lower than" %}{% set _taxcmp = "lower than" %}
+{% else %}{% set _cmp = "about the same as" %}{% set _taxcmp = "about the same as" %}{% endif %}
+<div class="card mb-4"><div class="card-header">How You Compare to Your Neighborhood</div>
+  <div class="card-body">
+    <p class="mb-2">Your home's value is <strong>{{ _cmp }}</strong> the typical home in Travis County
+      (county median: <strong>${{ "{:,.0f}".format(_med) }}</strong>).</p>
+    <p class="mb-0">Because property taxes are based on value, your tax bill is likely <strong>{{ _taxcmp }}</strong> similar homes.</p>
+  </div>
+</div>
+{% endif %}
+
+{# ── Section 4 — Your value over time ────────────────────────────────── #}
+<div class="card mb-4"><div class="card-header">Your Home's Value Over Time</div>
+  <div class="card-body">
+    <p class="text-muted mb-3" style="font-size:13px;">Here's how your home's value has changed over the past 6 years.</p>
+    <canvas id="hoValueChart" height="90"></canvas>
+  </div>
+</div>
+
+{# ── Section 5 — Who gets your tax money ─────────────────────────────── #}
+{% if entity_detail and entity_detail | selectattr('amount_due') | list %}
+<div class="card mb-4"><div class="card-header">Where Your 2025 Tax Dollars Went</div>
+  <div class="card-body">
+    <div class="row align-items-center">
+      <div class="col-md-5"><canvas id="hoEntityChart" height="180"></canvas></div>
+      <div class="col-md-7">
+        <table class="table table-sm mb-0" style="font-size:13px;">
+          <tbody>
+            {% set _tot = entity_detail | selectattr('amount_due') | sum(attribute='amount_due') | float %}
+            {% for e in entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
+            <tr>
+              <td>{{ e.entity_name or e.entity_code }}</td>
+              <td class="text-end" style="font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
+              <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">{{ "{:.0f}%".format(e.amount_due|float / _tot * 100) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ── Property-tax news (homeowner) ───────────────────────────────────── #}
+<div class="card mb-4" id="newsCard">
+  <div class="card-header">Property Tax News for Homeowners</div>
+  <div class="card-body p-0">
+    <div id="newsBody" class="p-3 text-muted" style="font-size:12.5px;">Loading news…</div>
+  </div>
+  <div class="card-footer text-muted" style="font-size:10.5px;">
+    Headlines via Google News. Links open the original source in a new tab.
+  </div>
+</div>
+
+{# ── Section 6 — Helpful links ───────────────────────────────────────── #}
+<div class="card mb-4"><div class="card-header">Helpful Links</div>
+  <div class="card-body">
+    <ul class="mb-0" style="line-height:2; font-size:14px; list-style:none; padding-left:0;">
+      <li><a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">Apply for a homestead exemption ↗</a></li>
+      <li><a href="https://traviscad.org/protests" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a></li>
+      <li><a href="https://tax-office.traviscountytx.gov" target="_blank" rel="noopener noreferrer">Pay your property taxes ↗</a></li>
+      <li><a href="https://traviscad.org/contact" target="_blank" rel="noopener noreferrer">Contact TCAD ↗</a></li>
+    </ul>
+  </div>
+</div>
+
+{% else %}
 {# ── Back link ───────────────────────────────────────────────────────── #}
 <div class="d-flex justify-content-between align-items-center">
   <a href="/" class="back-link">&larr; New search</a>
@@ -1824,10 +1994,71 @@
 
 </div>{# /col-12 full-width tables #}
 </div>{# /row full-width #}
+{% endif %}{# /mode == investor #}
 
 {% endblock %}
 
 {% block scripts %}
+{% if mode == 'homeowner' %}
+<script>
+// ── Homeowner mode: value-over-time bar, tax-money donut, homestead news ─────
+(function () {
+  // Value over time — single-color bar, no jargon
+  const yrs  = [{% for r in history if r.market_value %}{{ r.tax_year }},{% endfor %}];
+  const vals = [{% for r in history if r.market_value %}{{ r.market_value|float }},{% endfor %}];
+  const vc = document.getElementById('hoValueChart');
+  if (vc && window.Chart && yrs.length) {
+    new Chart(vc.getContext('2d'), {
+      type: 'bar',
+      data: { labels: yrs, datasets: [{ data: vals, backgroundColor: '#94B0DA', borderRadius: 4, maxBarThickness: 64 }] },
+      options: { responsive: true, plugins: { legend: { display: false },
+          tooltip: { callbacks: { label: c => '$' + Number(c.raw).toLocaleString() } } },
+        scales: { y: { ticks: { callback: v => '$' + Math.round(v/1000) + 'k' }, grid: { color: '#eee' } },
+                  x: { grid: { display: false } } } }
+    });
+  }
+  // Where your tax dollars went — donut
+  const enNames = [{% for e in entity_detail|selectattr('amount_due')|list %}{{ (e.entity_name or e.entity_code)|tojson }},{% endfor %}];
+  const enAmts  = [{% for e in entity_detail|selectattr('amount_due')|list %}{{ e.amount_due|float }},{% endfor %}];
+  const ec = document.getElementById('hoEntityChart');
+  if (ec && window.Chart && enAmts.length) {
+    new Chart(ec.getContext('2d'), {
+      type: 'doughnut',
+      data: { labels: enNames, datasets: [{ data: enAmts,
+        backgroundColor: ['#94B0DA','#DCEDFF','#8F91A2','#505A5B','#b7c7e0','#cdd3da'] }] },
+      options: { plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } },
+        tooltip: { callbacks: { label: c => c.label + ': $' + Number(c.raw).toLocaleString() } } }, cutout: '58%' }
+    });
+  }
+  // Homeowner news (homestead / residential)
+  const body = document.getElementById('newsBody');
+  if (body) {
+    const esc = s => { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
+    const rowHtml = (it, hidden) => `
+      <tr class="${hidden ? 'news-more' : ''}"${hidden ? ' style="display:none;"' : ''}>
+        <td style="white-space:nowrap; color:var(--text-3); width:92px; vertical-align:top;">${esc(it.date) || '—'}</td>
+        <td><a href="${esc(it.link)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>
+          ${it.source ? `<div style="color:var(--text-3); font-size:11px;">${esc(it.source)}</div>` : ''}</td>
+      </tr>`;
+    fetch('/api/news?type=homeowner').then(r => r.json()).then(d => {
+      const items = (d && d.items) || [];
+      if (!d || !d.ok || !items.length) { body.innerHTML = '<span class="text-muted">News is temporarily unavailable — please check back shortly.</span>'; return; }
+      const first = items.slice(0, 3), rest = items.slice(3, 8);
+      let html = '<table class="table table-sm table-hover mb-0" style="font-size:12.5px;"><tbody>' +
+        first.map(it => rowHtml(it, false)).join('') + rest.map(it => rowHtml(it, true)).join('') + '</tbody></table>';
+      if (rest.length) html += '<div class="px-3 py-2"><a href="#" id="newsMoreToggle" style="font-size:12px; text-decoration:none;">See more ▾</a></div>';
+      body.innerHTML = html;
+      const tog = document.getElementById('newsMoreToggle');
+      if (tog) tog.addEventListener('click', e => { e.preventDefault();
+        const more = body.querySelectorAll('.news-more');
+        const opening = more.length && more[0].style.display === 'none';
+        more.forEach(r => r.style.display = opening ? '' : 'none');
+        tog.textContent = opening ? 'See less ▴' : 'See more ▾'; });
+    }).catch(() => { body.innerHTML = '<span class="text-muted">News is temporarily unavailable.</span>'; });
+  }
+})();
+</script>
+{% else %}
 {% if history %}
 <script>
 const historyData = {{ history | tojson }};
@@ -3000,4 +3231,5 @@ if (rCtx) {
 })();
 </script>
 
+{% endif %}{# /mode investor scripts #}
 {% endblock %}

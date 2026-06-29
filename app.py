@@ -676,6 +676,35 @@ app = Flask(__name__)
 app.secret_key = config.FLASK_SECRET
 
 
+# ── Homeowner / Investor mode ─────────────────────────────────────────────────
+_MODES = ("homeowner", "investor")
+_MODE_COOKIE = "parcelytics_mode"
+_MODE_DEFAULT = "investor"
+
+
+def _resolve_mode():
+    """URL ?mode= overrides the cookie; cookie overrides the default."""
+    m = (request.args.get("mode") or "").strip().lower()
+    if m in _MODES:
+        return m
+    c = (request.cookies.get(_MODE_COOKIE) or "").strip().lower()
+    return c if c in _MODES else _MODE_DEFAULT
+
+
+@app.context_processor
+def inject_mode():
+    return {"mode": _resolve_mode()}
+
+
+@app.after_request
+def persist_mode(resp):
+    """When ?mode= is present and valid, remember it for 30 days."""
+    m = (request.args.get("mode") or "").strip().lower()
+    if m in _MODES:
+        resp.set_cookie(_MODE_COOKIE, m, max_age=30 * 24 * 3600, samesite="Lax")
+    return resp
+
+
 # ── DB helper ─────────────────────────────────────────────────────────────────
 def get_db():
     return psycopg2.connect(
@@ -1082,6 +1111,9 @@ def county_snapshot():
     view = request.args.get("view", "overall")
     if view not in ("overall", "residential", "commercial", "multifamily", "land", "agricultural"):
         view = "overall"
+    # Homeowner mode only sees residential home values.
+    if _resolve_mode() == "homeowner":
+        view = "residential"
 
     # ── View-specific WHERE clause applied to the y25 CTE ───────────────────
     # Base exclusions always apply: X-prefix (exempt), AJR* (personal property supplements).
@@ -1969,6 +2001,7 @@ _NEWS_TTL = 3600     # seconds
 
 # Property-type-specific news queries (keyed by the classi_cd-first label).
 _NEWS_QUERIES = {
+    "homeowner":    "Travis County homestead exemption OR Austin property tax homeowner OR Austin school tax",
     "Residential":  "Travis County homestead exemption OR Austin residential property tax",
     "Multi-Family": "Austin multifamily property tax OR Austin apartment market",
     "Commercial":   "Travis County commercial property tax",

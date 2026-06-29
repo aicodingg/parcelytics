@@ -17,6 +17,21 @@
           source, with a visible confidence level. No third-party aggregators. No guesses dressed as facts.
         </p>
 
+        {# Mode selector — who are you? #}
+        <div class="mb-3">
+          <div style="font-size:13px; font-weight:600; color:var(--text-2); margin-bottom:8px;">Who are you?</div>
+          <div class="d-flex flex-wrap gap-2">
+            <a href="/?mode=homeowner"
+               style="display:inline-block; padding:9px 16px; border-radius:10px; text-decoration:none; font-weight:600; font-size:14px;
+               border:1.5px solid #94B0DA;
+               {% if mode == 'homeowner' %}background:#94B0DA; color:#fff;{% else %}background:#fff; color:#505A5B;{% endif %}">🏠 I'm a Homeowner</a>
+            <a href="/?mode=investor"
+               style="display:inline-block; padding:9px 16px; border-radius:10px; text-decoration:none; font-weight:600; font-size:14px;
+               border:1.5px solid #94B0DA;
+               {% if mode == 'investor' %}background:#94B0DA; color:#fff;{% else %}background:#fff; color:#505A5B;{% endif %}">📊 I'm an Investor / Developer</a>
+          </div>
+        </div>
+
         {# Search — same behavior + typeahead as before #}
         <form method="get" action="/" class="hero-search">
           <div class="search-input-wrap">

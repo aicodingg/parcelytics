@@ -4,15 +4,16 @@
 {% block content %}
 <div class="page-header mb-3 d-flex align-items-center gap-3 flex-wrap">
   <div>
-    <h1 class="page-title mb-0">Travis County Market Snapshot</h1>
+    <h1 class="page-title mb-0">{% if mode == 'homeowner' %}Travis County Home Values{% else %}Travis County Market Snapshot{% endif %}</h1>
     <p class="text-muted mb-0" style="font-size:13px; margin-top:4px;">
-      2026 Preliminary vs 2025 Certified
+      {% if mode == 'homeowner' %}How home values changed across Travis County, 2025 → 2026{% else %}2026 Preliminary vs 2025 Certified{% endif %}
       <span class="badge-preliminary ms-2">Preliminary</span>
     </p>
   </div>
 </div>
 
-{# ── View toggle ────────────────────────────────────────────────── #}
+{# ── View toggle (hidden in homeowner mode) ─────────────────────── #}
+{% if mode != 'homeowner' %}
 <div class="mb-4">
   <div class="btn-group btn-group-sm" role="group">
     <a href="/snapshot?view=overall"
@@ -50,6 +51,7 @@
     {% endif %}
   </span>
 </div>
+{% endif %}{# /mode != homeowner — view toggle #}
 
 {% if totals %}
 {# ── Headline cards ────────────────────────────────────────────── #}
@@ -99,6 +101,16 @@
     {% if view == 'residential' %}
       {% set sf  = rows | selectattr('ptype', 'equalto', 'Single-Family')    | list | first | default(none) %}
       {% set ct  = rows | selectattr('ptype', 'equalto', 'Condo / Townhome') | list | first | default(none) %}
+      {% if mode == 'homeowner' %}
+        Across Travis County, the typical home's value
+        <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+          {{ "went down" if totals.median_pct < 0 else "went up" }}</strong>
+        about {{ totals.median_pct|abs }}% from 2025 to 2026.
+        {% if totals.n_up is defined and totals.n_down is defined %}
+        Of homes county-wide, {{ "{:,}".format(totals.n_up) }} rose in value and {{ "{:,}".format(totals.n_down) }} fell.
+        {% endif %}
+        Remember: a higher value usually means a higher tax bill, and a homestead exemption helps limit how fast your taxable value can rise.
+      {% else %}
       Travis County residential values
       <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
         {{ "declined" if totals.median_pct < 0 else "increased" }}
@@ -112,6 +124,7 @@
         Condos/townhomes: median {{ "+" if ct.median_pct >= 0 else "" }}{{ ct.median_pct }}%.
       {% endif %}
       Total residential assessed value: ${{ "{:,.2f}B".format(totals.total_mv25_b) }} → ${{ "{:,.2f}B".format(totals.total_mv26_b) }}.
+      {% endif %}
 
     {% elif view == 'commercial' %}
       {% set fi = rows | selectattr('ptype', 'equalto', 'Commercial Improved') | list | first | default(none) %}
