@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}Search — Parcelytics{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <h1 class="page-title mb-1">Search Travis County Parcels</h1>
+  <p class="text-muted mb-0" style="max-width:680px;">
+    Look up any of Travis County's 508,000+ parcels by account number or street address.
+    The map shows where Parcelytics has coverage today.
+  </p>
+</div>
+
+<div class="row g-4 align-items-start">
+
+  {# ── US coverage map (visual indicator only — not an interactive GIS map) ── #}
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Coverage Map</span>
+        <span class="text-muted" style="font-size:11.5px;">United States · county outlines</span>
+      </div>
+      <div class="card-body">
+        <svg id="usMap" viewBox="0 0 975 610" preserveAspectRatio="xMidYMid meet"
+             style="width:100%; height:auto; display:block;"></svg>
+        <div id="usMapFallback" class="text-muted small" style="display:none;">
+          Map preview unavailable offline. Coverage: Travis County, TX.
+        </div>
+        <div class="d-flex flex-wrap gap-3 mt-2" style="font-size:11.5px; color:var(--text-2);">
+          <span><span style="display:inline-block;width:11px;height:11px;background:#94B0DA;border:1px solid #7d97c2;vertical-align:-1px;border-radius:2px;"></span> Travis County — active</span>
+          <span><span style="display:inline-block;width:11px;height:11px;background:#DCEDFF;border:1px solid #c3d8f0;vertical-align:-1px;border-radius:2px;"></span> Texas — coming soon</span>
+          <span><span style="display:inline-block;width:11px;height:11px;background:#f1f2f4;border:1px solid #d9dde1;vertical-align:-1px;border-radius:2px;"></span> Other states</span>
+        </div>
+        <p class="text-muted mt-2 mb-0" style="font-size:12px;">
+          Currently covering <strong>Travis County, TX</strong> — additional counties coming soon.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  {# ── Search + optional pre-filters ───────────────────────────────────── #}
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header">Find a Parcel</div>
+      <div class="card-body">
+        <form method="get" action="/" id="searchPageForm">
+          <label class="form-label small text-muted mb-1" for="spQ">Parcel ID or address</label>
+          <div class="ta-wrap" style="position:relative;">
+            <input type="text" name="q" id="spQ" class="form-control"
+                   placeholder="e.g. 1201 S Lamar  ·  0100030105"
+                   autocomplete="off" spellcheck="false">
+            <div class="ta-list" id="spTaList" style="display:none;"></div>
+          </div>
+          <div class="form-text" style="font-size:11.5px;">
+            Accepts 10-digit TCAD account, 14-digit Tax Office account, prop_id, or street address.
+          </div>
+
+          {# Optional pre-filters (same options as the benchmark filters) #}
+          <div class="row g-2 mt-2">
+            <div class="col-6">
+              <label class="form-label small text-muted mb-1" for="spType">Property Type <span class="text-muted">(optional)</span></label>
+              <select id="spType" class="form-select form-select-sm" style="font-size:12px;">
+                <option value="">— Any —</option>
+                <option value="residential">Residential (SFR)</option>
+                <option value="multifamily">Multi-Family</option>
+                <option value="commercial">Commercial</option>
+                <option value="land">Land / Vacant</option>
+                <option value="agricultural">Agricultural</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label small text-muted mb-1" for="spCode">Use Code <span class="text-muted">(optional)</span></label>
+              <select id="spCode" class="form-select form-select-sm" style="font-size:12px;">
+                <option value="">— Any —</option>
+              </select>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-dark btn-sm w-100 mt-3 fw-semibold">Search</button>
+        </form>
+        <div class="text-muted mt-2" style="font-size:11px;">
+          Tip: enter a parcel to open its detail page. Choose a Property Type (no parcel entered) to browse that sector's Market Snapshot.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+<script>
+// ── US coverage map (static visual; Travis County highlighted) ───────────────
+(function () {
+  const TRAVIS = "48453", TX = "48", W = 975, H = 610;
+  const svg = d3.select("#usMap");
+  d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json")
+    .then(us => {
+      const counties = topojson.feature(us, us.objects.counties);
+      const states   = topojson.feature(us, us.objects.states);
+      // The TopoJSON is geographic (lon/lat) — project it into the 975×610 box.
+      const proj = d3.geoAlbersUsa().fitSize([W, H], states);
+      const path = d3.geoPath(proj);
+
+      svg.selectAll("path.county")
+        .data(counties.features).join("path")
+        .attr("class", "county")
+        .attr("d", path)
+        .attr("fill", d => {
+          const id = String(d.id);
+          if (id === TRAVIS) return "#94B0DA";        // Travis — active
+          if (id.slice(0, 2) === TX) return "#cdddf0"; // Texas — coming soon
+          return "#e6e9ed";                            // other states
+        })
+        .attr("stroke", "#ffffff")
+        .attr("stroke-width", 0.3)
+        .append("title")
+        .text(d => String(d.id) === TRAVIS ? "Travis County, TX — active coverage" : "");
+
+      // State boundaries on top for legibility
+      svg.append("path")
+        .datum(topojson.mesh(us, us.objects.states, (a, b) => a !== b))
+        .attr("d", path).attr("fill", "none")
+        .attr("stroke", "#9aa5b1").attr("stroke-width", 0.6);
+
+      // Marker so Travis County is unmistakable despite its small size
+      const tf = counties.features.find(d => String(d.id) === TRAVIS);
+      const c = tf ? path.centroid(tf) : null;
+      if (c && !isNaN(c[0])) {
+        svg.append("circle").attr("cx", c[0]).attr("cy", c[1]).attr("r", 16)
+          .attr("fill", "none").attr("stroke", "#94B0DA").attr("stroke-width", 1.4).attr("opacity", 0.7);
+        svg.append("circle").attr("cx", c[0]).attr("cy", c[1]).attr("r", 6)
+          .attr("fill", "#94B0DA").attr("stroke", "#ffffff").attr("stroke-width", 1.5);
+        svg.append("text").attr("x", c[0] + 22).attr("y", c[1] + 4)
+          .attr("font-size", "14").attr("font-weight", "600").attr("fill", "#505A5B")
+          .text("Travis County, TX");
+      }
+    })
+    .catch(() => {
+      document.getElementById("usMap").style.display = "none";
+      document.getElementById("usMapFallback").style.display = "";
+    });
+})();
+
+// ── Address typeahead (reuses /api/address_search, same as home search) ──────
+(function () {
+  const input = document.getElementById("spQ");
+  const list  = document.getElementById("spTaList");
+  if (!input || !list) return;
+  let t = null;
+  input.addEventListener("input", function () {
+    const v = input.value.trim();
+    clearTimeout(t);
+    if (v.length < 3) { list.style.display = "none"; return; }
+    t = setTimeout(() => {
+      fetch("/api/address_search?q=" + encodeURIComponent(v))
+        .then(r => r.json())
+        .then(d => {
+          const rows = (d.results || []);
+          if (!rows.length) { list.style.display = "none"; return; }
+          list.innerHTML = rows.map(r =>
+            `<a class="ta-item" href="/parcel/${encodeURIComponent(r.geo_id)}">
+               <span>${r.situs_address || '(address unknown)'}</span>
+               <span class="text-muted ms-2" style="font-family:var(--font-mono);font-size:11px;">${r.geo_id}</span>
+             </a>`).join('');
+          list.style.display = "";
+        })
+        .catch(() => { list.style.display = "none"; });
+    }, 180);
+  });
+  input.addEventListener("blur", () => setTimeout(() => { list.style.display = "none"; }, 160));
+})();
+
+// ── Pre-filter behavior: type-only (no parcel) → browse that sector's snapshot
+(function () {
+  const form = document.getElementById("searchPageForm");
+  const q    = document.getElementById("spQ");
+  const type = document.getElementById("spType");
+  if (!form) return;
+  form.addEventListener("submit", function (e) {
+    if (!q.value.trim() && type.value) {
+      e.preventDefault();
+      window.location.href = "/snapshot?view=" + encodeURIComponent(type.value);
+    }
+  });
+  // Populate Use Code options from the same source as the benchmark filters.
+  // meta returns use_codes_by_type: { "Residential": [{code,desc,n}, …], … }
+  const TYPE_MAP = { residential: "Residential", multifamily: "Multi-Family",
+                     commercial: "Commercial", land: "Land/Vacant", agricultural: "Agricultural" };
+  let codesByType = {};
+  function fillCodes() {
+    const sel = document.getElementById("spCode");
+    sel.innerHTML = '<option value="">— Any —</option>';
+    const wantLabel = TYPE_MAP[type.value] || null;
+    const groups = wantLabel ? { [wantLabel]: codesByType[wantLabel] || [] } : codesByType;
+    const seen = new Set();
+    Object.values(groups).forEach(list => (list || []).forEach(c => {
+      if (seen.has(c.code)) return; seen.add(c.code);
+      const o = document.createElement("option");
+      o.value = c.code; o.textContent = c.code + (c.desc ? ` — ${c.desc}` : "");
+      sel.appendChild(o);
+    }));
+  }
+  fetch("/api/benchmark/meta").then(r => r.json()).then(d => {
+    codesByType = d.use_codes_by_type || {};
+    fillCodes();
+    type.addEventListener("change", fillCodes);
+  }).catch(() => {});
+})();
+</script>
+{% endblock %}

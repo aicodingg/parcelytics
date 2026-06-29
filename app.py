@@ -764,6 +764,13 @@ def index():
     return render_template("index.html", q=q, error=error)
 
 
+@app.route("/search")
+def search_page():
+    """Task 13 — dedicated search page with a US coverage map (visual only).
+    Not an interactive GIS map; just communicates current coverage (Travis County)."""
+    return render_template("search.html")
+
+
 @app.route("/parcel/<geo_id>")
 def property_detail(geo_id):
     # Core parcel
@@ -1553,10 +1560,14 @@ def api_estimate_acq(geo_id):
                 float(r["rate"]) if r["rate"] is not None else None
             )
 
-    # Parcel market-growth assumption from its own certified history (clamped)
+    # Parcel market-growth assumption — mirror the main 6-year projection's CAGR
+    # (Task 5): earliest → latest INCLUDING the 2026 preliminary, and allow the
+    # rate to be negative (decline) instead of flooring at 0%. This is why the
+    # multi-year projection was staying flat; now it compounds the same CAGR the
+    # main projection uses. Clamped to a sane band.
     mkt_hist = query("""
         SELECT tax_year, market_value FROM parcel_tax_year
-        WHERE geo_id = %s AND market_value IS NOT NULL AND tax_year <= 2025
+        WHERE geo_id = %s AND market_value IS NOT NULL AND tax_year <= 2026
         ORDER BY tax_year
     """, (geo_id,))
     market_growth = None
@@ -1565,7 +1576,7 @@ def api_estimate_acq(geo_id):
         span = pts[-1][0] - pts[0][0]
         if span > 0:
             cagr = (pts[-1][1] / pts[0][1]) ** (1.0 / span) - 1.0
-            market_growth = max(0.0, min(0.08, cagr))   # clamp 0–8%
+            market_growth = max(-0.05, min(0.12, cagr))   # allow decline; mirror main projection
 
     result = _tx_estimate(
         dict(parcel),
@@ -1786,6 +1797,7 @@ def api_peer_benchmark_sf(geo_id):
 
     parcel_data = query("""
         SELECT p.living_area_sqft,
+               p.gross_building_area_sqft,
                pty.market_value,
                pty.assessed_value
         FROM   parcel p
@@ -1796,7 +1808,8 @@ def api_peer_benchmark_sf(geo_id):
     if not parcel_data:
         return jsonify({"ok": False, "error": "No 2025 data for this parcel"})
 
-    sqft    = float(parcel_data["living_area_sqft"]) if parcel_data.get("living_area_sqft") else None
+    sqft       = float(parcel_data["living_area_sqft"]) if parcel_data.get("living_area_sqft") else None
+    gross_sqft = float(parcel_data["gross_building_area_sqft"]) if parcel_data.get("gross_building_area_sqft") else None
     this_mv = float(parcel_data["market_value"])     if parcel_data.get("market_value")     else None
     this_av = float(parcel_data["assessed_value"])   if parcel_data.get("assessed_value")   else None
 
@@ -1805,6 +1818,10 @@ def api_peer_benchmark_sf(geo_id):
             "ok": False, "error": "no_sf_basis",
             "message": "No living area SF for this parcel (vacant land, exempt-only, or loader not run)"
         })
+
+    # Gross Building Area $/SF (Task 6) — provisional basis (total improvement area)
+    this_market_psf_gross   = round(this_mv / gross_sqft, 2) if (this_mv and gross_sqft) else None
+    this_assessed_psf_gross = round(this_av / gross_sqft, 2) if (this_av and gross_sqft) else None
 
     neighborhood = (parcel.get("neighborhood_cd") or "").strip()
     state_cd1    = (parcel.get("state_cd1") or "").strip()[:1]
@@ -1839,8 +1856,13 @@ def api_peer_benchmark_sf(geo_id):
                 pty.market_value,
                 pty.assessed_value,
                 CAST(p.living_area_sqft AS FLOAT)                               AS sqft,
+                CAST(p.gross_building_area_sqft AS FLOAT)                       AS gross_sqft,
                 CAST(pty.market_value   AS FLOAT) / p.living_area_sqft          AS market_psf,
-                CAST(pty.assessed_value AS FLOAT) / p.living_area_sqft          AS assessed_psf
+                CAST(pty.assessed_value AS FLOAT) / p.living_area_sqft          AS assessed_psf,
+                CASE WHEN p.gross_building_area_sqft > 0
+                     THEN CAST(pty.market_value   AS FLOAT) / p.gross_building_area_sqft END AS market_psf_gross,
+                CASE WHEN p.gross_building_area_sqft > 0
+                     THEN CAST(pty.assessed_value AS FLOAT) / p.gross_building_area_sqft END AS assessed_psf_gross
             FROM   parcel p
             JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
             WHERE  p.neighborhood_cd  = %(nb)s
@@ -1876,6 +1898,8 @@ def api_peer_benchmark_sf(geo_id):
 
     market_psf_vals   = sorted(float(r["market_psf"])   for r in peers if r.get("market_psf"))
     assessed_psf_vals = sorted(float(r["assessed_psf"]) for r in peers if r.get("assessed_psf"))
+    market_psf_gross_vals   = sorted(float(r["market_psf_gross"])   for r in peers if r.get("market_psf_gross"))
+    assessed_psf_gross_vals = sorted(float(r["assessed_psf_gross"]) for r in peers if r.get("assessed_psf_gross"))
 
     def _pct(lst, p):
         if not lst:
@@ -1899,10 +1923,13 @@ def api_peer_benchmark_sf(geo_id):
         "peer_count":             n,
         "band_note":              band_note,
         "this_sqft":              round(sqft),
+        "this_gross_sqft":        round(gross_sqft) if gross_sqft else None,
         "this_market_psf":        this_market_psf,
         "this_assessed_psf":      this_assessed_psf,
         "this_market_psf_rank":   this_market_psf_rank,
         "this_assessed_psf_rank": this_assessed_psf_rank,
+        "this_market_psf_gross":   this_market_psf_gross,
+        "this_assessed_psf_gross": this_assessed_psf_gross,
         "peer_market_psf": {
             "p25":    _pct(market_psf_vals, 25),
             "median": _pct(market_psf_vals, 50),
@@ -1913,8 +1940,157 @@ def api_peer_benchmark_sf(geo_id):
             "median": _pct(assessed_psf_vals, 50),
             "p75":    _pct(assessed_psf_vals, 75),
         },
+        "peer_market_psf_gross": {
+            "p25":    _pct(market_psf_gross_vals, 25),
+            "median": _pct(market_psf_gross_vals, 50),
+            "p75":    _pct(market_psf_gross_vals, 75),
+        },
+        "peer_assessed_psf_gross": {
+            "p25":    _pct(assessed_psf_gross_vals, 25),
+            "median": _pct(assessed_psf_gross_vals, 50),
+            "p75":    _pct(assessed_psf_gross_vals, 75),
+        },
+        "gross_provisional": True,
     })
 
+
+
+_NEWS_CACHE = {"ts": 0, "items": None}
+_NEWS_TTL = 3600  # seconds
+
+
+@app.route("/api/news")
+def api_news():
+    """Task: real Travis County property-tax news for the property page.
+
+    Pulls from Google News RSS (keyless, public) server-side, parses with the
+    stdlib, caches for an hour, and degrades gracefully. Never fabricates items —
+    on any failure it returns ok=False and the UI shows an honest 'unavailable'
+    note instead of placeholder headlines.
+    """
+    import time as _time
+    import urllib.request
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    now = _time.time()
+    if _NEWS_CACHE["items"] is not None and (now - _NEWS_CACHE["ts"]) < _NEWS_TTL:
+        return jsonify({"ok": True, "cached": True, "items": _NEWS_CACHE["items"]})
+
+    query = "Travis County property tax OR Travis Central Appraisal District"
+    url = ("https://news.google.com/rss/search?q="
+           + urllib.parse.quote(query)
+           + "&hl=en-US&gl=US&ceid=US:en")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Parcelytics/1.0 (news reader)"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            raw = resp.read()
+        root = ET.fromstring(raw)
+        items = []
+        for it in root.findall(".//item")[:12]:
+            title = (it.findtext("title") or "").strip()
+            link = (it.findtext("link") or "").strip()
+            pub = (it.findtext("pubDate") or "").strip()
+            # Google News prefixes "<title> - <source>"; split the source out.
+            source = ""
+            src_el = it.find("source")
+            if src_el is not None and src_el.text:
+                source = src_el.text.strip()
+            # Google News appends " - <source>" to the title — strip it for display.
+            if source and title.endswith(" - " + source):
+                title = title[: -(len(source) + 3)].strip()
+            elif " - " in title and not source:
+                source = title.rsplit(" - ", 1)[-1].strip()
+                title = title.rsplit(" - ", 1)[0].strip()
+            date_iso = ""
+            try:
+                date_iso = parsedate_to_datetime(pub).date().isoformat()
+            except Exception:
+                date_iso = ""
+            if title and link:
+                items.append({"title": title, "link": link, "source": source, "date": date_iso})
+        _NEWS_CACHE["items"] = items
+        _NEWS_CACHE["ts"] = now
+        return jsonify({"ok": True, "cached": False, "items": items})
+    except Exception as e:
+        # Honest failure — no fabricated news.
+        return jsonify({"ok": False, "error": "news_unavailable", "detail": str(e)[:120]})
+
+
+@app.route("/api/peer_set/<geo_id>")
+def api_peer_set(geo_id):
+    """Task 7 — 5 comparable parcels for the Submarket Position section.
+
+    Same classi_cd-first property type, same neighborhood (relaxed to same
+    state_cd1 prefix in the neighborhood if too few), 2025 market value within
+    ±25% of the subject. Excludes the subject and AJR* accounts.
+    """
+    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    if not parcel:
+        return jsonify({"ok": False, "error": "Parcel not found"})
+
+    subj = query("""
+        SELECT pty.market_value
+        FROM parcel_tax_year pty WHERE pty.geo_id = %s AND pty.tax_year = 2025
+    """, (geo_id,), one=True)
+    if not subj or not subj.get("market_value"):
+        return jsonify({"ok": False, "error": "No 2025 market value for subject"})
+
+    subj_label = property_type_label(parcel.get("classi_cd"), parcel.get("state_cd1"))
+    nb         = (parcel.get("neighborhood_cd") or "").strip()
+    sc1        = (parcel.get("state_cd1") or "").strip()[:1]
+    subj_mv    = float(subj["market_value"])
+    lbl_sql    = label_case_sql("p.classi_cd", "p.state_cd1")
+
+    base_select = f"""
+        SELECT p.geo_id, p.prop_id, p.situs_address, p.classi_cd,
+               p.living_area_sqft, p.land_sqft, p.year_built,
+               pty.market_value, pty.assessed_value,
+               ROUND(pty.assessed_value::numeric / NULLIF(pty.market_value, 0), 4) AS assessment_ratio,
+               (SELECT SUM(ctr.rate)
+                  FROM tax_billing_entity tbe
+                  JOIN county_tax_rate ctr
+                    ON ctr.entity_code = tbe.entity_code AND ctr.tax_year = 2025
+                 WHERE tbe.geo_id = p.geo_id AND tbe.tax_year = 2025) AS total_tax_rate
+        FROM parcel p
+        JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+        WHERE p.geo_id <> %(geo)s
+          AND p.geo_id NOT LIKE 'AJR%%'
+          AND pty.market_value BETWEEN %(lo)s AND %(hi)s
+          AND ({lbl_sql}) IS NOT DISTINCT FROM %(lbl)s
+    """
+    params = {"geo": geo_id, "lo": subj_mv * 0.75, "hi": subj_mv * 1.25, "lbl": subj_label, "nb": nb, "sc1": sc1}
+
+    peers = []
+    if nb:
+        peers = query(base_select + " AND p.neighborhood_cd = %(nb)s"
+                      " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5",
+                      {**params, "mv": subj_mv})
+    if len(peers) < 5:
+        # relax: same state_cd1 prefix, any neighborhood
+        peers = query(base_select + " AND LEFT(p.state_cd1,1) = %(sc1)s"
+                      " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5",
+                      {**params, "mv": subj_mv})
+
+    out = []
+    for p in peers:
+        cc = (p.get("classi_cd") or "").strip()
+        desc = USE_CODE_LOOKUP.get(cc, ("", ""))[0]
+        out.append({
+            "geo_id":           p["geo_id"],
+            "prop_id":          p["prop_id"],
+            "address":          p.get("situs_address") or "—",
+            "classi_cd":        cc or None,
+            "use_desc":         desc or None,
+            "main_area_sqft":   round(float(p["living_area_sqft"])) if p.get("living_area_sqft") else None,
+            "land_sqft":        round(float(p["land_sqft"])) if p.get("land_sqft") else None,
+            "year_built":       p.get("year_built"),
+            "market_value":     int(p["market_value"]) if p.get("market_value") else None,
+            "assessment_ratio": float(p["assessment_ratio"]) if p.get("assessment_ratio") is not None else None,
+            "total_tax_rate":   float(p["total_tax_rate"]) if p.get("total_tax_rate") is not None else None,
+        })
+    return jsonify({"ok": True, "subject_label": subj_label, "neighborhood": nb, "peers": out, "count": len(out)})
 
 
 # ── On-demand billing fetch ────────────────────────────────────────────────────

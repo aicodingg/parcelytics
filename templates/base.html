@@ -27,8 +27,15 @@
     </button>
 
     <div class="collapse navbar-collapse" id="mainNav">
+      {# Task 11: persistent parcel search — available from every page #}
+      <form class="d-flex me-lg-3 my-2 my-lg-0" role="search" action="/" method="get" id="navSearchForm">
+        <input class="form-control form-control-sm" type="search" name="q" id="navSearchInput"
+               placeholder="Search parcel ID or address…" autocomplete="off"
+               aria-label="Search parcels" style="min-width:210px; font-size:12px;">
+      </form>
       <div class="navbar-nav ms-auto d-flex align-items-lg-center">
-        <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">Search</a>
+        <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">Home</a>
+        <a class="nav-link {% if request.path == '/search' %}active{% endif %}" href="/search">Search</a>
         <a class="nav-link {% if request.path == '/rates' %}active{% endif %}" href="/rates">Rate Trends</a>
 
         {# Sector dropdown — links to Market Snapshot with appropriate view #}
@@ -88,6 +95,15 @@
       <span>Certified 2021–2025 · Preliminary 2026</span>
       <a href="mailto:parcelytics@gmail.com">Contact &amp; feedback</a>
     </div>
+  </div>
+  {# Task 12: data freshness — answers "how do I know when info is outdated?" #}
+  <div class="footer-bottom" style="flex-wrap:wrap; gap:6px;">
+    <span style="font-size:11px; color:var(--text-3);">
+      <strong>Data as of:</strong>
+      Appraisal — 2025 Certified (Jul 2025) · 2026 Preliminary (Jun 9, 2026)
+      &nbsp;|&nbsp; Tax rates — 2025 (latest certified)
+      &nbsp;|&nbsp; Billing — 2025 Verified · 2021–2024 Partial (portal receipts)
+    </span>
   </div>
   <div class="footer-bottom">
     <span>Travis County, Texas · Data: TCAD &amp; Travis County Tax Office</span>

@@ -106,113 +106,19 @@
 {% endif %}
 
 
-{# ── Post-Acquisition Tax Estimator (Task 1) ─────────────────────────── #}
-{# post-acq-estimator-card #}
-{% if entity_detail and current %}
-<div class="card mb-4 estimator-card" id="postAcqEstimator">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <span>Post-Acquisition Tax Estimate</span>
-    <span class="estimates-badge">Estimate · Not a prediction</span>
-  </div>
-  <div class="card-body">
-
-    {# Input row #}
-    <div class="d-flex flex-wrap gap-3 align-items-end mb-3">
-      <div>
-        <label class="form-label small text-muted mb-1" for="acqPrice">Purchase Price</label>
-        <div class="input-group input-group-sm" style="max-width:200px;">
-          <span class="input-group-text">$</span>
-          <input type="text" id="acqPrice" class="form-control"
-                 placeholder="e.g. 4500000"
-                 value="{{ current.market_value | int if current.market_value else '' }}"
-                 style="font-family:var(--font-mono); font-size:13px;">
-        </div>
-      </div>
-      <div>
-        <label class="form-label small text-muted mb-1">Buyer Type</label>
-        <div class="btn-group btn-group-sm" role="group" id="buyerToggle">
-          <input type="radio" class="btn-check" name="buyerType" id="buyerInvestor" value="non_owner_occupant" checked>
-          <label class="btn btn-outline-secondary" for="buyerInvestor">Investor</label>
-          <input type="radio" class="btn-check" name="buyerType" id="buyerOwner" value="owner_occupant">
-          <label class="btn btn-outline-secondary" for="buyerOwner">Owner-Occupant</label>
-        </div>
-      </div>
-      <div>
-        <label class="form-label small text-muted mb-1">Tax Rates</label>
-        <div class="btn-group btn-group-sm" role="group" id="rateToggle">
-          <input type="radio" class="btn-check" name="rateMode" id="rateCertified" value="certified" checked>
-          <label class="btn btn-outline-secondary" for="rateCertified">2025 Certified</label>
-          <input type="radio" class="btn-check" name="rateMode" id="rateProjected" value="projected">
-          <label class="btn btn-outline-secondary" for="rateProjected">Projected trend</label>
-        </div>
-      </div>
-      <button class="btn btn-sm btn-dark" id="acqRunBtn" onclick="runEstimator()">
-        Estimate
-      </button>
-      <span id="acqSpinner" class="text-muted small" style="display:none;">Calculating…</span>
-    </div>
-
-    {# Disclaimer #}
-    <p class="small text-muted mb-3" style="font-size:11.5px; line-height:1.5;">
-      Estimate only. The appraisal district sets value as of Jan 1 (not at sale price).
-      A sale is strong evidence of market value and is typically reflected in the next
-      Jan 1 valuation. Taxing units set rates annually. Modeled from government data —
-      not a legal or tax opinion.
-    </p>
-
-    {# Results pane (hidden until first run) #}
-    <div id="acqResults" style="display:none;">
-
-      {# Tax-year + rate-vintage label #}
-      <div id="acqRateVintage" class="mb-3" style="font-size:12px;"></div>
-
-      {# Summary row #}
-      <div class="d-flex flex-wrap gap-3 mb-3" id="acqSummary"></div>
-
-      {# Entity breakdown table #}
-      <div class="table-responsive">
-        <table class="table table-sm mb-0" id="acqTable">
-          <thead class="table-light small text-muted text-uppercase">
-            <tr>
-              <th>Entity</th>
-              <th class="text-end">Rate</th>
-              <th class="text-end">~Taxable Base</th>
-              <th class="text-end">~Est. Tax</th>
-              <th class="text-end">Seller Tax</th>
-              <th class="text-end">~Delta</th>
-            </tr>
-          </thead>
-          <tbody id="acqTbody"></tbody>
-          <tfoot id="acqTfoot"></tfoot>
-        </table>
-      </div>
-
-      {# Multi-year projection #}
-      <div id="acqMultiyear" class="mt-4"></div>
-
-      {# Homestead-exemption explainer (owner-occupant) #}
-      <div id="acqHsExplainer" class="mt-4"></div>
-
-      {# Circuit-breaker / gap-year notes #}
-      <div id="acqNotes" class="mt-3"></div>
-
-      {# Assumptions list #}
-      <div id="acqAssumptions" class="mt-3"></div>
-
-    </div>{# /acqResults #}
-
-    {# Error pane #}
-    <div id="acqError" class="search-error-block" style="display:none;"></div>
-
-  </div>{# /card-body #}
-</div>
-{% endif %}
 
 {# ── Property header ─────────────────────────────────────────────────── #}
-{# Property type label derived from state_cd1 (A/B/C/D/E/F prefix) #}
+{# Property type label — classi_cd-first (Task 1): use the same classification
+   bench_label the benchmarks use, so apartments aren't mislabeled single-family.
+   Fall back to the state_cd1 prefix only when no bench_label is available. #}
 {% set _sc = (parcel.state_cd1 or "")|trim %}
 {% set _sc1 = _sc[:1] %}
-{% if _sc1 == "A" %}{% set _prop_type = "Residential (Single-Family)" %}
+{% if bench_label == "Residential" %}{% set _prop_type = "Residential (Single-Family)" %}
+{% elif bench_label == "Multi-Family" %}{% set _prop_type = "Multi-Family" %}
+{% elif bench_label == "Land/Vacant" %}{% set _prop_type = "Land / Vacant" %}
+{% elif bench_label == "Agricultural" %}{% set _prop_type = "Agricultural" %}
+{% elif bench_label == "Commercial" %}{% set _prop_type = "Commercial" %}
+{% elif _sc1 == "A" %}{% set _prop_type = "Residential (Single-Family)" %}
 {% elif _sc1 == "B" %}{% set _prop_type = "Multi-Family" %}
 {% elif _sc1 == "C" %}{% set _prop_type = "Land / Vacant" %}
 {% elif _sc1 in ["D", "E"] %}{% set _prop_type = "Agricultural" %}
@@ -318,6 +224,23 @@
               </td></tr>
           <tr><th>Valuation</th>
               <td>{{ val_method }}</td></tr>
+          {# ── Size & age (Task 4) — shown only where data is loaded ───────── #}
+          <tr><th>Improvement SF</th>
+              <td style="font-variant-numeric:tabular-nums;">
+                {% if parcel.living_area_sqft %}{{ "{:,.0f}".format(parcel.living_area_sqft|float) }} SF{% else %}—{% endif %}
+              </td></tr>
+          <tr><th>Land SF</th>
+              <td style="font-variant-numeric:tabular-nums;">
+                {% if parcel.land_sqft %}{{ "{:,.0f}".format(parcel.land_sqft|float) }} SF{% else %}—{% endif %}
+              </td></tr>
+          <tr><th>Acres</th>
+              <td style="font-variant-numeric:tabular-nums;">
+                {% if parcel.land_sqft %}{{ "{:,.3f}".format(parcel.land_sqft|float / 43560.0) }}{% else %}—{% endif %}
+              </td></tr>
+          <tr><th>Year Built</th>
+              <td style="font-variant-numeric:tabular-nums;">
+                {% if parcel.year_built %}{{ parcel.year_built }}{% else %}—{% endif %}
+              </td></tr>
           <tr><th>Legal</th>
               <td style="font-size:12px; font-weight:400; text-align:right;">{{ parcel.legal_desc or "—" }}</td></tr>
           <tr><th>Neighborhood</th>
@@ -502,6 +425,97 @@
       </p>
       {% endif %}
 
+      {# ── Investment Snapshot — computed analysis (all from real data) ──── #}
+      {% if current and current.market_value %}
+      {% set _mv  = current.market_value %}
+      {% set _lv  = current.land_value or 0 %}
+      {% set _iv  = current.imprv_value or 0 %}
+      {% set _liv = (parcel.living_area_sqft | float) if parcel.living_area_sqft else none %}
+      {% set _gba = (parcel.gross_building_area_sqft | float) if parcel.gross_building_area_sqft else none %}
+      {% set _land = (parcel.land_sqft | float) if parcel.land_sqft else none %}
+      {% set _land_share = (_lv / _mv * 100) if (_lv and _mv) else none %}
+      {% set _bldg_psf = (_mv / _liv) if _liv else none %}
+      {% set _land_psf = (_lv / _land) if (_lv and _land) else none %}
+      {% set _age = (2026 - parcel.year_built) if parcel.year_built else none %}
+      {% set _m25 = metrics_by_year.get(2025) %}
+      {% set _etr = (_m25.effective_tax_rate | float * 100) if (_m25 and _m25.effective_tax_rate is not none) else none %}
+      {% set _ratio = (current.assessed_value / _mv * 100) if (current.assessed_value and _mv) else none %}
+      {% set _b25 = benchmark_by_year.get(2025) %}
+      {% set _proj = projections[-1] if projections else none %}
+
+      <hr class="my-3">
+      <div class="section-hdr" style="font-size:13px; margin-bottom:10px;">Investment Snapshot
+        <span class="text-muted" style="font-size:11px; font-weight:400;">— 2025 certified basis</span>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:16px; font-variant-numeric:tabular-nums;">
+        {% macro stat(label, value, sub='') -%}
+        <div style="border:1px solid var(--border,#e5e7eb); border-radius:7px; padding:9px 11px;">
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);">{{ label }}</div>
+          <div style="font-size:15px; font-weight:700; color:var(--ink,#1f2933);">{{ value }}</div>
+          {% if sub %}<div style="font-size:10.5px; color:var(--text-3);">{{ sub }}</div>{% endif %}
+        </div>
+        {%- endmacro %}
+        {{ stat('Building (Main)', ("{:,.0f} SF".format(_liv)) if _liv else '—') }}
+        {{ stat('Gross Building', (("{:,.0f} SF".format(_gba)) if _gba else '—'), 'enclosed area' if _gba else '') }}
+        {{ stat('Land', ("{:,.0f} SF".format(_land)) if _land else '—', ("{:.3f} ac".format(_land/43560.0)) if _land else '') }}
+        {{ stat('Value / Bldg SF', ("${:,.0f}".format(_bldg_psf)) if _bldg_psf else '—', 'all-in (incl. land)') }}
+        {{ stat('Land $/SF', ("${:,.0f}".format(_land_psf)) if _land_psf else '—') }}
+        {{ stat('Land Value Share', ("{:.0f}%".format(_land_share)) if _land_share is not none else '—') }}
+        {{ stat('Year Built', (parcel.year_built|string) if parcel.year_built else '—', ("~{} yrs old".format(_age)) if _age else '') }}
+        {{ stat('Eff. Tax Rate', ("{:.3f}%".format(_etr)) if _etr is not none else '—', '2025') }}
+        {{ stat('Assessment Ratio', ("{:.1f}%".format(_ratio)) if _ratio is not none else '—') }}
+        {{ stat('Est. Annual Tax', ("${:,.0f}".format(insights.est_annual_tax)) if insights.est_annual_tax else '—', '2025 taxable × rate') }}
+      </div>
+
+      {# Value composition / redevelopment lens #}
+      {% if _land_share is not none %}
+      <p class="mb-2">
+        <strong>Value Composition:</strong>
+        Land carries <strong>{{ "{:.0f}%".format(_land_share) }}</strong> of market value
+        (${{ "{:,.0f}".format(_lv) }} land vs ${{ "{:,.0f}".format(_iv) }} improvements){% if _land_psf %},
+        about <strong>${{ "{:,.0f}".format(_land_psf) }}/SF</strong> of land{% endif %}.
+        {% if _land_share >= 70 %}
+          With value concentrated in the land{% if _age and _age >= 30 %} under a ~{{ _age }}-year-old structure{% endif %},
+          this reads as a land-dominated asset — the classic higher-and-best-use / redevelopment signal. Underwrite the dirt, not the building.
+        {% elif _land_share >= 45 %}
+          Land and improvements both carry meaningful weight; value is balanced between the structure and its site.
+        {% else %}
+          Most value sits in the improvements, so building condition, age{% if _age %} (~{{ _age }} yrs){% endif %}, and rent roll drive the underwriting.
+        {% endif %}
+      </p>
+      {% endif %}
+
+      {# Submarket position vs county benchmark #}
+      {% if _b25 and _b25.median_market_value %}
+      {% set _med = _b25.median_market_value %}
+      {% set _p25 = _b25.p25_market_value %}
+      {% set _p75 = _b25.p75_market_value %}
+      {% if _p75 and _mv >= _p75 %}{% set _band = "top quartile (≥75th percentile)" %}
+      {% elif _med and _mv >= _med %}{% set _band = "upper-middle (50th–75th percentile)" %}
+      {% elif _p25 and _mv >= _p25 %}{% set _band = "lower-middle (25th–50th percentile)" %}
+      {% else %}{% set _band = "bottom quartile (<25th percentile)" %}{% endif %}
+      <p class="mb-2">
+        <strong>Submarket Position:</strong>
+        At ${{ "{:,.0f}".format(_mv) }}, this parcel sits in the <strong>{{ _band }}</strong>
+        of {{ bench_label }} property in Travis County — county median ${{ "{:,.0f}".format(_med) }}
+        (P25 ${{ "{:,.0f}".format(_p25) }} / P75 ${{ "{:,.0f}".format(_p75) }}{% if _b25.parcel_count %}, n={{ "{:,}".format(_b25.parcel_count) }}{% endif %}).
+        See the Peer Set and Per-SF benchmark below for parcel-level comparables.
+      </p>
+      {% endif %}
+
+      {# Forward outlook from the projection #}
+      {% if _proj and insights.value_cagr is defined %}
+      <p class="mb-2">
+        <strong>Forward Outlook:</strong>
+        Holding the historical <strong>{{ insights.value_cagr }}%</strong> CAGR, the model projects market value near
+        <strong>${{ "{:,.0f}".format(_proj.market) }}</strong> by {{ _proj.year }}, with an estimated annual tax burden around
+        <strong>${{ "{:,.0f}".format(_proj.est_tax) }}</strong>.
+        <span class="badge-estimated" style="font-size:9px; padding:1px 5px;">Estimated</span>
+        Forward figures are model projections, not certified — see the 6-Year Projection section for the low/base/high bands.
+      </p>
+      {% endif %}
+      {% endif %}
+
       {# Delinquency #}
       {% if insights.delinquent_amount is defined %}
       <p class="mb-0">
@@ -521,8 +535,135 @@
   </div>
   {% endif %}
 
+  {# ── Property-tax & county news (real feed; never fabricated) ─────────── #}
+  <div class="card mb-4" id="newsCard">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Property Tax &amp; County News</span>
+      <span class="text-muted" style="font-size:11px; font-weight:400;">Travis County · live feed</span>
+    </div>
+    <div class="card-body p-0">
+      <div id="newsBody" class="p-3 text-muted" style="font-size:12.5px;">Loading news…</div>
+    </div>
+    <div class="card-footer text-muted" style="font-size:10.5px;">
+      Headlines via Google News for “Travis County property tax” / Travis Central Appraisal District.
+      Dates and sources as published; links open the original source in a new tab. Updated hourly.
+    </div>
+  </div>
+
 </div>{# /col-lg-8 — insight report #}
 </div>{# /row — top two-column section #}
+
+{# ── Post-Acquisition Tax Estimator (Task 1) ─────────────────────────── #}
+{# post-acq-estimator-card #}
+{% if entity_detail and current %}
+<div class="card mb-4 estimator-card" id="postAcqEstimator">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Post-Acquisition Tax Estimate</span>
+    <span class="estimates-badge">Estimate · Not a prediction</span>
+  </div>
+  <div class="card-body">
+
+    {# Size context (Task 5) — gives the buyer scale while reviewing the estimate #}
+    {% if parcel.living_area_sqft or parcel.gross_building_area_sqft or parcel.land_sqft %}
+    <div class="mb-3" style="font-size:12px; color:var(--text-3); font-variant-numeric:tabular-nums;">
+      Property:
+      {% if parcel.living_area_sqft %}<strong>{{ "{:,.0f}".format(parcel.living_area_sqft|float) }} SF</strong> main area{% endif %}
+      {% if parcel.gross_building_area_sqft %}&middot; {{ "{:,.0f}".format(parcel.gross_building_area_sqft|float) }} SF gross{% endif %}
+      {% if parcel.land_sqft %}&middot; {{ "{:,.3f}".format(parcel.land_sqft|float / 43560.0) }} ac lot{% endif %}
+    </div>
+    {% endif %}
+
+    {# Input row #}
+    <div class="d-flex flex-wrap gap-3 align-items-end mb-3">
+      <div>
+        <label class="form-label small text-muted mb-1" for="acqPrice">Purchase Price</label>
+        <div class="input-group input-group-sm" style="max-width:200px;">
+          <span class="input-group-text">$</span>
+          <input type="text" id="acqPrice" class="form-control"
+                 placeholder="e.g. 4500000"
+                 value="{{ current.market_value | int if current.market_value else '' }}"
+                 style="font-family:var(--font-mono); font-size:13px;">
+        </div>
+      </div>
+      <div>
+        <label class="form-label small text-muted mb-1">Buyer Type</label>
+        <div class="btn-group btn-group-sm" role="group" id="buyerToggle">
+          <input type="radio" class="btn-check" name="buyerType" id="buyerInvestor" value="non_owner_occupant" checked>
+          <label class="btn btn-outline-secondary" for="buyerInvestor">Investor</label>
+          <input type="radio" class="btn-check" name="buyerType" id="buyerOwner" value="owner_occupant">
+          <label class="btn btn-outline-secondary" for="buyerOwner">Owner-Occupant</label>
+        </div>
+      </div>
+      <div>
+        <label class="form-label small text-muted mb-1">Tax Rates</label>
+        <div class="btn-group btn-group-sm" role="group" id="rateToggle">
+          <input type="radio" class="btn-check" name="rateMode" id="rateCertified" value="certified" checked>
+          <label class="btn btn-outline-secondary" for="rateCertified">2025 Certified</label>
+          <input type="radio" class="btn-check" name="rateMode" id="rateProjected" value="projected">
+          <label class="btn btn-outline-secondary" for="rateProjected">Projected trend</label>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-dark" id="acqRunBtn" onclick="runEstimator()">
+        Estimate
+      </button>
+      <span id="acqSpinner" class="text-muted small" style="display:none;">Calculating…</span>
+    </div>
+
+    {# Disclaimer #}
+    <p class="small text-muted mb-3" style="font-size:11.5px; line-height:1.5;">
+      Estimate only. The appraisal district sets value as of Jan 1 (not at sale price).
+      A sale is strong evidence of market value and is typically reflected in the next
+      Jan 1 valuation. Taxing units set rates annually. Modeled from government data —
+      not a legal or tax opinion.
+    </p>
+
+    {# Results pane (hidden until first run) #}
+    <div id="acqResults" style="display:none;">
+
+      {# Tax-year + rate-vintage label #}
+      <div id="acqRateVintage" class="mb-3" style="font-size:12px;"></div>
+
+      {# Summary row #}
+      <div class="d-flex flex-wrap gap-3 mb-3" id="acqSummary"></div>
+
+      {# Entity breakdown table #}
+      <div class="table-responsive">
+        <table class="table table-sm mb-0" id="acqTable">
+          <thead class="table-light small text-muted text-uppercase">
+            <tr>
+              <th>Entity</th>
+              <th class="text-end">Rate</th>
+              <th class="text-end">~Taxable Base</th>
+              <th class="text-end">~Est. Tax</th>
+              <th class="text-end">Seller Tax</th>
+              <th class="text-end">~Delta</th>
+            </tr>
+          </thead>
+          <tbody id="acqTbody"></tbody>
+          <tfoot id="acqTfoot"></tfoot>
+        </table>
+      </div>
+
+      {# Multi-year projection #}
+      <div id="acqMultiyear" class="mt-4"></div>
+
+      {# Homestead-exemption explainer (owner-occupant) #}
+      <div id="acqHsExplainer" class="mt-4"></div>
+
+      {# Circuit-breaker / gap-year notes #}
+      <div id="acqNotes" class="mt-3"></div>
+
+      {# Assumptions list #}
+      <div id="acqAssumptions" class="mt-3"></div>
+
+    </div>{# /acqResults #}
+
+    {# Error pane #}
+    <div id="acqError" class="search-error-block" style="display:none;"></div>
+
+  </div>{# /card-body #}
+</div>
+{% endif %}
 
 {# ── Overview narrative — collapsed (Task 4) ─────────────────────────────── #}
 {% if narrative %}
@@ -1543,6 +1684,39 @@
   </div>
   {% endif %}
 
+  {# ── Peer Set — 5 comparable parcels (Task 7) ───────────────────────── #}
+  <div id="peerSetSection" class="mb-4" style="display:none;">
+    <div class="section-hdr">Peer Set <span class="section-hdr-badge">Comparables</span></div>
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Comparable Parcels <span id="peerSetNote" class="text-muted" style="font-size:11.5px; font-weight:400;"></span></span>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
+            <thead class="table-light text-muted text-uppercase" style="font-size:10px;">
+              <tr>
+                <th>Address</th>
+                <th>Parcel ID</th>
+                <th>Use</th>
+                <th class="text-end">Main SF</th>
+                <th class="text-end">Land SF</th>
+                <th class="text-end">Yr Built</th>
+                <th class="text-end">2025 Market</th>
+                <th class="text-end">2025 Tax Rate</th>
+                <th class="text-end">Assess. Ratio</th>
+              </tr>
+            </thead>
+            <tbody id="peerSetBody"></tbody>
+          </table>
+        </div>
+        <div class="text-muted px-3 py-2" style="font-size:10.5px;">
+          Same property type and neighborhood, 2025 market value within ±25% of this parcel. Excludes AJR accounts. Click an address to open that parcel.
+        </div>
+      </div>
+    </div>
+  </div>
+
   {# ── Per-SF Peer Benchmark (Task B) ─────────────────────────────────── #}
   <div id="peerBenchSfSection" class="mb-4" style="display:none;">
     <div class="section-hdr">Per-SF Peer Benchmark</div>
@@ -1553,6 +1727,29 @@
         </span>
         <span class="estimates-badge">2025 Certified</span>
       </div>
+      {# Land-dominated cue — when land ≫ improvements, building $/SF reads high #}
+      {% if current and current.market_value and current.land_value
+            and (current.land_value / current.market_value) > 0.75 %}
+      <div class="px-3 pt-2" style="font-size:11.5px; color:var(--text-2); line-height:1.5;">
+        <strong>Context:</strong> land is
+        {{ "{:.0f}%".format(current.land_value / current.market_value * 100) }} of this parcel's value,
+        so the Market $/SF on building area reads high — the value is in the land, not the structure.
+        Weigh Gross Building Area and Land $/SF alongside it.
+      </div>
+      {% endif %}
+      {# Component-exclusion transparency — only when materially excluded (>20%) #}
+      {% if parcel.gross_building_area_sqft and parcel.gross_excluded_sqft
+            and (parcel.gross_excluded_sqft|float / (parcel.gross_building_area_sqft|float + parcel.gross_excluded_sqft|float)) > 0.20 %}
+      <div class="px-3 pt-2" style="font-size:11.5px; color:var(--text-2); line-height:1.55;">
+        <strong>Gross Building Area:</strong>
+        {{ "{:,.0f}".format(parcel.gross_building_area_sqft|float) }} SF of enclosed building —
+        excludes {{ "{:,.0f}".format(parcel.gross_excluded_sqft|float) }} SF of site improvements{% if parcel.gross_excluded_detail %}
+        ({{ parcel.gross_excluded_detail }}){% endif %}.
+        {% if current and current.market_value and current.land_value
+              and (current.land_value / current.market_value) > 0.75 %}
+        Surface parking on a high-value land parcel is often a redevelopment signal.{% endif %}
+      </div>
+      {% endif %}
       <div class="card-body" id="peerBenchSfBody">
         <div class="text-muted small" style="font-size:12px;">Loading SF data…</div>
       </div>
@@ -1830,6 +2027,7 @@ if (rCtx) {
   const parcelMv        = {{ (_r25.market_value if _r25 and _r25.market_value else 0) | tojson }};
   const parcelClassiCd  = {{ (parcel.classi_cd or "") | tojson }};
   const defaultBenchLabel = {{ bench_label | tojson }};
+  const parcelNeighborhood = {{ (parcel.neighborhood_cd or "") | tojson }};  // Task 8: default nbhd filter
 
   const selYear      = document.getElementById('benchYearFilter');
   const loadingEl    = document.getElementById('benchLoading');
@@ -1959,6 +2157,15 @@ if (rCtx) {
           if (nbCovPct < 80) {
             document.getElementById('benchNbInput').placeholder =
               `— Neighborhood (⚠ ${nbCovPct}% cov.) —`;
+          }
+          // Task 8: default the Neighborhood filter to the subject parcel's own
+          // neighborhood so the benchmark opens on the right comparison group.
+          if (parcelNeighborhood) {
+            const matchNb = nbs.find(item => item.code === parcelNeighborhood);
+            if (matchNb) {
+              taNb.select(matchNb.code, `${matchNb.code} (${matchNb.n.toLocaleString()})`);
+              fetchAndRender();
+            }
           }
         } else {
           document.getElementById('benchNbInput').disabled = true;
@@ -2171,6 +2378,64 @@ if (rCtx) {
 
 
 <script>
+// ── Property-tax & county news (real feed) ──────────────────────────────────
+(function () {
+  const body = document.getElementById('newsBody');
+  if (!body) return;
+  const esc = s => { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
+  fetch('/api/news')
+    .then(r => r.json())
+    .then(d => {
+      const items = (d && d.items) || [];
+      if (!d || !d.ok || !items.length) {
+        body.innerHTML = '<span class="text-muted">News is temporarily unavailable — please check back shortly.</span>';
+        return;
+      }
+      body.innerHTML =
+        '<table class="table table-sm table-hover mb-0" style="font-size:12.5px;"><tbody>' +
+        items.map(it => `
+          <tr>
+            <td style="white-space:nowrap; color:var(--text-3); width:92px; vertical-align:top;">${esc(it.date) || '—'}</td>
+            <td>
+              <a href="${esc(it.link)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>
+              ${it.source ? `<div style="color:var(--text-3); font-size:11px;">${esc(it.source)}</div>` : ''}
+            </td>
+          </tr>`).join('') +
+        '</tbody></table>';
+    })
+    .catch(() => { body.innerHTML = '<span class="text-muted">News is temporarily unavailable.</span>'; });
+})();
+
+// ── Peer Set — 5 comparable parcels (Task 7) ────────────────────────────────
+(function () {
+  const GEO_ID  = "{{ parcel.geo_id }}";
+  const section = document.getElementById('peerSetSection');
+  const body    = document.getElementById('peerSetBody');
+  const note    = document.getElementById('peerSetNote');
+  if (!section || !body) return;
+  const fmt0 = n => (n == null) ? '—' : Number(n).toLocaleString();
+  fetch(`/api/peer_set/${encodeURIComponent(GEO_ID)}`)
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok || !d.peers || !d.peers.length) return;
+      if (note) note.textContent = '— ' + (d.subject_label || '') + (d.neighborhood ? ', nbhd ' + d.neighborhood : '');
+      body.innerHTML = d.peers.map(p => `
+        <tr>
+          <td><a href="/parcel/${encodeURIComponent(p.geo_id)}">${p.address || '—'}</a></td>
+          <td><code style="font-size:11px;">${p.geo_id}</code></td>
+          <td>${p.classi_cd ? (p.classi_cd + (p.use_desc ? ' · ' + p.use_desc : '')) : '—'}</td>
+          <td class="text-end">${p.main_area_sqft != null ? fmt0(p.main_area_sqft) + ' SF' : '—'}</td>
+          <td class="text-end">${p.land_sqft != null ? fmt0(p.land_sqft) + ' SF' : '—'}</td>
+          <td class="text-end">${p.year_built || '—'}</td>
+          <td class="text-end">${p.market_value != null ? '$' + fmt0(p.market_value) : '—'}</td>
+          <td class="text-end">${p.total_tax_rate != null ? p.total_tax_rate.toFixed(4) + '%' : '—'}</td>
+          <td class="text-end">${p.assessment_ratio != null ? (p.assessment_ratio * 100).toFixed(1) + '%' : '—'}</td>
+        </tr>`).join('');
+      section.style.display = '';
+    })
+    .catch(() => {});
+})();
+
 // ── Per-SF Peer Benchmark (Task B) ──────────────────────────────────────────
 (function() {
   const GEO_ID  = "{{ parcel.geo_id }}";
@@ -2198,16 +2463,16 @@ if (rCtx) {
       body.innerHTML = `
         <div class="d-flex flex-wrap gap-3 mb-3">
           <div class="estimator-chip">
-            <div class="estimator-chip-label">Living Area</div>
-            <div class="estimator-chip-val">${d.this_sqft != null ? Number(d.this_sqft).toLocaleString() + ' SF' : '—'}</div>
+            <div class="estimator-chip-label">Main Area</div>
+            <div class="estimator-chip-val">${d.this_sqft != null ? Number(d.this_sqft).toLocaleString() + ' SF' : '—'}</div>
+          </div>
+          <div class="estimator-chip">
+            <div class="estimator-chip-label">Gross Building Area</div>
+            <div class="estimator-chip-val">${d.this_gross_sqft != null ? Number(d.this_gross_sqft).toLocaleString() + ' SF' : '—'}</div>
           </div>
           <div class="estimator-chip">
             <div class="estimator-chip-label">Market \$/SF Rank</div>
             <div class="estimator-chip-val">${_rank(d.this_market_psf_rank)}</div>
-          </div>
-          <div class="estimator-chip">
-            <div class="estimator-chip-label">Assessed \$/SF Rank</div>
-            <div class="estimator-chip-val">${_rank(d.this_assessed_psf_rank)}</div>
           </div>
           <div class="estimator-chip">
             <div class="estimator-chip-label">Peer Count</div>
@@ -2215,38 +2480,56 @@ if (rCtx) {
           </div>
         </div>
         <div class="table-responsive">
-          <table class="table table-sm mb-0 small">
+          <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
             <thead class="table-light text-muted text-uppercase" style="font-size:10.5px;">
               <tr>
-                <th>Metric</th>
-                <th class="text-end">P25</th>
+                <th rowspan="2" style="vertical-align:bottom;">Metric</th>
+                <th colspan="4" class="text-center" style="border-left:1px solid var(--border,#e5e7eb);">Main Area</th>
+                <th colspan="4" class="text-center" style="border-left:1px solid var(--border,#e5e7eb);"
+                    title="Enclosed building area from IMP_DET — all floors, garages, finish-out, structured parking. Excludes paving, HVAC/sprinkler attributes, open porches, decks, terraces, canopies and other site improvements.">Gross Building Area</th>
+              </tr>
+              <tr>
+                <th class="text-end" style="border-left:1px solid var(--border,#e5e7eb);">P25</th>
                 <th class="text-end">Median</th>
                 <th class="text-end">P75</th>
-                <th class="text-end">This Parcel</th>
+                <th class="text-end">This</th>
+                <th class="text-end" style="border-left:1px solid var(--border,#e5e7eb);">P25</th>
+                <th class="text-end">Median</th>
+                <th class="text-end">P75</th>
+                <th class="text-end">This</th>
               </tr>
             </thead>
             <tbody>
               <tr>
                 <td>Market \$/SF (2025)</td>
-                <td class="text-end">${_fmtPsf(d.peer_market_psf.p25)}</td>
+                <td class="text-end" style="border-left:1px solid var(--border,#e5e7eb);">${_fmtPsf(d.peer_market_psf.p25)}</td>
                 <td class="text-end fw-semibold">${_fmtPsf(d.peer_market_psf.median)}</td>
                 <td class="text-end">${_fmtPsf(d.peer_market_psf.p75)}</td>
                 <td class="text-end fw-bold">${_fmtPsf(d.this_market_psf)}</td>
+                <td class="text-end" style="border-left:1px solid var(--border,#e5e7eb);">${_fmtPsf(d.peer_market_psf_gross.p25)}</td>
+                <td class="text-end fw-semibold">${_fmtPsf(d.peer_market_psf_gross.median)}</td>
+                <td class="text-end">${_fmtPsf(d.peer_market_psf_gross.p75)}</td>
+                <td class="text-end fw-bold">${_fmtPsf(d.this_market_psf_gross)}</td>
               </tr>
               <tr>
                 <td>Assessed \$/SF (2025)</td>
-                <td class="text-end">${_fmtPsf(d.peer_assessed_psf.p25)}</td>
+                <td class="text-end" style="border-left:1px solid var(--border,#e5e7eb);">${_fmtPsf(d.peer_assessed_psf.p25)}</td>
                 <td class="text-end fw-semibold">${_fmtPsf(d.peer_assessed_psf.median)}</td>
                 <td class="text-end">${_fmtPsf(d.peer_assessed_psf.p75)}</td>
                 <td class="text-end fw-bold">${_fmtPsf(d.this_assessed_psf)}</td>
+                <td class="text-end" style="border-left:1px solid var(--border,#e5e7eb);">${_fmtPsf(d.peer_assessed_psf_gross.p25)}</td>
+                <td class="text-end fw-semibold">${_fmtPsf(d.peer_assessed_psf_gross.median)}</td>
+                <td class="text-end">${_fmtPsf(d.peer_assessed_psf_gross.p75)}</td>
+                <td class="text-end fw-bold">${_fmtPsf(d.this_assessed_psf_gross)}</td>
               </tr>
             </tbody>
           </table>
         </div>
         <p class="text-muted mt-2 mb-0" style="font-size:10.5px;">
           ${d.band_note}.
-          Living-area SF from TCAD IMP_DET.TXT (components: 1ST, 2ND, 3RD, 1/2, RSBLW, FBSMT — heated/cooled area only; excludes garages, unfinished basements, decks).
-          2025 certified market and assessed values. Assessed \$/SF reflects current appraisal; market \$/SF reflects TCAD's estimated market value per SF.
+          <strong>Main Area</strong> = heated/cooled living area (TCAD IMP_DET components 1ST, 2ND, 3RD, 1/2, RSBLW, FBSMT; excludes garages, unfinished basements, decks).
+          <strong>Gross Building Area</strong> = enclosed building components from TCAD IMP_DET (all floors, garages, finish-out, structured parking); excludes paving, HVAC/sprinkler attributes, open porches, decks, terraces, canopies and other site improvements.
+          2025 certified market and assessed values.
         </p>
       `;
       section.style.display = '';

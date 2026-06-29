@@ -252,8 +252,10 @@ def estimate_post_acquisition(
     entity_rate_history = entity_rate_history or {}
     if market_growth is None:
         market_growth = DEFAULT_MARKET_GROWTH
-    # keep the growth assumption in a sane band regardless of source
-    market_growth = max(0.0, min(0.10, float(market_growth)))
+    # keep the growth assumption in a sane band regardless of source.
+    # Lower bound allows a declining-value projection (Task 5): the multi-year
+    # estimate mirrors the parcel's actual CAGR instead of flooring flat at 0%.
+    market_growth = max(-0.05, min(0.12, float(market_growth)))
 
     # ── Pull 2025 certified values ────────────────────────────────────────────
     market_value   = int(current_yr_row.get("market_value")   or 0)

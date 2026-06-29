@@ -339,9 +339,10 @@
             {% endfor %}
           </tr>
 
-          {# Parcel Count row #}
+          {# Parcel Count row (Task 10 — explicit label) #}
           <tr>
-            <td class="trend-row-label text-muted fw-normal" style="font-size:11px;">Parcel Count</td>
+            <td class="trend-row-label text-muted fw-normal" style="font-size:11px;"
+                title="Number of parcels in this category with a valid certified market value that year. It varies year to year as parcels are added, reclassified, or have a value on record.">Parcels in This Category</td>
             {% for yr in _bt_years %}
             {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
             <td class="text-end text-muted small">

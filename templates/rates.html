@@ -26,6 +26,12 @@
             Reset to key entities
           </button>
         </div>
+        {# Task 9: typeahead filter for the long entity list #}
+        <div class="mb-2 px-1">
+          <input type="text" id="entitySearch" class="form-control form-control-sm"
+                 placeholder="Search entities…" autocomplete="off"
+                 style="font-size:12px;" oninput="filterEntityList()">
+        </div>
         {% for ent in all_entities %}
         <div class="form-check ms-1">
           <input class="form-check-input entity-cb" type="checkbox"
@@ -55,7 +61,7 @@
     {# All-entity summary table #}
     <div class="card">
       <div class="card-header">
-        2025 Rates — All Entities
+        2025 Rates — Selected Entities
       </div>
       <div class="card-body p-0">
         <div class="table-responsive">
@@ -161,6 +167,7 @@ function updateChart() {
     };
   });
   chart.update();
+  buildSummary();   // Task 9: keep the summary table in sync with the chart selection
 }
 
 function selectKey() {
@@ -170,11 +177,24 @@ function selectKey() {
   updateChart();
 }
 
-// Build summary table — entity badges match the design system
+// Task 9: filter the (long) entity checkbox list by code or name as you type.
+function filterEntityList() {
+  const q = (document.getElementById('entitySearch').value || '').toLowerCase();
+  document.querySelectorAll('.entity-cb').forEach(cb => {
+    const row = cb.closest('.form-check');
+    if (!row) return;
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+// Build summary table — entity badges match the design system.
+// Task 9: only show entities currently selected/displayed in the chart.
 function buildSummary() {
   const tbody = document.getElementById('summaryTable');
+  const checked = new Set([...document.querySelectorAll('.entity-cb:checked')].map(cb => cb.value));
   const rows = [];
   for (const [code, pts] of Object.entries(BY_ENTITY)) {
+    if (!checked.has(code)) continue;
     const r2025 = pts.find(p => p.year === 2025);
     const r2020 = pts.find(p => p.year === 2020);
     if (!r2025 || r2025.rate == null) continue;
@@ -183,6 +203,10 @@ function buildSummary() {
     rows.push({ code, name: ENTITY_NAMES[code] || '', r2025: r2025.rate, r2020: r2020 && r2020.rate, delta });
   }
   rows.sort((a, b) => b.r2025 - a.r2025);
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center p-3" style="font-size:12.5px;">No entities selected — choose entities at left to populate this table.</td></tr>';
+    return;
+  }
   tbody.innerHTML = rows.map(r => {
     const deltaColor = r.delta != null
       ? (r.delta < 0 ? 'style="color: var(--down);"' : r.delta > 0 ? 'style="color: var(--up);"' : '')
