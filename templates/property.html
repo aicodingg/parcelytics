@@ -77,8 +77,29 @@
   </div>
 </div>
 
+{# ── Left: links + exemptions + neighborhood · Right: satellite ──────── #}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<div class="row g-3 mb-4">
+<div class="col-lg-7">
+
+{# ── Helpful links (kept near the top for quick action) ──────────────── #}
+<div class="card mb-3"><div class="card-header">Helpful Links</div>
+  <div class="card-body">
+    <div class="row" style="font-size:14px; line-height:2;">
+      <div class="col-sm-6">
+        <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">Apply for a homestead exemption ↗</a><br>
+        <a href="https://traviscad.org/protests" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a>
+      </div>
+      <div class="col-sm-6">
+        <a href="https://tax-office.traviscountytx.gov" target="_blank" rel="noopener noreferrer">Pay your property taxes ↗</a><br>
+        <a href="https://traviscad.org/contact" target="_blank" rel="noopener noreferrer">Contact TCAD ↗</a>
+      </div>
+    </div>
+  </div>
+</div>
+
 {# ── Section 2 — Your Exemptions ─────────────────────────────────────── #}
-<div class="card mb-4"><div class="card-header">Your Exemptions</div>
+<div class="card mb-3"><div class="card-header">Your Exemptions</div>
   <div class="card-body">
     {% if excodes_list %}
     <p class="mb-2">You have <strong>{{ excodes_list | length }}</strong> exemption{{ "s" if excodes_list|length != 1 }} applied to this property:</p>
@@ -107,7 +128,7 @@
 {% if _ratio > 1.1 %}{% set _cmp = "higher than" %}{% set _taxcmp = "higher than" %}
 {% elif _ratio < 0.9 %}{% set _cmp = "lower than" %}{% set _taxcmp = "lower than" %}
 {% else %}{% set _cmp = "about the same as" %}{% set _taxcmp = "about the same as" %}{% endif %}
-<div class="card mb-4"><div class="card-header">How You Compare to Your Neighborhood</div>
+<div class="card mb-3"><div class="card-header">How You Compare to Your Neighborhood</div>
   <div class="card-body">
     <p class="mb-2">Your home's value is <strong>{{ _cmp }}</strong> the typical home in Travis County
       (county median: <strong>${{ "{:,.0f}".format(_med) }}</strong>).</p>
@@ -115,6 +136,20 @@
   </div>
 </div>
 {% endif %}
+
+</div>{# /col-lg-7 #}
+<div class="col-lg-5">
+  <div class="card h-100" id="hoSatCard" style="display:none;">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Satellite View</span>
+      <span class="text-muted" style="font-size:11px; font-weight:400;">Imagery: Esri</span>
+    </div>
+    <div class="card-body p-0" style="display:flex;">
+      <div id="hoSatMap" style="flex:1 1 auto; min-height:320px; width:100%; border-radius:0 0 8px 8px;"></div>
+    </div>
+  </div>
+</div>
+</div>{# /row #}
 
 {# ── Section 4 — Your value over time ────────────────────────────────── #}
 <div class="card mb-4"><div class="card-header">Your Home's Value Over Time</div>
@@ -132,19 +167,65 @@
       <div class="col-md-5"><canvas id="hoEntityChart" height="180"></canvas></div>
       <div class="col-md-7">
         <table class="table table-sm mb-0" style="font-size:13px;">
+          <thead class="text-muted" style="font-size:11px; text-transform:uppercase;">
+            <tr>
+              <th>Taxing Entity</th>
+              <th class="text-end">2025 Rate</th>
+              <th class="text-end">You Paid</th>
+              <th class="text-end">Share</th>
+            </tr>
+          </thead>
           <tbody>
             {% set _tot = entity_detail | selectattr('amount_due') | sum(attribute='amount_due') | float %}
             {% for e in entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
             <tr>
               <td>{{ e.entity_name or e.entity_code }}</td>
+              <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">{% if e.rate %}{{ "{:.4f}%".format(e.rate|float) }}{% else %}—{% endif %}</td>
               <td class="text-end" style="font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
               <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">{{ "{:.0f}%".format(e.amount_due|float / _tot * 100) }}</td>
             </tr>
             {% endfor %}
           </tbody>
+          <tfoot>
+            <tr style="font-weight:700; border-top:2px solid var(--border,#dee2e6);">
+              <td>Total</td>
+              <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ "{:.4f}%".format(entity_detail | selectattr('rate') | sum(attribute='rate') | float) }}</td>
+              <td class="text-end" style="font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(_tot) }}</td>
+              <td class="text-end" style="font-variant-numeric:tabular-nums;">100%</td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>
+  </div>
+</div>
+
+{# ── Your tax rate & bill, last 5 years ──────────────────────────────── #}
+<div class="card mb-4"><div class="card-header">Your Tax Rate &amp; Bill — Last 5 Years</div>
+  <div class="card-body p-0">
+    <table class="table table-sm mb-0" style="font-size:13px;">
+      <thead class="text-muted" style="font-size:11px; text-transform:uppercase;">
+        <tr><th class="ps-3">Year</th><th class="text-end">Combined Tax Rate</th><th class="text-end pe-3">Taxes Paid</th></tr>
+      </thead>
+      <tbody>
+        {% for yr in [2025, 2024, 2023, 2022, 2021] %}
+        {% set _h = history | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+        {% set _r = rate_history | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+        <tr>
+          <td class="ps-3">{{ yr }}</td>
+          <td class="text-end" style="font-variant-numeric:tabular-nums;">{% if _r and _r.total_rate %}{{ "{:.4f}%".format(_r.total_rate|float) }}{% else %}—{% endif %}</td>
+          <td class="text-end pe-3" style="font-variant-numeric:tabular-nums;">
+            {% if _h and _h.total_tax %}${{ "{:,.0f}".format(_h.total_tax|float) }}{% if yr != 2025 %} <span class="text-muted" style="font-size:10px;">(partial)</span>{% endif %}
+            {% else %}<span class="text-muted">Not available</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-footer text-muted" style="font-size:10.5px;">
+    Combined rate = the total of all your taxing entities' rates that year. 2025 taxes are verified from the Tax Office;
+    2021–2024 are from county payment receipts (marked “partial”) and may not reflect every adjustment.
   </div>
 </div>
 {% endif %}
@@ -157,18 +238,6 @@
   </div>
   <div class="card-footer text-muted" style="font-size:10.5px;">
     Headlines via Google News. Links open the original source in a new tab.
-  </div>
-</div>
-
-{# ── Section 6 — Helpful links ───────────────────────────────────────── #}
-<div class="card mb-4"><div class="card-header">Helpful Links</div>
-  <div class="card-body">
-    <ul class="mb-0" style="line-height:2; font-size:14px; list-style:none; padding-left:0;">
-      <li><a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">Apply for a homestead exemption ↗</a></li>
-      <li><a href="https://traviscad.org/protests" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a></li>
-      <li><a href="https://tax-office.traviscountytx.gov" target="_blank" rel="noopener noreferrer">Pay your property taxes ↗</a></li>
-      <li><a href="https://traviscad.org/contact" target="_blank" rel="noopener noreferrer">Contact TCAD ↗</a></li>
-    </ul>
   </div>
 </div>
 
@@ -2000,7 +2069,24 @@
 
 {% block scripts %}
 {% if mode == 'homeowner' %}
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+// ── Satellite view — geocode the address, render Esri World Imagery ──────────
+(function () {
+  const card = document.getElementById('hoSatCard');
+  const mapEl = document.getElementById('hoSatMap');
+  if (!card || !mapEl || !window.L) return;
+  fetch('/api/geocode/{{ parcel.geo_id }}').then(r => r.json()).then(d => {
+    if (!d || !d.ok || d.lat == null) return;   // no fabricated location
+    card.style.display = '';
+    const map = L.map('hoSatMap', { zoomControl: true, scrollWheelZoom: false }).setView([d.lat, d.lng], 18);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19, attribution: 'Imagery &copy; Esri' }).addTo(map);
+    L.marker([d.lat, d.lng]).addTo(map);
+    setTimeout(() => map.invalidateSize(), 200);
+  }).catch(() => {});
+})();
+
 // ── Homeowner mode: value-over-time bar, tax-money donut, homestead news ─────
 (function () {
   // Value over time — single-color bar, no jargon
@@ -2013,7 +2099,7 @@
       data: { labels: yrs, datasets: [{ data: vals, backgroundColor: '#94B0DA', borderRadius: 4, maxBarThickness: 64 }] },
       options: { responsive: true, plugins: { legend: { display: false },
           tooltip: { callbacks: { label: c => '$' + Number(c.raw).toLocaleString() } } },
-        scales: { y: { ticks: { callback: v => '$' + Math.round(v/1000) + 'k' }, grid: { color: '#eee' } },
+        scales: { y: { ticks: { callback: v => v >= 1e6 ? '$' + (v/1e6).toFixed(1) + 'MM' : '$' + Math.round(v/1000) + 'k' }, grid: { color: '#eee' } },
                   x: { grid: { display: false } } } }
     });
   }

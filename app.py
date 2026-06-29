@@ -1037,6 +1037,7 @@ def property_detail(geo_id):
         parcel=parcel,
         imp_det=imp_det,
         history=history,
+        rate_history=rate_history,
         current=current,
         current_2026=current_2026,
         entity_detail=entity_detail,
@@ -2079,6 +2080,53 @@ def api_news():
     if not items:
         return jsonify({"ok": False, "error": "news_unavailable"})
     return jsonify({"ok": True, "items": items, "query_type": ptype or "generic"})
+
+
+@app.route("/api/geocode/<geo_id>")
+def api_geocode(geo_id):
+    """Return {lat, lng} for a parcel — for the satellite map.
+
+    Uses cached parcel.latitude/longitude when present; otherwise geocodes the
+    situs address via the free U.S. Census geocoder (no key) and caches the
+    result. Returns ok=False (no fabricated coordinates) on any failure.
+    """
+    import urllib.request, urllib.parse, json as _json
+    row = query("SELECT latitude, longitude, situs_address FROM parcel WHERE geo_id = %s",
+                (geo_id,), one=True)
+    if not row:
+        return jsonify({"ok": False, "error": "not_found"})
+    if row.get("latitude") is not None and row.get("longitude") is not None:
+        return jsonify({"ok": True, "lat": float(row["latitude"]), "lng": float(row["longitude"]), "cached": True})
+
+    addr = (row.get("situs_address") or "").strip()
+    if not addr:
+        return jsonify({"ok": False, "error": "no_address"})
+    one_line = " ".join(addr.split())  # collapse double spaces
+    url = ("https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address="
+           + urllib.parse.quote(one_line)
+           + "&benchmark=Public_AR_Current&format=json")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Parcelytics/1.0"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = _json.loads(resp.read())
+        matches = data.get("result", {}).get("addressMatches", [])
+        if not matches:
+            return jsonify({"ok": False, "error": "no_match"})
+        c = matches[0]["coordinates"]
+        lat, lng = float(c["y"]), float(c["x"])
+        # Cache to the (previously empty) parcel columns.
+        try:
+            conn = get_db()
+            with conn.cursor() as cur:
+                cur.execute("UPDATE parcel SET latitude=%s, longitude=%s WHERE geo_id=%s",
+                            (lat, lng, geo_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return jsonify({"ok": True, "lat": lat, "lng": lng, "cached": False})
+    except Exception as e:
+        return jsonify({"ok": False, "error": "geocode_failed", "detail": str(e)[:100]})
 
 
 @app.route("/api/peer_set/<geo_id>")
