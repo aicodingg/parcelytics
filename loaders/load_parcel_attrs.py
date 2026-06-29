@@ -64,6 +64,13 @@ GROSS_EXCLUDE_KEYWORDS = (
     "HVAC", "SPRINKLER", "PAVED", "STREET", "PORCH OPEN",
     "DECK", "TERRACE", "CANOPY", "CARPORT", "COURT",
     "MASONRY TRIM", "POOL", "SPA", "FENCE",
+    # "Sketch Only" (code SO) is an unconfirmed appraiser outline. Investigation of
+    # the 2025 export: of 14,890 parcels with SO, 99% also carry confirmed itemized
+    # floors (1ST/2ND/…), and 1,281 show SO ≈ the floor area — i.e. SO overlaps/
+    # duplicates the confirmed detail. Summing it on top would inflate gross, so we
+    # build gross only from confirmed enclosed components. (190 SO-only parcels,
+    # ~1.2M SF / 0.8% of SO area, will show no gross — the honest "Not Available".)
+    "SKETCH ONLY",
 )
 
 
@@ -87,6 +94,7 @@ def _excl_category(desc):
     if "POOL" in d or "SPA" in d:      return "pool / spa"
     if "FENCE" in d:                   return "fencing"
     if "MASONRY TRIM" in d:            return "masonry trim"
+    if "SKETCH" in d:                  return "unconfirmed sketch area"
     return "other site improvement"
 
 

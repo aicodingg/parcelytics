@@ -247,6 +247,14 @@
               <td>{{ parcel.neighborhood_cd or "—" }}</td></tr>
         </tbody>
       </table>
+      {# View Building Sketch on TCAD — reference link, only when a building exists #}
+      {% if parcel.prop_id and (parcel.living_area_sqft or parcel.gross_building_area_sqft) %}
+      <div class="mt-2" style="font-size:12px;">
+        <a href="https://propaccess.traviscad.org/clientdb/?cid=1&amp;prop_id={{ parcel.prop_id }}"
+           target="_blank" rel="noopener noreferrer"
+           style="color:var(--accent, #94B0DA); text-decoration:none;">View Building Sketch on TCAD ↗</a>
+      </div>
+      {% endif %}
     </div>
   </div>
 
