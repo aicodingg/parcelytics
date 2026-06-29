@@ -247,12 +247,12 @@
               <td>{{ parcel.neighborhood_cd or "—" }}</td></tr>
         </tbody>
       </table>
-      {# View Building Sketch on TCAD — reference link, only when a building exists #}
-      {% if parcel.prop_id and (parcel.living_area_sqft or parcel.gross_building_area_sqft) %}
+      {# Search this property on TCAD — reference link, only when a building exists #}
+      {% if parcel.living_area_sqft or parcel.gross_building_area_sqft %}
       <div class="mt-2" style="font-size:12px;">
-        <a href="https://propaccess.traviscad.org/clientdb/?cid=1&amp;prop_id={{ parcel.prop_id }}"
+        <a href="https://traviscad.org/propertysearch/"
            target="_blank" rel="noopener noreferrer"
-           style="color:var(--accent, #94B0DA); text-decoration:none;">View Building Sketch on TCAD ↗</a>
+           style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on TCAD ↗</a>
       </div>
       {% endif %}
     </div>
@@ -317,6 +317,49 @@
       </table>
     </div>
   </div>
+  {% endif %}
+
+  {# ── Improvement Detail — collapsible IMP_DET component table ──────────── #}
+  {% if imp_det %}
+  <details class="card mb-4" id="impDetailCard">
+    <summary class="card-header" style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center;">
+      <span>Improvement Detail</span>
+      <span class="text-muted" style="font-size:11px; font-weight:400;">{{ imp_det|length }} components · show ▾</span>
+    </summary>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
+          <thead class="table-light text-muted text-uppercase" style="font-size:10px;">
+            <tr>
+              <th>Code</th>
+              <th>Description</th>
+              <th class="text-end">SF</th>
+              <th class="text-center" title="Included in Gross Building Area?">In Gross</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in imp_det %}
+            <tr>
+              <td><span class="entity-badge">{{ c.code or "—" }}</span></td>
+              <td>{{ c.desc or "—" }}</td>
+              <td class="text-end">{{ "{:,.0f}".format(c.sqft) if c.sqft else "—" }} SF</td>
+              <td class="text-center">
+                {% if c.excluded %}<span style="color:var(--down);" title="Excluded — site improvement, attribute, or unconfirmed sketch">✗</span>
+                {% else %}<span style="color:var(--up);" title="Included in gross building area">✓</span>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card-footer text-muted" style="font-size:10.5px;">
+        Source: TCAD Improvement Detail Records. ✓ included in Gross Building Area · ✗ excluded
+        (site improvement, SF-measured attribute, or unconfirmed "Sketch Only").
+      </div>
+    </div>
+  </details>
+  <style>#impDetailCard > summary::-webkit-details-marker{display:none;}
+  #impDetailCard[open] > summary .text-muted::after{content:"";}</style>
   {% endif %}
 
 </div>{# /col-lg-4 #}
@@ -2386,12 +2429,22 @@ if (rCtx) {
 
 
 <script>
-// ── Property-tax & county news (real feed) ──────────────────────────────────
+// ── Property-tax & county news (real feed, property-type-aware) ──────────────
 (function () {
   const body = document.getElementById('newsBody');
   if (!body) return;
+  const NEWS_TYPE = {{ bench_label | tojson }};
   const esc = s => { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
-  fetch('/api/news')
+  const rowHtml = (it, hidden) => `
+    <tr class="${hidden ? 'news-more' : ''}"${hidden ? ' style="display:none;"' : ''}>
+      <td style="white-space:nowrap; color:var(--text-3); width:92px; vertical-align:top;">${esc(it.date) || '—'}</td>
+      <td>
+        <a href="${esc(it.link)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>
+        ${it.source ? `<div style="color:var(--text-3); font-size:11px;">${esc(it.source)}</div>` : ''}
+      </td>
+    </tr>`;
+  const url = '/api/news' + (NEWS_TYPE ? ('?type=' + encodeURIComponent(NEWS_TYPE)) : '');
+  fetch(url)
     .then(r => r.json())
     .then(d => {
       const items = (d && d.items) || [];
@@ -2399,17 +2452,24 @@ if (rCtx) {
         body.innerHTML = '<span class="text-muted">News is temporarily unavailable — please check back shortly.</span>';
         return;
       }
-      body.innerHTML =
-        '<table class="table table-sm table-hover mb-0" style="font-size:12.5px;"><tbody>' +
-        items.map(it => `
-          <tr>
-            <td style="white-space:nowrap; color:var(--text-3); width:92px; vertical-align:top;">${esc(it.date) || '—'}</td>
-            <td>
-              <a href="${esc(it.link)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>
-              ${it.source ? `<div style="color:var(--text-3); font-size:11px;">${esc(it.source)}</div>` : ''}
-            </td>
-          </tr>`).join('') +
+      const first = items.slice(0, 3);
+      const rest  = items.slice(3, 8);   // up to 8 total
+      let html = '<table class="table table-sm table-hover mb-0" style="font-size:12.5px;"><tbody>' +
+        first.map(it => rowHtml(it, false)).join('') +
+        rest.map(it => rowHtml(it, true)).join('') +
         '</tbody></table>';
+      if (rest.length) {
+        html += '<div class="px-3 py-2"><a href="#" id="newsMoreToggle" style="font-size:12px; text-decoration:none;">See more ▾</a></div>';
+      }
+      body.innerHTML = html;
+      const tog = document.getElementById('newsMoreToggle');
+      if (tog) tog.addEventListener('click', e => {
+        e.preventDefault();
+        const more = body.querySelectorAll('.news-more');
+        const opening = more.length && more[0].style.display === 'none';
+        more.forEach(r => r.style.display = opening ? '' : 'none');
+        tog.textContent = opening ? 'See less ▴' : 'See more ▾';
+      });
     })
     .catch(() => { body.innerHTML = '<span class="text-muted">News is temporarily unavailable.</span>'; });
 })();

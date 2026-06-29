@@ -31,6 +31,7 @@ Run:
 import os
 import sys
 import time
+import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
@@ -111,6 +112,7 @@ ALTER TABLE parcel ADD COLUMN IF NOT EXISTS year_built                SMALLINT;
 ALTER TABLE parcel ADD COLUMN IF NOT EXISTS gross_building_area_sqft  NUMERIC(12, 2);
 ALTER TABLE parcel ADD COLUMN IF NOT EXISTS gross_excluded_sqft       NUMERIC(12, 2);
 ALTER TABLE parcel ADD COLUMN IF NOT EXISTS gross_excluded_detail     TEXT;
+ALTER TABLE parcel ADD COLUMN IF NOT EXISTS imp_det_json              TEXT;
 """
 
 SANITY = ["0100030105", "0100030109", "0284460113", "0204140408", "0133040418"]
@@ -157,6 +159,8 @@ def load_imp(cert_dir, prop_map):
     gross_by_prop = {}
     excl_by_prop = {}        # pid -> total excluded SF
     excl_cat_by_prop = {}    # pid -> {category: SF}
+    comp_by_prop = {}        # pid -> {code: total SF}  (all components, for detail table)
+    code_desc = {}           # code -> description (shared, small)
     # year of the single largest living-area component per parcel:
     best_living_area = {}
     year_by_prop = {}
@@ -172,6 +176,10 @@ def load_imp(cert_dir, prop_map):
             area = _f(line[93:103]) or 0.0
             if area > 0:
                 pid = line[0:12].strip()
+                cb = comp_by_prop.setdefault(pid, {})
+                cb[code] = cb.get(code, 0.0) + area
+                if code not in code_desc:
+                    code_desc[code] = desc
                 if _is_excluded_from_gross(desc):
                     excl_area += area
                     excl_by_prop[pid] = excl_by_prop.get(pid, 0.0) + area
@@ -204,7 +212,22 @@ def load_imp(cert_dir, prop_map):
     excl_by_geo  = {prop_map[p]: a for p, a in excl_by_prop.items()  if p in prop_map}
     detail_by_geo = {prop_map[p]: _build_excl_detail(c)
                      for p, c in excl_cat_by_prop.items() if p in prop_map}
-    return gross_by_geo, year_by_geo, code_area, excl_by_geo, detail_by_geo
+
+    # Per-parcel improvement-detail list (JSON), sorted by SF desc, for the
+    # collapsible "Improvement Detail" table on the property page.
+    impdet_by_geo = {}
+    for p, codes in comp_by_prop.items():
+        geo = prop_map.get(p)
+        if not geo:
+            continue
+        rows = []
+        for code, sf in codes.items():
+            d = code_desc.get(code, "")
+            rows.append({"code": code, "desc": d, "sqft": round(sf, 0),
+                         "excluded": _is_excluded_from_gross(d)})
+        rows.sort(key=lambda r: -r["sqft"])
+        impdet_by_geo[geo] = json.dumps(rows)
+    return gross_by_geo, year_by_geo, code_area, excl_by_geo, detail_by_geo, impdet_by_geo
 
 
 def main():
@@ -223,16 +246,17 @@ def main():
             return
         prop_map = _build_prop_id_map(cert_dir)
         land_by_geo = load_land(cert_dir, prop_map)
-        gross_by_geo, year_by_geo, code_area, excl_by_geo, detail_by_geo = load_imp(cert_dir, prop_map)
+        gross_by_geo, year_by_geo, code_area, excl_by_geo, detail_by_geo, impdet_by_geo = load_imp(cert_dir, prop_map)
 
         # Merge keys and upsert
-        geos = set(land_by_geo) | set(gross_by_geo) | set(year_by_geo) | set(excl_by_geo)
+        geos = set(land_by_geo) | set(gross_by_geo) | set(year_by_geo) | set(excl_by_geo) | set(impdet_by_geo)
         rows = [(
             round(land_by_geo[g], 2) if g in land_by_geo else None,
             year_by_geo.get(g),
             round(gross_by_geo[g], 2) if g in gross_by_geo else None,
             round(excl_by_geo[g], 2) if g in excl_by_geo else None,
             detail_by_geo.get(g),
+            impdet_by_geo.get(g),
             g,
         ) for g in geos]
 
@@ -245,7 +269,8 @@ def main():
                        year_built               = COALESCE(%s, year_built),
                        gross_building_area_sqft = COALESCE(%s, gross_building_area_sqft),
                        gross_excluded_sqft      = %s,
-                       gross_excluded_detail    = %s
+                       gross_excluded_detail    = %s,
+                       imp_det_json             = %s
                  WHERE geo_id = %s
             """, rows, page_size=5000)
         conn.commit()

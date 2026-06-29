@@ -995,9 +995,18 @@ def property_detail(geo_id):
                                                 benchmark_by_year, insights, projections)
     annual_trends = compute_annual_trends(history, metrics_by_year, projections)
 
+    # Improvement Detail (per-parcel IMP_DET components) for the collapsible table.
+    imp_det = []
+    if parcel.get("imp_det_json"):
+        try:
+            imp_det = json.loads(parcel["imp_det_json"])
+        except (ValueError, TypeError):
+            imp_det = []
+
     return render_template(
         "property.html",
         parcel=parcel,
+        imp_det=imp_det,
         history=history,
         current=current,
         current_2026=current_2026,
@@ -1955,33 +1964,27 @@ def api_peer_benchmark_sf(geo_id):
 
 
 
-_NEWS_CACHE = {"ts": 0, "items": None}
-_NEWS_TTL = 3600  # seconds
+_NEWS_CACHE = {}     # query string -> {"ts": float, "items": list}
+_NEWS_TTL = 3600     # seconds
+
+# Property-type-specific news queries (keyed by the classi_cd-first label).
+_NEWS_QUERIES = {
+    "Residential":  "Travis County homestead exemption OR Austin residential property tax",
+    "Multi-Family": "Austin multifamily property tax OR Austin apartment market",
+    "Commercial":   "Travis County commercial property tax",
+    "Land/Vacant":  "Travis County property tax TCAD",
+    "Agricultural": "Travis County agricultural property tax",
+}
+_NEWS_GENERIC = "Travis County property tax OR Travis Central Appraisal District"
 
 
-@app.route("/api/news")
-def api_news():
-    """Task: real Travis County property-tax news for the property page.
-
-    Pulls from Google News RSS (keyless, public) server-side, parses with the
-    stdlib, caches for an hour, and degrades gracefully. Never fabricates items —
-    on any failure it returns ok=False and the UI shows an honest 'unavailable'
-    note instead of placeholder headlines.
-    """
-    import time as _time
-    import urllib.request
-    import urllib.parse
+def _fetch_news(query):
+    """Fetch + parse Google News RSS for a query. Returns a list, or None on failure."""
+    import urllib.request, urllib.parse
     import xml.etree.ElementTree as ET
     from email.utils import parsedate_to_datetime
-
-    now = _time.time()
-    if _NEWS_CACHE["items"] is not None and (now - _NEWS_CACHE["ts"]) < _NEWS_TTL:
-        return jsonify({"ok": True, "cached": True, "items": _NEWS_CACHE["items"]})
-
-    query = "Travis County property tax OR Travis Central Appraisal District"
     url = ("https://news.google.com/rss/search?q="
-           + urllib.parse.quote(query)
-           + "&hl=en-US&gl=US&ceid=US:en")
+           + urllib.parse.quote(query) + "&hl=en-US&gl=US&ceid=US:en")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Parcelytics/1.0 (news reader)"})
         with urllib.request.urlopen(req, timeout=6) as resp:
@@ -1992,30 +1995,57 @@ def api_news():
             title = (it.findtext("title") or "").strip()
             link = (it.findtext("link") or "").strip()
             pub = (it.findtext("pubDate") or "").strip()
-            # Google News prefixes "<title> - <source>"; split the source out.
             source = ""
             src_el = it.find("source")
             if src_el is not None and src_el.text:
                 source = src_el.text.strip()
-            # Google News appends " - <source>" to the title — strip it for display.
             if source and title.endswith(" - " + source):
                 title = title[: -(len(source) + 3)].strip()
             elif " - " in title and not source:
                 source = title.rsplit(" - ", 1)[-1].strip()
                 title = title.rsplit(" - ", 1)[0].strip()
-            date_iso = ""
             try:
                 date_iso = parsedate_to_datetime(pub).date().isoformat()
             except Exception:
                 date_iso = ""
             if title and link:
                 items.append({"title": title, "link": link, "source": source, "date": date_iso})
-        _NEWS_CACHE["items"] = items
-        _NEWS_CACHE["ts"] = now
-        return jsonify({"ok": True, "cached": False, "items": items})
-    except Exception as e:
-        # Honest failure — no fabricated news.
-        return jsonify({"ok": False, "error": "news_unavailable", "detail": str(e)[:120]})
+        return items
+    except Exception:
+        return None
+
+
+@app.route("/api/news")
+def api_news():
+    """Real, property-type-aware Travis County property-tax news.
+
+    ?type=<property_type_label> selects a tailored query (cached per type, not per
+    parcel). Falls back to the generic query, then to an honest 'unavailable' —
+    never fabricates headlines.
+    """
+    import time as _time
+    ptype = (request.args.get("type", "") or "").strip()
+    query = _NEWS_QUERIES.get(ptype, _NEWS_GENERIC)
+    now = _time.time()
+
+    def _cached(q):
+        c = _NEWS_CACHE.get(q)
+        return c["items"] if (c and (now - c["ts"]) < _NEWS_TTL) else None
+
+    items = _cached(query)
+    if items is None:
+        items = _fetch_news(query)
+        if items:
+            _NEWS_CACHE[query] = {"ts": now, "items": items}
+    # Fall back to the generic query if the tailored one failed or was empty.
+    if not items and query != _NEWS_GENERIC:
+        items = _cached(_NEWS_GENERIC) or _fetch_news(_NEWS_GENERIC)
+        if items:
+            _NEWS_CACHE[_NEWS_GENERIC] = {"ts": now, "items": items}
+            query = _NEWS_GENERIC
+    if not items:
+        return jsonify({"ok": False, "error": "news_unavailable"})
+    return jsonify({"ok": True, "items": items, "query_type": ptype or "generic"})
 
 
 @app.route("/api/peer_set/<geo_id>")
