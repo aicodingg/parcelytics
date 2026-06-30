@@ -27,6 +27,59 @@ import psycopg2.extras
 
 COMPUTATION_VERSION = "2.0"
 
+# ── Row-count sanity floor ───────────────────────────────────────────────────────
+# Absolute backstop for the "silently far fewer rows than expected" failure mode.
+# Primary check is relative (new vs. previous row count, see _assert_row_count_sane);
+# these are only the floor for a first-ever run or if the previous count was itself 0.
+# parcel_metrics is currently ~2,796,316 rows (508K parcels x ~5.5 years); 1,000,000
+# is comfortably below normal (survives losing a year or two of coverage) while still
+# catching a near-empty or empty table.
+PARCEL_METRICS_ROW_FLOOR = 1_000_000
+# county_benchmark is 5 TYPE_GROUPS x ~5 years each = ~25 rows; 15 survives losing a
+# year of coverage on a couple of categories without masking a real failure.
+COUNTY_BENCHMARK_ROW_FLOOR = 15
+# Relative tolerance: a rebuild producing fewer than this fraction of the previous
+# row count is treated as a failure, not a quirk of the source data.
+ROW_COUNT_TOLERANCE = 0.95
+
+
+class MetricsIntegrityError(RuntimeError):
+    """Raised when a rebuild step produces a suspiciously low row count.
+
+    This is the fix for the "silent" failure mode flagged in
+    COMPUTE_METRICS_CURRENCY_REPORT_2026-06-30.md: a bug that matches far fewer
+    rows than it should previously completed with no error and a quietly-wrong
+    row count. Raising here makes that loud instead — combined with the
+    transaction-per-table rebuild (see compute_parcel_metrics /
+    compute_county_benchmarks), the failure also leaves the table in its prior
+    state rather than committing the short rebuild.
+    """
+
+
+def _assert_row_count_sane(label, new_count, prev_count, hard_floor, tolerance=ROW_COUNT_TOLERANCE):
+    """Fail loudly if a rebuild produced a suspiciously low row count.
+
+    Primary check: new_count vs. prev_count (self-adjusting as the county's
+    parcel/year coverage naturally grows over time). Secondary check: an
+    absolute hard_floor, which is what catches a first-ever run (prev_count
+    == 0) or guards against prev_count having itself already been wrong.
+    """
+    if prev_count > 0 and new_count < prev_count * tolerance:
+        drop_pct = (1 - new_count / prev_count) * 100
+        raise MetricsIntegrityError(
+            f"{label}: rebuild produced {new_count:,} rows, down from {prev_count:,} "
+            f"({drop_pct:.1f}% drop) — exceeds the {(1 - tolerance) * 100:.0f}% "
+            f"tolerance. Treating this as a failure, not a successful rebuild."
+        )
+    if new_count < hard_floor:
+        raise MetricsIntegrityError(
+            f"{label}: rebuild produced {new_count:,} rows, below the absolute "
+            f"floor of {hard_floor:,}. Treating this as a failure, not a "
+            f"successful rebuild."
+        )
+    print(f"    row-count check OK: {label} = {new_count:,} rows "
+          f"(prev {prev_count:,}, floor {hard_floor:,})")
+
 # ── Risk threshold ──────────────────────────────────────────────────────────────
 # Set at 75% based on actual distribution across 1,401,316 parcel-year pairs:
 #   p50=7.1%  p75=32.3%  p90=59.4%  p95=72.0%  p99=292.9%
@@ -159,9 +212,19 @@ def compute_parcel_metrics(conn):
     print("\n[1] Computing parcel_metrics…")
     t0 = time.time()
 
+    # Partial-write-window fix: DELETE and the full rebuild below run in ONE
+    # transaction (no commit() until the very end of this function). If
+    # anything raises before that final commit — including the row-count
+    # sanity check — Postgres rolls back the DELETE along with everything
+    # else, so a crash mid-run leaves parcel_metrics in its PRIOR state,
+    # never empty. (Previously the DELETE committed immediately, so a crash
+    # between that commit and the rebuild's commit left the table empty.)
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM parcel_metrics")
+        prev_count = cur.fetchone()[0]
+
     with conn.cursor() as cur:
         cur.execute("DELETE FROM parcel_metrics")
-    conn.commit()
 
     # Main insert: YoY metrics via SQL window functions
     # yoy_tax_amount_pct is NULL for all years — no historical billing exists yet
@@ -272,8 +335,13 @@ def compute_parcel_metrics(conn):
             WINDOW w AS (PARTITION BY pty.geo_id ORDER BY pty.tax_year)
         """)
         n = cur.rowcount
-    conn.commit()
     print(f"    Inserted {n:,} rows  ({time.time()-t0:.1f}s)")
+
+    # Row-count sanity floor (silent-failure fix): a JOIN/WHERE bug that
+    # silently matched far fewer rows than it should used to "succeed" here
+    # with no error. This raises instead — and because nothing has been
+    # committed yet, the table is left untouched (see top-of-function note).
+    _assert_row_count_sane("parcel_metrics", n, prev_count, hard_floor=PARCEL_METRICS_ROW_FLOOR)
 
     # Pass 2: large value jump flag
     t1 = time.time()
@@ -285,7 +353,6 @@ def compute_parcel_metrics(conn):
             WHERE ABS(yoy_market_value_pct) > {LARGE_JUMP_THRESHOLD_PCT}
         """)
         n_jump = cur.rowcount
-    conn.commit()
     print(f"    risk_large_value_jump: {n_jump:,} rows flagged (>{LARGE_JUMP_THRESHOLD_PCT}%)  ({time.time()-t1:.1f}s)")
 
     # Pass 3: homestead cap expiry risk — residential only, consistent with Phase 1 guard.
@@ -311,7 +378,6 @@ def compute_parcel_metrics(conn):
             WHERE pm.geo_id = hs.geo_id
         """)
         n_cap = cur.rowcount
-    conn.commit()
     print(f"    risk_homestead_cap_expiry: {n_cap:,} rows flagged  ({time.time()-t1:.1f}s)")
 
     # Pass 4: cumulative value growth (on 2025 row, from each parcel's earliest valid year)
@@ -346,9 +412,10 @@ def compute_parcel_metrics(conn):
             WHERE pm.geo_id = sub.geo_id AND pm.tax_year = 2025
         """)
         n_cum = cur.rowcount
-    conn.commit()
     print(f"    cumulative_value_growth_pct: {n_cum:,} rows updated  ({time.time()-t1:.1f}s)")
 
+    # Single commit for the whole DELETE + rebuild (see top-of-function note).
+    conn.commit()
     print(f"  → parcel_metrics done in {time.time()-t0:.1f}s total")
 
 
@@ -357,14 +424,22 @@ def compute_county_benchmarks(conn):
     print("\n[2] Computing county_benchmark…")
     t0 = time.time()
 
+    # Partial-write-window fix: same approach as compute_parcel_metrics() — the
+    # DELETE and the full rebuild loop below share one transaction, committed
+    # once at the end. A crash or sanity-check failure anywhere in between
+    # rolls back the DELETE too, leaving county_benchmark in its prior state.
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM county_benchmark")
+        prev_count = cur.fetchone()[0]
+
     with conn.cursor() as cur:
         cur.execute("DELETE FROM county_benchmark")
-    conn.commit()
 
     excl = _exclude_clause()
     # classi_cd-first label (Task 1): apartments carrying a multi-family
     # improvement code are bucketed as Multi-Family even when state_cd1 says 'A'.
     label_expr = label_case_sql("p.classi_cd", "p.state_cd1")
+    total_n = 0
     with conn.cursor() as cur:
         for prefixes, label, prefix_key in TYPE_GROUPS:
             cur.execute(f"""
@@ -417,6 +492,22 @@ def compute_county_benchmarks(conn):
             """, (label, prefix_key, label))
             n = cur.rowcount
             print(f"    {label}: {n} year rows")
+            # Each of the five TYPE_GROUPS is known to have real parcels in
+            # Travis County every year — a category producing zero rows is a
+            # silent-failure signal (bad label_expr, bad exclusion clause,
+            # etc.), not a legitimate empty category. Fail loudly rather than
+            # let the aggregate floor below mask a single broken category.
+            if n == 0:
+                raise MetricsIntegrityError(
+                    f"county_benchmark: category '{label}' produced 0 rows — "
+                    f"every TYPE_GROUP is expected to have parcels every year. "
+                    f"Treating this as a failure, not a successful rebuild."
+                )
+            total_n += n
+
+    _assert_row_count_sane("county_benchmark", total_n, prev_count, hard_floor=COUNTY_BENCHMARK_ROW_FLOOR)
+
+    # Single commit for the whole DELETE + rebuild (see top-of-function note).
     conn.commit()
     print(f"  → county_benchmark done in {time.time()-t0:.1f}s")
 
@@ -526,7 +617,13 @@ def main():
         if args.benchmarks_only:
             # Task 1: classification-only change touches county_benchmark bucketing,
             # not the per-parcel YoY rows — rebuild just the benchmark.
-            compute_county_benchmarks(conn)
+            try:
+                compute_county_benchmarks(conn)
+            except Exception:
+                conn.rollback()
+                print("\n*** county_benchmark rebuild FAILED and was rolled back — "
+                      "the table is unchanged from before this run. ***")
+                raise
             print_sample(conn)
             print("\nDone (benchmarks only).")
             return
@@ -534,9 +631,25 @@ def main():
         # Threshold analysis runs first so you can see what the current setting flags
         analyze_threshold(conn)
 
-        # Compute
-        compute_parcel_metrics(conn)
-        compute_county_benchmarks(conn)
+        # Compute. Each function commits its own table's DELETE+rebuild as one
+        # transaction; if either raises (including the row-count sanity checks
+        # inside them), roll back explicitly here too — belt and suspenders in
+        # case the connection isn't closed cleanly — and re-raise so the
+        # failure is loud (non-zero exit, visible traceback), never silent.
+        # Note: if compute_parcel_metrics() already printed "→ parcel_metrics
+        # done" before compute_county_benchmarks() fails, parcel_metrics was
+        # already committed and IS updated — only the table whose "done" line
+        # never printed was rolled back to its prior state.
+        try:
+            compute_parcel_metrics(conn)
+            compute_county_benchmarks(conn)
+        except Exception:
+            conn.rollback()
+            print("\n*** compute_metrics FAILED and was rolled back. Check which "
+                  "step's '→ ... done' line printed above (if any) — that table "
+                  "was already committed and is current; whichever step didn't "
+                  "finish is unchanged from before this run. ***")
+            raise
         print_sample(conn)
 
         print("\nDone.")

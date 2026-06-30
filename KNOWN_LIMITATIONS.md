@@ -85,6 +85,64 @@ See `ENTITY_CODE_AUDIT.md` for the full table and recommended fix.
 billed amount forward as a pass-through estimate labeled "PID/Special District assessments
 (from prior billing, not rate-computed)". See `ENTITY_CODE_AUDIT.md` for implementation.
 
+### tax_billing.total_tax (2025): 0.00 for ~93% of rows — source data, not a Parcelytics bug, but NEEDS REVIEW on two read sites
+
+Confirmed by direct inspection of the raw `TaxCurOpenData (1).csv` (the file
+`loaders/load_tax_current.py` loads as-is, no transformation): for a
+representative sample across the whole file, **93.3%** of 2025 rows have
+`TOTAL_TAX = "0.00"` and `TOTAL_DUE = "0.00"` in the source CSV itself, while
+the same row's `ENTITY*`/`DUE*` columns carry real, nonzero per-entity
+amounts. Example — `0100030105` (1201 S Lamar): source `TOTAL_TAX=0.00`,
+`ENTITY1=IAU DUE1=40080.27` (just the first of several entities). Only ~3.5%
+of 2025 rows have a populated, correct `TOTAL_TAX` that matches the entity
+sum. **This is a Travis County Tax Office open-data quirk, not a Parcelytics
+loader bug** — `load_tax_current.py` writes `TOTAL_TAX` straight from the
+source field with no transformation, and the pattern is present in the raw
+file before it ever reaches the database. It is **not** narrowly scoped to
+"some property types (commercial, multi-family)" as an existing code comment
+in `compute_metrics.py` suggests — it affects the large majority of all 2025
+billing rows regardless of type.
+
+**Where this is already handled correctly:**
+- `compute_metrics.py` never reads `tax_billing.total_tax` for its
+  calculations — it sums `tax_billing_entity.amount_due` instead (see the
+  comment at the `effective_tax_rate` CASE block). `parcel_metrics` and
+  `county_benchmark` are unaffected.
+- `app.py`'s single-property page (`current["total_tax"]`) has a fallback —
+  `if current is not None and not current.get("total_tax") and entity_detail:` —
+  that backfills from the entity sum. Because Python treats `0` and `None` as
+  equally falsy, this fallback fires correctly for the 0.00 case even though
+  the comment above it was written describing blanks/NULLs, not 0. **This
+  works today but is fragile**: a future refactor to an explicit `is None`
+  check (often considered better practice) would silently break it and
+  reintroduce a $0 display for ~93% of parcels. Worth a comment update at
+  minimum.
+- `templates/compare.html` (`/compare` route) checks `p.billing.total_tax`
+  truthiness directly (`{% if ... and p.billing.total_tax %}`) — for the 93%
+  case this is falsy, so it correctly falls back to "—" rather than showing
+  a misleading $0. It does **not** backfill from `tax_billing_entity` the way
+  the single-property page does, so the Compare page's "Total Tax" /
+  "Effective Tax Rate" rows show "—" for the large majority of parcels even
+  though the real figure is knowable. Safe, but incomplete.
+
+**Where this is NOT handled correctly — live bug, not yet fixed:**
+- `/api/peer_benchmark_local/<geo_id>` (`app.py` ~line 1746) queries
+  `tb.total_tax` directly for the peer set and filters
+  `taxes = sorted([float(r["total_tax"]) for r in peers if r.get("total_tax")])`
+  — this silently drops ~93% of peers from the tax statistic (0 is falsy),
+  with no fallback to `tax_billing_entity`. The resulting `peer_tax.median` /
+  `p25` / `p75` are computed from a small, non-random ~7% slice of the peer
+  set (whichever peers happen to have a populated source `TOTAL_TAX`), not
+  the full comparable pool that `peer_mv`/`peer_av` use. This is displayed
+  in `templates/property.html` as the "Peer Median Tax" chip and "Total Tax
+  (2025)" row in the Peer Set table (~line 2776, 2801–2803) with **no
+  confidence label or sample-size caveat** — it looks like a normal verified
+  median to the user, investor or homeowner. **Not fixed as part of this
+  note** — flagged for review per the Data Integrity Standard; the fix would
+  mirror the property page's pattern (derive from `tax_billing_entity` when
+  `tax_billing.total_tax` is 0/NULL) but touches a live query path and
+  should be scoped and reviewed as its own task.
+
 ## Out of Scope for Phase 1
 
 The following were explicitly excluded from this phase and should not be backfilled without a separate scoping decision:

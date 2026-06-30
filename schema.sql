@@ -190,17 +190,111 @@ CREATE INDEX IF NOT EXISTS idx_benchmark_year_type ON county_benchmark (tax_year
 
 -- ── Migration: widen pct columns to NUMERIC(15,4) ──────────────────────────────
 -- AJR source data contains extreme outliers (max observed: 751,858,200% YoY) that
--- overflow NUMERIC(9,4). These DO blocks are safe to re-run; they no-op if the
--- column is already the right type.
-DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN yoy_market_value_pct      TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN yoy_assessed_value_pct    TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN yoy_tax_amount_pct        TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN cumulative_value_growth_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN cumulative_tax_growth_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN risk_large_value_jump_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE county_benchmark ALTER COLUMN median_yoy_value_change_pct TYPE NUMERIC(15,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN assessment_ratio  TYPE NUMERIC(10,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE parcel_metrics ALTER COLUMN effective_tax_rate TYPE NUMERIC(10,4); EXCEPTION WHEN OTHERS THEN NULL; END $$;
+-- overflow NUMERIC(9,4). These DO blocks are safe to re-run: each first checks
+-- information_schema for the target precision/scale and skips cleanly if already
+-- correct (no exception involved in the common case at all). Only a genuinely
+-- unexpected error during the ALTER itself is caught — and that is logged via
+-- RAISE WARNING (visible in compute_metrics.py's "Applying schema…" output) and
+-- re-raised, so it surfaces instead of being silently absorbed like the old
+-- "EXCEPTION WHEN OTHERS THEN NULL" version of these blocks did.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='parcel_metrics' AND column_name='yoy_market_value_pct'
+                   AND numeric_precision=15 AND numeric_scale=4) THEN
+    ALTER TABLE parcel_metrics ALTER COLUMN yoy_market_value_pct TYPE NUMERIC(15,4);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'schema migration failed: parcel_metrics.yoy_market_value_pct -> NUMERIC(15,4): %', SQLERRM;
+  RAISE;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='parcel_metrics' AND column_name='yoy_assessed_value_pct'
+                   AND numeric_precision=15 AND numeric_scale=4) THEN
+    ALTER TABLE parcel_metrics ALTER COLUMN yoy_assessed_value_pct TYPE NUMERIC(15,4);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'schema migration failed: parcel_metrics.yoy_assessed_value_pct -> NUMERIC(15,4): %', SQLERRM;
+  RAISE;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='parcel_metrics' AND column_name='yoy_tax_amount_pct'
+                   AND numeric_precision=15 AND numeric_scale=4) THEN
+    ALTER TABLE parcel_metrics ALTER COLUMN yoy_tax_amount_pct TYPE NUMERIC(15,4);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'schema migration failed: parcel_metrics.yoy_tax_amount_pct -> NUMERIC(15,4): %', SQLERRM;
+  RAISE;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='parcel_metrics' AND column_name='cumulative_value_growth_pct'
+                   AND numeric_precision=15 AND numeric_scale=4) THEN
+    ALTER TABLE parcel_metrics ALTER COLUMN cumulative_value_growth_pct TYPE NUMERIC(15,4);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'schema migration failed: parcel_metrics.cumulative_value_growth_pct -> NUMERIC(15,4): %', SQLERRM;
+  RAISE;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='parcel_metrics' AND column_name='cumulative_tax_growth_pct'
+                   AND numeric_precision=15 AND numeric_scale=4) THEN
+    ALTER TABLE parcel_metrics ALTER COLUMN cumulative_tax_growth_pct TYPE NUMERIC(15,4);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'schema migration failed: parcel_metrics.cumulative_tax_growth_pct -> NUMERIC(15,4): %', SQLERRM;
+  RAISE;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='parcel_metrics' AND column_name='risk_large_value_jump_pct'
+                   AND numeric_precision=15 AND numeric_scale=4) THEN
+    ALTER TABLE parcel_metrics ALTER COLUMN risk_large_value_jump_pct TYPE NUMERIC(15,4);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'schema migration failed: parcel_metrics.risk_large_value_jump_pct -> NUMERIC(15,4): %', SQLERRM;
+  RAISE;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='county_benchmark' AND column_name='median_yoy_value_change_pct'
+                   AND numeric_precision=15 AND numeric_scale=4) THEN
+    ALTER TABLE county_benchmark ALTER COLUMN median_yoy_value_change_pct TYPE NUMERIC(15,4);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'schema migration failed: county_benchmark.median_yoy_value_change_pct -> NUMERIC(15,4): %', SQLERRM;
+  RAISE;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='parcel_metrics' AND column_name='assessment_ratio'
+                   AND numeric_precision=10 AND numeric_scale=4) THEN
+    ALTER TABLE parcel_metrics ALTER COLUMN assessment_ratio TYPE NUMERIC(10,4);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'schema migration failed: parcel_metrics.assessment_ratio -> NUMERIC(10,4): %', SQLERRM;
+  RAISE;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='parcel_metrics' AND column_name='effective_tax_rate'
+                   AND numeric_precision=10 AND numeric_scale=4) THEN
+    ALTER TABLE parcel_metrics ALTER COLUMN effective_tax_rate TYPE NUMERIC(10,4);
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'schema migration failed: parcel_metrics.effective_tax_rate -> NUMERIC(10,4): %', SQLERRM;
+  RAISE;
+END $$;
 
 
 -- rate_trend: VIEW on county_tax_rate adding YoY delta/pct.

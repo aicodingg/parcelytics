@@ -230,6 +230,7 @@
         </tr>
       </thead>
       <tbody>
+        {% set _no_rate_entities = [] %}
         {% for e in entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
         {% if e.rate %}
         {% set _net = e.amount_due|float * 100 / (e.rate|float) %}
@@ -242,6 +243,24 @@
           <td class="text-end text-muted">{{ "{:.4f}%".format(e.rate|float) }}</td>
           <td class="text-end pe-3">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
         </tr>
+        {% else %}
+        {# PID / Special District entity billed in 2025 but absent from county_tax_rate
+           (KNOWN_LIMITATIONS.md — "PID/Special-District entity codes missing from
+           county_tax_rate", CORRECTNESS-CRITICAL, ~6% of parcels / $38.05M in 2025
+           billing county-wide). Without a rate we cannot derive net taxable / exemption
+           split, so show the row honestly (real, verified amount_due; Not Available for
+           the derived fields) instead of dropping it — matches the pass-through pattern
+           already used in the /api/estimate_acq PID handling below on this same page. #}
+        {% set _ = _no_rate_entities.append(e) %}
+        <tr>
+          <td class="ps-3">{{ e.entity_name or e.entity_code }}
+            <span class="badge-estimated ms-1" style="font-size:9px;" title="No certified 2025 rate published for this entity — likely a PID/Special District">no rate</span></td>
+          <td class="text-end">${{ "{:,.0f}".format(_assessed) }}</td>
+          <td class="text-end">—</td>
+          <td class="text-end" style="font-style:italic; color:var(--text-3);">Not Available</td>
+          <td class="text-end text-muted">—</td>
+          <td class="text-end pe-3">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
+        </tr>
         {% endif %}
         {% endfor %}
       </tbody>
@@ -250,6 +269,9 @@
   </div>
   <div class="card-footer text-muted" style="font-size:10.5px;">
     Each entity grants different exemptions, so your <strong>net taxable value</strong> — the amount it actually taxes you on — differs by entity, even though the assessed value is the same. Net taxable is derived from your tax ÷ that entity's rate.
+    {% if _no_rate_entities %}
+    <br><strong>{{ _no_rate_entities | length }}</strong> of your entities ({{ _no_rate_entities | map(attribute='entity_code') | join(', ') }}) bill you directly but don't publish a rate Parcelytics has on file — usually a Public Improvement District or Water Control district. The amount billed is real and verified; Net Taxable for those rows is Not Available because it can't be derived without a rate.
+    {% endif %}
   </div>
 </div>
 {% endif %}
