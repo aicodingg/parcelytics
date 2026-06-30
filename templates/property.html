@@ -10,12 +10,24 @@
 {% set tv25 = current.taxable_value if current else none %}
 {% set tax25 = current.total_tax if current else none %}
 {% set rate = insights.total_rate_2025 if insights else none %}
-{% set excodes = (current.exemption_codes or "") if current else "" %}
+{# Use the latest year's exemptions (2026 preliminary if available) so newly
+   added exemptions — e.g. a Solar exemption — are reflected. #}
+{% set excodes = ((current_2026.exemption_codes if (current_2026 and current_2026.exemption_codes)
+                   else (current.exemption_codes if current else "")) or "") %}
+{% set excodes_year = 2026 if (current_2026 and current_2026.exemption_codes) else 2025 %}
 {% set has_hs = "HS" in excodes %}
-{% set _exmap = {"HS":"Homestead", "OV65":"Over-65", "O65":"Over-65", "DP":"Disabled Person",
-                 "DV":"Disabled Veteran", "DVHS":"Disabled Veteran (Homestead)",
-                 "DV1":"Disabled Veteran 10–29%", "DV2":"Disabled Veteran 30–49%",
-                 "DV3":"Disabled Veteran 50–69%", "DV4":"Disabled Veteran 70–100%",
+{% set _exmap = {"HS":"Homestead", "OV65":"Over-65", "O65":"Over-65", "OV65S":"Over-65 Surviving Spouse",
+                 "DP":"Disabled Person", "DPS":"Disabled Person Surviving Spouse",
+                 "DV":"Disabled Veteran", "DVHS":"Disabled Veteran Homestead (100%)", "DVHSS":"Disabled Veteran Homestead — Surviving Spouse",
+                 "DV1":"Disabled Veteran 10–29%", "DV1S":"Disabled Veteran 10–29% Surviving Spouse",
+                 "DV2":"Disabled Veteran 30–49%", "DV2S":"Disabled Veteran 30–49% Surviving Spouse",
+                 "DV3":"Disabled Veteran 50–69%", "DV3S":"Disabled Veteran 50–69% Surviving Spouse",
+                 "DV4":"Disabled Veteran 70–100%", "DV4S":"Disabled Veteran 70–100% Surviving Spouse",
+                 "SO":"Solar / Wind-Powered Energy (Tax Code 11.27)", "EN":"Energy",
+                 "FR":"Freeport", "HT":"Historic", "AB":"Abatement", "PC":"Pollution Control",
+                 "CH":"Charitable", "EX366":"Low-Value (under $500)", "CLT":"Community Land Trust",
+                 "GIT":"Goods in Transit", "LIH":"Low-Income Housing", "CHODO":"Charitable Low-Income Housing",
+                 "ECO":"Economic Development", "CCF":"Child Care Facility", "MED":"Medical / Biomedical",
                  "SS":"Surviving Spouse", "EX":"Total (Charitable/Govt)"} %}
 {% set excodes_list = excodes.replace(";", ",").split(",") | map("trim") | select | list %}
 
@@ -102,7 +114,7 @@
 <div class="card mb-3"><div class="card-header">Your Exemptions</div>
   <div class="card-body">
     {% if excodes_list %}
-    <p class="mb-2">You have <strong>{{ excodes_list | length }}</strong> exemption{{ "s" if excodes_list|length != 1 }} applied to this property:</p>
+    <p class="mb-2">You have <strong>{{ excodes_list | length }}</strong> exemption{{ "s" if excodes_list|length != 1 }} applied to this property{% if excodes_year == 2026 %} <span class="text-muted" style="font-size:12px;">(as of the 2026 preliminary roll)</span>{% endif %}:</p>
     <table class="table table-sm mb-0" style="max-width:420px;">
       <tbody>
         {% for code in excodes_list %}
@@ -199,6 +211,48 @@
     </div>
   </div>
 </div>
+
+{# ── How exemptions reduce your bill, per taxing entity ───────────────── #}
+{% if entity_detail and entity_detail | selectattr('amount_due') | list and current and current.assessed_value %}
+{% set _assessed = current.assessed_value | float %}
+<div class="card mb-4"><div class="card-header">How Your Exemptions Reduce Your Bill — by Taxing Entity</div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+    <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
+      <thead class="text-muted" style="font-size:11px; text-transform:uppercase;">
+        <tr>
+          <th class="ps-3">Taxing Entity</th>
+          <th class="text-end">Assessed</th>
+          <th class="text-end">Exemption</th>
+          <th class="text-end">Net Taxable</th>
+          <th class="text-end">Rate</th>
+          <th class="text-end pe-3">Tax</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
+        {% if e.rate %}
+        {% set _net = e.amount_due|float * 100 / (e.rate|float) %}
+        {% set _exempt = _assessed - _net %}
+        <tr>
+          <td class="ps-3">{{ e.entity_name or e.entity_code }}</td>
+          <td class="text-end">${{ "{:,.0f}".format(_assessed) }}</td>
+          <td class="text-end" style="color:#2e7d32;">{% if _exempt > 1 %}−${{ "{:,.0f}".format(_exempt) }}{% else %}—{% endif %}</td>
+          <td class="text-end">${{ "{:,.0f}".format(_net) }}</td>
+          <td class="text-end text-muted">{{ "{:.4f}%".format(e.rate|float) }}</td>
+          <td class="text-end pe-3">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <div class="card-footer text-muted" style="font-size:10.5px;">
+    Each entity grants different exemptions, so your <strong>net taxable value</strong> — the amount it actually taxes you on — differs by entity, even though the assessed value is the same. Net taxable is derived from your tax ÷ that entity's rate.
+  </div>
+</div>
+{% endif %}
 
 {# ── Your tax rate & bill, last 5 years ──────────────────────────────── #}
 <div class="card mb-4"><div class="card-header">Your Tax Rate &amp; Bill — Last 5 Years</div>
