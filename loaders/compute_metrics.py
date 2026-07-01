@@ -289,8 +289,10 @@ def compute_parcel_metrics(conn):
 
                 -- Effective tax rate: real billing for 2025 only; Not Available otherwise.
                 -- Uses SUM(amount_due) from tax_billing_entity rather than tax_billing.total_tax,
-                -- because TOTAL_TAX in TaxCurOpenData is 0 for some property types (commercial,
-                -- multi-family) even when entity-level DUE amounts are correct.
+                -- because TOTAL_TAX in the TaxCurOpenData source is 0.00 for ~93% of all 2025
+                -- rows (confirmed by direct inspection of the raw CSV — not narrowly scoped to
+                -- "some property types"; it's the majority of rows regardless of type), even
+                -- when entity-level DUE amounts are correct. See KNOWN_LIMITATIONS.md.
                 -- Cap at 1.0 (100%) — values above that are bad data.
                 CASE
                     WHEN pty.tax_year = 2025

@@ -215,6 +215,183 @@ def _project_multiyear(base_value, entities, buyer_status, market_growth,
     return rows
 
 
+# ── Local-option homestead exemption (S11.13(n)) — estimate_homestead_savings() only ──
+#
+# S11.13(n) separately lets ANY taxing unit (not just school districts) adopt
+# its own local-option homestead exemption of up to 20% of appraised value
+# (floor: $5,000, even if 20% of AV would compute lower). This is NOT modeled
+# in estimate_post_acquisition() / _project_multiyear() (Tier 1, approved
+# separately, not touched here) — those remain conservative/school-only by
+# design. It IS modeled here, for exactly three entities confirmed against
+# primary/official sources (not real-estate-blog aggregators):
+#   * Travis County    — 20%, the maximum allowed by law. Travis County's own
+#     FY2026 Taxpayer Impact Statement (traviscountytx.gov).
+#   * City of Austin    — 20%. TCAD board-proceedings reporting (The Austin
+#     Bulldog), sourcing TCAD's own chief appraiser.
+#   * Central Health    — 20%. Same source as City of Austin above. Central
+#     Health is the public-facing brand of the Travis County Healthcare
+#     District; the taxing-entity record itself is named "Travis Central
+#     Health" (see entity_code THD below).
+#
+# Matched primarily by entity_code, confirmed against
+# 2025RatesHistory1990-2025.xlsx (the actual source file loaders/load_tax_rates.py
+# uses to populate county_tax_rate.entity_name — this IS the real DB value,
+# not an assumed string):
+#   TCO -> "Travis County"          CAT -> "City of Austin"
+#   THD -> "Travis Central Health"
+# entity_name is checked too (exact match, not substring) as defense in depth
+# in case a future reload ever changes codes. Substring matching was
+# deliberately avoided: the same source file also has entity_code CAH ->
+# "City of Austin (Hays)" — a DIFFERENT, unconfirmed entity that a naive
+# "CITY OF AUSTIN" in name.upper() check would have incorrectly swept in.
+#
+# NOT extended to any other entity on a bill (MUDs, ESDs, Austin Community
+# College [ACT], other cities/ISDs). Their local-option status is real
+# taxing-unit-by-taxing-unit information this project has not confirmed
+# against an authoritative source — left at $0 exemption (conservative),
+# per this project's rule against guessing where sourcing doesn't reach.
+LOCAL_OPTION_20PCT_ENTITY_CODES = {"TCO", "CAT", "THD"}
+LOCAL_OPTION_20PCT_ENTITY_NAMES = {"TRAVIS COUNTY", "CITY OF AUSTIN", "TRAVIS CENTRAL HEALTH"}
+LOCAL_OPTION_PCT           = 0.20
+LOCAL_OPTION_MIN_EXEMPTION = 5_000   # S11.13(n) floor; won't bind at typical Travis AVs
+
+
+def _local_option_20pct_entity(entity_code: Optional[str], entity_name: Optional[str]) -> bool:
+    """True only for the 3 entities confirmed above -- code match first (authoritative),
+    exact (non-substring) name match as a fallback. See constants block above for sourcing."""
+    code = (entity_code or "").strip().upper()
+    if code in LOCAL_OPTION_20PCT_ENTITY_CODES:
+        return True
+    name = (entity_name or "").strip().upper()
+    return name in LOCAL_OPTION_20PCT_ENTITY_NAMES
+
+
+def estimate_homestead_savings(entity_detail: List[dict], assessed_value: Optional[int]) -> Optional[dict]:
+    """
+    Estimate the ANNUAL tax savings a parcel would see if it filed for the
+    general residence homestead exemption, for parcels that do NOT currently
+    have one.
+
+    Models TWO exemption types, each applied per-entity to that entity's own
+    portion of the bill (an entity gets at most one; they're mutually
+    exclusive by construction):
+      * School district entities: $140,000 mandatory exemption (SS11.13(b)(1)),
+        same constant/detection as estimate_post_acquisition() (Tier 1, not
+        touched here).
+      * Travis County / City of Austin / Central Health specifically: 20% of
+        assessed value local-option exemption (SS11.13(n)), floor $5,000 --
+        see the sourcing block above _local_option_20pct_entity(). This is
+        new; previously these three entities got no exemption modeled at all,
+        which understated potential savings since they're a meaningful share
+        of most Travis County bills.
+      * All other entities (MUDs, ESDs, ACT, other cities): still $0 --
+        unconfirmed, left conservative, unchanged from before.
+
+    This is a hypothetical "what if you filed" figure on the CURRENT
+    assessed value, not a post-acquisition or multi-year projection — it's
+    a standalone estimate for display on the property page's Exemptions
+    section. Caller is responsible for only invoking/displaying this for
+    parcels that don't already have a homestead exemption (this function
+    does not check exemption_codes itself — it estimates the hypothetical
+    savings regardless of current status).
+
+    Does NOT model the 65+/disabled-specific additional exemption amounts
+    (e.g. Travis County's additional $143,220, or the combined $200,000
+    school figure for 65+/disabled homeowners) -- scoped to the general
+    homestead case only. Flagged as a possible future extension.
+
+    current_est_tax reconciliation (Homestead Accuracy brief): this is now
+    the REAL billed total (SUM of entity_detail's amount_due), not a figure
+    recomputed from assessed_value * rate. It has to be, because amount_due
+    already reflects whatever exemption the parcel ALREADY has that doesn't
+    require homestead -- e.g. a Disabled Veteran exemption -- the same way
+    the "How Your Exemptions Reduce Your Bill" table on this page already
+    proves it does (that table back-derives each entity's existing exemption
+    as assessed_value - (amount_due * 100 / rate)). A version of this
+    function that recomputed current_est_tax from assessed_value * rate
+    would ignore that existing exemption entirely and overstate the parcel's
+    real current tax burden -- visually contradicting the real total shown
+    elsewhere on the same page for any parcel with a non-homestead exemption
+    already on file. estimated_annual_savings is unaffected by this either
+    way (the existing exemption cancels out of the subtraction), so only
+    current_est_tax / with_hs_est_tax needed reconciling, not the headline
+    savings number.
+
+    Returns None if there's no rate/billing data to compute from, or if the
+    computed savings isn't positive (e.g. no school/local-option entity in
+    the bill, which would make the estimate $0 and not worth displaying).
+    """
+    if not entity_detail or not assessed_value:
+        return None
+
+    current_total = 0.0    # REAL billed total -- see reconciliation note above
+    savings_total = 0.0    # marginal reduction from adding HS / local-option exemption
+    any_rate = False
+    any_billed = False
+    local_option_entities_applied = []
+    for e in entity_detail:
+        rate = e.get("rate")
+        if not rate:
+            continue
+        any_rate = True
+        rate = float(rate)
+        entity_code = e.get("entity_code")
+        entity_name = e.get("entity_name") or entity_code
+        is_school = _is_school_entity(entity_name)
+        is_local_option = (not is_school) and _local_option_20pct_entity(entity_code, entity_name)
+
+        if is_school:
+            exempt = SCHOOL_HS_EXEMPTION
+        elif is_local_option:
+            exempt = max(float(assessed_value) * LOCAL_OPTION_PCT, LOCAL_OPTION_MIN_EXEMPTION)
+            local_option_entities_applied.append(entity_name or entity_code)
+        else:
+            exempt = 0
+
+        # amount_due is the real, verified billed figure for this entity --
+        # already net of any exemption currently on file. `is not None`
+        # (not a truthy check) so a genuine $0 bill isn't confused with
+        # missing data -- entity_detail is driven FROM tax_billing_entity
+        # (see app.py), so every row here already carries a real amount_due
+        # in the normal case; the assessed*rate fallback below only covers
+        # the rare case where that field is unexpectedly null.
+        amount_due = e.get("amount_due")
+        if amount_due is not None:
+            any_billed = True
+            current_total += float(amount_due)
+        else:
+            current_total += round(float(assessed_value) * rate / 100)
+
+        # Marginal savings from adding this exemption, independent of
+        # whatever exemption (if any) already reduced amount_due -- algebraically
+        # (assessed-E)*rate/100 - (assessed-E-exempt)*rate/100 == exempt*rate/100
+        # for any existing exemption E, so this stacks correctly on the real
+        # current_total above without needing to know E.
+        # Left unrounded here (rounded once at the very end, on the totals) --
+        # rounding each entity's marginal reduction before summing would add a
+        # few dollars of avoidable drift between with_hs_est_tax and the true
+        # per-entity "keep the existing exemption, add this one too" total.
+        savings_total += exempt * rate / 100
+
+    if not any_rate or not any_billed:
+        return None
+
+    savings = savings_total
+    if savings <= 0:
+        return None
+
+    with_hs_total = current_total - savings
+
+    return {
+        "current_est_tax":          round(current_total),
+        "with_hs_est_tax":          round(with_hs_total),
+        "estimated_annual_savings": round(savings),
+        "school_hs_exemption":      SCHOOL_HS_EXEMPTION,
+        "local_option_pct":         LOCAL_OPTION_PCT,
+        "local_option_entities":    local_option_entities_applied,
+    }
+
+
 # ── Public interface ──────────────────────────────────────────────────────────
 
 def estimate_post_acquisition(

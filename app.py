@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import config
 
 from tax_logic.texas import estimate_post_acquisition as _tx_estimate
+from tax_logic.texas import estimate_homestead_savings as _tx_hs_savings
 from tax_logic.classify import property_type_label, label_case_sql, label_sort_case_sql
 from loaders.scrape_billing_history import fetch_html, parse_receipts, upsert_billing_rows, HTTP_OK
 
@@ -1024,6 +1025,15 @@ def property_detail(geo_id):
                                                 benchmark_by_year, insights, projections)
     annual_trends = compute_annual_trends(history, metrics_by_year, projections)
 
+    # Estimated homestead savings for parcels without one (Part 2c). Computed
+    # unconditionally from real 2025 assessed_value + entity rates; the
+    # template only DISPLAYS it when `not has_hs` (existing Jinja flag) so
+    # this doesn't duplicate the "which year's exemption codes" selection
+    # logic that already lives in the template.
+    hs_potential_savings = _tx_hs_savings(
+        entity_detail, current.get("assessed_value") if current else None
+    )
+
     # Improvement Detail (per-parcel IMP_DET components) for the collapsible table.
     imp_det = []
     if parcel.get("imp_det_json"):
@@ -1062,6 +1072,7 @@ def property_detail(geo_id):
         kpi=kpi,
         narrative=narrative,
         annual_trends=annual_trends,
+        hs_potential_savings=hs_potential_savings,
     )
 
 
@@ -1743,15 +1754,26 @@ def api_peer_benchmark_local(geo_id):
     mv_hi = this_mv * 1.50
 
     # Peer set: same neighborhood, same state_cd1 prefix, MV band ±50%
+    # tb.total_tax is 0.00 (not NULL) for ~93% of 2025 tax_billing rows at the
+    # source (see KNOWN_LIMITATIONS.md) — entity_tax_sum is the per-geo_id
+    # SUM(amount_due) from tax_billing_entity, used as a fallback below so a
+    # real, verified figure isn't silently dropped for the median/percentile.
     peers = query("""
         SELECT
             p.geo_id,
             pty.market_value,
             pty.assessed_value,
-            tb.total_tax
+            tb.total_tax,
+            tbe.entity_tax_sum
         FROM   parcel p
         JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
         LEFT JOIN tax_billing  tb  ON tb.geo_id  = p.geo_id AND tb.tax_year  = 2025
+        LEFT JOIN (
+            SELECT geo_id, SUM(amount_due) AS entity_tax_sum
+            FROM   tax_billing_entity
+            WHERE  tax_year = 2025
+            GROUP  BY geo_id
+        ) tbe ON tbe.geo_id = p.geo_id
         WHERE  p.neighborhood_cd = %(nb)s
           AND  LEFT(p.state_cd1, 1) = %(sc1)s
           AND  pty.market_value BETWEEN %(lo)s AND %(hi)s
@@ -1764,10 +1786,17 @@ def api_peer_benchmark_local(geo_id):
     if n < 3:
         # Fallback: relax to neighborhood + type only, drop MV band
         peers = query("""
-            SELECT p.geo_id, pty.market_value, pty.assessed_value, tb.total_tax
+            SELECT p.geo_id, pty.market_value, pty.assessed_value,
+                   tb.total_tax, tbe.entity_tax_sum
             FROM   parcel p
             JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
             LEFT JOIN tax_billing  tb  ON tb.geo_id  = p.geo_id AND tb.tax_year  = 2025
+            LEFT JOIN (
+                SELECT geo_id, SUM(amount_due) AS entity_tax_sum
+                FROM   tax_billing_entity
+                WHERE  tax_year = 2025
+                GROUP  BY geo_id
+            ) tbe ON tbe.geo_id = p.geo_id
             WHERE  p.neighborhood_cd = %(nb)s
               AND  LEFT(p.state_cd1, 1) = %(sc1)s
               AND  p.geo_id NOT LIKE 'AJR%%'
@@ -1784,7 +1813,24 @@ def api_peer_benchmark_local(geo_id):
 
     mvs   = sorted([float(r["market_value"]) for r in peers if r.get("market_value")])
     avs   = sorted([float(r["assessed_value"]) for r in peers if r.get("assessed_value")])
-    taxes = sorted([float(r["total_tax"]) for r in peers if r.get("total_tax")])
+
+    # Effective tax per peer: tax_billing.total_tax when it's a real (nonzero)
+    # figure; otherwise fall back to the tax_billing_entity sum (also real,
+    # also verified — same pattern as app.py's single-property `current`
+    # fallback). A peer with neither (no total_tax AND no entity billing) has
+    # genuinely no 2025 billing data and is excluded from the stat — that's
+    # different from "billed but the aggregate field reads 0.00", and we don't
+    # want to conflate the two.
+    def _effective_tax(r):
+        if r.get("total_tax"):
+            return float(r["total_tax"])
+        if r.get("entity_tax_sum"):
+            return float(r["entity_tax_sum"])
+        return None
+
+    tax_values   = [_effective_tax(r) for r in peers]
+    taxes        = sorted([t for t in tax_values if t is not None])
+    peer_tax_n   = len(taxes)
 
     def pct(lst, p):
         if not lst: return None
@@ -1820,6 +1866,13 @@ def api_peer_benchmark_local(geo_id):
             "median": median(taxes),
             "p75":    pct(taxes, 75),
         },
+        # Sample-size disclosure: peer_tax is built from fewer peers than
+        # peer_mv/peer_av when some peers genuinely have no 2025 billing data
+        # at all (excluded, not zero-filled). Surfaced in the UI as "(n of N)"
+        # next to the Peer Median Tax figure so the stat isn't presented as if
+        # it covers the same peer set as MV/AV.
+        "peer_tax_sample_size": peer_tax_n,
+        "peer_tax_total_count": n,
         "this_mv_pct_rank": mv_pct,
     })
 
@@ -2428,6 +2481,15 @@ def compare_parcels():
         return render_template("compare.html", parcels=[], error="No valid parcels found for the provided IDs.")
 
     return render_template("compare.html", parcels=parcels, error=None)
+
+@app.route("/info")
+def info():
+    """Informational reference page -- topic sections (starting with Homestead
+    Exemptions) filtered by state / county. Static content today (Texas /
+    Travis County only), no parcel or DB data involved -- structured so more
+    topics/states/counties can be added later without a route change."""
+    return render_template("info.html")
+
 
 @app.route("/about")
 def about():

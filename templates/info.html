@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Info — Parcelytics{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <h1 class="page-title mb-1">Property Tax Info</h1>
+  <p class="text-muted mb-0" style="max-width:700px;">
+    Plain-language explainers on how property tax works, grounded in official government
+    sources — every figure below links to where it comes from. Pick a topic, then a state,
+    then (where rules are also set locally) a county. Coverage starts with Texas / Travis
+    County and is structured to grow as Parcelytics covers more states and counties.
+  </p>
+</div>
+
+<div class="row g-4">
+
+  {# ── Topic sidebar — one topic today, structured for more later ─────────── #}
+  <div class="col-lg-3">
+    <div class="card" style="position:sticky; top:16px;">
+      <div class="card-header">Topics</div>
+      <div class="list-group list-group-flush" id="topicList">
+        <a href="#" class="list-group-item list-group-item-action active" data-topic="homestead">
+          Homestead Exemptions
+        </a>
+        {# Add future topics here as: <a class="list-group-item list-group-item-action" data-topic="...">...</a>
+           plus a matching <div class="info-topic" id="topic-..."> block below. #}
+      </div>
+      <div class="card-footer text-muted" style="font-size:11px;">
+        More topics — protests, agricultural valuation, delinquency — coming as Parcelytics builds them out.
+      </div>
+    </div>
+  </div>
+
+  {# ── Content ──────────────────────────────────────────────────────────── #}
+  <div class="col-lg-9">
+
+    <div class="info-topic" id="topic-homestead">
+      <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+        <h2 class="fw-bold mb-0">Homestead Exemptions</h2>
+        <div class="d-flex align-items-center gap-2" style="font-size:13px;">
+          <label class="text-muted mb-0" for="stateSelect">State</label>
+          <select id="stateSelect" class="form-select form-select-sm" style="width:auto;">
+            <option value="tx" selected>Texas</option>
+          </select>
+        </div>
+      </div>
+      <p class="text-muted mb-3" style="font-size:11.5px;">
+        Homestead rules are set partly by state law and partly by each local taxing unit — so this page has a
+        state-level section that applies everywhere in Texas, and a county-level section for how Travis County's
+        own taxing units have chosen to apply it. Only Texas / Travis County are built out today; more states will
+        show here as Parcelytics expands.
+      </p>
+
+      {# ── State-level section (Texas) ──────────────────────────────────── #}
+      <div class="info-state-panel" data-state="tx">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Texas — general rules (state law)</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              Texas school districts are required to exempt <strong>$140,000</strong> of a home's appraised value
+              from the taxes they collect
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.11.htm#11.13" target="_blank" rel="noopener noreferrer">Tax Code &sect;11.13(b)</a>).
+              This exemption is mandatory — every school district in Texas grants it automatically to a qualifying
+              homestead; it isn't something a district can opt out of.
+            </p>
+            <p>
+              Beyond that mandatory school exemption, <strong>any other taxing unit</strong> — a county, city,
+              hospital district, or other special district — may separately choose to adopt its own local-option
+              homestead exemption of <strong>up to 20% of a home's appraised value</strong>, with a minimum
+              exemption of $5,000 if it adopts one at all
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.11.htm#11.13" target="_blank" rel="noopener noreferrer">Tax Code &sect;11.13(n)</a>).
+              This part is optional: not every taxing unit offers it, and where they do, the percentage can vary
+              by entity.
+            </p>
+            <p>
+              To qualify for the general homestead exemption, you must own the property and use it as your
+              principal residence as of January 1 of the tax year. You can only claim one homestead exemption
+              at a time, and only in Texas — you cannot claim a homestead exemption on a Texas property while
+              also claiming one on a residence anywhere else, in or out of state.
+            </p>
+            <p class="mb-0 text-muted" style="font-size:12px;">
+              Separate, additional exemptions exist for homeowners 65+, disabled homeowners, and disabled
+              veterans — not covered on this page yet.
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://comptroller.texas.gov/taxes/property-tax/exemptions/" target="_blank" rel="noopener noreferrer">Texas Comptroller — Property Tax Exemptions ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://traviscad.org/homesteadexemptions/" target="_blank" rel="noopener noreferrer">Travis Central Appraisal District — Homestead Exemptions ↗</a>
+          </div>
+        </details>
+      </div>
+
+      {# ── County selector — one county today, structured for more later ─── #}
+      <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
+        <label class="text-muted mb-0" for="countySelect">County</label>
+        <select id="countySelect" class="form-select form-select-sm" style="width:auto;">
+          <option value="travis" selected>Travis County</option>
+        </select>
+        <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
+      </div>
+
+      {# ── County-level section (Travis) ────────────────────────────────── #}
+      <div class="info-county-panel" data-county="travis">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Travis County — how local taxing units apply it</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              Travis County itself has adopted the <strong>maximum local-option exemption allowed by law: 20%</strong>
+              of a home's appraised value (minimum $5,000).
+            </p>
+            <p>
+              Two other major Travis County taxing entities have separately adopted their own 20% local-option
+              exemptions: the <strong>City of Austin</strong> and <strong>Central Health</strong> (the Travis
+              County Healthcare District). Travis Central Appraisal District's own entity-level exemption
+              records confirm City of Austin and Travis County both at 20% with a $5,000 minimum; Central
+              Health's Board of Managers has adopted 20% — "the maximum allowable by state law" — in its own
+              taxpayer impact filings.
+              <span class="text-muted" style="font-size:11.5px; font-style:italic;">
+                (Central Health's 20% figure is based on their most recently available public filing we
+                located &mdash; fiscal year 2022 &mdash; not independently reconfirmed since. City of Austin
+                and Travis County's figures above come from Travis Central Appraisal District's 2025 filing,
+                current for this tax year.)
+              </span>
+            </p>
+            <p>
+              Because each taxing unit's exemption applies only to <em>that unit's own share</em> of your bill,
+              a homestead exemption doesn't reduce every line of your tax bill by the same amount. It reduces
+              each entity's portion by whatever that specific entity has adopted — the mandatory $140,000 for
+              your school district, up to 20% for the county / city / health district, and often $0 for entities
+              that haven't adopted a local-option exemption at all, such as most water and municipal utility
+              districts.
+            </p>
+            <p class="mb-0">
+              Travis County also grants an <strong>additional $143,220 exemption</strong>, on top of its 20%,
+              for homesteads of owners who are 65 or older or disabled. That additional exemption is specific
+              to age/disability status and isn't modeled elsewhere on Parcelytics yet.
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://www.traviscountytx.gov/planning-budget/tc-taxpayer-statement" target="_blank" rel="noopener noreferrer">Travis County — FY2026 Taxpayer Impact Statement ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://traviscad.org/wp-content/uploads/2025_ExemptionListingTravis_07252025.pdf" target="_blank" rel="noopener noreferrer">TCAD — 2025 Exemption Listing Report ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://www.centralhealth.net/wp-content/uploads/2021/09/FY2022-TCHD-Taxpayer-Impact-Statement.pdf" target="_blank" rel="noopener noreferrer">Central Health — Taxpayer Impact Statement (FY2022) ↗</a>
+          </div>
+        </details>
+      </div>
+
+    </div>
+    {# Add future topics here as: <div class="info-topic" id="topic-..." style="display:none;">...</div> #}
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Topic / state / county switching. Only one option exists in each selector
+// today, so this is inert in practice -- it's here so adding a second topic,
+// state, or county later is a matter of adding markup + an <option>, not
+// rewriting this logic.
+(function () {
+  const topicLinks = document.querySelectorAll('#topicList [data-topic]');
+  topicLinks.forEach((link) => {
+    link.addEventListener('click', function (e) {
+      e.preventDefault();
+      topicLinks.forEach((l) => l.classList.remove('active'));
+      this.classList.add('active');
+      const topic = this.getAttribute('data-topic');
+      document.querySelectorAll('.info-topic').forEach((panel) => {
+        panel.style.display = (panel.id === 'topic-' + topic) ? '' : 'none';
+      });
+    });
+  });
+
+  const stateSelect = document.getElementById('stateSelect');
+  if (stateSelect) {
+    stateSelect.addEventListener('change', function () {
+      document.querySelectorAll('.info-state-panel').forEach((panel) => {
+        panel.style.display = (panel.getAttribute('data-state') === this.value) ? '' : 'none';
+      });
+    });
+  }
+
+  const countySelect = document.getElementById('countySelect');
+  if (countySelect) {
+    countySelect.addEventListener('change', function () {
+      document.querySelectorAll('.info-county-panel').forEach((panel) => {
+        panel.style.display = (panel.getAttribute('data-county') === this.value) ? '' : 'none';
+      });
+    });
+  }
+})();
+</script>
+{% endblock %}

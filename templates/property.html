@@ -129,6 +129,34 @@
     <p class="mb-0">No exemptions are currently applied. If this is your primary residence, you may qualify for a homestead exemption —
       <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">visit traviscad.org to apply ↗</a>.</p>
     {% endif %}
+    {% if not has_hs and hs_potential_savings %}
+    {# Estimated tier only — a modeled "what if you filed" figure, never blended
+       with a real/verified number. Gated on has_hs (not excodes_list) so a
+       parcel with some OTHER exemption but no Homestead specifically still
+       gets this note. Reuses the same dashed-border "estimated" treatment
+       already used for the 5-Year Tax Projection card.
+       Models TWO exemption types now (tax_logic/texas.py estimate_homestead_savings,
+       updated for the Homestead Accuracy brief): the $140,000 mandatory school
+       exemption (unchanged), PLUS a confirmed 20% local-option exemption for
+       Travis County / City of Austin / Central Health specifically when they
+       bill this parcel — sourced to Travis County's FY2026 Taxpayer Impact
+       Statement and TCAD chief-appraiser-sourced reporting, not guessed. Other
+       entities' optional status is unconfirmed and stays unmodeled. #}
+    {% set _lo = hs_potential_savings.local_option_entities %}
+    <div class="projection-card mt-3 p-3" style="border-radius:8px;">
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <span class="badge-estimated" style="font-size:10px;">Estimated</span>
+        <span style="font-size:12.5px; font-weight:600;">Potential Homestead Savings</span>
+      </div>
+      <p class="mb-0" style="font-size:13px;">
+        If this is your primary residence and you filed for a homestead exemption, you could save an estimated
+        <strong>~${{ "{:,.0f}".format(hs_potential_savings.estimated_annual_savings) }}/year</strong>
+        — based on the school district's ${{ "{:,.0f}".format(hs_potential_savings.school_hs_exemption) }} mandatory exemption{% if _lo %}, plus the confirmed 20% local-option exemption ($5,000 minimum) offered by {{ _lo | join(', ') }}{% endif %}, applied to your current assessed value at your entities' 2025 certified rates.
+        Other entities on your bill may offer their own optional exemptions Parcelytics hasn't confirmed against an official source and doesn't model yet, so actual savings could be higher still.
+        This is a modeled estimate, not a verified figure, and is separate from any real, billed exemption shown elsewhere on this page.
+      </p>
+    </div>
+    {% endif %}
   </div>
 </div>
 
@@ -198,10 +226,24 @@
             </tr>
             {% endfor %}
           </tbody>
+          {# Total "2025 Rate" must not silently sum only the entities that happen
+             to have a published rate and present it as THE combined rate — that
+             would quietly exclude no-rate PID/Special-District entities (see
+             KNOWN_LIMITATIONS.md) from a number labeled "Total" with no disclosure.
+             Same partial-sum-disclosure convention as the Combined Rate row in the
+             Historical Tax Rates by Entity table above (badge-partial "n of n"). #}
+          {% set _ent_for_total = entity_detail | selectattr('amount_due') | list %}
+          {% set _rate_n = _ent_for_total | selectattr('rate') | list | length %}
+          {% set _ent_n  = _ent_for_total | length %}
           <tfoot>
             <tr style="font-weight:700; border-top:2px solid var(--border,#dee2e6);">
               <td>Total</td>
-              <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ "{:.4f}%".format(entity_detail | selectattr('rate') | sum(attribute='rate') | float) }}</td>
+              <td class="text-end" style="font-variant-numeric:tabular-nums;">
+                {% if _rate_n > 0 %}
+                  {{ "{:.4f}%".format(_ent_for_total | selectattr('rate') | sum(attribute='rate') | float) }}
+                  {% if _rate_n < _ent_n %}<span class="badge-partial d-block" style="font-size:9px; margin-top:2px;">{{ _rate_n }} of {{ _ent_n }}</span>{% endif %}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
               <td class="text-end" style="font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(_tot) }}</td>
               <td class="text-end" style="font-variant-numeric:tabular-nums;">100%</td>
             </tr>
@@ -231,10 +273,14 @@
       </thead>
       <tbody>
         {% set _no_rate_entities = [] %}
+        {% set _tot = namespace(net=0, exempt=0, tax=0) %}
         {% for e in entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
+        {% set _tot.tax = _tot.tax + (e.amount_due|float) %}
         {% if e.rate %}
         {% set _net = e.amount_due|float * 100 / (e.rate|float) %}
         {% set _exempt = _assessed - _net %}
+        {% set _tot.net = _tot.net + _net %}
+        {% set _tot.exempt = _tot.exempt + (_exempt if _exempt > 1 else 0) %}
         <tr>
           <td class="ps-3">{{ e.entity_name or e.entity_code }}</td>
           <td class="text-end">${{ "{:,.0f}".format(_assessed) }}</td>
@@ -264,6 +310,26 @@
         {% endif %}
         {% endfor %}
       </tbody>
+      <tfoot>
+        <tr style="font-weight:700; border-top:2px solid var(--border-strong, #dee2e6);">
+          <td class="ps-3">Total</td>
+          <td class="text-end">—</td>
+          {# Exemption / Net Taxable totals are only a true total when every row had a
+             rate to derive them from. If any row is Not Available (no-rate entity), a
+             silent sum here would quietly present an incomplete total as the real one —
+             so both columns show Not Available instead, matching the row-level treatment,
+             not a number that excludes those rows without saying so. #}
+          {% if _no_rate_entities %}
+          <td class="text-end" style="font-style:italic; color:var(--text-3);">Not Available</td>
+          <td class="text-end" style="font-style:italic; color:var(--text-3);">Not Available</td>
+          {% else %}
+          <td class="text-end" style="color:#2e7d32;">{% if _tot.exempt > 1 %}−${{ "{:,.0f}".format(_tot.exempt) }}{% else %}—{% endif %}</td>
+          <td class="text-end">${{ "{:,.0f}".format(_tot.net) }}</td>
+          {% endif %}
+          <td class="text-end text-muted">—</td>
+          <td class="text-end pe-3">${{ "{:,.0f}".format(_tot.tax) }}</td>
+        </tr>
+      </tfoot>
     </table>
     </div>
   </div>
@@ -271,6 +337,7 @@
     Each entity grants different exemptions, so your <strong>net taxable value</strong> — the amount it actually taxes you on — differs by entity, even though the assessed value is the same. Net taxable is derived from your tax ÷ that entity's rate.
     {% if _no_rate_entities %}
     <br><strong>{{ _no_rate_entities | length }}</strong> of your entities ({{ _no_rate_entities | map(attribute='entity_code') | join(', ') }}) bill you directly but don't publish a rate Parcelytics has on file — usually a Public Improvement District or Water Control district. The amount billed is real and verified; Net Taxable for those rows is Not Available because it can't be derived without a rate.
+    Total Tax below sums every entity including these — that figure is real either way. Total Net Taxable / Exemption show Not Available rather than a partial sum that would quietly exclude them.
     {% endif %}
   </div>
 </div>
@@ -562,14 +629,29 @@
               <td>{{ parcel.neighborhood_cd or "—" }}</td></tr>
         </tbody>
       </table>
-      {# Search this property on TCAD — reference link, only when a building exists #}
-      {% if parcel.living_area_sqft or parcel.gross_building_area_sqft %}
+      {# Direct TCAD property-detail link — shown on every parcel page, both modes.
+         Deep-links via parcel.prop_id (TCAD's internal short numeric ID) when
+         available: https://travis.prodigycad.com/property-detail/<prop_id>/<year>.
+         Mapping confirmed by live-navigating the actual TCAD portal for 3 known
+         parcels: prop_id 100008 → geo_id 0100030105 (1201 S Lamar Blvd), prop_id
+         100012 → geo_id 0100030109 (1219 S Lamar Blvd), prop_id 961801 → geo_id
+         0284460113 (19365 Wilke Ln) — all three matched exactly on the portal's
+         displayed "Geographic ID" field. The year segment does not need to match
+         any specific year shown elsewhere on this page: /2026 and /2025 against
+         the same prop_id returned the identical full Value History table, only
+         the page's Status label changed — so a fixed current year is safe here.
+         Falls back to the generic property-search page when prop_id is missing. #}
       <div class="mt-2" style="font-size:12px;">
+        {% if parcel.prop_id %}
+        <a href="https://travis.prodigycad.com/property-detail/{{ parcel.prop_id }}/2026"
+           target="_blank" rel="noopener noreferrer"
+           style="color:var(--accent, #94B0DA); text-decoration:none;">View this property on TCAD ↗</a>
+        {% else %}
         <a href="https://traviscad.org/propertysearch/"
            target="_blank" rel="noopener noreferrer"
            style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on TCAD ↗</a>
+        {% endif %}
       </div>
-      {% endif %}
     </div>
   </div>
 
@@ -2774,6 +2856,9 @@ if (rCtx) {
           <div class="estimator-chip">
             <div class="estimator-chip-label">Peer Median Tax</div>
             <div class="estimator-chip-val">${_fmtM(d.peer_tax.median)}</div>
+            ${d.peer_tax_sample_size != null && d.peer_tax_total_count != null && d.peer_tax_sample_size < d.peer_tax_total_count
+              ? `<span class="badge-partial d-block" style="font-size:10px; margin-top:2px;">${d.peer_tax_sample_size} of ${d.peer_tax_total_count}</span>`
+              : ''}
           </div>
         </div>
         <div class="table-responsive">
@@ -2797,7 +2882,11 @@ if (rCtx) {
                 <td class="text-end">—</td>
               </tr>
               <tr>
-                <td class="small">Total Tax (2025)</td>
+                <td class="small">Total Tax (2025)
+                  ${d.peer_tax_sample_size != null && d.peer_tax_total_count != null && d.peer_tax_sample_size < d.peer_tax_total_count
+                    ? `<span class="badge-partial ms-1" style="font-size:9px;">${d.peer_tax_sample_size} of ${d.peer_tax_total_count}</span>`
+                    : ''}
+                </td>
                 <td class="text-end">${_fmtM(d.peer_tax.p25)}</td>
                 <td class="text-end fw-semibold">${_fmtM(d.peer_tax.median)}</td>
                 <td class="text-end">${_fmtM(d.peer_tax.p75)}</td>
@@ -2809,6 +2898,9 @@ if (rCtx) {
         <p class="text-muted mt-2 mb-0" style="font-size:10.5px;">
           Peer selection: same neighbourhood + property type, ±50% of 2025 market value.
           For improved SF-normalised comparison see the Per-SF section above (available when living-area sqft is on record).
+          ${d.peer_tax_sample_size != null && d.peer_tax_total_count != null && d.peer_tax_sample_size < d.peer_tax_total_count
+            ? ` Total Tax is based on ${d.peer_tax_sample_size} of ${d.peer_tax_total_count} peers — the rest have no 2025 billing data on record.`
+            : ''}
         </p>
       `;
       section.style.display = '';
