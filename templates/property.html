@@ -107,6 +107,27 @@
         <a href="https://traviscad.org/contact" target="_blank" rel="noopener noreferrer">Contact TCAD ↗</a>
       </div>
     </div>
+    {# Direct TCAD property-detail link — shown on every parcel page, both
+       modes (Bug fix: this card previously had no equivalent in Homeowner
+       mode at all — the only other copy of this link lived inside the
+       Property Info card, which sits entirely inside the investor-only
+       {% else %} branch of the top-level mode split, lines 387–2187).
+       Deep-links via parcel.prop_id (TCAD's internal short numeric ID) when
+       available: https://travis.prodigycad.com/property-detail/<prop_id>/<year>.
+       Mapping confirmed by live-navigating the actual TCAD portal for 3 known
+       parcels (see Property Info card comment for full mapping detail).
+       Falls back to the generic property-search page when prop_id is missing. #}
+    <div class="mt-2 pt-2" style="font-size:12px; border-top:1px solid var(--border, #e5e7eb);">
+      {% if parcel.prop_id %}
+      <a href="https://travis.prodigycad.com/property-detail/{{ parcel.prop_id }}/2026"
+         target="_blank" rel="noopener noreferrer"
+         style="color:var(--accent, #94B0DA); text-decoration:none;">View this property on TCAD ↗</a>
+      {% else %}
+      <a href="https://traviscad.org/propertysearch/"
+         target="_blank" rel="noopener noreferrer"
+         style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on TCAD ↗</a>
+      {% endif %}
+    </div>
   </div>
 </div>
 
@@ -254,21 +275,46 @@
   </div>
 </div>
 
-{# ── How exemptions reduce your bill, per taxing entity ───────────────── #}
+{# ── How exemptions reduce your bill, per taxing entity ───────────────────────
+   REDESIGNED (layout only — every data-integrity behavior below is byte-for-byte
+   identical to the prior version: same namespace accumulation, same no-rate
+   detection/Not Available treatment, same total-row Not-Available-on-partial-sum
+   guard, same footnote text). What changed is purely visual:
+     1. The 6 columns are now grouped under two labeled headers — "Taxable Value
+        Walk" (Assessed / − Exemption / = Net Taxable) and "Your Bill" (× Rate /
+        = Tax) — with a heavier divider between the groups, so the two different
+        "jobs" those columns do read as two steps instead of one flat row.
+     2. Arrow/operator prefixes (−, =, ×, =) on the sub-headers make the left-to-
+        right Assessed → Exemption → Net Taxable → Rate → Tax flow explicit
+        instead of implicit in six unlabeled numbers.
+     3. No-rate rows now carry a one-line inline explanation directly under the
+        entity name (not just a hover title + a footnote you have to scroll to)
+        so "why is this Not Available" is answered at the point of confusion.
+     4. The total row gets a tinted background (var(--surface-2), the project's
+        existing "table foot / subtle fill" token) so it reads as a summary line
+        rather than just another row with a bold weight. ───────────────────── #}
 {% if entity_detail and entity_detail | selectattr('amount_due') | list and current and current.assessed_value %}
 {% set _assessed = current.assessed_value | float %}
 <div class="card mb-4"><div class="card-header">How Your Exemptions Reduce Your Bill — by Taxing Entity</div>
+  <p class="text-muted px-3 pt-3 mb-2" style="font-size:11.5px;">
+    Read each row left to right: your assessed value, minus what that entity exempts, equals what they actually
+    tax you on — then multiplied by their rate is what you owed them.
+  </p>
   <div class="card-body p-0">
     <div class="table-responsive">
     <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
-      <thead class="text-muted" style="font-size:11px; text-transform:uppercase;">
+      <thead class="text-muted" style="font-size:10px; text-transform:uppercase;">
         <tr>
-          <th class="ps-3">Taxing Entity</th>
+          <th class="ps-3" rowspan="2" style="vertical-align:bottom;">Taxing Entity</th>
+          <th class="text-center" colspan="3" style="border-bottom:2px solid var(--border-strong, #cbd0dc); padding-bottom:4px;">Taxable Value Walk</th>
+          <th class="text-center" colspan="2" style="border-bottom:2px solid var(--border-strong, #cbd0dc); padding-bottom:4px; border-left:2px solid var(--border-strong, #cbd0dc);">Your Bill</th>
+        </tr>
+        <tr style="font-size:10px;">
           <th class="text-end">Assessed</th>
-          <th class="text-end">Exemption</th>
-          <th class="text-end">Net Taxable</th>
-          <th class="text-end">Rate</th>
-          <th class="text-end pe-3">Tax</th>
+          <th class="text-end">− Exemption</th>
+          <th class="text-end">= Net Taxable</th>
+          <th class="text-end" style="border-left:2px solid var(--border-strong, #cbd0dc);">× Rate</th>
+          <th class="text-end pe-3">= Tax</th>
         </tr>
       </thead>
       <tbody>
@@ -286,7 +332,7 @@
           <td class="text-end">${{ "{:,.0f}".format(_assessed) }}</td>
           <td class="text-end" style="color:#2e7d32;">{% if _exempt > 1 %}−${{ "{:,.0f}".format(_exempt) }}{% else %}—{% endif %}</td>
           <td class="text-end">${{ "{:,.0f}".format(_net) }}</td>
-          <td class="text-end text-muted">{{ "{:.4f}%".format(e.rate|float) }}</td>
+          <td class="text-end text-muted" style="border-left:2px solid var(--border-strong, #cbd0dc);">{{ "{:.4f}%".format(e.rate|float) }}</td>
           <td class="text-end pe-3">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
         </tr>
         {% else %}
@@ -299,19 +345,22 @@
            already used in the /api/estimate_acq PID handling below on this same page. #}
         {% set _ = _no_rate_entities.append(e) %}
         <tr>
-          <td class="ps-3">{{ e.entity_name or e.entity_code }}
-            <span class="badge-estimated ms-1" style="font-size:9px;" title="No certified 2025 rate published for this entity — likely a PID/Special District">no rate</span></td>
+          <td class="ps-3">
+            {{ e.entity_name or e.entity_code }}
+            <span class="badge-estimated ms-1" style="font-size:9px;" title="No certified 2025 rate published for this entity — likely a PID/Special District">no rate</span>
+            <div class="text-muted" style="font-size:10px; font-weight:400; line-height:1.4; margin-top:1px; max-width:220px;">No certified rate on file for this entity — Net Taxable can't be derived. This is not a $0 exemption.</div>
+          </td>
           <td class="text-end">${{ "{:,.0f}".format(_assessed) }}</td>
           <td class="text-end">—</td>
           <td class="text-end" style="font-style:italic; color:var(--text-3);">Not Available</td>
-          <td class="text-end text-muted">—</td>
+          <td class="text-end text-muted" style="border-left:2px solid var(--border-strong, #cbd0dc);">—</td>
           <td class="text-end pe-3">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
         </tr>
         {% endif %}
         {% endfor %}
       </tbody>
       <tfoot>
-        <tr style="font-weight:700; border-top:2px solid var(--border-strong, #dee2e6);">
+        <tr style="font-weight:700; border-top:2px solid var(--border-strong, #dee2e6); background:var(--surface-2, #f4f5f8);">
           <td class="ps-3">Total</td>
           <td class="text-end">—</td>
           {# Exemption / Net Taxable totals are only a true total when every row had a
@@ -326,7 +375,7 @@
           <td class="text-end" style="color:#2e7d32;">{% if _tot.exempt > 1 %}−${{ "{:,.0f}".format(_tot.exempt) }}{% else %}—{% endif %}</td>
           <td class="text-end">${{ "{:,.0f}".format(_tot.net) }}</td>
           {% endif %}
-          <td class="text-end text-muted">—</td>
+          <td class="text-end text-muted" style="border-left:2px solid var(--border-strong, #cbd0dc);">—</td>
           <td class="text-end pe-3">${{ "{:,.0f}".format(_tot.tax) }}</td>
         </tr>
       </tfoot>
@@ -655,7 +704,23 @@
     </div>
   </div>
 
-  {# ── How this value is derived (value build-up) ─────────────────────────── #}
+  {# ── Current Values — TCAD-pattern grouped label:value panel (Part 4 redesign) ──
+     REDESIGNED — was "How This Value Is Derived." Same card, same position,
+     same underlying figures (current.market_value / land_value / imprv_value /
+     assessed_value / taxable_value / exemption_codes) — restructured into
+     TCAD's own layout idiom: label-left/value-right rows grouped into Land,
+     Improvement, and Summary blocks, each ending in a bold subtotal, using
+     Parcelytics' existing .info-table component and brand palette (not TCAD's
+     cream/yellow styling).
+     DATA-INTEGRITY NOTE (see brief report): TCAD's page splits Land into Land
+     Homesite / Land Non-Homesite / Special Use Land Market, and Improvement
+     into Improvement Homesite / Improvement Non-Homesite. Parcelytics' loader
+     (loaders/load_parcel_attrs.py) only captures one aggregate land_value and
+     one aggregate imprv_value per year — that split isn't in the data model —
+     so each group below shows one real line rather than an invented split.
+     Special Use Land Market / Special Use Exclusion are marked Not Available
+     for the same reason the prior card already documented: "Special-use /
+     productivity (agricultural) valuation is not in the current dataset." #}
   {% if current and current.market_value %}
   {% set _mv  = current.market_value %}
   {% set _av  = current.assessed_value or _mv %}
@@ -664,30 +729,73 @@
   {% set _exe = (_av - _tv) if _av > _tv else 0 %}
   <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <span>How This Value Is Derived</span>
+      <span>Current Values</span>
       {% if current.data_source == 'certified' %}<span class="badge-verified" style="font-size:9px;">2025 Certified</span>{% endif %}
     </div>
     <div class="card-body p-3">
-      <div class="derivation">
-        <div class="drow"><span class="lbl">Market value</span><span class="val">${{ "{:,.0f}".format(_mv) }}</span></div>
-        {% if current.land_value and current.imprv_value %}
-        <div class="drow sub"><span class="lbl">Land</span><span class="val">${{ "{:,.0f}".format(current.land_value) }}</span></div>
-        <div class="drow sub"><span class="lbl">+ Improvements</span><span class="val">${{ "{:,.0f}".format(current.imprv_value) }}</span></div>
-        {% endif %}
-        {% if _cap > 0 %}
-        <div class="drow deduct"><span class="lbl">− Value-limitation adjustment <span class="text-muted" style="font-size:11px;">(homestead cap)</span></span><span class="val">−${{ "{:,.0f}".format(_cap) }}</span></div>
-        {% endif %}
-        <div class="drow total"><span class="lbl">= Net appraised <span class="text-muted" style="font-size:11px;">(assessed)</span></span><span class="val">${{ "{:,.0f}".format(_av) }}</span></div>
-        {% if _exe > 0 %}
-        <div class="drow deduct"><span class="lbl">− Exemptions{% if current.exemption_codes %} <span class="text-muted" style="font-size:11px;">({{ current.exemption_codes }})</span>{% endif %}</span><span class="val">−${{ "{:,.0f}".format(_exe) }}</span></div>
-        {% elif current.exemption_codes %}
-        <div class="drow sub"><span class="lbl">Exemptions on file</span><span class="val" style="font-family:var(--font-sans);">{{ current.exemption_codes }}</span></div>
-        {% endif %}
-        <div class="drow grand total"><span class="lbl">= Taxable value</span><span class="val">${{ "{:,.0f}".format(_tv) }}</span></div>
-      </div>
-      <div class="derivation-note">
-        Build-up from 2025 TCAD certified values. Deductions reduce the taxable base.
-        Special-use / productivity (agricultural) valuation is not in the current dataset and is omitted.
+
+      {# Group 1 — Land #}
+      <table class="info-table mb-2" style="width:100%;">
+        <tbody>
+          <tr><th>Land</th><td class="text-end">{% if current.land_value %}${{ "{:,.0f}".format(current.land_value) }}{% else %}—{% endif %}</td></tr>
+          <tr><th class="text-muted" style="font-weight:400; font-style:italic;">Special Use Land Market</th><td class="na-cell text-end">Not Available</td></tr>
+          <tr style="border-top:1.5px solid var(--border-strong, #cbd0dc);">
+            <th style="font-weight:700;">Total Land</th>
+            <td class="text-end" style="font-weight:700;">{% if current.land_value %}${{ "{:,.0f}".format(current.land_value) }}{% else %}—{% endif %}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {# Group 2 — Improvement #}
+      <table class="info-table mb-2" style="width:100%;">
+        <tbody>
+          <tr><th>Improvement</th><td class="text-end">{% if current.imprv_value %}${{ "{:,.0f}".format(current.imprv_value) }}{% else %}—{% endif %}</td></tr>
+          <tr style="border-top:1.5px solid var(--border-strong, #cbd0dc);">
+            <th style="font-weight:700;">Total Improvement</th>
+            <td class="text-end" style="font-weight:700;">{% if current.imprv_value %}${{ "{:,.0f}".format(current.imprv_value) }}{% else %}—{% endif %}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {# Group 3 — Summary (Market → Appraised → Net Appraised) #}
+      <table class="info-table mb-2" style="width:100%;">
+        <tbody>
+          <tr><th>Market</th><td class="text-end">${{ "{:,.0f}".format(_mv) }}</td></tr>
+          <tr><th class="text-muted" style="font-weight:400; font-style:italic;">Special Use Exclusion (−)</th><td class="na-cell text-end">Not Available</td></tr>
+          <tr><th>Appraised</th><td class="text-end">${{ "{:,.0f}".format(_mv) }}</td></tr>
+          {% if _cap > 0 %}
+          <tr><th>Value Limitation Adjustment (−) <span class="text-muted" style="font-size:11px;">(homestead cap)</span></th><td class="text-end">−${{ "{:,.0f}".format(_cap) }}</td></tr>
+          {% else %}
+          <tr><th class="text-muted" style="font-weight:400;">Value Limitation Adjustment (−)</th><td class="text-muted text-end">—</td></tr>
+          {% endif %}
+          <tr style="border-top:1.5px solid var(--border-strong, #cbd0dc);">
+            <th style="font-weight:700;">Net Appraised <span class="text-muted" style="font-size:11px; font-weight:400;">(assessed)</span></th>
+            <td class="text-end" style="font-weight:700;">${{ "{:,.0f}".format(_av) }}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {# Group 4 — Exemptions → Taxable value (existing figures, unchanged; not part
+         of TCAD's Current Values panel but real data the prior card already showed —
+         kept so nothing is dropped in the restyle). #}
+      <table class="info-table" style="width:100%;">
+        <tbody>
+          {% if _exe > 0 %}
+          <tr><th>Exemptions (−){% if current.exemption_codes %} <span class="text-muted" style="font-size:11px;">({{ current.exemption_codes }})</span>{% endif %}</th><td class="text-end">−${{ "{:,.0f}".format(_exe) }}</td></tr>
+          {% elif current.exemption_codes %}
+          <tr><th class="text-muted" style="font-weight:400;">Exemptions on file</th><td class="text-muted text-end" style="font-family:var(--font-sans);">{{ current.exemption_codes }}</td></tr>
+          {% endif %}
+          <tr style="border-top:1.5px solid var(--border-strong, #cbd0dc);">
+            <th style="font-weight:700; color:var(--accent, #94B0DA);">Taxable Value</th>
+            <td class="text-end" style="font-weight:700; color:var(--accent, #94B0DA);">${{ "{:,.0f}".format(_tv) }}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="text-muted mt-2" style="font-size:10.5px; line-height:1.5;">
+        Build-up from 2025 TCAD certified values. Land and Improvement are shown as single totals — Parcelytics'
+        loaders capture one aggregate value per year, not TCAD's Homesite / Non-Homesite split. Special Use Land
+        Market and Special Use Exclusion (agricultural/productivity valuation) are not in the current dataset.
       </div>
     </div>
   </div>
@@ -716,47 +824,94 @@
   </div>
   {% endif %}
 
-  {# ── Improvement Detail — collapsible IMP_DET component table ──────────── #}
+  {# ── Improvement Detail — TCAD-pattern grouped block (Part 4 redesign) ──────
+     REDESIGNED — was a single flat component table. Restructured into TCAD's
+     "per-improvement header block, then a table of that improvement's
+     components" pattern, using Parcelytics' existing card/grid conventions
+     (not TCAD's cream/yellow styling).
+     DATA-INTEGRITY NOTE (surfaced in full in the brief report, not glossed
+     over here): TCAD's own page groups components under MULTIPLE
+     improvements when a parcel has more than one (main dwelling, solar
+     array, ADU, etc.), each with its own Class CD / Exterior Wall / Number
+     of Units / EFF Year Built header fields and an "Improvement Features"
+     block (Foundation, Roof Style, Floor Factor, Roof Covering, Shape
+     Factor). Parcelytics' loader (loaders/load_parcel_attrs.py load_imp())
+     reads IMP_DET.TXT but discards imp_id — the field that would separate
+     one improvement from another — and never reads quality_class/eff_year
+     per component or any wall/roof/foundation attribute data; those live in
+     TCAD export files this repo doesn't currently ingest. So this block
+     shows ONE improvement group per parcel — the real granularity our data
+     supports today — with the header fields we actually have. It does not
+     invent a multi-improvement split or Improvement Features data. #}
   {% if imp_det %}
-  <details class="card mb-4" id="impDetailCard">
-    <summary class="card-header" style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center;">
-      <span>Improvement Detail</span>
-      <span class="text-muted" style="font-size:11px; font-weight:400;">{{ imp_det|length }} components · show ▾</span>
-    </summary>
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
-          <thead class="table-light text-muted text-uppercase" style="font-size:10px;">
-            <tr>
-              <th>Code</th>
-              <th>Description</th>
-              <th class="text-end">SF</th>
-              <th class="text-center" title="Included in Gross Building Area?">In Gross</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for c in imp_det %}
-            <tr>
-              <td><span class="entity-badge">{{ c.code or "—" }}</span></td>
-              <td>{{ c.desc or "—" }}</td>
-              <td class="text-end">{{ "{:,.0f}".format(c.sqft) if c.sqft else "—" }} SF</td>
-              <td class="text-center">
-                {% if c.excluded %}<span style="color:var(--down);" title="Excluded — site improvement, attribute, or unconfirmed sketch">✗</span>
-                {% else %}<span style="color:var(--up);" title="Included in gross building area">✓</span>{% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+  {% set _gba = parcel.gross_building_area_sqft %}
+  <div class="card mb-4" id="impDetailCard">
+    <div class="card-header">Improvement Detail</div>
+    <div class="card-body p-3">
+
+      {# Per-improvement header — compact grid of label:value pairs, TCAD's
+         pattern, single group (see Data-Integrity note above). #}
+      <div class="row g-3 mb-2" style="font-size:12.5px;">
+        <div class="col-6 col-md-3">
+          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Improvement Value</div>
+          <div style="font-weight:700;">{% if current and current.imprv_value %}${{ "{:,.0f}".format(current.imprv_value) }}{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Main Area</div>
+          <div style="font-weight:700;">{% if parcel.living_area_sqft %}{{ "{:,.0f}".format(parcel.living_area_sqft|float) }} SF{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Gross Building Area</div>
+          <div style="font-weight:700;">{% if _gba %}{{ "{:,.0f}".format(_gba|float) }} SF{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Year Built</div>
+          <div style="font-weight:700;">{% if parcel.year_built %}{{ parcel.year_built }}{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
+        </div>
       </div>
-      <div class="card-footer text-muted" style="font-size:10.5px;">
-        Source: TCAD Improvement Detail Records. ✓ included in Gross Building Area · ✗ excluded
-        (site improvement, SF-measured attribute, or unconfirmed "Sketch Only").
+      <div class="text-muted mb-1" style="font-size:10.5px; line-height:1.5;">
+        TCAD's page also shows Class CD, Exterior Wall, Number of Units, and EFF Year Built per component, plus an
+        "Improvement Features" block (Foundation, Roof Style, Roof Covering, etc.) — not in Parcelytics' current
+        dataset (see footer), so left out here rather than guessed.
       </div>
+
+      <details>
+        <summary style="cursor:pointer; list-style:none; font-size:11px; color:var(--text-3); font-weight:600; margin-top:8px;">{{ imp_det|length }} components · show ▾</summary>
+        <div class="table-responsive mt-2">
+          <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
+            <thead class="table-light text-muted text-uppercase" style="font-size:10px;">
+              <tr>
+                <th>Code</th>
+                <th>Description</th>
+                <th class="text-end">SF</th>
+                <th class="text-center" title="Included in Gross Building Area?">In Gross</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for c in imp_det %}
+              <tr>
+                <td><span class="entity-badge">{{ c.code or "—" }}</span></td>
+                <td>{{ c.desc or "—" }}</td>
+                <td class="text-end">{{ "{:,.0f}".format(c.sqft) if c.sqft else "—" }} SF</td>
+                <td class="text-center">
+                  {% if c.excluded %}<span style="color:var(--down);" title="Excluded — site improvement, attribute, or unconfirmed sketch">✗</span>
+                  {% else %}<span style="color:var(--up);" title="Included in gross building area">✓</span>{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
     </div>
-  </details>
-  <style>#impDetailCard > summary::-webkit-details-marker{display:none;}
-  #impDetailCard[open] > summary .text-muted::after{content:"";}</style>
+    <div class="card-footer text-muted" style="font-size:10.5px;">
+      Source: TCAD Improvement Detail Records. ✓ included in Gross Building Area · ✗ excluded
+      (site improvement, SF-measured attribute, or unconfirmed "Sketch Only"). Component list is aggregated by
+      component code across the whole parcel — TCAD's own per-improvement (imp_id) grouping and wall/roof/
+      foundation attribute data are not captured by Parcelytics' current loader.
+    </div>
+  </div>
+  <style>#impDetailCard details > summary::-webkit-details-marker{display:none;}</style>
   {% endif %}
 
 </div>{# /col-lg-4 #}
@@ -1516,9 +1671,20 @@
   {# ── 3. History table — now 6-year when 2026 preliminary is loaded ── #}
   {% set _hist_years = history | map(attribute='tax_year') | list %}
   {% set _has_2026 = 2026 in _hist_years %}
+  {# REDESIGNED (Part 4) — renamed "Value History" per the brief, columns
+     reordered to read Market → Value Limitation Adj → Net Appraised → Taxable,
+     matching the flow of the new "Current Values" panel above/left. Land/Imprv
+     Value, Total Tax, and Source are existing real columns kept as-is (Diego's
+     TCAD-described column list doesn't include them, but they're real, sourced
+     data the prior table already showed — not dropped in a layout-only pass).
+     "Special Use Exclusion" and "Appraised" (TCAD's two extra Summary-group
+     steps) are not shown as separate columns here: for every row in this
+     dataset Appraised == Market Value, since Special Use / productivity
+     valuation isn't modeled — see the card-footer note and the Current Values
+     panel's own disclosure of the same gap. #}
   <div class="card mb-4">
     <div class="card-header">
-      {% if _has_2026 %}6-Year History (2021–2026){% else %}5-Year History (2021–2025){% endif %}
+      {% if _has_2026 %}Value History (2021–2026){% else %}Value History (2021–2025){% endif %}
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
@@ -1527,9 +1693,10 @@
             <tr>
               <th>Year</th>
               <th class="text-end">Market Value</th>
-              <th class="text-end">Assessed Value</th>
               <th class="text-end" style="font-variant-numeric:tabular-nums;">Land Value</th>
               <th class="text-end" style="font-variant-numeric:tabular-nums;">Imprv Value</th>
+              <th class="text-end" style="border-left:2px solid var(--border-strong, #cbd0dc);">Value Limitation Adj (−)</th>
+              <th class="text-end">Net Appraised <span style="text-transform:none;">(Assessed)</span></th>
               <th class="text-end">Taxable Value</th>
               <th class="text-end">Total Tax</th>
               <th>Source</th>
@@ -1538,6 +1705,7 @@
           <tbody>
             {% for r in history | sort(attribute='tax_year', reverse=True) %}
             {% set _av_anomaly = r.assessed_value and r.market_value and r.assessed_value > r.market_value %}
+            {% set _cap_r = (r.market_value - r.assessed_value) if (r.market_value and r.assessed_value and r.market_value > r.assessed_value) else 0 %}
             <tr data-year="{{ r.tax_year }}">
               <td>
                 {{ r.tax_year }}
@@ -1546,6 +1714,9 @@
                 {% endif %}
               </td>
               <td class="text-end">${{ "{:,.0f}".format(r.market_value) if r.market_value else "—" }}</td>
+              <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.land_value)) if r.land_value else "—" }}</td>
+              <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.imprv_value)) if r.imprv_value else "—" }}</td>
+              <td class="text-end" style="border-left:2px solid var(--border-strong, #cbd0dc);">{% if _cap_r > 0 %}−${{ "{:,.0f}".format(_cap_r) }}{% else %}—{% endif %}</td>
               <td class="text-end">
                 {% if r.assessed_value %}
                   ${{ "{:,.0f}".format(r.assessed_value) }}
@@ -1555,8 +1726,6 @@
                   {% endif %}
                 {% else %}—{% endif %}
               </td>
-              <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.land_value)) if r.land_value else "—" }}</td>
-              <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.imprv_value)) if r.imprv_value else "—" }}</td>
               <td class="text-end">${{ "{:,.0f}".format(r.taxable_value) if r.taxable_value else "—" }}</td>
               <td class="text-end" {% if r.tax_year in [2021,2022,2023,2024] %}id="btax-{{ r.tax_year }}"{% endif %}>
                 {% if r.total_tax and r.billing_source == 'portal_scrape' %}
@@ -1596,7 +1765,7 @@
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="8" class="na-cell text-center py-3">No history found for this parcel.</td></tr>
+            <tr><td colspan="9" class="na-cell text-center py-3">No history found for this parcel.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -1611,8 +1780,28 @@
       {% if _has_2026 %}2026 — TCAD Preliminary Export, June 9, 2026 (Preliminary — subject to change until July 25, 2026 certification).{% endif %}
       Billing detail is only available for 2025.
       <span class="badge-data-anomaly" title="AV > MV flag" style="margin-left:6px;">!</span> = assessed value exceeds market value in source data — known AJR data quality issue.
+      "Value Limitation Adj" is the same homestead-cap deduction shown in the Current Values panel, computed per
+      year as Market − Assessed. TCAD's own page also shows "Special Use Land Market" and "Special Use Exclusion" —
+      not in Parcelytics' dataset, so they're omitted here rather than shown as $0 (see Current Values panel note).
     </div>
   </div>
+
+  {# ── Value Trend chart — MOVED here from below Growth & Assessment Metrics
+     (Part 4 redesign) so the "small bar chart underneath showing the trend"
+     Diego asked for sits directly beneath the Value History table it charts,
+     instead of one card further down the page. Card content/JS unchanged —
+     same canvas id="valueTrendChart", same Chart.js config (1.75px lines,
+     minimal gridlines, white tooltips — existing convention, not reinvented). #}
+  {% if history %}
+  <div class="card mb-4">
+    <div class="card-header">
+      Value Trend
+    </div>
+    <div class="card-body">
+      <canvas id="valueTrendChart" height="120"></canvas>
+    </div>
+  </div>
+  {% endif %}
 
   {# ── Phase 2: Growth & Assessment Metrics ───────────────────────── #}
   {# Only rendered when parcel_metrics rows exist (compute_metrics.py has been run) #}
@@ -1782,17 +1971,9 @@
   </div>
   {% endif %}
 
-  {# Value trend chart — upgraded bar+line with forecast divider #}
-  {% if history %}
-  <div class="card mb-4">
-    <div class="card-header">
-      Value Trend
-    </div>
-    <div class="card-body">
-      <canvas id="valueTrendChart" height="120"></canvas>
-    </div>
-  </div>
-  {% endif %}
+  {# Value Trend chart moved above (Part 4 redesign) — now sits directly under
+     the Value History table instead of here. See the card right after that
+     table for the live canvas#valueTrendChart + its Chart.js JS block below. #}
 
   {# ── Phase 2: Risk Indicators ────────────────────────────────────── #}
   <div class="section-hdr">Risk Indicators</div>
