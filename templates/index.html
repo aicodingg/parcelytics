@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Parcelytics — Verified Travis County Property-Tax Intelligence{% endblock %}
+{% block title %}Parcelytics — Verified Property Tax Intelligence for Investors, Developers & Homeowners{% endblock %}
 {% block container_class %} is-frontdoor{% endblock %}
 
 {% block content %}
@@ -10,14 +10,14 @@
     <div class="row align-items-center g-5">
       <div class="col-lg-7">
         <span class="hero-eyebrow"><span class="dot"></span> Verified government data — honestly labeled</span>
-        <h1>Verified Travis County <span class="accent">property-tax intelligence</span>, sourced directly from government records.</h1>
+        <h1>The one-stop shop for <span class="accent">verified property tax intelligence</span> — for investors, developers, and homeowners.</h1>
         <p class="hero-sub">
-          Certified TCAD appraisals and Travis County Tax Office billing — parcel-level values,
-          tax history, benchmarks, and post-acquisition estimates. Every figure traceable to its
-          source, with a visible confidence level. No third-party aggregators. No guesses dressed as facts.
+          Every figure sourced directly from government records, honestly labeled by confidence, and traceable
+          back to where it came from. Underwrite a deal, evaluate a site, or understand your own bill — all from
+          the same certified data. Live today in Travis County, TX, expanding to the country's largest markets next.
         </p>
 
-        {# Mode selector — who are you? #}
+        {# Mode selector — who are you? (unchanged) #}
         <div class="mb-3">
           <div style="font-size:13px; font-weight:600; color:var(--text-2); margin-bottom:8px;">Who are you?</div>
           <div class="d-flex flex-wrap gap-2">
@@ -32,7 +32,7 @@
           </div>
         </div>
 
-        {# Search — same behavior + typeahead as before #}
+        {# Search — unchanged behavior/markup #}
         <form method="get" action="/" class="hero-search">
           <div class="search-input-wrap">
             <input
@@ -46,7 +46,7 @@
             <div class="ta-list" id="addrTaList"></div>
           </div>
         </form>
-        <div class="hero-search-hint">Accepts 10-digit TCAD account, 14-digit Tax Office account, prop_id, or street address.</div>
+        <div class="hero-search-hint">Accepts 10-digit TCAD account, 14-digit Tax Office account, prop_id, or street address — Travis County, TX today.</div>
 
         {% if addr_matches %}
         <div class="card mt-3" style="text-align:left;">
@@ -67,7 +67,7 @@
         {% if error %}<div class="search-error-block mt-3" style="text-align:left;">{{ error }}</div>{% endif %}
       </div>
 
-      {# Product visual — a credible data motif, not stock art #}
+      {# Product visual — unchanged #}
       <div class="col-lg-5 d-none d-lg-block">
         <div class="product-frame">
           <div class="pf-bar"><span class="pf-dot"></span><span class="pf-dot"></span><span class="pf-dot"></span>
@@ -91,7 +91,7 @@
       </div>
     </div>
 
-    {# Trust strip #}
+    {# Trust strip — unchanged; already specific + honest #}
     <div class="trust-strip">
       <div class="trust-stat"><div class="num">508K+</div><div class="lbl">Travis County parcels</div></div>
       <div class="trust-stat"><div class="num">1990</div><div class="lbl">Tax rates tracked since</div></div>
@@ -105,13 +105,13 @@
 <section class="fd-section">
   <div class="fd-kicker">What makes it different</div>
   <h2 class="fd-h2">Built on verified records, not estimates dressed as facts.</h2>
-  <p class="fd-lead mb-5">The data integrity is the product. Three principles run through every screen.</p>
+  <p class="fd-lead mb-5">The data integrity is the product. Three principles run through every screen, in every market we cover.</p>
   <div class="row g-4">
     <div class="col-md-4">
       <div class="fd-card">
         <div class="fd-card-num">1</div>
         <h3>Directly sourced</h3>
-        <p>Certified TCAD appraisal rolls and Travis County Tax Office billing — loaded straight from official government exports. No third-party aggregators sitting between you and the record.</p>
+        <p>Certified appraisal-district and tax-office billing data — loaded straight from official government exports, county by county. No third-party aggregators sitting between you and the record.</p>
       </div>
     </div>
     <div class="col-md-4">
@@ -131,14 +131,14 @@
   </div>
 </section>
 
-{# ══ TRUST PANEL (dark) ════════════════════════════════════════════════════ #}
+{# ══ TRUST PANEL (dark) — still explicitly Travis, scoped as "live today" ═══ #}
 <section class="fd-section-tight">
   <div class="fd-trust-panel">
     <div class="row g-5 align-items-center">
       <div class="col-lg-6">
-        <div class="fd-kicker">Provenance</div>
+        <div class="fd-kicker">Provenance · Travis County, TX — live today</div>
         <h2 class="fd-h2" style="color:#fff;">Certified data, shown proudly.</h2>
-        <p class="fd-lead" style="color:var(--text-on-dark-2);">Two official sources. Both named on every figure, with coverage and as-of dates stated plainly.</p>
+        <p class="fd-lead" style="color:var(--text-on-dark-2);">Two official sources, named on every figure — live in Travis County today, with coverage and as-of dates stated plainly.</p>
       </div>
       <div class="col-lg-6">
         <div class="provenance-row">
@@ -164,10 +164,84 @@
   </div>
 </section>
 
+{# ══ ROADMAP ═══════════════════════════════════════════════════════════════
+   Replaces no prior section (the previous round's Harris/Bexar/Collin/Denton
+   Texas-counties roadmap proposal was never implemented, so there was nothing
+   to remove — this is a fresh addition using the top-5-CRE-markets framing).
+   Reuses search.html's muted-map D3 pattern (same library, same FIPS-keyed
+   county coloring approach), adapted with a second visual state — a "roadmap"
+   marker style distinct from Travis's "live" styling — plus a text list and
+   an explicit "not current coverage" disclaimer. ═══════════════════════════ #}
+<section class="fd-section">
+  <div class="fd-kicker">Where we're headed</div>
+  <h2 class="fd-h2">Live today in Travis County. Expanding to the country's largest markets next.</h2>
+  <p class="fd-lead mb-4">
+    Parcelytics starts in Travis County because that's where the data pipeline is built and verified end-to-end.
+    The roadmap below — not current coverage — targets the five largest U.S. commercial real estate markets,
+    built out county by county the same way Travis was.
+  </p>
+
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-1">
+      <span>Coverage Map</span>
+      <span class="text-muted" style="font-size:11.5px;">Live today vs. roadmap — roadmap markets are not yet live</span>
+    </div>
+    <div class="card-body p-2">
+      <svg id="roadmapMap" viewBox="0 0 975 610" preserveAspectRatio="xMidYMid meet"
+           style="width:100%; height:auto; display:block;"></svg>
+      <div id="roadmapMapFallback" class="text-muted small p-3" style="display:none;">
+        Map preview unavailable offline. Live today: Travis County, TX. Roadmap (not yet live): New York City,
+        Los Angeles, Houston, Chicago, and Dallas metro counties.
+      </div>
+    </div>
+    <div class="card-footer" style="font-size:11.5px;">
+      <span class="me-3"><span style="display:inline-block;width:11px;height:11px;background:#94B0DA;border:1px solid #7d97c2;vertical-align:-1px;border-radius:2px;"></span> Travis County, TX — live today</span>
+      <span><span style="display:inline-block;width:11px;height:11px;background:#DCEDFF;border:1px dashed #94B0DA;vertical-align:-1px;border-radius:2px;"></span> Roadmap markets — not yet live</span>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-6 col-md">
+      <div class="audience-card" style="padding:14px 16px;">
+        <div style="font-size:13px; font-weight:700;">New York City</div>
+        <div class="text-muted" style="font-size:12px;">New York County (Manhattan) core, metro to follow</div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="audience-card" style="padding:14px 16px;">
+        <div style="font-size:13px; font-weight:700;">Los Angeles</div>
+        <div class="text-muted" style="font-size:12px;">Los Angeles County</div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="audience-card" style="padding:14px 16px;">
+        <div style="font-size:13px; font-weight:700;">Houston</div>
+        <div class="text-muted" style="font-size:12px;">Harris County</div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="audience-card" style="padding:14px 16px;">
+        <div style="font-size:13px; font-weight:700;">Chicago</div>
+        <div class="text-muted" style="font-size:12px;">Cook County</div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="audience-card" style="padding:14px 16px;">
+        <div style="font-size:13px; font-weight:700;">Dallas</div>
+        <div class="text-muted" style="font-size:12px;">Dallas County</div>
+      </div>
+    </div>
+  </div>
+  <p class="text-muted mt-3 mb-0" style="font-size:11.5px;">
+    Roadmap, not current coverage — none of these markets have live Parcelytics data yet. Timing depends on
+    each county's data pipeline and public-records access.
+  </p>
+</section>
+
 {# ══ AUDIENCES ═════════════════════════════════════════════════════════════ #}
 <section class="fd-section">
   <div class="fd-kicker">Who it's for</div>
-  <h2 class="fd-h2">Investment-grade, whatever you're underwriting.</h2>
+  <h2 class="fd-h2">One dataset. Three ways to use it.</h2>
   <div class="row g-4 mt-2">
     <div class="col-md-4">
       <div class="audience-card">
@@ -178,7 +252,7 @@
     <div class="col-md-4">
       <div class="audience-card">
         <h3>Developers</h3>
-        <p>Track value trends by neighborhood and property type, and monitor the rate environment across every Travis County taxing entity — with 2026 preliminary values ahead of certification.</p>
+        <p>Track value trends by neighborhood and property type, and monitor the rate environment across every taxing entity in your market — live in Travis County today, with 2026 preliminary values ahead of certification.</p>
       </div>
     </div>
     <div class="col-md-4">
@@ -194,11 +268,11 @@
 <section class="fd-section-tight" id="request">
   <div class="fd-cta-band">
     <h2>Request access or send feedback</h2>
-    <p>Parcelytics is in active development, starting with Travis County. Tell us what you're underwriting and we'll get you set up.</p>
+    <p>Parcelytics is live in Travis County and expanding to the country's largest markets next. Tell us what you're working on and we'll get you set up.</p>
     <a class="btn-cta" href="mailto:parcelytics@gmail.com?subject=Parcelytics%20access%20request">Request access →</a>
   </div>
   <p class="text-center text-muted small mt-4">
-    Coverage expands from Travis County across the Austin metro and Texas over time.
+    Live today in Travis County, TX — expanding next to New York City, Los Angeles, Houston, Chicago, and Dallas.
     Questions? <a href="mailto:parcelytics@gmail.com">parcelytics@gmail.com</a>
   </p>
 </section>
@@ -206,7 +280,7 @@
 {% endblock %}
 
 {% block scripts %}
-{# ── Address typeahead JS (Task 2) ───────────────────────────────────────── #}
+{# ── Address typeahead JS (unchanged) ────────────────────────────────────── #}
 <script>
 (function () {
   const inp  = document.querySelector('input[name="q"]');
@@ -249,6 +323,91 @@
   inp.addEventListener("focus", function () {
     if (inp.value.trim().length >= 3 && isAddressLike(inp.value)) inp.dispatchEvent(new Event("input"));
   });
+})();
+</script>
+
+{# ── Roadmap coverage map — reuses search.html's D3/topojson pattern with a
+     second "roadmap" (not-live) marker style so the two states never look
+     visually equivalent. ─────────────────────────────────────────────────── #}
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+<script>
+(function () {
+  const svgEl = document.getElementById("roadmapMap");
+  if (!svgEl) return;
+  const TRAVIS = "48453", TX = "48", W = 975, H = 610;
+  // Target-market counties (core county per metro — see fallback text for
+  // the plain-language names shown if the map itself fails to load):
+  //   New York, NY  -> New York County (Manhattan), FIPS 36061
+  //   Los Angeles, CA -> Los Angeles County, FIPS 06037
+  //   Houston, TX   -> Harris County, FIPS 48201
+  //   Chicago, IL   -> Cook County, FIPS 17031
+  //   Dallas, TX    -> Dallas County, FIPS 48113
+  const ROADMAP = {
+    "36061": "New York City, NY — roadmap, not yet live",
+    "06037": "Los Angeles, CA — roadmap, not yet live",
+    "48201": "Houston, TX — roadmap, not yet live",
+    "17031": "Chicago, IL — roadmap, not yet live",
+    "48113": "Dallas, TX — roadmap, not yet live",
+  };
+  const svg = d3.select("#roadmapMap");
+  d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json")
+    .then(us => {
+      const counties = topojson.feature(us, us.objects.counties);
+      const states   = topojson.feature(us, us.objects.states);
+      const proj = d3.geoAlbersUsa().fitSize([W, H], states);
+      const path = d3.geoPath(proj);
+
+      svg.selectAll("path.county")
+        .data(counties.features).join("path")
+        .attr("class", "county")
+        .attr("d", path)
+        .attr("fill", d => {
+          const id = String(d.id);
+          if (id === TRAVIS) return "#94B0DA";          // live today
+          if (id in ROADMAP) return "#DCEDFF";           // roadmap target — distinct, lighter fill
+          if (id.slice(0, 2) === TX) return "#eef2f7";
+          return "#e6e9ed";
+        })
+        .attr("stroke", "#ffffff").attr("stroke-width", 0.3)
+        .append("title")
+        .text(d => {
+          const id = String(d.id);
+          if (id === TRAVIS) return "Travis County, TX — live today";
+          if (id in ROADMAP) return ROADMAP[id];
+          return "";
+        });
+
+      svg.append("path")
+        .datum(topojson.mesh(us, us.objects.states, (a, b) => a !== b))
+        .attr("d", path).attr("fill", "none")
+        .attr("stroke", "#9aa5b1").attr("stroke-width", 0.6);
+
+      // Travis marker — solid fill, "live" styling (matches search.html)
+      const tf = counties.features.find(d => String(d.id) === TRAVIS);
+      const tc = tf ? path.centroid(tf) : null;
+      if (tc && !isNaN(tc[0])) {
+        svg.append("circle").attr("cx", tc[0]).attr("cy", tc[1]).attr("r", 16)
+          .attr("fill", "none").attr("stroke", "#94B0DA").attr("stroke-width", 1.4).attr("opacity", 0.7);
+        svg.append("circle").attr("cx", tc[0]).attr("cy", tc[1]).attr("r", 6)
+          .attr("fill", "#94B0DA").attr("stroke", "#ffffff").attr("stroke-width", 1.5);
+      }
+
+      // Roadmap markers — hollow, dashed ring, explicitly NOT the "live" style
+      Object.keys(ROADMAP).forEach(id => {
+        const f = counties.features.find(d => String(d.id) === id);
+        if (!f) return;
+        const c = path.centroid(f);
+        if (isNaN(c[0])) return;
+        svg.append("circle").attr("cx", c[0]).attr("cy", c[1]).attr("r", 6)
+          .attr("fill", "#fff").attr("stroke", "#94B0DA").attr("stroke-width", 1.5)
+          .attr("stroke-dasharray", "2,1.5");
+      });
+    })
+    .catch(() => {
+      svgEl.style.display = "none";
+      document.getElementById("roadmapMapFallback").style.display = "";
+    });
 })();
 </script>
 {% endblock %}
