@@ -261,6 +261,7 @@
         <div class="d-flex align-items-center gap-3 mt-3">
           <button type="button" id="fltApplyBtn" class="btn btn-dark btn-sm fw-semibold">Apply Filters</button>
           <button type="button" id="fltClearBtn" class="btn btn-outline-secondary btn-sm">Clear All</button>
+          <span id="fltLoading" style="display:none; color:var(--text-3);">Loading…</span>
           <span class="text-muted" style="font-size:11px;">County alone won't run a search — add at least one more filter above.</span>
         </div>
         <div id="fltErrorMsg" class="search-error-block mt-2" style="display:none; font-size:12.5px;"></div>
@@ -574,6 +575,7 @@
   // ---- Apply / Clear / Results / Pagination -------------------------------
   const applyBtn   = document.getElementById("fltApplyBtn");
   const clearBtn   = document.getElementById("fltClearBtn");
+  const loadingEl  = document.getElementById("fltLoading");
   const errorBox   = document.getElementById("fltErrorMsg");
   const resultsWrap = document.getElementById("fltResultsWrap");
   const resultsBody = document.getElementById("fltResultsBody");
@@ -627,13 +629,46 @@
   function runSearch(page) {
     currentPage = page || 1;
     errorBox.style.display = "none";
+
+    // Loading state (Task: Loading Indicator on Search Page Filter
+    // Results). Reuses the same "Loading…" span + disabled-button pattern
+    // already used elsewhere on the site (see property.html's
+    // #benchLoading / #acqRunBtn around the /api/benchmark and
+    // /api/estimate_acq fetches) rather than inventing a new one. Lives
+    // here, not at each call site, since Apply Filters, every Quick Filter
+    // preset, and Prev/Next all call this one function — so all three get
+    // the loading state and double-submit protection automatically.
+    const prevWasDisabled = prevBtn.disabled;
+    const nextWasDisabled = nextBtn.disabled;
+    // Capture each quick-filter button's actual prior disabled state (not
+    // just assume false) — they start disabled until benchmark metadata
+    // finishes loading (see metaReady / line ~532), so blindly re-enabling
+    // all of them after the request would wrongly un-gate them if a search
+    // somehow ran before that metadata load completed.
+    const quickBtns = document.querySelectorAll(".quick-filter-btn");
+    const quickBtnsPrevDisabled = Array.from(quickBtns).map(b => b.disabled);
+    loadingEl.style.display = "inline";
+    applyBtn.disabled = true;
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    quickBtns.forEach(b => b.disabled = true);
+
+    function clearLoading() {
+      loadingEl.style.display = "none";
+      applyBtn.disabled = false;
+      quickBtns.forEach((b, i) => b.disabled = quickBtnsPrevDisabled[i]);
+    }
+
     fetch("/api/search_filter?" + buildParams(currentPage).toString())
       .then(r => r.json().then(d => ({ status: r.status, body: d })))
       .then(({ status, body }) => {
+        clearLoading();
         if (status !== 200 || !body.ok) {
           errorBox.textContent = body.error || "Something went wrong running that search.";
           errorBox.style.display = "";
           resultsWrap.style.display = "none";
+          prevBtn.disabled = prevWasDisabled;
+          nextBtn.disabled = nextWasDisabled;
           return;
         }
         resultsWrap.style.display = "";
@@ -653,6 +688,9 @@
         nextBtn.disabled = currentPage >= body.total_pages;
       })
       .catch(() => {
+        clearLoading();
+        prevBtn.disabled = prevWasDisabled;
+        nextBtn.disabled = nextWasDisabled;
         errorBox.textContent = "Something went wrong running that search. Please try again.";
         errorBox.style.display = "";
       });
