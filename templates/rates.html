@@ -5,11 +5,82 @@
 
 <div class="d-flex align-items-baseline gap-3 mb-1">
   <h2 class="fw-bold mb-0" style="letter-spacing: -0.025em;">Tax Rate Trends</h2>
-  <span style="font-size: 13px; color: var(--text-3);">Travis County · 2006–2025</span>
+  <span style="font-size: 13px; color: var(--text-3);">Travis County · {{ year_min }}–{{ year_max }}</span>
 </div>
 <p style="font-size: 13px; color: var(--text-3); margin-bottom: 1.5rem;">
   Rates per $100 of taxable value. Select one or more entities to compare.
 </p>
+
+{# ── Filters: County / Year Range / "Which entities apply to my property?" ── #}
+<div class="card mb-4">
+  <div class="card-header">Filters</div>
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+
+      {# County — typeahead-select; 1 option today. Same reusable combobox
+         component as the Search page's County/Neighborhood/PropType/UseCode
+         filters (initTypeaheadSelect(), copied verbatim below) — not a new
+         pattern. One real option today; a second county is just another
+         entry in setOptions(), no restructuring. #}
+      <div class="col-md-2">
+        <label class="form-label small text-muted mb-1" for="fltCountyInput">County</label>
+        <div class="ta-select" data-field="county" style="position:relative;">
+          <input type="text" id="fltCountyInput" class="form-control form-control-sm ta-select-input"
+                 autocomplete="off" spellcheck="false" style="font-size:12px;">
+          <input type="hidden" id="fltCountyValue" value="travis">
+          <div class="ta-list" id="fltCountyList" style="display:none;"></div>
+        </div>
+      </div>
+
+      {# Year range — two linked selects, not a slider. Chosen because this
+         page has no slider anywhere today (or elsewhere on the site), while
+         plain .form-select-sm dropdowns match every other filter control
+         already on this page (#entitySearch) and on Search's filter panel —
+         a slider would be a new component pattern for a one-off control. #}
+      <div class="col-md-2">
+        <label class="form-label small text-muted mb-1" for="yearFrom">From year</label>
+        <select id="yearFrom" class="form-select form-select-sm" style="font-size:12px;">
+          {% for y in range(year_min, year_max + 1) %}
+          <option value="{{ y }}" {% if y == default_year_from %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small text-muted mb-1" for="yearTo">To year</label>
+        <select id="yearTo" class="form-select form-select-sm" style="font-size:12px;">
+          {% for y in range(year_min, year_max + 1) %}
+          <option value="{{ y }}" {% if y == year_max %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      {# Part 5 — "which entities apply to my property". Address text reuses
+         /api/address_search (identical to Search's #spTaList / the
+         homepage's #addrTaList — same endpoint, same fetch pattern). A
+         typed parcel ID (Enter key) reuses normalize_parcel_id() via the
+         new /api/parcel_entities endpoint — no new ID-parsing logic. #}
+      <div class="col-md-6">
+        <label class="form-label small text-muted mb-1" for="parcelLookupInput">Which entities apply to my property?</label>
+        <div class="ta-wrap" style="position:relative;">
+          <input type="text" id="parcelLookupInput" class="form-control form-control-sm"
+                 placeholder="Parcel ID or street address — Enter to look up a parcel ID"
+                 autocomplete="off" spellcheck="false" style="font-size:12px;">
+          <div class="ta-list" id="parcelLookupList"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <div id="parcelLookupBanner" class="mt-3"
+         style="display:none; font-size:12.5px; color: var(--text-2); background: var(--accent-soft);
+                border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 12px;
+                align-items:center; gap:10px;">
+      <span id="parcelLookupBannerText"></span>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="parcelLookupClear"
+              style="font-size:11px; padding:2px 8px; margin-left:auto;">Clear</button>
+    </div>
+  </div>
+</div>
 
 <div class="row g-4">
 
@@ -32,19 +103,35 @@
                  placeholder="Search entities…" autocomplete="off"
                  style="font-size:12px;" oninput="filterEntityList()">
         </div>
-        {% for ent in all_entities %}
-        <div class="form-check ms-1">
-          <input class="form-check-input entity-cb" type="checkbox"
-                 id="cb_{{ ent.code }}"
-                 value="{{ ent.code }}"
-                 {% if ent.code in key_entities %}checked{% endif %}
-                 onchange="updateChart()">
-          <label class="form-check-label" for="cb_{{ ent.code }}"
-                 style="font-size: 12px; color: var(--text-2); cursor: pointer;">
-            <span class="fw-semibold" style="font-family: var(--font-mono); font-size: 11px;">{{ ent.code }}</span>
-            {% if ent.name %}<span style="color: var(--text-3);"> — {{ ent.name }}</span>{% endif %}
-          </label>
-        </div>
+        {# Part 3 — grouped by inferred category (School District / County /
+           City / Hospital District / MUD/WCID / Other). See categorize_entity()
+           in app.py: rule-based inference from entity_name text, since
+           county_tax_rate has no category/type column — flagged there as
+           inferred, not authoritative. #}
+        {% for category in entity_category_order %}
+          {% set group_entities = all_entities | selectattr('category', 'equalto', category) | list %}
+          {% if group_entities %}
+          <div class="entity-group" data-category="{{ category }}">
+            <div class="entity-group-label"
+                 style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3); margin:10px 0 4px; padding:0 4px;">
+              {{ category }}
+            </div>
+            {% for ent in group_entities %}
+            <div class="form-check ms-1">
+              <input class="form-check-input entity-cb" type="checkbox"
+                     id="cb_{{ ent.code }}"
+                     value="{{ ent.code }}"
+                     {% if ent.code in key_entities %}checked{% endif %}
+                     onchange="updateChart()">
+              <label class="form-check-label" for="cb_{{ ent.code }}"
+                     style="font-size: 12px; color: var(--text-2); cursor: pointer;">
+                <span class="fw-semibold" style="font-family: var(--font-mono); font-size: 11px;">{{ ent.code }}</span>
+                {% if ent.name %}<span style="color: var(--text-3);"> — {{ ent.name }}</span>{% endif %}
+              </label>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
         {% endfor %}
       </div>
     </div>
@@ -60,8 +147,11 @@
 
     {# All-entity summary table #}
     <div class="card">
-      <div class="card-header">
-        2025 Rates — Selected Entities
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span id="summaryCardTitle">{{ default_year_from }}–{{ year_max }} Rates — Selected Entities</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="exportCsvBtn" style="font-size:11.5px;">
+          Export CSV
+        </button>
       </div>
       <div class="card-body p-0">
         <div class="table-responsive">
@@ -70,9 +160,9 @@
               <tr>
                 <th>Entity</th>
                 <th>Name</th>
-                <th class="text-end">2025 Rate</th>
-                <th class="text-end">2020 Rate</th>
-                <th class="text-end">5yr Δ</th>
+                <th class="text-end" id="summaryColFrom">{{ default_year_from }} Rate</th>
+                <th class="text-end" id="summaryColTo">{{ year_max }} Rate</th>
+                <th class="text-end" id="summaryColDelta">{{ year_max - default_year_from }}yr Δ</th>
               </tr>
             </thead>
             <tbody id="summaryTable"></tbody>
@@ -87,9 +177,23 @@
 
 {% block scripts %}
 <script>
-const BY_ENTITY    = {{ by_entity_json | safe }};
-const ENTITY_NAMES = {{ entity_names_json | safe }};
-const KEY_ENTITIES = {{ key_entities | tojson }};
+const BY_ENTITY        = {{ by_entity_json | safe }};
+const ENTITY_NAMES     = {{ entity_names_json | safe }};
+const ENTITY_CATEGORY  = {{ entity_category_json | safe }};
+const KEY_ENTITIES     = {{ key_entities | tojson }};
+const YEAR_MIN          = {{ year_min }};
+const YEAR_MAX          = {{ year_max }};
+
+// Set/cleared by the Part 5 parcel-lookup block below, alongside the
+// "Showing entities for…" banner's own visibility — this is the single
+// source of truth for whether a parcel lookup is currently active, used by
+// exportCsv() to decide whether the CSV needs Parcel ID / Address columns.
+let activeParcelGeoId = null;
+// The real situs_address on file for the active parcel, kept separately
+// from the banner's display label — the label falls back to the geo_id
+// when there's no address, but the CSV needs to know the actual address
+// (or that there isn't one) rather than reusing that fallback string.
+let activeParcelAddress = null;
 
 // Brand-adjacent palette: distinct lines, not Bootstrap defaults
 const PALETTE = [
@@ -142,12 +246,22 @@ const chart = new Chart(ctx, {
   }
 });
 
+// ── Part 2: year range (from linked From/To <select> elements) ─────────────
+function getYearRange() {
+  const from = parseInt(document.getElementById('yearFrom').value, 10);
+  const to   = parseInt(document.getElementById('yearTo').value, 10);
+  return { from, to };
+}
+
 function updateChart() {
   const checked = [...document.querySelectorAll('.entity-cb:checked')].map(cb => cb.value);
   if (!checked.length) { chart.data.datasets = []; chart.data.labels = []; chart.update(); return; }
 
+  const { from, to } = getYearRange();
   const yearsSet = new Set();
-  checked.forEach(code => (BY_ENTITY[code] || []).forEach(p => yearsSet.add(p.year)));
+  checked.forEach(code => (BY_ENTITY[code] || []).forEach(p => {
+    if (p.year >= from && p.year <= to) yearsSet.add(p.year);
+  }));
   const years = [...yearsSet].sort();
 
   chart.data.labels = years;
@@ -170,6 +284,17 @@ function updateChart() {
   buildSummary();   // Task 9: keep the summary table in sync with the chart selection
 }
 
+document.getElementById('yearFrom').addEventListener('change', function () {
+  const to = document.getElementById('yearTo');
+  if (parseInt(this.value, 10) > parseInt(to.value, 10)) to.value = this.value;
+  updateChart();
+});
+document.getElementById('yearTo').addEventListener('change', function () {
+  const from = document.getElementById('yearFrom');
+  if (parseInt(this.value, 10) < parseInt(from.value, 10)) from.value = this.value;
+  updateChart();
+});
+
 function selectKey() {
   document.querySelectorAll('.entity-cb').forEach(cb => {
     cb.checked = KEY_ENTITIES.includes(cb.value);
@@ -178,36 +303,57 @@ function selectKey() {
 }
 
 // Task 9: filter the (long) entity checkbox list by code or name as you type.
+// Part 3 update: also hides a category group's own label when every row in
+// that group is filtered out, so an empty "MUD/WCID" heading doesn't linger.
 function filterEntityList() {
   const q = (document.getElementById('entitySearch').value || '').toLowerCase();
-  document.querySelectorAll('.entity-cb').forEach(cb => {
-    const row = cb.closest('.form-check');
-    if (!row) return;
-    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  document.querySelectorAll('.entity-group').forEach(group => {
+    let anyVisible = false;
+    group.querySelectorAll('.entity-cb').forEach(cb => {
+      const row = cb.closest('.form-check');
+      if (!row) return;
+      const match = row.textContent.toLowerCase().includes(q);
+      row.style.display = match ? '' : 'none';
+      if (match) anyVisible = true;
+    });
+    group.style.display = anyVisible ? '' : 'none';
   });
 }
 
 // Build summary table — entity badges match the design system.
 // Task 9: only show entities currently selected/displayed in the chart.
+// Part 2 update: "2025"/"2020" are no longer hardcoded — the two rate
+// columns and the delta column now track the From/To year range selects,
+// and the column headers + card title update to match.
 function buildSummary() {
   const tbody = document.getElementById('summaryTable');
   const checked = new Set([...document.querySelectorAll('.entity-cb:checked')].map(cb => cb.value));
+  const { from, to } = getYearRange();
+
+  document.getElementById('summaryColTo').textContent   = `${to} Rate`;
+  document.getElementById('summaryColFrom').textContent = `${from} Rate`;
+  document.getElementById('summaryColDelta').textContent = `${to - from}yr Δ`;
+  // Previously just `${to} Rates — …`, which only reflected the To-year and
+  // silently dropped the From-year even though this text already updated
+  // live on every range change. Now shows the full selected range.
+  document.getElementById('summaryCardTitle').textContent = `${from}–${to} Rates — Selected Entities`;
+
   const rows = [];
   for (const [code, pts] of Object.entries(BY_ENTITY)) {
     if (!checked.has(code)) continue;
-    const r2025 = pts.find(p => p.year === 2025);
-    const r2020 = pts.find(p => p.year === 2020);
-    if (!r2025 || r2025.rate == null) continue;
-    const delta = (r2025.rate != null && r2020 && r2020.rate != null)
-      ? r2025.rate - r2020.rate : null;
-    rows.push({ code, name: ENTITY_NAMES[code] || '', r2025: r2025.rate, r2020: r2020 && r2020.rate, delta });
+    const rTo   = pts.find(p => p.year === to);
+    const rFrom = pts.find(p => p.year === from);
+    if (!rTo || rTo.rate == null) continue;
+    const delta = (rTo.rate != null && rFrom && rFrom.rate != null)
+      ? rTo.rate - rFrom.rate : null;
+    rows.push({ code, name: ENTITY_NAMES[code] || '', rTo: rTo.rate, rFrom: rFrom && rFrom.rate, delta });
   }
-  rows.sort((a, b) => b.r2025 - a.r2025);
+  rows.sort((a, b) => b.rTo - a.rTo);
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center p-3" style="font-size:12.5px;">No entities selected — choose entities at left to populate this table.</td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map(r => {
+  const dataRowsHtml = rows.map(r => {
     const deltaColor = r.delta != null
       ? (r.delta < 0 ? 'style="color: var(--down);"' : r.delta > 0 ? 'style="color: var(--up);"' : '')
       : '';
@@ -218,12 +364,310 @@ function buildSummary() {
     <tr>
       <td><span class="entity-badge">${r.code}</span></td>
       <td style="font-size:12.5px; color: var(--text-2);">${r.name}</td>
-      <td class="text-end" style="font-variant-numeric: tabular-nums;">${r.r2025.toFixed(4)}%</td>
-      <td class="text-end" style="font-variant-numeric: tabular-nums; color: var(--text-3);">${r.r2020 != null ? r.r2020.toFixed(4) + '%' : '—'}</td>
+      <td class="text-end" style="font-variant-numeric: tabular-nums; color: var(--text-3);">${r.rFrom != null ? r.rFrom.toFixed(4) + '%' : '—'}</td>
+      <td class="text-end" style="font-variant-numeric: tabular-nums;">${r.rTo.toFixed(4)}%</td>
       <td class="text-end" style="font-variant-numeric: tabular-nums;" ${deltaColor}>${deltaStr}</td>
     </tr>`;
   }).join('');
+  tbody.innerHTML = dataRowsHtml + buildTotalRow(checked, from, to);
 }
+
+// Total row — an entity's individual tax rate literally sums into a
+// property's combined effective rate, so this is a real, meaningful number,
+// not just a display convenience. Sums over CHECKED entities directly
+// (independent of the per-row table-visibility filtering above, which can
+// silently drop an entity from the table entirely if it has no To-year
+// rate) for the From-year and To-year columns.
+//
+// Missing-value handling matches the site's existing convention for
+// summing per-entity rates — see property.html's "Where Your 2025 Tax
+// Dollars Went" Total row: sum only over entities that actually have a
+// rate for that year, and if that's a PARTIAL sum (fewer entities had a
+// rate than were selected), flag it with a "n of n" badge-partial marker
+// rather than silently presenting a partial sum as if it were complete.
+// Only show "Not Available" (na-cell) if ZERO selected entities have a
+// rate for that year — never treat a missing rate as $0 in the sum.
+function buildTotalRow(checked, from, to) {
+  const n = checked.size;
+  const toVals = [], fromVals = [];
+  checked.forEach(code => {
+    const pts   = BY_ENTITY[code] || [];
+    const rTo   = pts.find(p => p.year === to);
+    const rFrom = pts.find(p => p.year === from);
+    if (rTo && rTo.rate != null) toVals.push(rTo.rate);
+    if (rFrom && rFrom.rate != null) fromVals.push(rFrom.rate);
+  });
+  const totalTo    = toVals.length   ? toVals.reduce((a, b) => a + b, 0)   : null;
+  const totalFrom  = fromVals.length ? fromVals.reduce((a, b) => a + b, 0) : null;
+  const totalDelta = (totalTo != null && totalFrom != null) ? totalTo - totalFrom : null;
+
+  function cell(val, matchedN) {
+    if (val == null) return '<span class="na-cell">—</span>';
+    const badge = matchedN < n
+      ? `<span class="badge-partial d-block" style="font-size:9px; margin-top:2px;">${matchedN} of ${n}</span>`
+      : '';
+    return `${val.toFixed(4)}%${badge}`;
+  }
+
+  const deltaColor = totalDelta != null
+    ? (totalDelta < 0 ? 'style="color: var(--down);"' : totalDelta > 0 ? 'style="color: var(--up);"' : '')
+    : '';
+  const deltaStr = totalDelta != null
+    ? (totalDelta > 0 ? '+' : '') + totalDelta.toFixed(4) + '%'
+    : '<span class="na-cell">—</span>';
+
+  return `
+    <tr style="font-weight:700; border-top:2px solid var(--border-strong);">
+      <td colspan="2">Total</td>
+      <td class="text-end" style="font-variant-numeric: tabular-nums;">${cell(totalFrom, fromVals.length)}</td>
+      <td class="text-end" style="font-variant-numeric: tabular-nums;">${cell(totalTo, toVals.length)}</td>
+      <td class="text-end" style="font-variant-numeric: tabular-nums;" ${deltaColor}>${deltaStr}</td>
+    </tr>`;
+}
+
+// ── Part 4: CSV export — respects whatever's currently selected (county,
+// year range, entities) at the moment the button is clicked, not the full
+// unfiltered dataset. County is a no-op today (one option), included so the
+// export stays correct once a second county exists. ─────────────────────────
+function csvEscape(v) {
+  const s = String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function exportCsv() {
+  const checked = [...document.querySelectorAll('.entity-cb:checked')].map(cb => cb.value);
+  if (!checked.length) return;
+  const { from, to } = getYearRange();
+  const countyLabel = document.getElementById('fltCountyInput').value || 'Travis County, TX';
+
+  // Parcel ID + Address columns only when a parcel lookup is active (the
+  // "Showing entities for…" banner is visible) — both omitted from the CSV
+  // structure entirely otherwise, not shown blank. When a lookup IS active
+  // but that specific parcel has no address on file, the Address column
+  // still appears (the lookup itself is active) with an empty value for
+  // that field — activeParcelAddress is null in that case, rendered as ''.
+  const header = activeParcelGeoId
+    ? ['County', 'Parcel ID', 'Address', 'Entity Code', 'Entity Name', 'Year', 'Rate']
+    : ['County', 'Entity Code', 'Entity Name', 'Year', 'Rate'];
+  const rows = [header];
+  checked.forEach(code => {
+    const pts = (BY_ENTITY[code] || [])
+      .filter(p => p.year >= from && p.year <= to)
+      .sort((a, b) => a.year - b.year);
+    pts.forEach(p => {
+      const row = activeParcelGeoId
+        ? [countyLabel, activeParcelGeoId, activeParcelAddress || '', code, ENTITY_NAMES[code] || '', p.year, p.rate != null ? p.rate : '']
+        : [countyLabel, code, ENTITY_NAMES[code] || '', p.year, p.rate != null ? p.rate : ''];
+      rows.push(row);
+    });
+  });
+
+  const csv = rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `parcelytics_rate_history_${from}-${to}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
+
+// ── Part 1: County typeahead-select — copied verbatim from templates/
+// search.html's initTypeaheadSelect() (same fieldKey/idSuffix convention),
+// not reinvented. Only "county" is wired here (Rate Trends has no
+// neighborhood/prop-type/use-code filters), but the function itself is
+// unmodified so any future fix made on Search's version can be ported
+// identically. ───────────────────────────────────────────────────────────
+(function () {
+  function initTypeaheadSelect(fieldKey, idSuffix) {
+    const wrap  = document.querySelector(`.ta-select[data-field="${fieldKey}"]`);
+    const input = document.getElementById(`flt${idSuffix}Input`);
+    const hidden = document.getElementById(`flt${idSuffix}Value`);
+    const list  = document.getElementById(`flt${idSuffix}List`);
+    if (!wrap || !input || !hidden || !list) return null;
+
+    let options = [];   // [{value, label}]
+
+    function render(filterText) {
+      const q = (filterText || "").toLowerCase();
+      const matches = q ? options.filter(o => o.label.toLowerCase().includes(q)) : options;
+      if (!matches.length) { list.style.display = "none"; return; }
+      list.innerHTML = matches.slice(0, 300).map(o =>
+        `<a href="#" class="ta-opt" data-value="${o.value.replace(/"/g, '&quot;')}">${o.label}</a>`
+      ).join("");
+      // NOT list.style.display = "" — .ta-list's own CSS class rule sets
+      // display:none as its default; clearing the inline style back to ""
+      // just lets that class rule win again. Must set a real value.
+      list.style.display = "block";
+    }
+
+    function selectOption(val) {
+      const opt = options.find(o => o.value === val);
+      input.value = opt ? opt.label : "";
+      hidden.value = val;
+      list.style.display = "none";
+      input.dispatchEvent(new CustomEvent("ta:select", { detail: val }));
+    }
+
+    input.addEventListener("input", () => { hidden.value = ""; render(input.value); });
+    input.addEventListener("focus", () => render(""));
+    input.addEventListener("click", () => render(""));
+    input.addEventListener("blur", () => setTimeout(() => { list.style.display = "none"; }, 150));
+    list.addEventListener("mousedown", (e) => {
+      const item = e.target.closest(".ta-opt");
+      if (!item) return;
+      e.preventDefault();
+      selectOption(item.getAttribute("data-value"));
+    });
+
+    return {
+      setOptions(newOptions) { options = newOptions || []; },
+      clear() { input.value = ""; hidden.value = ""; },
+      getValue() { return hidden.value; },
+      selectByValue(val) {
+        if (!options.some(o => o.value === val)) return false;
+        selectOption(val);
+        return true;
+      },
+    };
+  }
+
+  const countyTA = initTypeaheadSelect("county", "County");
+  if (!countyTA) return;
+  countyTA.setOptions([{ value: "travis", label: "Travis County, TX" }]);
+  document.getElementById("fltCountyInput").value = "Travis County, TX";
+  document.getElementById("fltCountyValue").value = "travis";
+})();
+
+// ── Part 5: "Which entities apply to my property?" ─────────────────────────
+// Address text reuses /api/address_search verbatim (same endpoint/fetch
+// pattern as Search's #spTaList and the homepage's #addrTaList). A typed
+// parcel ID (Enter key) hits the new /api/parcel_entities endpoint, which
+// itself reuses normalize_parcel_id() server-side — no new ID-parsing logic
+// anywhere in this file.
+(function () {
+  const input  = document.getElementById('parcelLookupInput');
+  const list   = document.getElementById('parcelLookupList');
+  const banner = document.getElementById('parcelLookupBanner');
+  const bannerText = document.getElementById('parcelLookupBannerText');
+  const clearBtn = document.getElementById('parcelLookupClear');
+  if (!input || !list || !banner) return;
+
+  let t = null;
+  let bannerActive = false;
+
+  function applyParcelEntities(geoId, address, entityCodes) {
+    const codeSet = new Set(entityCodes);
+    let matched = 0;
+    document.querySelectorAll('.entity-cb').forEach(cb => {
+      const on = codeSet.has(cb.value);
+      cb.checked = on;          // programmatic — does not fire 'change'
+      if (on) matched++;
+    });
+    updateChart();
+    bannerActive = true;
+    activeParcelGeoId = geoId;        // drives exportCsv()'s Parcel ID column
+    activeParcelAddress = address || null;   // drives exportCsv()'s Address column; null when no address on file
+
+    // "ADDRESS (geoId)" when a real address is on file; just the geoId
+    // alone when there isn't — avoids showing "(geoId) (geoId)".
+    const label = address ? `${address} (${geoId})` : geoId;
+    bannerText.textContent = entityCodes.length
+      ? `Showing entities for ${label} — ${matched} of ${entityCodes.length} billing entities have rate history`
+      : `No billing entities found for ${label}.`;
+    banner.style.display = 'flex';
+  }
+
+  function lookup(q) {
+    fetch('/api/parcel_entities?q=' + encodeURIComponent(q))
+      .then(r => r.json())
+      .then(d => {
+        if (!d.ok) return;
+        applyParcelEntities(d.geo_id, d.situs_address || null, d.entity_codes);
+      })
+      .catch(() => {});
+  }
+
+  input.addEventListener('input', function () {
+    const v = input.value.trim();
+    clearTimeout(t);
+    if (v.length < 3) { list.style.display = 'none'; return; }
+    t = setTimeout(() => {
+      fetch('/api/address_search?q=' + encodeURIComponent(v))
+        .then(r => r.json())
+        .then(d => {
+          const rows = (d.results || []);
+          if (!rows.length) { list.style.display = 'none'; return; }
+          list.innerHTML = rows.map(r =>
+            `<a class="ta-item" href="#" data-geo-id="${r.geo_id}">
+               <span>${r.address || '(address unknown)'}</span>
+               <span class="text-muted ms-2" style="font-family:var(--font-mono);font-size:11px;">${r.geo_id}</span>
+             </a>`).join('');
+          list.style.display = 'block';
+        })
+        .catch(() => { list.style.display = 'none'; });
+    }, 180);
+  });
+
+  // Selecting an address result — same non-navigating mousedown/preventDefault
+  // pattern as Search's .ta-opt selects (not a page navigation like the
+  // homepage's address dropdown, since this needs to stay on this page).
+  list.addEventListener('mousedown', (e) => {
+    const item = e.target.closest('.ta-item');
+    if (!item) return;
+    e.preventDefault();
+    const geoId = item.getAttribute('data-geo-id');
+    const addrSpan = item.querySelector('span');
+    input.value = addrSpan ? addrSpan.textContent : geoId;
+    list.style.display = 'none';
+    lookup(geoId);
+  });
+
+  input.addEventListener('blur', () => setTimeout(() => { list.style.display = 'none'; }, 160));
+
+  // A typed parcel ID (10-digit account, 14-digit tax-office format, or
+  // prop_id) won't show up in the address dropdown above, since
+  // api_address_search() only matches situs_address text (Part 0 finding).
+  // Enter triggers a direct resolution via /api/parcel_entities instead.
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const v = input.value.trim();
+    if (v.length < 3) return;
+    list.style.display = 'none';
+    lookup(v);
+  });
+
+  clearBtn.addEventListener('click', () => {
+    banner.style.display = 'none';
+    bannerActive = false;
+    activeParcelGeoId = null;
+    activeParcelAddress = null;
+  });
+
+  // Part 5 requirement: don't fight the user's own selection — once they
+  // manually change any checkbox, drop the "showing entities for X" banner
+  // rather than re-asserting the parcel's entity set on top of it. The
+  // checkbox states themselves are never re-applied automatically (this
+  // lookup only ever runs once, on demand), so there's nothing to "fight"
+  // beyond keeping the banner's claim honest. activeParcelGeoId is cleared
+  // in lockstep with the banner so exportCsv()'s Parcel ID column follows
+  // the same "banner visible" rule this round's brief specifies.
+  document.querySelectorAll('.entity-cb').forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (bannerActive) { banner.style.display = 'none'; bannerActive = false; activeParcelGeoId = null; activeParcelAddress = null; }
+    });
+  });
+
+  // Optional low-effort follow-up (flagged, not built this round — see
+  // final report): a "See rate history for these entities" link from a
+  // property page's entity table could link to /rates?parcel=<geo_id> and
+  // this auto-runs the lookup on load.
+  const preset = new URLSearchParams(window.location.search).get('parcel');
+  if (preset) { input.value = preset; lookup(preset); }
+})();
 
 // Init on page load
 selectKey();

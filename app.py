@@ -1076,16 +1076,67 @@ def property_detail(geo_id):
     )
 
 
+
+# Display order for the Rate Trends entity selector's category groups
+# (Part 3 — see categorize_entity() docstring for how membership is decided).
+ENTITY_CATEGORY_ORDER = ["School District", "County", "City", "Hospital District", "MUD/WCID", "Other"]
+
+
+def categorize_entity(code, name):
+    """
+    Infer a display category for a taxing entity, for grouping the Rate
+    Trends page's entity selector (Task: Rate Trends Page brief, Part 3).
+
+    There is no category/type column on county_tax_rate (confirmed via
+    schema.sql) and no other entity-classification table exists in this
+    codebase — so this is a lightweight, RULE-BASED INFERENCE from the
+    entity_name text (sourced from the county's own JURISNAME column in
+    2025RatesHistory1990-2025.xlsx), in the same spirit as how
+    tax_logic/classify.py infers property-type buckets from state_cd1
+    prefixes elsewhere in this app. It is NOT an authoritative legal
+    classification — flagging per the brief's explicit instruction rather
+    than presenting this as more certain than it is.
+
+    Known imperfection, left as-is rather than hand-patched (see brief
+    conversation / final report): 3 of the 4 "Pilot Knob" MUDs (U4M, U4P,
+    U4R) land in "Other" because the source spreadsheet's JURISNAME text
+    for those three omits the word "MUD" (unlike the 4th, U4N "Pilot Knob
+    MUD #4", which matches correctly) — a naming inconsistency in the
+    county's own source file, not something this function special-cases.
+    """
+    n = (name or "").upper()
+    if "ISD" in n:
+        return "School District"
+    if n == "TRAVIS COUNTY":
+        return "County"
+    if "CITY OF" in n or "VILLAGE OF" in n:
+        return "City"
+    if "HEALTH" in n:                 # THD = "Travis Central Health", the county hospital district
+        return "Hospital District"
+    if "MUD" in n or "WCID" in n or "WSID" in n or "UTILITY DISTRICT" in n:
+        return "MUD/WCID"
+    return "Other"   # ESDs, road districts, limited districts, disannexed
+                      # entries, Austin Community College, and anything else
+                      # that doesn't match a bucket above.
+
+
 @app.route("/rates")
 def tax_rates():
     """Tax rate trend page — county-level, no parcel required."""
     # Key entities to highlight in the main chart
     KEY_ENTITIES = ["TCO", "IAU", "CAT", "THD", "ACT"]
 
+    # Part 0 finding: this previously read "WHERE tax_year >= 2006", an
+    # undocumented restriction that contradicted both the source file
+    # (2025RatesHistory1990-2025.xlsx genuinely has RATE90…RATE25 — 36
+    # years, confirmed directly from the workbook) and every other page's
+    # own "rates back to 1990" claims (index.html, about.html, base.html
+    # footer). No WHERE clause is needed at all — county_tax_rate only ever
+    # gets rows from that same 1990-2025 loader — so the full confirmed
+    # range is used here rather than re-imposing an arbitrary floor.
     rates = query("""
         SELECT entity_code, entity_name, tax_year, rate
         FROM   county_tax_rate
-        WHERE  tax_year >= 2006
         ORDER  BY entity_code, tax_year
     """)
 
@@ -1100,19 +1151,94 @@ def tax_rates():
             "rate": float(r["rate"]) if r["rate"] else None,
         })
 
-    # All available entities for the selector
-    all_entities = [
-        {"code": code, "name": entity_names[code]}
-        for code in sorted(by_entity.keys())
-    ]
+    # Actual available year range, computed from what's really loaded
+    # rather than hardcoded — avoids a number on the page that could
+    # silently drift from the real data over time.
+    all_years = [r["tax_year"] for r in rates]
+    year_min = min(all_years) if all_years else 1990
+    year_max = max(all_years) if all_years else 2025
+    # Default window: most recent 10 years, matching the page's existing
+    # "10-year rate history chart" framing, not the full 35-year span.
+    default_year_from = max(year_min, year_max - 9)
+
+    # All available entities for the selector, grouped by inferred category
+    # (Part 3). category_rank lets the template sort by ENTITY_CATEGORY_ORDER
+    # without re-implementing that ordering in Jinja.
+    category_rank = {cat: i for i, cat in enumerate(ENTITY_CATEGORY_ORDER)}
+    all_entities = sorted(
+        [
+            {
+                "code": code,
+                "name": entity_names[code],
+                "category": categorize_entity(code, entity_names[code]),
+            }
+            for code in by_entity.keys()
+        ],
+        key=lambda e: (category_rank.get(e["category"], 999), e["name"] or "", e["code"]),
+    )
+    entity_category = {e["code"]: e["category"] for e in all_entities}
 
     return render_template(
         "rates.html",
         by_entity_json=json.dumps(by_entity),
         entity_names_json=json.dumps(entity_names),
+        entity_category_json=json.dumps(entity_category),
         all_entities=all_entities,
+        entity_category_order=ENTITY_CATEGORY_ORDER,
         key_entities=KEY_ENTITIES,
+        year_min=year_min,
+        year_max=year_max,
+        default_year_from=default_year_from,
     )
+
+
+@app.route("/api/parcel_entities")
+def api_parcel_entities():
+    """
+    Rate Trends page, Part 5 — "which entities apply to my property".
+
+    Resolves a parcel ID (reusing normalize_parcel_id(), the exact same
+    function the "/" route uses — not a new ID-parsing scheme) and returns
+    that parcel's 2025 billing entity codes, using the identical
+    tax_billing_entity / tax_year=2025 convention already used by
+    property_detail()'s entity_detail query.
+
+    This endpoint intentionally does NOT duplicate api_address_search()'s
+    address-text matching — the frontend calls that existing endpoint
+    directly for the address-typeahead dropdown (same as Search/homepage),
+    and calls this endpoint only with a geo_id (either typed directly, or
+    taken from an api_address_search() result the user clicked). This is
+    also why a bare address string here (e.g. "S Lamar") intentionally
+    returns ok:false rather than attempting its own address search.
+    """
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify({"ok": False, "error": "No parcel ID or geo_id provided."})
+
+    geo_id = normalize_parcel_id(q)
+    parcel = query(
+        "SELECT geo_id, situs_address FROM parcel WHERE geo_id = %s", (geo_id,), one=True
+    )
+    if not parcel and q.isdigit():
+        parcel = query(
+            "SELECT geo_id, situs_address FROM parcel WHERE prop_id = %s", (int(q),), one=True
+        )
+    if not parcel:
+        return jsonify({"ok": False, "error": f"No parcel found matching \"{q}\"."})
+
+    rows = query("""
+        SELECT DISTINCT entity_code
+        FROM   tax_billing_entity
+        WHERE  geo_id = %s AND tax_year = 2025
+    """, (parcel["geo_id"],))
+    entity_codes = sorted(r["entity_code"] for r in rows)
+
+    return jsonify({
+        "ok": True,
+        "geo_id": parcel["geo_id"],
+        "situs_address": parcel["situs_address"] or "",
+        "entity_codes": entity_codes,
+    })
 
 
 @app.route("/snapshot")
