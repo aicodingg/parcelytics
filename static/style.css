@@ -1011,7 +1011,12 @@ canvas { max-height: 440px; }
   box-shadow: var(--shadow-3);
   padding: 4px;
 }
-.ta-opt {
+/* .ta-item (address search box's #spTaList result rows) reuses this same
+   ruleset — same single-line flex layout with a label + value pushed to
+   opposite ends, same padding/hover treatment as .ta-opt (Filter Parcels
+   panel's dropdowns), so both dropdowns on this page look consistent
+   instead of .ta-item rendering as a bare unstyled link. */
+.ta-opt, .ta-item {
   padding: 8px 12px;
   font-size: 13px;
   cursor: pointer; white-space: nowrap;
@@ -1019,7 +1024,7 @@ canvas { max-height: 440px; }
   border-radius: var(--r-xs);
   display: flex; align-items: center; justify-content: space-between;
 }
-.ta-opt:hover, .ta-opt.active { background: var(--accent-soft); color: var(--accent-active); }
+.ta-opt:hover, .ta-opt.active, .ta-item:hover { background: var(--accent-soft); color: var(--accent-active); }
 
 /* Combobox affordance: a select-style chevron on typeahead-select inputs
    (Search page's County / Neighborhood / Property Type / Use Code filters)

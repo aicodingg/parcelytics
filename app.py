@@ -1953,15 +1953,38 @@ def api_address_search():
     # Normalise: collapse whitespace, uppercase for consistent matching
     q_norm = " ".join(q.upper().split())
 
+    # AJR* geo_ids = personal property supplement accounts loaded from AJR
+    # (not real, situs-addressable property) — same convention used
+    # elsewhere in this file (see the ~8 other `NOT LIKE 'AJR%%'` call
+    # sites), excluded here too since this is an address lookup for real
+    # parcels, not placeholder accounts.
+    #
+    # Relevance ranking: the match condition stays a substring ILIKE (so a
+    # mid-address search like "Lamar" still works), but results where
+    # situs_address STARTS WITH the query now rank above ones that only
+    # contain it elsewhere, via a CASE-based sort key, before falling back
+    # to alphabetical within each tier. Without this, e.g. "1201 S LAMAR
+    # BLVD" (searching "1201") could rank behind any other address merely
+    # containing "1201" somewhere, sorted alphabetically — which is exactly
+    # what was happening before this fix.
+    #
+    # Note: geo_id/parcel-ID matching (normalize_parcel_id()) is a
+    # completely separate code path used only by the "/" route's parcel-ID
+    # search — this endpoint has never done geo_id matching and doesn't
+    # need to preserve any such behavior here.
+    #
     # pg_trgm index (idx_parcel_situs_trgm) will be used if installed;
     # ILIKE works correctly either way — just slower without the index.
     rows = query("""
         SELECT geo_id, situs_address, owner_name, state_cd1, neighborhood_cd
         FROM   parcel
         WHERE  UPPER(situs_address) ILIKE %(pattern)s
-        ORDER  BY situs_address
+          AND  geo_id NOT LIKE 'AJR%%'
+        ORDER  BY
+            CASE WHEN UPPER(situs_address) LIKE %(prefix_pattern)s THEN 0 ELSE 1 END,
+            situs_address
         LIMIT  10
-    """, {"pattern": f"%{q_norm}%"})
+    """, {"pattern": f"%{q_norm}%", "prefix_pattern": f"{q_norm}%"})
 
     results = [
         {

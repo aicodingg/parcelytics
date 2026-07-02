@@ -394,10 +394,13 @@
           if (!rows.length) { list.style.display = "none"; return; }
           list.innerHTML = rows.map(r =>
             `<a class="ta-item" href="/parcel/${encodeURIComponent(r.geo_id)}">
-               <span>${r.situs_address || '(address unknown)'}</span>
+               <span>${r.address || '(address unknown)'}</span>
                <span class="text-muted ms-2" style="font-family:var(--font-mono);font-size:11px;">${r.geo_id}</span>
              </a>`).join('');
-          list.style.display = "";
+          // Same fix as initTypeaheadSelect()'s render(): .ta-list's CSS
+          // class default is display:none, so clearing the inline style
+          // back to "" doesn't show it — it has to be set to a real value.
+          list.style.display = "block";
         })
         .catch(() => { list.style.display = "none"; });
     }, 180);
@@ -433,7 +436,12 @@
       list.innerHTML = matches.slice(0, 300).map(o =>
         `<a href="#" class="ta-opt" data-value="${o.value.replace(/"/g, '&quot;')}">${o.label}</a>`
       ).join("");
-      list.style.display = "";
+      // NOT list.style.display = "" — .ta-list's own CSS class rule
+      // (static/style.css) sets display:none as its default. Clearing the
+      // inline style back to "" doesn't show the element; it just removes
+      // the inline override and lets that class rule win again, so the list
+      // never actually became visible this way. Must set a real value.
+      list.style.display = "block";
     }
 
     function selectOption(val) {
