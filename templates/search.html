@@ -307,7 +307,25 @@
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
 <script>
 // ── US coverage map (static visual; Travis County highlighted) ───────────────
+// Guard added: this map, the address typeahead below, and the entire Filter
+// Parcels panel below THAT are all three separate IIFEs inside this SAME
+// <script> tag. If d3/topojson-client fail to load from the CDN (blocked
+// script, offline, CDN outage) and this IIFE's synchronous d3.select() call
+// throws, the browser aborts the REST of this script block — the address
+// typeahead and the entire filter panel (all 4 dropdowns, Quick Filters,
+// Apply/Clear) would never run, with no error visible to a normal user,
+// just "nothing responds to clicks." This typeof guard makes a map-library
+// failure degrade to the existing #usMapFallback text (already built for
+// exactly this "map unavailable" case) instead of silently taking the rest
+// of the page's interactivity down with it.
 (function () {
+  if (typeof d3 === "undefined" || typeof topojson === "undefined") {
+    const map = document.getElementById("usMap");
+    const fallback = document.getElementById("usMapFallback");
+    if (map) map.style.display = "none";
+    if (fallback) fallback.style.display = "";
+    return;
+  }
   const TRAVIS = "48453", TX = "48", W = 975, H = 610;
   const svg = d3.select("#usMap");
   d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json")
@@ -473,10 +491,27 @@
   // dropdown and Market Snapshot — no separate bucket system invented here).
   let useCodesByType = {};
   let metaReady = false;
+
+  // De-duplicated code list across every property type — used both for the
+  // initial Use Code population (fix: this used to only happen reactively,
+  // via the Property Type ta:select/input listeners below, which meant Use
+  // Code stayed empty until a user touched Property Type first) and for the
+  // "Property Type cleared -> show every code again" case further down.
+  function allUseCodeOptions() {
+    const all = [];
+    const seen = new Set();
+    Object.values(useCodesByType).forEach(list => (list || []).forEach(c => {
+      if (seen.has(c.code)) return; seen.add(c.code);
+      all.push({ value: c.code, label: c.desc ? `${c.code} — ${c.desc}` : c.code });
+    }));
+    return all;
+  }
+
   fetch("/api/benchmark/meta").then(r => r.json()).then(d => {
     const propTypes = d.prop_types || [];
     propTypeTA.setOptions(propTypes.map(p => ({ value: p, label: p })));
     useCodesByType = d.use_codes_by_type || {};
+    useCodeTA.setOptions(allUseCodeOptions());
 
     const nbs = d.neighborhoods || [];
     neighborhoodTA.setOptions(nbs.map(n => ({
@@ -525,13 +560,7 @@
   document.getElementById("fltPropTypeInput").addEventListener("input", (e) => {
     if (e.target.value.trim()) return;
     useCodeTA.clear();
-    const all = [];
-    const seen = new Set();
-    Object.values(useCodesByType).forEach(list => (list || []).forEach(c => {
-      if (seen.has(c.code)) return; seen.add(c.code);
-      all.push({ value: c.code, label: c.desc ? `${c.code} — ${c.desc}` : c.code });
-    }));
-    useCodeTA.setOptions(all);
+    useCodeTA.setOptions(allUseCodeOptions());
   });
 
   // ---- Apply / Clear / Results / Pagination -------------------------------
