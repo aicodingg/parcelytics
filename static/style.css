@@ -1021,6 +1021,34 @@ canvas { max-height: 440px; }
 }
 .ta-opt:hover, .ta-opt.active { background: var(--accent-soft); color: var(--accent-active); }
 
+/* Combobox affordance: a select-style chevron on typeahead-select inputs
+   (Search page's County / Neighborhood / Property Type / Use Code filters)
+   so they read as real selectors, not plain text fields, even before the
+   dropdown is opened. */
+.ta-select-input {
+  padding-right: 30px !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%236B7280' d='M4.646 6.646a.5.5 0 0 1 .708 0L8 9.293l2.646-2.647a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 0-.708z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 14px 14px;
+}
+
+/* Quick Filters (Search page) — one-click preset buttons */
+.quick-filter-btn {
+  display: flex; flex-direction: column; align-items: flex-start;
+  width: 100%; text-align: left;
+  padding: 9px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.quick-filter-btn:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.quick-filter-btn:disabled { opacity: .5; cursor: default; }
+.quick-filter-btn .qf-title { font-size: 12.5px; font-weight: var(--fw-semibold); color: var(--text); }
+.quick-filter-btn .qf-desc { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+
 /* ════════════════════════════════════════════════════════════════════════════
    POST-ACQUISITION ESTIMATOR — flagship app feature
    ════════════════════════════════════════════════════════════════════════════ */

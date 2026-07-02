@@ -321,3 +321,25 @@ CREATE INDEX IF NOT EXISTS idx_pty_year           ON parcel_tax_year(tax_year);
 CREATE INDEX IF NOT EXISTS idx_billing_geo        ON tax_billing(geo_id);
 CREATE INDEX IF NOT EXISTS idx_rate_year          ON county_tax_rate(tax_year);
 CREATE INDEX IF NOT EXISTS idx_rate_entity        ON county_tax_rate(entity_code);
+
+-- Search page filter system (/api/search_filter) — approved, reviewed DDL.
+-- Full selectivity/composite-column reasoning per index: see
+-- task_staging/search_filters/proposed_indexes.sql. Summary:
+--   idx_parcel_neighborhood_cd  — Neighborhood filter; first real filter in
+--                                 the panel, most likely to run alone.
+--   idx_parcel_classi_cd        — Use Code filter; also feeds the Property
+--                                 Type CASE expression (label_case_sql()).
+--   idx_parcel_year_built       — Year Built range filter.
+--   idx_pty_year_market_value   — Market Value range filter, composite on
+--                                 (tax_year, market_value) since every query
+--                                 already scopes to one tax_year first.
+--   idx_metrics_year_etr        — Effective Tax Rate range filter, same
+--                                 tax_year-first composite reasoning.
+-- Not included (deliberately, see proposed_indexes.sql for why): sqft
+-- indexes (living_area_sqft/land_sqft) and a trigram/GIN index for the
+-- Homestead exemption_codes regex match.
+CREATE INDEX IF NOT EXISTS idx_parcel_neighborhood_cd ON parcel(neighborhood_cd);
+CREATE INDEX IF NOT EXISTS idx_parcel_classi_cd       ON parcel(classi_cd);
+CREATE INDEX IF NOT EXISTS idx_parcel_year_built      ON parcel(year_built);
+CREATE INDEX IF NOT EXISTS idx_pty_year_market_value  ON parcel_tax_year(tax_year, market_value);
+CREATE INDEX IF NOT EXISTS idx_metrics_year_etr       ON parcel_metrics(tax_year, effective_tax_rate);

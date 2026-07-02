@@ -3,10 +3,11 @@
 
 {% block content %}
 <div class="mb-3">
-  <h1 class="page-title mb-1">Search Travis County Parcels</h1>
+  <h1 class="page-title mb-1">Search Property Records</h1>
   <p class="text-muted mb-0" style="max-width:680px;">
-    Look up any of Travis County's 508,000+ parcels by account number or street address.
-    The map shows where Parcelytics has coverage today.
+    Look up a parcel by account number or street address, or filter by neighborhood, property type,
+    value, and more. Live today in Travis County, TX — 508,000+ parcels — with more counties coming
+    as Parcelytics expands.
   </p>
 </div>
 
@@ -54,33 +55,248 @@
             Accepts 10-digit TCAD account, 14-digit Tax Office account, prop_id, or street address.
           </div>
 
-          {# Optional pre-filters (same options as the benchmark filters) #}
-          <div class="row g-2 mt-2">
-            <div class="col-6">
-              <label class="form-label small text-muted mb-1" for="spType">Property Type <span class="text-muted">(optional)</span></label>
-              <select id="spType" class="form-select form-select-sm" style="font-size:12px;">
-                <option value="">— Any —</option>
-                <option value="residential">Residential (SFR)</option>
-                <option value="multifamily">Multi-Family</option>
-                <option value="commercial">Commercial</option>
-                <option value="land">Land / Vacant</option>
-                <option value="agricultural">Agricultural</option>
-              </select>
-            </div>
-            <div class="col-6">
-              <label class="form-label small text-muted mb-1" for="spCode">Use Code <span class="text-muted">(optional)</span></label>
-              <select id="spCode" class="form-select form-select-sm" style="font-size:12px;">
-                <option value="">— Any —</option>
-              </select>
-            </div>
-          </div>
-
           <button type="submit" class="btn btn-dark btn-sm w-100 mt-3 fw-semibold">Search</button>
         </form>
         <div class="text-muted mt-2" style="font-size:11px;">
-          Tip: enter a parcel to open its detail page. Choose a Property Type (no parcel entered) to browse that sector's Market Snapshot.
+          Tip: enter a parcel to open its detail page. To browse or narrow by property type, value,
+          neighborhood, and more, use the Filter Parcels panel below.
         </div>
       </div>
+    </div>
+
+    {# ── Quick Filters — one-click presets that pre-fill and run the Filter
+         Parcels panel below. Fills the vertical space left under Find a
+         Parcel (this column is shorter than the coverage map beside it). ── #}
+    <div class="card mt-3">
+      <div class="card-header">Quick Filters</div>
+      <div class="card-body">
+        <div class="text-muted mb-2" style="font-size:11.5px;">
+          One-click presets — each fills in the filter panel below and runs the search.
+        </div>
+        <div class="d-flex flex-column gap-2">
+          <button type="button" class="quick-filter-btn" data-preset="no_homestead" disabled>
+            <span class="qf-title">Homes Without Homestead Exemption</span>
+            <span class="qf-desc">Residential parcels that haven't filed for homestead</span>
+          </button>
+          <button type="button" class="quick-filter-btn" data-preset="value_jump" disabled>
+            <span class="qf-title">Large Value Jumps — Recent</span>
+            <span class="qf-desc">Parcels flagged for an unusually large year-over-year value change</span>
+          </button>
+          <button type="button" class="quick-filter-btn" data-preset="high_value_commercial" disabled>
+            <span class="qf-title">High-Value Commercial</span>
+            <span class="qf-desc">Commercial parcels at $1,000,000+ market value</span>
+          </button>
+          <button type="button" class="quick-filter-btn" data-preset="new_construction" disabled>
+            <span class="qf-title">New Construction</span>
+            <span class="qf-desc">Built in the last 3 years</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   Filter Parcels — additive filter system, entirely separate from the
+   parcel-ID/address search above (untouched). County-agnostic by design:
+   County is the first filter (one real option today — Travis County, TX —
+   built so a second county is an added <option>, not a restructure), same
+   pattern as the /info page's state/county selectors.
+   ══════════════════════════════════════════════════════════════════════════ #}
+<div class="row g-4 mt-1">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">Filter Parcels</div>
+      <div class="card-body">
+        <div class="text-muted mb-3" style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.04em;">Optional</div>
+
+        <div class="row g-3">
+
+          {# ── County (typeahead-select; 1 option today) ─────────────────── #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1" for="fltCountyInput">County</label>
+            <div class="ta-select" data-field="county" style="position:relative;">
+              <input type="text" id="fltCountyInput" class="form-control form-control-sm ta-select-input"
+                     autocomplete="off" spellcheck="false" style="font-size:12px;">
+              <input type="hidden" id="fltCountyValue" value="travis">
+              <div class="ta-list" id="fltCountyList" style="display:none;"></div>
+            </div>
+          </div>
+
+          {# ── Neighborhood (typeahead-select; populated from /api/benchmark/meta) #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1" for="fltNeighborhoodInput">Neighborhood</label>
+            <div class="ta-select" data-field="neighborhood" style="position:relative;">
+              <input type="text" id="fltNeighborhoodInput" class="form-control form-control-sm ta-select-input"
+                     placeholder="Type to search…" autocomplete="off" spellcheck="false" style="font-size:12px;">
+              <input type="hidden" id="fltNeighborhoodValue">
+              <div class="ta-list" id="fltNeighborhoodList" style="display:none;"></div>
+            </div>
+          </div>
+
+          {# ── Property Type / Sector (typeahead-select; classify.py's 5-category
+               taxonomy — same one the nav sector dropdown and Market Snapshot use) #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1" for="fltPropTypeInput">Property Type / Sector</label>
+            <div class="ta-select" data-field="propType" style="position:relative;">
+              <input type="text" id="fltPropTypeInput" class="form-control form-control-sm ta-select-input"
+                     placeholder="Type to search…" autocomplete="off" spellcheck="false" style="font-size:12px;">
+              <input type="hidden" id="fltPropTypeValue">
+              <div class="ta-list" id="fltPropTypeList" style="display:none;"></div>
+            </div>
+            <a href="#" id="fltPropTypeSnapshotLink" class="d-inline-block mt-1" style="display:none; font-size:11px;">
+              Browse <span id="fltPropTypeSnapshotLabel"></span> Market Snapshot &rarr;
+            </a>
+          </div>
+
+          {# ── Use Code (typeahead-select; code + description, cascades from Property Type) #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1" for="fltUseCodeInput">Use Code</label>
+            <div class="ta-select" data-field="useCode" style="position:relative;">
+              <input type="text" id="fltUseCodeInput" class="form-control form-control-sm ta-select-input"
+                     placeholder="Type to search…" autocomplete="off" spellcheck="false" style="font-size:12px;">
+              <input type="hidden" id="fltUseCodeValue">
+              <div class="ta-list" id="fltUseCodeList" style="display:none;"></div>
+            </div>
+          </div>
+
+          {# ── Market Value range ──────────────────────────────────────────── #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1">Market Value</label>
+            <div class="d-flex gap-1">
+              <input type="number" id="fltMvMin" class="form-control form-control-sm" placeholder="Min $" style="font-size:12px;">
+              <input type="number" id="fltMvMax" class="form-control form-control-sm" placeholder="Max $" style="font-size:12px;">
+            </div>
+          </div>
+
+          {# ── Effective Tax Rate range + Not Available inclusion ─────────── #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1">Effective Tax Rate (%)</label>
+            <div class="d-flex gap-1">
+              <input type="number" step="0.01" id="fltEtrMin" class="form-control form-control-sm" placeholder="Min %" style="font-size:12px;">
+              <input type="number" step="0.01" id="fltEtrMax" class="form-control form-control-sm" placeholder="Max %" style="font-size:12px;">
+            </div>
+            <div class="form-check mt-1">
+              <input class="form-check-input" type="checkbox" id="fltEtrIncludeNa">
+              <label class="form-check-label text-muted" for="fltEtrIncludeNa" style="font-size:11px;">
+                Include parcels with Not Available effective tax rate
+              </label>
+            </div>
+          </div>
+
+          {# ── Building size range ─────────────────────────────────────────── #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1">Building Size (SF)</label>
+            <div class="d-flex gap-1">
+              <input type="number" id="fltBldgMin" class="form-control form-control-sm" placeholder="Min SF" style="font-size:12px;">
+              <input type="number" id="fltBldgMax" class="form-control form-control-sm" placeholder="Max SF" style="font-size:12px;">
+            </div>
+          </div>
+
+          {# ── Land size range ─────────────────────────────────────────────── #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1">Land Size (SF)</label>
+            <div class="d-flex gap-1">
+              <input type="number" id="fltLandMin" class="form-control form-control-sm" placeholder="Min SF" style="font-size:12px;">
+              <input type="number" id="fltLandMax" class="form-control form-control-sm" placeholder="Max SF" style="font-size:12px;">
+            </div>
+          </div>
+
+          {# ── Year Built range ────────────────────────────────────────────── #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1">Year Built</label>
+            <div class="d-flex gap-1">
+              <input type="number" id="fltYrMin" class="form-control form-control-sm" placeholder="From" style="font-size:12px;">
+              <input type="number" id="fltYrMax" class="form-control form-control-sm" placeholder="To" style="font-size:12px;">
+            </div>
+          </div>
+
+          {# ── Large Value Jump flag ───────────────────────────────────────── #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1 d-block">Value Change</label>
+            <div class="form-check mt-1">
+              <input class="form-check-input" type="checkbox" id="fltLargeValueJump">
+              <label class="form-check-label" for="fltLargeValueJump" style="font-size:12.5px;">
+                Large Value Jump only
+              </label>
+            </div>
+          </div>
+
+          {# ── Homestead exemption status ──────────────────────────────────── #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1" for="fltHomestead">Homestead Exemption</label>
+            <select id="fltHomestead" class="form-select form-select-sm" style="font-size:12px;">
+              <option value="">Any</option>
+              <option value="has">Has homestead exemption</option>
+              <option value="not_has">Does not have homestead exemption</option>
+            </select>
+          </div>
+
+          {# ── Tax Year ─────────────────────────────────────────────────────── #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1" for="fltTaxYear">Tax Year</label>
+            <select id="fltTaxYear" class="form-select form-select-sm" style="font-size:12px;">
+              <option value="2026">2026 (Preliminary)</option>
+              <option value="2025" selected>2025 (Certified)</option>
+              <option value="2024">2024</option>
+              <option value="2023">2023</option>
+              <option value="2022">2022</option>
+              <option value="2021">2021</option>
+            </select>
+          </div>
+
+          {# ── Data confidence toggle ──────────────────────────────────────── #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1 d-block">Data Confidence</label>
+            <div class="form-check mt-1">
+              <input class="form-check-input" type="checkbox" id="fltVerifiedOnly">
+              <label class="form-check-label" for="fltVerifiedOnly" style="font-size:12.5px;">
+                Verified data only
+              </label>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="d-flex align-items-center gap-3 mt-3">
+          <button type="button" id="fltApplyBtn" class="btn btn-dark btn-sm fw-semibold">Apply Filters</button>
+          <button type="button" id="fltClearBtn" class="btn btn-outline-secondary btn-sm">Clear All</button>
+          <span class="text-muted" style="font-size:11px;">County alone won't run a search — add at least one more filter above.</span>
+        </div>
+        <div id="fltErrorMsg" class="search-error-block mt-2" style="display:none; font-size:12.5px;"></div>
+
+      </div>
+
+      {# ── Results ──────────────────────────────────────────────────────────── #}
+      <div id="fltResultsWrap" style="display:none;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Results</span>
+          <span class="text-muted" id="fltResultsCount" style="font-size:11.5px;"></span>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+              <thead class="table-light small text-muted text-uppercase">
+                <tr>
+                  <th>Address</th>
+                  <th>Parcel ID</th>
+                  <th>Property Type</th>
+                  <th class="text-end">Market Value</th>
+                  <th>Tax Year</th>
+                  <th>Confidence</th>
+                </tr>
+              </thead>
+              <tbody id="fltResultsBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card-footer d-flex justify-content-between align-items-center">
+          <button type="button" id="fltPrevBtn" class="btn btn-sm btn-outline-secondary">&larr; Prev</button>
+          <span class="text-muted" id="fltPageInfo" style="font-size:12px;"></span>
+          <button type="button" id="fltNextBtn" class="btn btn-sm btn-outline-secondary">Next &rarr;</button>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -171,41 +387,297 @@
   input.addEventListener("blur", () => setTimeout(() => { list.style.display = "none"; }, 160));
 })();
 
-// ── Pre-filter behavior: type-only (no parcel) → browse that sector's snapshot
+// ── Filter Parcels panel ───────────────────────────────────────────────────
+// Reuses the Rate Trends page's "type to filter a visible option list"
+// interaction (templates/rates.html's #entitySearch / filterEntityList()),
+// adapted from that page's multi-select checkboxes to a single-select
+// dropdown-that-closes-on-pick, and rendered with the site's existing
+// .ta-wrap/.ta-list/.ta-opt typeahead styling (the same classes the address
+// search on this page and the homepage use) so it looks native, not bolted on.
 (function () {
-  const form = document.getElementById("searchPageForm");
-  const q    = document.getElementById("spQ");
-  const type = document.getElementById("spType");
-  if (!form) return;
-  form.addEventListener("submit", function (e) {
-    if (!q.value.trim() && type.value) {
-      e.preventDefault();
-      window.location.href = "/snapshot?view=" + encodeURIComponent(type.value);
+
+  // ---- Reusable single-select typeahead component ------------------------
+  // fieldKey must match data-field on the .ta-select wrapper and the
+  // flt<Cap>Input / flt<Cap>Value / flt<Cap>List element id suffix.
+  function initTypeaheadSelect(fieldKey, idSuffix) {
+    const wrap  = document.querySelector(`.ta-select[data-field="${fieldKey}"]`);
+    const input = document.getElementById(`flt${idSuffix}Input`);
+    const hidden = document.getElementById(`flt${idSuffix}Value`);
+    const list  = document.getElementById(`flt${idSuffix}List`);
+    if (!wrap || !input || !hidden || !list) return null;
+
+    let options = [];   // [{value, label}]
+
+    function render(filterText) {
+      const q = (filterText || "").toLowerCase();
+      const matches = q ? options.filter(o => o.label.toLowerCase().includes(q)) : options;
+      if (!matches.length) { list.style.display = "none"; return; }
+      list.innerHTML = matches.slice(0, 300).map(o =>
+        `<a href="#" class="ta-opt" data-value="${o.value.replace(/"/g, '&quot;')}">${o.label}</a>`
+      ).join("");
+      list.style.display = "";
     }
-  });
-  // Populate Use Code options from the same source as the benchmark filters.
-  // meta returns use_codes_by_type: { "Residential": [{code,desc,n}, …], … }
-  const TYPE_MAP = { residential: "Residential", multifamily: "Multi-Family",
-                     commercial: "Commercial", land: "Land/Vacant", agricultural: "Agricultural" };
-  let codesByType = {};
-  function fillCodes() {
-    const sel = document.getElementById("spCode");
-    sel.innerHTML = '<option value="">— Any —</option>';
-    const wantLabel = TYPE_MAP[type.value] || null;
-    const groups = wantLabel ? { [wantLabel]: codesByType[wantLabel] || [] } : codesByType;
-    const seen = new Set();
-    Object.values(groups).forEach(list => (list || []).forEach(c => {
-      if (seen.has(c.code)) return; seen.add(c.code);
-      const o = document.createElement("option");
-      o.value = c.code; o.textContent = c.code + (c.desc ? ` — ${c.desc}` : "");
-      sel.appendChild(o);
-    }));
+
+    function selectOption(val) {
+      const opt = options.find(o => o.value === val);
+      input.value = opt ? opt.label : "";
+      hidden.value = val;
+      list.style.display = "none";
+      input.dispatchEvent(new CustomEvent("ta:select", { detail: val }));
+    }
+
+    // Clicking/focusing shows the FULL option list, even if the field
+    // already has a value (e.g. re-opening after a prior selection, or
+    // County's single pre-filled option) — narrowing only kicks in once the
+    // user actually types. Matches the combobox behavior used site-wide.
+    input.addEventListener("input", () => { hidden.value = ""; render(input.value); });
+    input.addEventListener("focus", () => render(""));
+    input.addEventListener("click", () => render(""));
+    input.addEventListener("blur", () => setTimeout(() => { list.style.display = "none"; }, 150));
+    list.addEventListener("mousedown", (e) => {
+      const item = e.target.closest(".ta-opt");
+      if (!item) return;
+      e.preventDefault();
+      selectOption(item.getAttribute("data-value"));
+    });
+
+    return {
+      setOptions(newOptions) { options = newOptions || []; },
+      clear() { input.value = ""; hidden.value = ""; },
+      getValue() { return hidden.value; },
+      // Programmatically select an option by value (Quick Filters use this).
+      // Returns true if the value was found among the currently-loaded options.
+      selectByValue(val) {
+        if (!options.some(o => o.value === val)) return false;
+        selectOption(val);
+        return true;
+      },
+    };
   }
+
+  const countyTA       = initTypeaheadSelect("county", "County");
+  const neighborhoodTA = initTypeaheadSelect("neighborhood", "Neighborhood");
+  const propTypeTA     = initTypeaheadSelect("propType", "PropType");
+  const useCodeTA      = initTypeaheadSelect("useCode", "UseCode");
+  if (!countyTA || !neighborhoodTA || !propTypeTA || !useCodeTA) return;
+
+  // County: one real option today. Pre-selected and effectively fixed, but
+  // built as a real typeahead-select so a second county is just another
+  // entry in this options array — no restructuring.
+  countyTA.setOptions([{ value: "travis", label: "Travis County, TX" }]);
+  document.getElementById("fltCountyInput").value = "Travis County, TX";
+  document.getElementById("fltCountyValue").value = "travis";
+
+  // Property Type / Sector — classify.py's 5-category taxonomy, populated
+  // from /api/benchmark/meta's prop_types (same source as the nav sector
+  // dropdown and Market Snapshot — no separate bucket system invented here).
+  let useCodesByType = {};
+  let metaReady = false;
   fetch("/api/benchmark/meta").then(r => r.json()).then(d => {
-    codesByType = d.use_codes_by_type || {};
-    fillCodes();
-    type.addEventListener("change", fillCodes);
+    const propTypes = d.prop_types || [];
+    propTypeTA.setOptions(propTypes.map(p => ({ value: p, label: p })));
+    useCodesByType = d.use_codes_by_type || {};
+
+    const nbs = d.neighborhoods || [];
+    neighborhoodTA.setOptions(nbs.map(n => ({
+      value: n.code, label: `${n.code} (${n.n.toLocaleString()} parcels)`,
+    })));
+
+    // Quick Filters need prop_types loaded (Residential/Commercial values)
+    // before a preset can select them — enable the buttons once ready.
+    metaReady = true;
+    document.querySelectorAll(".quick-filter-btn").forEach(b => b.disabled = false);
   }).catch(() => {});
+
+  // ── Property Type → "Browse this sector's Market Snapshot" shortcut ──────
+  // Carried over from the old Find a Parcel box (removed — this filter panel
+  // is now the single home for property-type selection). classify.py's
+  // 5-category labels don't match /snapshot's lowercase ?view= keys, so map
+  // them explicitly rather than guessing a transform.
+  const SNAPSHOT_VIEW_BY_LABEL = {
+    "Residential": "residential", "Multi-Family": "multifamily",
+    "Commercial": "commercial", "Land/Vacant": "land", "Agricultural": "agricultural",
+  };
+  const snapshotLink  = document.getElementById("fltPropTypeSnapshotLink");
+  const snapshotLabel = document.getElementById("fltPropTypeSnapshotLabel");
+  document.getElementById("fltPropTypeInput").addEventListener("ta:select", (e) => {
+    const view = SNAPSHOT_VIEW_BY_LABEL[e.detail];
+    if (!view) { snapshotLink.style.display = "none"; return; }
+    snapshotLabel.textContent = e.detail;
+    snapshotLink.href = "/snapshot?view=" + encodeURIComponent(view);
+    snapshotLink.style.display = "";
+  });
+  document.getElementById("fltPropTypeInput").addEventListener("input", (e) => {
+    if (!e.target.value.trim()) snapshotLink.style.display = "none";
+  });
+
+  // Use Code cascades from the selected Property Type — shows code + full
+  // description together (never a bare code), sourced from USE_CODE_LOOKUP
+  // via /api/benchmark/meta's use_codes_by_type.
+  document.getElementById("fltPropTypeInput").addEventListener("ta:select", (e) => {
+    useCodeTA.clear();
+    const codes = useCodesByType[e.detail] || [];
+    useCodeTA.setOptions(codes.map(c => ({
+      value: c.code, label: c.desc ? `${c.code} — ${c.desc}` : c.code,
+    })));
+  });
+  // If Property Type is cleared, Use Code falls back to every code across all types.
+  document.getElementById("fltPropTypeInput").addEventListener("input", (e) => {
+    if (e.target.value.trim()) return;
+    useCodeTA.clear();
+    const all = [];
+    const seen = new Set();
+    Object.values(useCodesByType).forEach(list => (list || []).forEach(c => {
+      if (seen.has(c.code)) return; seen.add(c.code);
+      all.push({ value: c.code, label: c.desc ? `${c.code} — ${c.desc}` : c.code });
+    }));
+    useCodeTA.setOptions(all);
+  });
+
+  // ---- Apply / Clear / Results / Pagination -------------------------------
+  const applyBtn   = document.getElementById("fltApplyBtn");
+  const clearBtn   = document.getElementById("fltClearBtn");
+  const errorBox   = document.getElementById("fltErrorMsg");
+  const resultsWrap = document.getElementById("fltResultsWrap");
+  const resultsBody = document.getElementById("fltResultsBody");
+  const resultsCount = document.getElementById("fltResultsCount");
+  const pageInfo   = document.getElementById("fltPageInfo");
+  const prevBtn    = document.getElementById("fltPrevBtn");
+  const nextBtn    = document.getElementById("fltNextBtn");
+
+  let currentPage = 1;
+
+  function buildParams(page) {
+    const p = new URLSearchParams();
+    p.set("county", countyTA.getValue() || "travis");
+    p.set("tax_year", document.getElementById("fltTaxYear").value);
+    p.set("page", page);
+    const nb = neighborhoodTA.getValue(); if (nb) p.set("neighborhood", nb);
+    const pt = propTypeTA.getValue();     if (pt) p.set("prop_type", pt);
+    const uc = useCodeTA.getValue();      if (uc) p.set("use_code", uc);
+    const mvMin = document.getElementById("fltMvMin").value; if (mvMin) p.set("mv_min", mvMin);
+    const mvMax = document.getElementById("fltMvMax").value; if (mvMax) p.set("mv_max", mvMax);
+    const etrMin = document.getElementById("fltEtrMin").value; if (etrMin) p.set("etr_min", etrMin);
+    const etrMax = document.getElementById("fltEtrMax").value; if (etrMax) p.set("etr_max", etrMax);
+    if (document.getElementById("fltEtrIncludeNa").checked) p.set("etr_include_na", "1");
+    const bMin = document.getElementById("fltBldgMin").value; if (bMin) p.set("bldg_min", bMin);
+    const bMax = document.getElementById("fltBldgMax").value; if (bMax) p.set("bldg_max", bMax);
+    const lMin = document.getElementById("fltLandMin").value; if (lMin) p.set("land_min", lMin);
+    const lMax = document.getElementById("fltLandMax").value; if (lMax) p.set("land_max", lMax);
+    const yMin = document.getElementById("fltYrMin").value; if (yMin) p.set("yr_min", yMin);
+    const yMax = document.getElementById("fltYrMax").value; if (yMax) p.set("yr_max", yMax);
+    if (document.getElementById("fltLargeValueJump").checked) p.set("large_value_jump", "1");
+    const hs = document.getElementById("fltHomestead").value; if (hs) p.set("homestead", hs);
+    if (document.getElementById("fltVerifiedOnly").checked) p.set("verified_only", "1");
+    return p;
+  }
+
+  // All 5 site-wide confidence tiers (static/style.css "CONFIDENCE BADGES"
+  // block: badge-verified/preliminary/partial/estimated/na). Only verified,
+  // preliminary, and partial are actually reachable from api_search_filter
+  // today (see app.py's _row_confidence docstring for why estimated and
+  // not_available can't occur here) — the other two are included so this
+  // map stays correct if that route's join logic ever changes, rather than
+  // silently rendering nothing for a tier it doesn't yet expect.
+  const CONFIDENCE_BADGE = {
+    verified:      '<span class="badge-verified" style="font-size:9px;">Verified</span>',
+    preliminary:   '<span class="badge-preliminary" style="font-size:9px;">Preliminary</span>',
+    partial:       '<span class="badge-partial" style="font-size:9px;">Partial</span>',
+    estimated:     '<span class="badge-estimated" style="font-size:9px;">Estimated</span>',
+    not_available: '<span class="na-cell">Not Available</span>',
+  };
+
+  function runSearch(page) {
+    currentPage = page || 1;
+    errorBox.style.display = "none";
+    fetch("/api/search_filter?" + buildParams(currentPage).toString())
+      .then(r => r.json().then(d => ({ status: r.status, body: d })))
+      .then(({ status, body }) => {
+        if (status !== 200 || !body.ok) {
+          errorBox.textContent = body.error || "Something went wrong running that search.";
+          errorBox.style.display = "";
+          resultsWrap.style.display = "none";
+          return;
+        }
+        resultsWrap.style.display = "";
+        resultsCount.textContent = body.total.toLocaleString() + " matching parcel" + (body.total === 1 ? "" : "s");
+        resultsBody.innerHTML = (body.results || []).map(r => `
+          <tr>
+            <td><a href="/parcel/${encodeURIComponent(r.geo_id)}">${r.situs_address || "(address unknown)"}</a></td>
+            <td><span style="font-family:var(--font-mono); font-size:11.5px;">${r.geo_id}</span></td>
+            <td>${r.prop_type || "—"}</td>
+            <td class="text-end">${r.market_value != null ? "$" + Math.round(r.market_value).toLocaleString() : "—"}</td>
+            <td>${r.tax_year}</td>
+            <td>${CONFIDENCE_BADGE[r.confidence] || ""}</td>
+          </tr>
+        `).join("") || `<tr><td colspan="6" class="na-cell text-center py-3">No parcels matched these filters.</td></tr>`;
+        pageInfo.textContent = body.total_pages ? `Page ${body.page} of ${body.total_pages}` : "";
+        prevBtn.disabled = currentPage <= 1;
+        nextBtn.disabled = currentPage >= body.total_pages;
+      })
+      .catch(() => {
+        errorBox.textContent = "Something went wrong running that search. Please try again.";
+        errorBox.style.display = "";
+      });
+  }
+
+  applyBtn.addEventListener("click", () => runSearch(1));
+  prevBtn.addEventListener("click", () => { if (currentPage > 1) runSearch(currentPage - 1); });
+  nextBtn.addEventListener("click", () => runSearch(currentPage + 1));
+
+  function clearAllFilterFields() {
+    neighborhoodTA.clear(); propTypeTA.clear(); useCodeTA.clear();
+    snapshotLink.style.display = "none";
+    ["fltMvMin","fltMvMax","fltEtrMin","fltEtrMax","fltBldgMin","fltBldgMax",
+     "fltLandMin","fltLandMax","fltYrMin","fltYrMax"].forEach(id => document.getElementById(id).value = "");
+    document.getElementById("fltEtrIncludeNa").checked = false;
+    document.getElementById("fltLargeValueJump").checked = false;
+    document.getElementById("fltVerifiedOnly").checked = false;
+    document.getElementById("fltHomestead").value = "";
+    document.getElementById("fltTaxYear").value = "2025";
+    errorBox.style.display = "none";
+  }
+
+  clearBtn.addEventListener("click", () => {
+    clearAllFilterFields();
+    resultsWrap.style.display = "none";
+  });
+
+  // ── Quick Filters — one-click presets ────────────────────────────────────
+  // Chosen interaction model: clear the panel, apply the preset's values
+  // into the *same* filter fields the user would set by hand (so the
+  // applied filters stay visible/adjustable, consistent with how Apply
+  // Filters already works), run the search immediately, then scroll the
+  // panel into view. This was picked over silently running an invisible
+  // search because the filter values a preset used should be exactly as
+  // inspectable as ones the user picked themselves.
+  function runQuickFilter(preset) {
+    if (!metaReady) return;
+    clearAllFilterFields();
+
+    if (preset === "no_homestead") {
+      propTypeTA.selectByValue("Residential");
+      document.getElementById("fltHomestead").value = "not_has";
+
+    } else if (preset === "value_jump") {
+      document.getElementById("fltLargeValueJump").checked = true;
+
+    } else if (preset === "high_value_commercial") {
+      propTypeTA.selectByValue("Commercial");
+      document.getElementById("fltMvMin").value = "1000000";
+
+    } else if (preset === "new_construction") {
+      const taxYear = parseInt(document.getElementById("fltTaxYear").value || "2025", 10);
+      document.getElementById("fltYrMin").value = String(taxYear - 3);
+    }
+
+    document.getElementById("fltApplyBtn").closest(".card").scrollIntoView({ behavior: "smooth", block: "start" });
+    runSearch(1);
+  }
+
+  document.querySelectorAll(".quick-filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => runQuickFilter(btn.getAttribute("data-preset")));
+  });
 })();
 </script>
 {% endblock %}

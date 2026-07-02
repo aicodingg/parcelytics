@@ -1549,6 +1549,256 @@ def api_benchmark_meta():
     })
 
 
+# ── Filtered parcel search (Search page filter system) ─────────────────────────
+# County-agnostic by design: the "county" param is accepted and validated but
+# only "travis" exists today (single-option dropdown in the UI, same
+# structured-for-more-later pattern as the /info page's state/county
+# selectors) — adding a second county later is new WHERE-clause branches here,
+# not a rewrite of this route.
+#
+# Property-type taxonomy note: this reuses tax_logic.classify's canonical
+# 5-category taxonomy (Residential / Multi-Family / Commercial / Land-Vacant /
+# Agricultural) via label_case_sql() — the SAME taxonomy the nav sector
+# dropdown, Market Snapshot, and /api/benchmark/meta already use. There is no
+# 8-category (Commercial-Retail / Industrial / Hospitality-Other / Exempt)
+# taxonomy anywhere in this codebase; see the brief report for detail.
+SEARCH_FILTER_PAGE_SIZE = 50
+
+# Homestead exemption_codes are a comma/semicolon-separated token string
+# (schema.sql: "comma-separated codes (HS, OV65, DP, DV, etc.)"). Matching
+# must be a word-boundary check on the HS token specifically — a plain
+# substring/ILIKE '%HS%' would incorrectly match DVHS / DVHSS (Disabled
+# Veteran Homestead — a real, different exemption that contains the letters
+# "HS" but is not the general Homestead exemption).
+_HS_TOKEN_RE = r'(^|[,;])\s*HS\s*($|[,;])'
+
+
+def _row_confidence(data_source):
+    """Confidence tier for a single parcel_tax_year row, given its data_source.
+
+    Mirrors the property page's per-year confidence badge logic exactly
+    (templates/property.html, "Property-level confidence badge" block,
+    ~line 572-593) — same certified/preliminary/else-Partial branching — so
+    a parcel shown here reads the same confidence it would show on its own
+    detail page. Not a shared call site (that logic is inline Jinja on the
+    property page); if that block changes, this needs a matching update.
+
+    Only 3 of the site's 5 confidence tiers are reachable from this function:
+      - "verified"    — data_source == 'certified'
+      - "preliminary" — data_source == 'preliminary' (2026 preliminary roll)
+      - "partial"     — anything else non-null (e.g. 'ajr', 'ajr_2021',
+                         'ajr_pir_2022', 'cert_2021', or legacy NULL rows —
+                         see loaders/load_cert_2021.py, load_certified_historical.py)
+    "not_available" is impossible here: this route INNER JOINs parcel_tax_year
+    on the selected tax_year, so a result can only exist if a row is present
+    (property.html's "Not Available" branch fires when NO row exists at all —
+    structurally excluded from a result set that required a join match).
+    "estimated" is also not produced by this function: on the property page,
+    Estimated tags *computed/derived* figures (projections, billing-derived
+    tax estimates) — never a stored parcel_tax_year row's own data_source.
+    Since this route surfaces stored market_value/data_source directly (not
+    a computed figure), there is no case where "estimated" legitimately
+    applies to a row here under the site's existing confidence logic.
+    """
+    if data_source == "certified":
+        return "verified"
+    if data_source == "preliminary":
+        return "preliminary"
+    return "partial"
+
+
+@app.route("/api/search_filter")
+def api_search_filter():
+    """Filtered parcel search behind the Search page's optional filter panel.
+    Returns paginated results; requires at least one real filter beyond
+    County (and Tax Year — see has_real_filter below) to avoid running an
+    effectively-unbounded query against 508K+ parcels."""
+    args = request.args
+
+    def _f(name):
+        v = (args.get(name) or "").strip()
+        try:
+            return float(v) if v else None
+        except ValueError:
+            return None
+
+    def _i(name):
+        v = (args.get(name) or "").strip()
+        try:
+            return int(v) if v else None
+        except ValueError:
+            return None
+
+    county          = (args.get("county") or "travis").strip().lower()
+    neighborhood    = (args.get("neighborhood") or "").strip()
+    prop_type       = (args.get("prop_type") or "").strip()
+    use_code        = (args.get("use_code") or "").strip()
+    mv_min, mv_max  = _f("mv_min"), _f("mv_max")
+    etr_min, etr_max = _f("etr_min"), _f("etr_max")
+    etr_include_na  = (args.get("etr_include_na") or "") == "1"
+    bldg_min, bldg_max = _f("bldg_min"), _f("bldg_max")
+    land_min, land_max = _f("land_min"), _f("land_max")
+    yr_min, yr_max  = _i("yr_min"), _i("yr_max")
+    large_value_jump = (args.get("large_value_jump") or "") == "1"
+    homestead       = (args.get("homestead") or "").strip()   # 'has' | 'not_has' | ''
+    verified_only   = (args.get("verified_only") or "") == "1"
+    tax_year        = _i("tax_year") or 2025
+    page            = max(1, _i("page") or 1)
+
+    if county != "travis":
+        return jsonify({"ok": False, "error": f"Unknown county '{county}'. Only Travis County, TX is available today."}), 400
+
+    # ── Minimum-filter guard ────────────────────────────────────────────────
+    # County and Tax Year each SELECT which slice of data to look at — neither
+    # narrows the underlying population on its own, so neither counts toward
+    # the "at least one filter beyond County" requirement. Every other filter
+    # does narrow the result set, so any one of them satisfies the guard.
+    #
+    # etr_include_na is deliberately NOT in this list. It's a modifier on the
+    # ETR range filter, not a filter on its own — the WHERE-clause block below
+    # only emits a condition when etr_min or etr_max is set (see "if etr_min
+    # is not None or etr_max is not None" further down); etr_include_na alone
+    # never reaches that block, so it never actually narrows the query. Before
+    # this fix, etr_include_na=1 with no min/max satisfied this guard while
+    # producing zero WHERE conditions — i.e. an unfiltered scan of all 508K+
+    # parcels could slip through. It must pair with etr_min and/or etr_max.
+    has_real_filter = any([
+        neighborhood, prop_type, use_code,
+        mv_min is not None, mv_max is not None,
+        etr_min is not None, etr_max is not None,
+        bldg_min is not None, bldg_max is not None,
+        land_min is not None, land_max is not None,
+        yr_min is not None, yr_max is not None,
+        large_value_jump, homestead, verified_only,
+    ])
+    if not has_real_filter:
+        return jsonify({
+            "ok": False,
+            "error": ("Select at least one filter beyond County to run a search — County alone "
+                      "would match all 508,000+ Travis County parcels."),
+        }), 400
+
+    where = ["1=1"]
+    params = {"tax_year": tax_year}
+
+    if neighborhood:
+        where.append("p.neighborhood_cd = %(neighborhood)s")
+        params["neighborhood"] = neighborhood
+
+    _ptype_sql = label_case_sql("p.classi_cd", "p.state_cd1")  # emits no '%' — safe alongside %()s params
+
+    if prop_type:
+        where.append(f"({_ptype_sql}) = %(prop_type)s")
+        params["prop_type"] = prop_type
+
+    if use_code:
+        where.append("p.classi_cd = %(use_code)s")
+        params["use_code"] = use_code
+
+    if mv_min is not None:
+        where.append("pty.market_value >= %(mv_min)s")
+        params["mv_min"] = mv_min
+    if mv_max is not None:
+        where.append("pty.market_value <= %(mv_max)s")
+        params["mv_max"] = mv_max
+
+    # effective_tax_rate is stored as a fraction (e.g. 0.020465), displayed
+    # elsewhere ×100 as a percentage — user-entered min/max here are percentages
+    # and must be divided by 100 before comparing against the stored column.
+    if etr_min is not None or etr_max is not None:
+        etr_conds = []
+        if etr_min is not None:
+            etr_conds.append("pm.effective_tax_rate >= %(etr_min)s")
+            params["etr_min"] = etr_min / 100.0
+        if etr_max is not None:
+            etr_conds.append("pm.effective_tax_rate <= %(etr_max)s")
+            params["etr_max"] = etr_max / 100.0
+        etr_clause = " AND ".join(etr_conds)
+        if etr_include_na:
+            where.append(f"(({etr_clause}) OR pm.effective_tax_rate IS NULL)")
+        else:
+            where.append(f"({etr_clause})")
+
+    if bldg_min is not None:
+        where.append("p.living_area_sqft >= %(bldg_min)s")
+        params["bldg_min"] = bldg_min
+    if bldg_max is not None:
+        where.append("p.living_area_sqft <= %(bldg_max)s")
+        params["bldg_max"] = bldg_max
+
+    if land_min is not None:
+        where.append("p.land_sqft >= %(land_min)s")
+        params["land_min"] = land_min
+    if land_max is not None:
+        where.append("p.land_sqft <= %(land_max)s")
+        params["land_max"] = land_max
+
+    if yr_min is not None:
+        where.append("p.year_built >= %(yr_min)s")
+        params["yr_min"] = yr_min
+    if yr_max is not None:
+        where.append("p.year_built <= %(yr_max)s")
+        params["yr_max"] = yr_max
+
+    if large_value_jump:
+        where.append("pm.risk_large_value_jump = TRUE")
+
+    if homestead in ("has", "not_has"):
+        params["hs_re"] = _HS_TOKEN_RE
+        if homestead == "has":
+            where.append("(pty.exemption_codes IS NOT NULL AND pty.exemption_codes ~ %(hs_re)s)")
+        else:
+            where.append("(pty.exemption_codes IS NULL OR pty.exemption_codes !~ %(hs_re)s)")
+
+    if verified_only:
+        # Direct mapping onto parcel_tax_year.data_source = 'certified' (the
+        # actual stored confidence signal for values). Does not additionally
+        # require verified BILLING data — see brief report for this scoping note.
+        where.append("pty.data_source = 'certified'")
+
+    where_sql = " AND ".join(where)
+    offset = (page - 1) * SEARCH_FILTER_PAGE_SIZE
+    params["offset"] = offset
+
+    sql = f"""
+        SELECT
+            p.geo_id, p.situs_address, p.neighborhood_cd,
+            ({_ptype_sql}) AS prop_type_label,
+            pty.market_value, pty.data_source, pty.tax_year,
+            COUNT(*) OVER() AS total_count
+        FROM parcel p
+        JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = %(tax_year)s
+        LEFT JOIN parcel_metrics pm ON pm.geo_id = p.geo_id AND pm.tax_year = %(tax_year)s
+        WHERE {where_sql}
+        ORDER BY p.situs_address NULLS LAST, p.geo_id
+        LIMIT {SEARCH_FILTER_PAGE_SIZE} OFFSET %(offset)s
+    """
+
+    rows = query(sql, params)
+    total = int(rows[0]["total_count"]) if rows else 0
+
+    results = []
+    for r in rows:
+        confidence = _row_confidence(r["data_source"])
+        results.append({
+            "geo_id": r["geo_id"],
+            "situs_address": r["situs_address"],
+            "neighborhood_cd": r["neighborhood_cd"],
+            "prop_type": r["prop_type_label"],
+            "market_value": float(r["market_value"]) if r["market_value"] is not None else None,
+            "tax_year": r["tax_year"],
+            "confidence": confidence,
+        })
+
+    total_pages = (total + SEARCH_FILTER_PAGE_SIZE - 1) // SEARCH_FILTER_PAGE_SIZE if total else 0
+    return jsonify({
+        "ok": True,
+        "results": results,
+        "total": total,
+        "page": page,
+        "page_size": SEARCH_FILTER_PAGE_SIZE,
+        "total_pages": total_pages,
+    })
 
 
 @app.route("/api/estimate_acq/<geo_id>")
