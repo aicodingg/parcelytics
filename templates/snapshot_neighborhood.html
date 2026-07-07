@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Neighborhood {{ code }} — Parcelytics{% endblock %}
+
+{% block content %}
+{# Back link — same convention as parcel_list.html's "&larr; Back to Snapshot" #}
+<a href="/snapshot?view={{ view }}" class="back-link">&larr; Back to Market Snapshot{% if view != 'overall' %} ({{ view_prop_type }}){% endif %}</a>
+
+<div class="page-header mb-3 mt-2 d-flex align-items-center gap-3 flex-wrap">
+  <div>
+    <h1 class="page-title mb-0" style="font-family:var(--font-mono);">{{ code }}</h1>
+    <p class="text-muted mb-0" style="font-size:13px; margin-top:4px;">
+      {{ "{:,}".format(total) }} parcel{{ "" if total == 1 else "s" }}
+      {% if view_prop_type %}&middot; {{ view_prop_type }} only{% endif %}
+      &middot; 2025 Certified vs 2026 Preliminary
+      <span class="badge-preliminary ms-2">Preliminary</span>
+    </p>
+  </div>
+</div>
+
+{% if parcels %}
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover table-stack mb-0">
+        <thead class="table-light small text-muted text-uppercase">
+          <tr>
+            <th>Address</th>
+            <th>Parcel ID</th>
+            <th class="text-end">2025 Market Value <span class="badge-verified" style="font-size:8px; padding:1px 4px;">V</span></th>
+            <th class="text-end">2026 Preliminary Value <span class="badge-preliminary" style="font-size:8px; padding:1px 4px;">P</span></th>
+            <th class="text-end">% Change</th>
+            {% if view == 'overall' %}<th>Property Type</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in parcels %}
+          <tr>
+            <td data-label="Address">
+              <a href="/parcel/{{ p.geo_id }}" class="text-decoration-none">{{ p.situs_address or "(unknown)" }}</a>
+            </td>
+            <td data-label="Parcel ID">
+              <a href="/parcel/{{ p.geo_id }}" class="text-muted text-decoration-none" style="font-family:var(--font-mono); font-size:11.5px;">{{ p.geo_id }}</a>
+            </td>
+            <td class="text-end" style="font-family:var(--font-mono); font-size:12px;" data-label="2025 Market Value">
+              {{ "$" + "{:,.0f}".format(p.mv25) if p.mv25 else "—" }}
+            </td>
+            <td class="text-end" style="font-family:var(--font-mono); font-size:12px;" data-label="2026 Preliminary Value">
+              {{ "$" + "{:,.0f}".format(p.mv26) if p.mv26 else "—" }}
+            </td>
+            <td class="text-end fw-semibold {% if p.pct_chg > 0 %}text-danger{% elif p.pct_chg < 0 %}text-success{% endif %}" data-label="% Change">
+              {% if p.pct_chg is not none %}{{ "{:+.1f}%".format(p.pct_chg) }}{% else %}—{% endif %}
+            </td>
+            {% if view == 'overall' %}<td class="text-muted small" data-label="Property Type">{{ p.prop_type }}</td>{% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span class="text-muted small">
+      V = Certified 2025 data. P = Preliminary 2026 data, subject to change at certification (July 25, 2026).
+      Excludes tax-exempt (X), personal-property (N), and AJR* supplement records — same population as Market Snapshot.
+    </span>
+    {% if total_pages > 1 %}
+    <div class="d-flex align-items-center gap-2">
+      {% if page > 1 %}
+      <a href="/snapshot/neighborhood/{{ code }}?view={{ view }}&page={{ page - 1 }}" class="btn btn-sm btn-outline-secondary">&larr; Prev</a>
+      {% else %}
+      <button type="button" class="btn btn-sm btn-outline-secondary" disabled>&larr; Prev</button>
+      {% endif %}
+      <span class="text-muted" style="font-size:12px;">Page {{ page }} of {{ total_pages }}</span>
+      {% if page < total_pages %}
+      <a href="/snapshot/neighborhood/{{ code }}?view={{ view }}&page={{ page + 1 }}" class="btn btn-sm btn-outline-secondary">Next &rarr;</a>
+      {% else %}
+      <button type="button" class="btn btn-sm btn-outline-secondary" disabled>Next &rarr;</button>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<div class="search-error-block">
+  No parcels found for neighborhood {{ code }}{% if view_prop_type %} in the {{ view_prop_type }} sector{% endif %}.
+</div>
+{% endif %}
+{% endblock %}

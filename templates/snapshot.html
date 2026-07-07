@@ -12,6 +12,25 @@
   </div>
 </div>
 
+{# ── County filter — same combobox pattern as Search/Rate Trends/Info;
+   one real option today ("Travis County, TX"), structured so a second
+   county is just another entry in setOptions(), not a restructure. Not
+   wired to any query param yet since there's only one county's data to
+   show either way — same as Rate Trends' County filter, which is purely
+   structural for now too. Diego's broader zoomable-map idea for county
+   selection is intentionally on hold (overlaps with not-yet-started
+   Phase 3 GIS work) — this is the same lightweight dropdown used
+   elsewhere, not a new pattern. #}
+<div class="mb-3">
+  <label class="form-label small text-muted mb-1" for="fltCountyInput">County</label>
+  <div class="ta-select" data-field="county" style="position:relative; max-width:260px;">
+    <input type="text" id="fltCountyInput" class="form-control form-control-sm ta-select-input"
+           autocomplete="off" spellcheck="false" style="font-size:12px;">
+    <input type="hidden" id="fltCountyValue" value="travis">
+    <div class="ta-list" id="fltCountyList" style="display:none;"></div>
+  </div>
+</div>
+
 {# ── View toggle (hidden in homeowner mode) ─────────────────────── #}
 {% if mode != 'homeowner' %}
 <div class="mb-4">
@@ -81,6 +100,23 @@
       {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
     </div>
     <div class="kpi-sub">{{ "{:,}".format(totals.n_up) }} ↑&nbsp;&nbsp;{{ "{:,}".format(totals.n_down) }} ↓</div>
+  </div>
+</div>
+
+{# ── New aggregate stats (Part 4, items 2 & 3) — risk signal count and new
+   construction count for the current sector. Both computed from data
+   that's already loaded (parcel_metrics.risk_large_value_jump, parcel.
+   year_built) — no new pipeline. #}
+<div class="kpi-row mb-4">
+  <div class="kpi-card">
+    <div class="kpi-label">Large Value-Jump Signals</div>
+    <div class="kpi-value">{{ "{:,}".format(risk_flagged_count) }}</div>
+    <div class="kpi-sub">parcels flagged for an unusually large value change this year</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">New Construction</div>
+    <div class="kpi-value">{{ "{:,}".format(new_construction_count) }}</div>
+    <div class="kpi-sub">parcels built {{ 2026 - 3 }} or later — same cutoff as Search's New Construction filter</div>
   </div>
 </div>
 
@@ -250,11 +286,11 @@
             <td class="text-end">{{ "{:,}".format(t.n_total) }}</td>
             <td class="text-end text-danger">{{ "{:,}".format(t.n_up) }}</td>
             <td class="text-end text-success">{{ "{:,}".format(t.n_down) }}</td>
-            <td class="text-end text-muted">—</td>
+            <td class="text-end text-muted">{{ "{:,}".format(t.n_flat) }}</td>
             <td class="text-end {% if t.median_pct > 0 %}text-danger{% elif t.median_pct < 0 %}text-success{% endif %}">
               {{ "+" if t.median_pct >= 0 else "" }}{{ t.median_pct }}%
             </td>
-            <td></td>
+            <td class="text-end text-muted">—</td>
             <td class="text-end">${{ "{:,.2f}B".format(t.total_mv25_b) }}</td>
             <td class="text-end">${{ "{:,.2f}B".format(t.total_mv26_b) }}</td>
             <td class="text-end {% if t_delta >= 0 %}text-danger{% else %}text-success{% endif %}">
@@ -275,6 +311,81 @@
     Red = increasing burden, green = decreasing.
   </div>
 </div>
+
+{# ── Top & Bottom Moving Neighborhoods (Part 4, item 1) — within the
+   current sector. county_benchmark has no neighborhood_cd grouping
+   (PRIMARY KEY is county_code/tax_year/property_type_label only), so this
+   is a new read aggregation (app.py's top_neighborhoods / bottom_neighborhoods),
+   not new data collection. Neighborhoods with fewer than 10 qualifying
+   parcels in the current sector are excluded server-side (HAVING COUNT(*)
+   >= 10) to keep a tiny, noisy neighborhood from dominating the list — a
+   judgment call, flagged here rather than silently baked in. #}
+{# Neighborhood links go to the dedicated drill-down page
+   (/snapshot/neighborhood/<code>?view=<view>) rather than Search — that
+   page shows both years' parcel-level values side by side, which a
+   Search filter result (one year at a time) can't. The Search page's own
+   ?neighborhood=/?prop_type= URL-param handling from the prior round is
+   left in place, just no longer linked from here. #}
+{% if top_neighborhoods or bottom_neighborhoods %}
+<div class="card mb-4">
+  <div class="card-header">Top &amp; Bottom Moving Neighborhoods</div>
+  <div class="card-body">
+    <div class="row g-4">
+      <div class="col-md-6">
+        <div class="text-muted text-uppercase fw-semibold mb-2" style="letter-spacing:.04em; font-size:11px;">Largest increases</div>
+        {% if top_neighborhoods %}
+        <table class="table table-sm mb-0">
+          <tbody>
+            {% for n in top_neighborhoods %}
+            <tr>
+              <td style="font-family:var(--font-mono); font-size:12px;">
+                <a href="/snapshot/neighborhood/{{ n.neighborhood_cd | urlencode }}?view={{ view | urlencode }}"
+                   title="View {{ n.neighborhood_cd }} parcel detail">{{ n.neighborhood_cd }}</a>
+              </td>
+              <td class="text-end fw-semibold {% if n.median_pct > 0 %}text-danger{% elif n.median_pct < 0 %}text-success{% endif %}">
+                {{ "+" if n.median_pct >= 0 else "" }}{{ n.median_pct }}%
+              </td>
+              <td class="text-end text-muted small">{{ "{:,}".format(n.n_parcels) }} parcels</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted small mb-0">No neighborhoods with 10+ parcels in this sector.</p>
+        {% endif %}
+      </div>
+      <div class="col-md-6">
+        <div class="text-muted text-uppercase fw-semibold mb-2" style="letter-spacing:.04em; font-size:11px;">Largest decreases</div>
+        {% if bottom_neighborhoods %}
+        <table class="table table-sm mb-0">
+          <tbody>
+            {% for n in bottom_neighborhoods %}
+            <tr>
+              <td style="font-family:var(--font-mono); font-size:12px;">
+                <a href="/snapshot/neighborhood/{{ n.neighborhood_cd | urlencode }}?view={{ view | urlencode }}"
+                   title="View {{ n.neighborhood_cd }} parcel detail">{{ n.neighborhood_cd }}</a>
+              </td>
+              <td class="text-end fw-semibold {% if n.median_pct > 0 %}text-danger{% elif n.median_pct < 0 %}text-success{% endif %}">
+                {{ "+" if n.median_pct >= 0 else "" }}{{ n.median_pct }}%
+              </td>
+              <td class="text-end text-muted small">{{ "{:,}".format(n.n_parcels) }} parcels</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted small mb-0">No neighborhoods with 10+ parcels in this sector.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="card-footer text-muted small">
+    Median parcel-level YoY % change by neighborhood_cd, current sector only ({{ "{:,}".format(totals.n_total) if totals else "" }} parcels total).
+    Neighborhoods with fewer than 10 qualifying parcels are excluded. Red = increasing value, green = decreasing — same convention as the table above.
+    Click a neighborhood code to browse its parcels in Search.
+  </div>
+</div>
+{% endif %}
 
 {# ── Annual Trends (county-level from county_benchmark) ────────────── #}
 {% if bench_trends %}
@@ -381,11 +492,37 @@
 {% endif %}
 {% endif %}
 
-{# ── Chart ─────────────────────────────────────────────────────── #}
+{# ── Chart (Part 5) ────────────────────────────────────────────────
+   Investigated before redesigning: this chart's data is total_mv26_b -
+   total_mv25_b per property type — the exact same 2025-certified-vs-2026-
+   preliminary comparison already shown in the table above, for a SINGLE
+   period (not the 2021-2025 multi-year span the Annual Trends card shows).
+   Confirmed via app.py: `rows` computes total_mv25_b/total_mv26_b from the
+   y25 (tax_year=2025) / y26 (tax_year=2026) CTEs only — no other years
+   enter this query. Title now states that period explicitly. #}
 <div class="card mb-4">
-  <div class="card-header">Net Value Change by Property Type ($B)</div>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span id="snapshotChartTitle">Net Value Change by Property Type, 2025→2026 ($B)</span>
+    {# $/% toggle rather than always-visible dual labels — the two metrics
+       (aggregate $ and aggregate %) have very different scales, and
+       showing both as bars at once would need a dual-axis chart (more
+       room for misreading) or two side-by-side charts (heavier). A toggle
+       reuses a pattern already on this exact page (the sector buttons
+       above) and lets the "which sector holds the most value" question
+       ($ view) and the "what's changing fastest, relatively" question
+       (% view) each get an uncluttered, single-metric chart. #}
+    <div class="btn-group btn-group-sm" role="group" aria-label="Chart display mode">
+      <button type="button" class="btn btn-outline-secondary active" id="snapChartModeDollar">$</button>
+      <button type="button" class="btn btn-outline-secondary" id="snapChartModePct">%</button>
+    </div>
+  </div>
   <div class="card-body">
     <canvas id="snapshotChart" height="80"></canvas>
+  </div>
+  <div class="card-footer text-muted small">
+    % view = aggregate value change per sector (total 2026 MV ÷ total 2025 MV − 1) — the same underlying
+    totals as the $ view, just normalized by sector size, so it answers "what's changing fastest
+    proportionally" rather than "which sector holds the most value."
   </div>
 </div>
 
@@ -397,20 +534,107 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+// ── County typeahead-select — copied verbatim from templates/search.html's
+// initTypeaheadSelect() (same fieldKey/idSuffix convention as Search and
+// Rate Trends), not reinvented. Outside the rows-guarded script block below
+// since the County filter's markup renders regardless of whether snapshot
+// data is loaded. ───────────────────────────────────────────────────────
+(function () {
+  function initTypeaheadSelect(fieldKey, idSuffix) {
+    const wrap  = document.querySelector(`.ta-select[data-field="${fieldKey}"]`);
+    const input = document.getElementById(`flt${idSuffix}Input`);
+    const hidden = document.getElementById(`flt${idSuffix}Value`);
+    const list  = document.getElementById(`flt${idSuffix}List`);
+    if (!wrap || !input || !hidden || !list) return null;
+
+    let options = [];   // [{value, label}]
+
+    function render(filterText) {
+      const q = (filterText || "").toLowerCase();
+      const matches = q ? options.filter(o => o.label.toLowerCase().includes(q)) : options;
+      if (!matches.length) { list.style.display = "none"; return; }
+      list.innerHTML = matches.slice(0, 300).map(o =>
+        `<a href="#" class="ta-opt" data-value="${o.value.replace(/"/g, '&quot;')}">${o.label}</a>`
+      ).join("");
+      // NOT list.style.display = "" — .ta-list's own CSS class rule sets
+      // display:none as its default; clearing the inline style back to ""
+      // just lets that class rule win again. Must set a real value.
+      list.style.display = "block";
+    }
+
+    function selectOption(val) {
+      const opt = options.find(o => o.value === val);
+      input.value = opt ? opt.label : "";
+      hidden.value = val;
+      list.style.display = "none";
+      input.dispatchEvent(new CustomEvent("ta:select", { detail: val }));
+    }
+
+    input.addEventListener("input", () => { hidden.value = ""; render(input.value); });
+    input.addEventListener("focus", () => render(""));
+    input.addEventListener("click", () => render(""));
+    input.addEventListener("blur", () => setTimeout(() => { list.style.display = "none"; }, 150));
+    list.addEventListener("mousedown", (e) => {
+      const item = e.target.closest(".ta-opt");
+      if (!item) return;
+      e.preventDefault();
+      selectOption(item.getAttribute("data-value"));
+    });
+
+    return {
+      setOptions(newOptions) { options = newOptions || []; },
+      clear() { input.value = ""; hidden.value = ""; },
+      getValue() { return hidden.value; },
+      selectByValue(val) {
+        if (!options.some(o => o.value === val)) return false;
+        selectOption(val);
+        return true;
+      },
+    };
+  }
+
+  const countyTA = initTypeaheadSelect("county", "County");
+  if (!countyTA) return;
+  countyTA.setOptions([{ value: "travis", label: "Travis County, TX" }]);
+  document.getElementById("fltCountyInput").value = "Travis County, TX";
+  document.getElementById("fltCountyValue").value = "travis";
+})();
+</script>
 {% if rows %}
 <script>
 const snapLabels = {{ rows | selectattr('ptype', 'ne', 'Other') | map(attribute='ptype') | list | tojson }};
 const snapDeltas = [
   {% for r in rows %}{% if r.ptype != 'Other' %}{{ (r.total_mv26_b - r.total_mv25_b) | round(2) }},{% endif %}{% endfor %}
 ];
+// % view = aggregate value change per sector (2026 total ÷ 2025 total − 1),
+// the same underlying totals as snapDeltas, just normalized by sector size —
+// answers "what's changing fastest proportionally" instead of "which sector
+// holds the most value." Same sign as snapDeltas per row (dividing/multiplying
+// by a positive base preserves sign), so snapColors below applies to both.
+const snapPcts = [
+  {% for r in rows %}{% if r.ptype != 'Other' %}{{ (((r.total_mv26_b - r.total_mv25_b) / r.total_mv25_b * 100) if r.total_mv25_b else 0) | round(2) }},{% endif %}{% endfor %}
+];
+// Color logic UNCHANGED from before this round — held pending confirmation,
+// see final report: this currently matches the rest of THIS page's own
+// established, documented convention (red = value increasing = rising tax
+// burden, green = decreasing = relief; see the "--up"/"--down" CSS tokens
+// and the "Red = increasing burden, green = decreasing" footnote above),
+// not a bug being fixed here. Flagging rather than silently changing it,
+// since the brief's literal ask ("reserve red for negative values") would
+// conflict with that same convention used in the KPI cards and table on
+// this exact page.
 const snapColors = snapDeltas.map(v => v >= 0 ? 'rgba(217,45,32,0.78)' : 'rgba(6,118,71,0.78)');
 
-new Chart(document.getElementById('snapshotChart'), {
+let snapChartMode = 'dollar';
+function snapCurrentData() { return snapChartMode === 'dollar' ? snapDeltas : snapPcts; }
+
+const snapChart = new Chart(document.getElementById('snapshotChart'), {
   type: 'bar',
   data: {
     labels: snapLabels,
     datasets: [{
-      label: 'Net MV Change ($B)',
+      label: 'Net MV Change',
       data: snapDeltas,
       backgroundColor: snapColors,
       borderColor: snapColors.map(c => c.replace('0.7','1')),
@@ -423,19 +647,37 @@ new Chart(document.getElementById('snapshotChart'), {
       legend: { display: false },
       tooltip: {
         callbacks: {
-          label: item => `${item.parsed.y >= 0 ? '+' : ''}$${item.parsed.y.toFixed(2)}B`
+          label: item => snapChartMode === 'dollar'
+            ? `${item.parsed.y >= 0 ? '+' : ''}$${item.parsed.y.toFixed(2)}B`
+            : `${item.parsed.y >= 0 ? '+' : ''}${item.parsed.y.toFixed(1)}%`
         }
       }
     },
     scales: {
       y: {
-        ticks: { callback: v => (v >= 0 ? '+' : '') + '$' + v.toFixed(1) + 'B' },
+        ticks: {
+          callback: v => snapChartMode === 'dollar'
+            ? (v >= 0 ? '+' : '') + '$' + v.toFixed(1) + 'B'
+            : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'
+        },
         grid: { color: 'rgba(0,0,0,0.06)' }
       },
       x: { grid: { display: false } }
     }
   }
 });
+
+const snapModeDollarBtn = document.getElementById('snapChartModeDollar');
+const snapModePctBtn    = document.getElementById('snapChartModePct');
+function snapSetMode(mode) {
+  snapChartMode = mode;
+  snapChart.data.datasets[0].data = snapCurrentData();
+  snapChart.update();
+  snapModeDollarBtn.classList.toggle('active', mode === 'dollar');
+  snapModePctBtn.classList.toggle('active', mode === 'pct');
+}
+snapModeDollarBtn.addEventListener('click', () => snapSetMode('dollar'));
+snapModePctBtn.addEventListener('click', () => snapSetMode('pct'));
 </script>
 {% endif %}
 {% endblock %}

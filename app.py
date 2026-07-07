@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import re
+import time
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 import psycopg2
 import psycopg2.extras
@@ -724,6 +725,50 @@ def query(sql, params=None, one=False):
         conn.close()
 
 
+def query_no_nestloop(sql, params=None, one=False):
+    """
+    Like query(), but disables Nested Loop plans for this one query via a
+    transaction-scoped `SET LOCAL enable_nestloop = off`.
+
+    Reserved ONLY for the three Market Snapshot queries in
+    _compute_snapshot_data() (breakdown, Part 4 aggregate, neighborhoods)
+    that each join parcel_tax_year twice — once for tax_year=2025, once for
+    tax_year=2026. On this deployment (Postgres 15), the planner
+    consistently mis-chooses a Nested Loop doing ~407,000 individual
+    per-row index probes against parcel_tax_year_pkey for that second join,
+    instead of a Hash/Merge Join — confirmed NOT to be a cache-timing
+    illusion by running each query 4x (on/off/on/off) via
+    task_staging/snapshot_perf/check_snapshot_nestloop_off.command: forcing
+    the join off beat the planner's own choice every single time, at every
+    position in the run order:
+        breakdown:      480-1489ms (off)  vs 3008-9644ms (on, planner default)
+        Part 4 aggregate: 299-535ms (off) vs  974-2491ms (on)
+        neighborhoods:    361-362ms (off) vs 2382-2393ms (on) — this one
+            especially clean: the "on" plan was rock-steady ~2.4s on both
+            of its runs, so there's no cache-order ambiguity to explain away.
+    This is NOT a blanket "nested loop is always bad" opinion, and it must
+    not be copy-pasted onto other queries without the same on/off
+    measurement — for a query where Postgres's own Nested Loop choice is
+    actually correct, this override would make things slower, not faster.
+    It is intentionally scoped two ways so it can't leak beyond its
+    purpose: (1) SET LOCAL only affects the current transaction, never the
+    session or server; (2) this helper opens its own connection and is
+    never committed — the connection is closed (implicit rollback) right
+    after fetching results, so nothing persists beyond this one query call.
+    Do not "clean this up" into a session-wide `SET enable_nestloop = off`
+    or apply it to query() generally — see the investigation history above
+    before touching this.
+    """
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SET LOCAL enable_nestloop = off")
+            cur.execute(sql, params or ())
+            return cur.fetchone() if one else cur.fetchall()
+    finally:
+        conn.close()
+
+
 # ── Search normalisation ──────────────────────────────────────────────────────
 def normalize_parcel_id(raw: str) -> str:
     """
@@ -1241,6 +1286,61 @@ def api_parcel_entities():
     })
 
 
+# ── Market Snapshot shared scoping — canonical exclusion filter + the
+# view -> property-type WHERE fragment. Hoisted to module level so any
+# route that needs the same "current Market Snapshot sector" population
+# (originally just _compute_snapshot_data(), now also
+# snapshot_neighborhood() below) reuses these exactly rather than each
+# re-declaring its own copy of the same literal SQL.
+#
+# CANONICAL_PARCEL_EXCL — verified against loaders/compute_metrics.py's
+# BENCHMARK_EXCLUDE_PREFIXES = ["X", "N"] (the filter
+# compute_county_benchmarks() itself uses) plus its own
+# "AND p.geo_id NOT LIKE 'AJR%%'" — matches /api/benchmark's excl_filter
+# exactly (commented there as "mirrors compute_metrics.py").
+CANONICAL_PARCEL_EXCL = "AND p.state_cd1 NOT LIKE 'X%%' AND p.state_cd1 NOT LIKE 'N%%' AND p.geo_id NOT LIKE 'AJR%%'"
+
+# view -> property_type_label, matching templates/snapshot.html's
+# _view_to_prop_type Jinja mapping and search.html's SNAPSHOT_VIEW_BY_LABEL
+# (inverse direction) — same 5-category classify.py taxonomy used
+# everywhere on this site, not a new one for this route.
+_SNAPSHOT_VIEW_PROP_TYPE_LABEL = {
+    "residential": "Residential", "multifamily": "Multi-Family",
+    "commercial": "Commercial", "land": "Land/Vacant", "agricultural": "Agricultural",
+}
+
+
+def _snapshot_view_where(view):
+    """
+    Property-type WHERE-clause fragment for a Market Snapshot `view`, using
+    the same classi_cd-first label_case_sql(...) scoping
+    _compute_snapshot_data() already used per-view (residential/commercial/
+    multifamily/land/agricultural each map to one property_type_label;
+    "overall" returns "" since it spans every type, unrestricted).
+    """
+    label = _SNAPSHOT_VIEW_PROP_TYPE_LABEL.get(view)
+    if not label:
+        return ""
+    _lbl = label_case_sql("p.classi_cd", "p.state_cd1")
+    return f"AND ({_lbl}) = '{label}'"
+
+
+# Part 1 performance fix — simple in-process cache for /snapshot, keyed by
+# view. TTL-bounded rather than event-invalidated: this app's data reloads
+# happen out-of-band via separate loader scripts (compute_metrics.py etc.),
+# not through any live signal this long-running Flask process could listen
+# for, so wiring up precise reload-triggered invalidation would mean adding
+# new cross-process coordination (e.g. a sentinel file or admin endpoint)
+# beyond what "simple" calls for. A 10-minute TTL bounds staleness to a
+# window that's a non-issue for data that's reloaded manually and rarely.
+# Known limitation, accepted rather than engineered around: this dict is
+# per-process, so under a multi-worker deployment (e.g. gunicorn -w 4) each
+# worker keeps its own cache and the effective hit rate drops accordingly —
+# still correct, just less effective than a shared cache would be.
+_SNAPSHOT_CACHE = {}
+_SNAPSHOT_CACHE_TTL_SECONDS = 600
+
+
 @app.route("/snapshot")
 def county_snapshot():
     """County Market Snapshot — 2026 preliminary vs 2025 certified.
@@ -1253,170 +1353,245 @@ def county_snapshot():
     if _resolve_mode() == "homeowner":
         view = "residential"
 
-    # ── View-specific WHERE clause applied to the y25 CTE ───────────────────
-    # Base exclusions always apply: X-prefix (exempt), AJR* (personal property supplements).
+    # _compute_snapshot_data(view) is purely a function of `view` (and
+    # current DB state) — mode only changes which template text renders,
+    # not the query results — so it's safe to cache by view alone, shared
+    # across homeowner/investor mode.
+    cached = _SNAPSHOT_CACHE.get(view)
+    if cached and (time.time() - cached["ts"]) < _SNAPSHOT_CACHE_TTL_SECONDS:
+        payload = cached["payload"]
+    else:
+        payload = _compute_snapshot_data(view)
+        _SNAPSHOT_CACHE[view] = {"payload": payload, "ts": time.time()}
+
+    return render_template("snapshot.html", view=view, **payload)
+
+
+def _compute_snapshot_data(view):
+    """
+    Runs the Market Snapshot queries for one sector view. Split out from
+    county_snapshot() so the route can short-circuit via the cache above
+    without duplicating this logic.
+
+    Part 1 performance fix: `rows` (per-property-type breakdown) and
+    `totals` (the grand-total row) used to be two separate, near-duplicate
+    queries, each independently JOINing parcel_tax_year's 2025 and 2026
+    rows for the whole sector — the same expensive join computed twice per
+    request. Confirmed via check_snapshot_perf.command: TOTALS alone took
+    ~840ms on a Nested Loop plan (407,967 loops) while ROWS used an
+    efficient Hash Join for the same shape of work. They're now ONE query
+    using GROUP BY GROUPING SETS ((ptype, sort_key), ()) — one pass over
+    the joined data produces both the per-sector breakdown AND the single
+    grand-total row (ptype IS NULL marks the total row; split out below).
+
+    Investigating the merge surfaced a second, real bug, not just a
+    performance one: the two queries' parcel-eligibility filters weren't
+    actually identical. ROWS excluded only state_cd1 X* (plus N* only for
+    the "overall" view, via the old view_where special-case) and filtered
+    AJR* on the parcel table; TOTALS hardcoded X* + N* and filtered AJR* on
+    the tax_year table instead. They happened to produce the same row count
+    in the check_snapshot_perf.command run — by coincidence of current data
+    (no N*-prefix parcel fell in the tested view), not by logical
+    equivalence. For the 5 non-"overall" sector views, ROWS was NOT
+    excluding the 3 known N*-prefix personal-property accounts that TOTALS
+    was, meaning the per-sector breakdown and the grand total could
+    silently disagree by those parcels whenever one fell in-sector.
+
+    The correct, canonical filter — confirmed against the actual source of
+    truth rather than picked ad hoc between the two ad hoc versions — is
+    loaders/compute_metrics.py's BENCHMARK_EXCLUDE_PREFIXES = ["X", "N"]
+    (the exact set compute_county_benchmarks() uses to build
+    county_benchmark itself, with documented parcel counts and reasoning
+    per prefix) plus its own "AND p.geo_id NOT LIKE 'AJR%%'". This is also
+    exactly what /api/benchmark's excl_filter already uses, commented there
+    as "mirrors compute_metrics.py" — so this brings /snapshot in line with
+    both. Applied unconditionally below (canonical_excl), not per-view, so
+    "overall" no longer needs its own N-exclusion special-case in
+    view_where.
+    """
     # classi_cd-first membership (Task 1): a parcel is placed by its actual
     # improvement use (apartments -> Multi-Family) before its state_cd1 prefix.
-    _lbl = label_case_sql("p.classi_cd", "p.state_cd1")
+    # NOTE: ptype_case/sort_case below reference "p." (the parcel table
+    # alias used directly in the flattened breakdown query, Part 1 round 3
+    # fix). They previously referenced "y25." back when this data came
+    # through an intermediate y25 CTE; p.state_cd1/p.classi_cd are the same
+    # columns the old y25 CTE passed through unchanged, so this is a
+    # rename only, not a logic change.
+    #
+    # view_where is now computed once via the shared _snapshot_view_where()
+    # helper (module-level, near CANONICAL_PARCEL_EXCL above) rather than
+    # per-branch below, so snapshot_neighborhood()'s route can reuse the
+    # exact same view -> property-type scoping instead of re-deriving it.
+    view_where = _snapshot_view_where(view)
     if view == "residential":
-        view_where    = f"AND ({_lbl}) = 'Residential'"
         bench_labels  = ["Residential"]
         ptype_case = """
             CASE
-                WHEN y25.state_cd1 LIKE 'A1%%' THEN 'Single-Family'
-                WHEN y25.state_cd1 LIKE 'A2%%' OR y25.state_cd1 LIKE 'A4%%' THEN 'Condo / Townhome'
+                WHEN p.state_cd1 LIKE 'A1%%' THEN 'Single-Family'
+                WHEN p.state_cd1 LIKE 'A2%%' OR p.state_cd1 LIKE 'A4%%' THEN 'Condo / Townhome'
                 ELSE 'Other Residential'
             END"""
         sort_case = """
             CASE
-                WHEN y25.state_cd1 LIKE 'A1%%' THEN 1
-                WHEN y25.state_cd1 LIKE 'A2%%' OR y25.state_cd1 LIKE 'A4%%' THEN 2
+                WHEN p.state_cd1 LIKE 'A1%%' THEN 1
+                WHEN p.state_cd1 LIKE 'A2%%' OR p.state_cd1 LIKE 'A4%%' THEN 2
                 ELSE 3
             END"""
     elif view == "commercial":
-        view_where    = f"AND ({_lbl}) = 'Commercial'"
         bench_labels  = ["Commercial"]
         ptype_case = """
             CASE
-                WHEN LEFT(y25.state_cd1,1) = 'F' THEN 'Commercial Improved'
-                WHEN LEFT(y25.state_cd1,1) = 'L' THEN 'Commercial Land / RE'
+                WHEN LEFT(p.state_cd1,1) = 'F' THEN 'Commercial Improved'
+                WHEN LEFT(p.state_cd1,1) = 'L' THEN 'Commercial Land / RE'
                 ELSE 'Other'
             END"""
         sort_case = """
             CASE
-                WHEN LEFT(y25.state_cd1,1) = 'F' THEN 1
-                WHEN LEFT(y25.state_cd1,1) = 'L' THEN 2
+                WHEN LEFT(p.state_cd1,1) = 'F' THEN 1
+                WHEN LEFT(p.state_cd1,1) = 'L' THEN 2
                 ELSE 3
             END"""
     elif view == "multifamily":
-        view_where    = f"AND ({_lbl}) = 'Multi-Family'"
         bench_labels  = ["Multi-Family"]
         ptype_case = """
             CASE
-                WHEN y25.state_cd1 LIKE 'B1%%' THEN 'Multifamily (5+ units)'
-                WHEN y25.state_cd1 LIKE 'B2%%' THEN 'Duplex'
-                WHEN y25.state_cd1 LIKE 'B3%%' THEN 'Triplex'
-                WHEN y25.state_cd1 LIKE 'B4%%' THEN 'Fourplex'
+                WHEN p.state_cd1 LIKE 'B1%%' THEN 'Multifamily (5+ units)'
+                WHEN p.state_cd1 LIKE 'B2%%' THEN 'Duplex'
+                WHEN p.state_cd1 LIKE 'B3%%' THEN 'Triplex'
+                WHEN p.state_cd1 LIKE 'B4%%' THEN 'Fourplex'
                 ELSE 'Other Multi-Family'
             END"""
         sort_case = """
             CASE
-                WHEN y25.state_cd1 LIKE 'B1%%' THEN 1
-                WHEN y25.state_cd1 LIKE 'B2%%' THEN 2
-                WHEN y25.state_cd1 LIKE 'B3%%' THEN 3
-                WHEN y25.state_cd1 LIKE 'B4%%' THEN 4
+                WHEN p.state_cd1 LIKE 'B1%%' THEN 1
+                WHEN p.state_cd1 LIKE 'B2%%' THEN 2
+                WHEN p.state_cd1 LIKE 'B3%%' THEN 3
+                WHEN p.state_cd1 LIKE 'B4%%' THEN 4
                 ELSE 5
             END"""
     elif view == "land":
-        view_where    = f"AND ({_lbl}) = 'Land/Vacant'"
         bench_labels  = ["Land/Vacant"]
         ptype_case = """
             CASE
-                WHEN y25.state_cd1 LIKE 'C1%%' THEN 'Vacant Lot'
-                WHEN y25.state_cd1 LIKE 'C2%%' THEN 'Colonia'
+                WHEN p.state_cd1 LIKE 'C1%%' THEN 'Vacant Lot'
+                WHEN p.state_cd1 LIKE 'C2%%' THEN 'Colonia'
                 ELSE 'Other Vacant'
             END"""
         sort_case = """
             CASE
-                WHEN y25.state_cd1 LIKE 'C1%%' THEN 1
-                WHEN y25.state_cd1 LIKE 'C2%%' THEN 2
+                WHEN p.state_cd1 LIKE 'C1%%' THEN 1
+                WHEN p.state_cd1 LIKE 'C2%%' THEN 2
                 ELSE 3
             END"""
     elif view == "agricultural":
-        view_where    = f"AND ({_lbl}) = 'Agricultural'"
         bench_labels  = ["Agricultural"]
         ptype_case = """
             CASE
-                WHEN LEFT(y25.state_cd1,1) = 'D' THEN 'Open-Space Ag (1-d-1)'
-                WHEN LEFT(y25.state_cd1,1) = 'E' THEN 'Rural Land (non-ag)'
+                WHEN LEFT(p.state_cd1,1) = 'D' THEN 'Open-Space Ag (1-d-1)'
+                WHEN LEFT(p.state_cd1,1) = 'E' THEN 'Rural Land (non-ag)'
                 ELSE 'Other Agricultural'
             END"""
         sort_case = """
             CASE
-                WHEN LEFT(y25.state_cd1,1) = 'D' THEN 1
-                WHEN LEFT(y25.state_cd1,1) = 'E' THEN 2
+                WHEN LEFT(p.state_cd1,1) = 'D' THEN 1
+                WHEN LEFT(p.state_cd1,1) = 'E' THEN 2
                 ELSE 3
             END"""
     else:  # overall
-        view_where    = "AND p.state_cd1 NOT LIKE 'N%%'"
+        # view_where is already "" for "overall" via _snapshot_view_where()
+        # above (N* exclusion lives in canonical_excl instead, applied
+        # unconditionally to every view).
         bench_labels  = ["Residential", "Multi-Family", "Commercial", "Land/Vacant", "Agricultural"]
         # classi_cd-first bucketing (Task 1) so apartments land in Multi-Family,
         # not Residential, in the overall snapshot table.
-        _ov_label = label_case_sql("y25.classi_cd", "y25.state_cd1")
+        _ov_label = label_case_sql("p.classi_cd", "p.state_cd1")
         ptype_case = f"COALESCE({_ov_label}, 'Other')"
         sort_case  = label_sort_case_sql(_ov_label)
 
-    rows = query(f"""
-        WITH y25 AS (
-            SELECT p.geo_id, p.state_cd1, p.classi_cd, t.market_value AS mv25
-            FROM parcel p
-            JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = 2025
-            WHERE t.market_value > 0
-              AND p.state_cd1 NOT LIKE 'X%%'
-              AND p.geo_id NOT LIKE 'AJR%%'
-              {view_where}
-        ),
-        y26 AS (
-            SELECT geo_id, market_value AS mv26
-            FROM parcel_tax_year
-            WHERE tax_year = 2026 AND market_value > 0
-        ),
-        joined AS (
-            SELECT
-                y25.state_cd1,
-                y25.mv25,
-                y26.mv26,
-                (y26.mv26 - y25.mv25)::FLOAT / y25.mv25 AS pct_chg,
-                ({ptype_case}) AS ptype,
-                ({sort_case}) AS sort_key
-            FROM y25 JOIN y26 USING (geo_id)
-        )
+    # Canonical parcel-eligibility filter — now the module-level
+    # CANONICAL_PARCEL_EXCL (see its docstring above), so snapshot_neighborhood()
+    # reuses the exact same constant rather than a second copy of this
+    # literal. Applied uniformly below to every query in this function —
+    # the rows/totals merge, the Part 4 aggregate query, and the
+    # neighborhoods query.
+    canonical_excl = CANONICAL_PARCEL_EXCL
+
+    # Part 1 performance fix — full history, corrected as later rounds
+    # falsified earlier hypotheses:
+    #   - Round 2: merged rows+totals into one query via GROUPING SETS.
+    #     Real fix, held up.
+    #   - Round 3: hypothesized the CTE structure itself was the problem
+    #     and flattened it to a plain FROM/JOIN ("Variant B"). This turned
+    #     out to be a NO-OP: Postgres 15 auto-inlines non-recursive,
+    #     singly-referenced CTEs by default, so the CTE and flat forms are
+    #     byte-identical in plan cost. The apparent "35-45% win" was a
+    #     cache-warming artifact from running EXPLAIN ANALYZE variants
+    #     back-to-back in one session — confirmed wrong when a fresh,
+    #     standalone run reproduced the original slow timings exactly.
+    #   - Round 4: identified the REAL bottleneck — Postgres's planner
+    #     consistently chooses a Nested Loop with ~407,000 individual
+    #     per-row index probes against parcel_tax_year_pkey for the second
+    #     (tax_year=2026) join, instead of a Hash/Merge Join. Confirmed via
+    #     task_staging/snapshot_perf/check_snapshot_nestloop_off.command:
+    #     each query run 4x (on/off/on/off) to rule out cache-order bias.
+    #     Forcing the join off beat the planner's own choice every time:
+    #     breakdown 480-1489ms (off) vs 3008-9644ms (on); Part 4 aggregate
+    #     299-535ms (off) vs 974-2491ms (on); neighborhoods 361-362ms (off)
+    #     vs 2382-2393ms (on, rock-steady both runs — no cache ambiguity).
+    #     Fix: query_no_nestloop() (defined near query(), see its docstring
+    #     for the full scoping rationale) applies a transaction-scoped
+    #     SET LOCAL enable_nestloop = off to exactly these three queries —
+    #     not a session- or server-wide change, and not to be copied onto
+    #     other queries without the same on/off verification.
+    # rows (per-property-type breakdown) and totals (grand-total row) stay
+    # merged via GROUPING SETS ((ptype, sort_key), ()) — one pass over the
+    # join produces both; that part of the round-2 fix held up throughout.
+    # A real ptype value is never NULL (every ptype_case branch above has
+    # an ELSE / COALESCE), so "ptype IS NULL" unambiguously identifies the
+    # total row below.
+    breakdown = query_no_nestloop(f"""
         SELECT
-            ptype,
-            sort_key,
+            ({ptype_case})                                                                  AS ptype,
+            ({sort_case})                                                                    AS sort_key,
             COUNT(*)                                                                        AS n_parcels,
-            SUM(CASE WHEN mv26 > mv25 THEN 1 ELSE 0 END)                                   AS n_up,
-            SUM(CASE WHEN mv26 < mv25 THEN 1 ELSE 0 END)                                   AS n_down,
-            SUM(CASE WHEN mv26 = mv25 THEN 1 ELSE 0 END)                                   AS n_flat,
-            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY pct_chg)::NUMERIC * 100, 2)  AS median_pct,
-            ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY pct_chg)::NUMERIC * 100, 2) AS p25_pct,
-            ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY pct_chg)::NUMERIC * 100, 2) AS p75_pct,
-            ROUND(SUM(mv25)::NUMERIC / 1e9, 2)                                             AS total_mv25_b,
-            ROUND(SUM(mv26)::NUMERIC / 1e9, 2)                                             AS total_mv26_b
-        FROM joined
-        GROUP BY ptype, sort_key
-        ORDER BY sort_key
+            SUM(CASE WHEN t26.market_value > t25.market_value THEN 1 ELSE 0 END)            AS n_up,
+            SUM(CASE WHEN t26.market_value < t25.market_value THEN 1 ELSE 0 END)            AS n_down,
+            SUM(CASE WHEN t26.market_value = t25.market_value THEN 1 ELSE 0 END)            AS n_flat,
+            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
+                ORDER BY (t26.market_value - t25.market_value)::FLOAT / t25.market_value
+            )::NUMERIC * 100, 2)                                                            AS median_pct,
+            ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (
+                ORDER BY (t26.market_value - t25.market_value)::FLOAT / t25.market_value
+            )::NUMERIC * 100, 2)                                                            AS p25_pct,
+            ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (
+                ORDER BY (t26.market_value - t25.market_value)::FLOAT / t25.market_value
+            )::NUMERIC * 100, 2)                                                            AS p75_pct,
+            ROUND(SUM(t25.market_value)::NUMERIC / 1e9, 3)                                  AS total_mv25_b,
+            ROUND(SUM(t26.market_value)::NUMERIC / 1e9, 3)                                  AS total_mv26_b
+        FROM parcel p
+        JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
+        JOIN parcel_tax_year t26 ON t26.geo_id = p.geo_id AND t26.tax_year = 2026
+        WHERE t25.market_value > 0
+          AND t26.market_value > 0
+          {canonical_excl}
+          {view_where}
+        GROUP BY GROUPING SETS ((({ptype_case}), ({sort_case})), ())
+        ORDER BY sort_key NULLS LAST
     """)
 
-    # Totals row (same view filter applied)
-    totals = query(f"""
-        WITH y25 AS (
-            SELECT t.geo_id, market_value AS mv25
-            FROM parcel_tax_year t
-            JOIN parcel p ON p.geo_id = t.geo_id
-            WHERE tax_year = 2025 AND market_value > 0
-              AND p.state_cd1 NOT LIKE 'X%%'
-              AND p.state_cd1 NOT LIKE 'N%%'
-              AND t.geo_id NOT LIKE 'AJR%%'
-              {view_where}
-        ),
-        y26 AS (
-            SELECT geo_id, market_value AS mv26
-            FROM parcel_tax_year
-            WHERE tax_year = 2026 AND market_value > 0
-              AND geo_id NOT LIKE 'AJR%%'
-        )
-        SELECT
-            COUNT(*)                                                                        AS n_total,
-            SUM(CASE WHEN mv26 > mv25 THEN 1 ELSE 0 END)                                   AS n_up,
-            SUM(CASE WHEN mv26 < mv25 THEN 1 ELSE 0 END)                                   AS n_down,
-            ROUND(SUM(mv25)::NUMERIC / 1e9, 3)                                             AS total_mv25_b,
-            ROUND(SUM(mv26)::NUMERIC / 1e9, 3)                                             AS total_mv26_b,
-            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
-                ORDER BY (mv26 - mv25)::FLOAT / mv25
-            )::NUMERIC * 100, 2)                                                           AS median_pct
-        FROM y25 JOIN y26 USING (geo_id)
-    """, one=True)
+    rows = [r for r in breakdown if r["ptype"] is not None]
+    _total_row = next((r for r in breakdown if r["ptype"] is None), None)
+    totals = None
+    if _total_row:
+        totals = {
+            "n_total":      _total_row["n_parcels"],
+            "n_up":         _total_row["n_up"],
+            "n_down":       _total_row["n_down"],
+            "n_flat":       _total_row["n_flat"],
+            "total_mv25_b": _total_row["total_mv25_b"],
+            "total_mv26_b": _total_row["total_mv26_b"],
+            "median_pct":   _total_row["median_pct"],
+        }
 
     # ── County Benchmark Annual Trends for the selected view ─────────────────
     # Pull from county_benchmark for the relevant property_type_label(s).
@@ -1438,12 +1613,187 @@ def county_snapshot():
             ORDER BY tax_year, property_type_label
         """)
 
+    # ── New aggregate features (Part 4) — all read-only aggregation over
+    # data that's already computed/loaded; no new pipeline. Same
+    # canonical_excl/view_where scoping as the breakdown query above, so
+    # "in the current sector" means the identical population already shown
+    # in the table.
+    #
+    # Round 4 performance fix: this query was the single biggest cost on
+    # the page (4322ms). Confirmed via check_snapshot_nestloop_off.command
+    # that the cause is the planner's Nested Loop misjudgment on the
+    # tax_year=2026 join (see query_no_nestloop()'s docstring for the full
+    # on/off evidence) — not the CTE-vs-flat syntax. Uses
+    # query_no_nestloop() rather than query() for exactly this reason.
+    new_construction_count = 0
+    risk_flagged_count = 0
+    if totals:
+        agg = query_no_nestloop(f"""
+            SELECT
+                -- "Recent" = same cutoff as the Search page's New Construction
+                -- Quick Filter (runQuickFilter() in search.html): tax_year - 3.
+                -- Here tax_year is this page's own preliminary year, 2026, so
+                -- 2026 - 3 = 2023 — reusing that exact rule, not a new cutoff.
+                COUNT(*) FILTER (WHERE p.year_built >= 2023)              AS n_new_construction,
+                COUNT(*) FILTER (WHERE pm.risk_large_value_jump = TRUE)   AS n_risk_flagged
+            FROM parcel p
+            JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
+            JOIN parcel_tax_year t26 ON t26.geo_id = p.geo_id AND t26.tax_year = 2026
+            LEFT JOIN parcel_metrics pm ON pm.geo_id = p.geo_id AND pm.tax_year = 2026
+            WHERE t25.market_value > 0
+              AND t26.market_value > 0
+              {canonical_excl}
+              {view_where}
+        """, one=True)
+        if agg:
+            new_construction_count = int(agg["n_new_construction"] or 0)
+            risk_flagged_count = int(agg["n_risk_flagged"] or 0)
+
+    # Top/bottom moving neighborhoods within the current sector. county_benchmark
+    # has no neighborhood_cd column (confirmed via schema.sql — it's county-wide
+    # only, PRIMARY KEY county_code/tax_year/property_type_label), so this is a
+    # new read aggregation grouped by neighborhood_cd, not a new data pipeline.
+    # HAVING COUNT(*) >= 10 excludes tiny neighborhoods (a 2-parcel neighborhood
+    # with one outlier would otherwise dominate the "biggest mover" list with a
+    # noisy, not-representative swing) — a judgment call, flagged rather than
+    # silently baked in.
+    #
+    # Round 4 performance fix: isolated at 2122ms via
+    # check_snapshot_other_queries.command — the same planner Nested Loop
+    # misjudgment as the other two queries (query_no_nestloop()'s docstring
+    # has the full on/off evidence). This one was the cleanest signal:
+    # the default plan was rock-steady ~2.4s across repeated runs, so
+    # there's no cache-order ambiguity in that comparison.
+    top_neighborhoods = []
+    bottom_neighborhoods = []
+    if totals:
+        nb_rows = query_no_nestloop(f"""
+            SELECT
+                p.neighborhood_cd,
+                COUNT(*) AS n_parcels,
+                ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
+                    ORDER BY (t26.market_value - t25.market_value)::FLOAT / t25.market_value
+                )::NUMERIC * 100, 2) AS median_pct
+            FROM parcel p
+            JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
+            JOIN parcel_tax_year t26 ON t26.geo_id = p.geo_id AND t26.tax_year = 2026
+            WHERE t25.market_value > 0
+              AND t26.market_value > 0
+              {canonical_excl}
+              AND p.neighborhood_cd IS NOT NULL AND p.neighborhood_cd != ''
+              {view_where}
+            GROUP BY p.neighborhood_cd
+            HAVING COUNT(*) >= 10
+            ORDER BY median_pct DESC
+        """)
+        if nb_rows:
+            top_neighborhoods = [dict(r) for r in nb_rows[:5]]
+            bottom_neighborhoods = [dict(r) for r in nb_rows[-5:]][::-1]
+
+    return {
+        "rows": rows,
+        "totals": totals,
+        "bench_trends": bench_trends,
+        "new_construction_count": new_construction_count,
+        "risk_flagged_count": risk_flagged_count,
+        "top_neighborhoods": top_neighborhoods,
+        "bottom_neighborhoods": bottom_neighborhoods,
+    }
+
+
+@app.route("/snapshot/neighborhood/<code>")
+def snapshot_neighborhood(code):
+    """
+    Neighborhood drill-down for Market Snapshot's Top/Bottom Moving
+    Neighborhoods table — parcel-level detail for one neighborhood_cd, both
+    years' values side by side. Replaces the earlier /search?neighborhood=
+    linking approach (that URL-param handling is still present and dormant
+    on the Search page — not reverted, just no longer linked from here; it
+    could be a useful entry point for something else later).
+
+    ?view=<sector> (optional, same values as /snapshot) scopes results to
+    that sector's property type — mirrors how /snapshot's own links pass
+    prop_type today. Defaults to "overall" (no property-type restriction).
+
+    Reuses, rather than re-derives:
+      - CANONICAL_PARCEL_EXCL and _snapshot_view_where() (module-level,
+        above _compute_snapshot_data()) for the exact same
+        parcel-eligibility filter and view->property-type scoping that
+        function's breakdown/neighborhoods queries use.
+      - SEARCH_FILTER_PAGE_SIZE (50) and the same total/total_pages math
+        already used by /api/search_filter, so "page size" means the same
+        thing everywhere on the site rather than a page-specific number.
+
+    Uses plain query(), NOT query_no_nestloop() — deliberately, despite the
+    superficial resemblance to the breakdown/Part 4/neighborhoods queries
+    that DO need it. Measured via
+    task_staging/neighborhood_drilldown/check_neighborhood_drilldown_perf.command:
+    for this query, Nested Loop is 15-100x FASTER than forcing it off
+    (3-5ms vs 79-367ms), the opposite of those other three. The difference
+    is selectivity: this query filters to one neighborhood_cd via an index
+    first, narrowing to ~79 rows before the two-year join, where an
+    indexed point-lookup Nested Loop is the correct, fast plan — unlike
+    the whole-county queries that fix targeted, where the planner's own
+    Nested Loop choice was the actual problem. query_no_nestloop() exists
+    for a specific, measured misjudgment, not as a general "always avoid
+    Nested Loop" switch — see its docstring, which warns against exactly
+    this kind of over-generalization.
+    """
+    view = request.args.get("view", "overall")
+    if view not in ("overall", "residential", "commercial", "multifamily", "land", "agricultural"):
+        view = "overall"
+
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        page = 1
+
+    view_where = _snapshot_view_where(view)
+    view_prop_type = _SNAPSHOT_VIEW_PROP_TYPE_LABEL.get(view)  # None for "overall"
+
+    # Same 5-category property_type_label used by the "overall" breakdown
+    # in _compute_snapshot_data() (COALESCE(label_case_sql(...), 'Other')) —
+    # returned per-parcel here so the template can show it when the
+    # neighborhood spans multiple types (view == "overall").
+    _lbl_sql = label_case_sql("p.classi_cd", "p.state_cd1")
+    ptype_case = f"COALESCE({_lbl_sql}, 'Other')"
+
+    offset = (page - 1) * SEARCH_FILTER_PAGE_SIZE
+
+    rows = query(f"""
+        SELECT
+            p.geo_id,
+            p.situs_address,
+            t25.market_value AS mv25,
+            t26.market_value AS mv26,
+            ({ptype_case}) AS prop_type,
+            (t26.market_value - t25.market_value)::FLOAT / t25.market_value * 100 AS pct_chg,
+            COUNT(*) OVER() AS total_count
+        FROM parcel p
+        JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
+        JOIN parcel_tax_year t26 ON t26.geo_id = p.geo_id AND t26.tax_year = 2026
+        WHERE t25.market_value > 0
+          AND t26.market_value > 0
+          AND p.neighborhood_cd = %(code)s
+          {CANONICAL_PARCEL_EXCL}
+          {view_where}
+        ORDER BY pct_chg DESC
+        LIMIT {SEARCH_FILTER_PAGE_SIZE} OFFSET %(offset)s
+    """, params={"code": code, "offset": offset})
+
+    total = int(rows[0]["total_count"]) if rows else 0
+    total_pages = (total + SEARCH_FILTER_PAGE_SIZE - 1) // SEARCH_FILTER_PAGE_SIZE if total else 0
+    parcels = [dict(r) for r in rows]
+
     return render_template(
-        "snapshot.html",
-        rows=rows,
-        totals=totals,
+        "snapshot_neighborhood.html",
+        code=code,
         view=view,
-        bench_trends=bench_trends,
+        view_prop_type=view_prop_type,
+        page=page,
+        total=total,
+        total_pages=total_pages,
+        parcels=parcels,
     )
 
 
@@ -1648,7 +1998,29 @@ def api_benchmark_meta():
         desc = USE_CODE_LOOKUP.get(r["classi_cd"], (r["classi_cd"], ""))[0]
         by_type[pt].append({"code": r["classi_cd"], "desc": desc, "n": int(r["n"])})
 
-    # Neighborhoods with ≥5 parcels (sorted by count desc, capped at 500 to avoid huge dropdown)
+    # Neighborhoods with ≥5 parcels (sorted by count desc).
+    #
+    # Fix (Neighborhood Link Silent Failure investigation): this used to end
+    # with "LIMIT 500 (capped ... to avoid huge dropdown)". That cap silently
+    # dropped any neighborhood ranked below the top 500 by raw parcel count
+    # from this dropdown's option list entirely — including real, valid
+    # Market Snapshot "moving neighborhood" codes (confirmed: H0D6C, Q23000,
+    # R331C), since a neighborhood can clear the Moving Neighborhoods query's
+    # HAVING COUNT(*) >= 10 (its qualifying-population threshold: parcels
+    # present with a valid market_value in BOTH 2025 and 2026, non-excluded
+    # state_cd1/geo_id) while still ranking outside the top 500 county-wide
+    # by total raw parcel count (this query's unrelated, looser population:
+    # every parcel in `parcel`, any year, any state_cd1, no join at all).
+    # Every other difference between this query and the Moving Neighborhoods
+    # query already makes THIS one's population a strict superset (no
+    # tax-year join, no canonical X/N/AJR exclusion, and a lower >= 5 vs >= 10
+    # threshold) — the LIMIT was the only mechanism that could still make
+    # this list narrower than the moving-neighborhoods query for an
+    # individual code, and did. Search's Neighborhood filter dropdown must
+    # be a superset of anything Market Snapshot's neighborhood links can
+    # point to, so the cap is removed rather than raised to some other
+    # arbitrary number — a moving-neighborhood code must always be
+    # selectable, not selectable-until-the-list-grows-again.
     nb_raw = query("""
         SELECT neighborhood_cd, COUNT(*) AS n
         FROM parcel
@@ -1656,7 +2028,6 @@ def api_benchmark_meta():
         GROUP BY neighborhood_cd
         HAVING COUNT(*) >= 5
         ORDER BY n DESC
-        LIMIT 500
     """)
     total_parcels = query("SELECT COUNT(*) AS n FROM parcel", one=True)["n"]
     nb_non_null = query(

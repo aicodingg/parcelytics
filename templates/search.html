@@ -531,6 +531,29 @@
     // before a preset can select them — enable the buttons once ready.
     metaReady = true;
     document.querySelectorAll(".quick-filter-btn").forEach(b => b.disabled = false);
+
+    // ── URL-param pre-fill — entry point from Market Snapshot's Top/Bottom
+    // Moving Neighborhoods table (/search?neighborhood=<code>[&prop_type=<label>]).
+    // Gated on this same metaReady point as Quick Filters, for the same
+    // reason: neighborhoodTA/propTypeTA aren't populated with real options
+    // until this callback runs, so selectByValue() would have nothing to
+    // match against any earlier. Uses selectByValue() — the exact method
+    // Quick Filters already use to apply values programmatically — rather
+    // than new selection logic. Only triggers a search if at least one
+    // param actually matched a real option; an unrecognized/mistyped code
+    // just leaves that field empty (selectByValue returns false) instead of
+    // erroring, matching how a manually-mistyped neighborhood_cd behaves at
+    // the API layer too (a plain equality filter — zero rows, not an error).
+    const urlParams = new URLSearchParams(window.location.search);
+    const nbParam = urlParams.get("neighborhood");
+    const ptParam = urlParams.get("prop_type");
+    let appliedFromUrl = false;
+    if (nbParam && neighborhoodTA.selectByValue(nbParam)) appliedFromUrl = true;
+    if (ptParam && propTypeTA.selectByValue(ptParam)) appliedFromUrl = true;
+    if (appliedFromUrl) {
+      document.getElementById("fltApplyBtn").closest(".card").scrollIntoView({ behavior: "smooth", block: "start" });
+      runSearch(1);
+    }
   }).catch(() => {});
 
   // ── Property Type → "Browse this sector's Market Snapshot" shortcut ──────
