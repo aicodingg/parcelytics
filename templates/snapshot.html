@@ -31,10 +31,17 @@
   </div>
 </div>
 
-{# ── View toggle (hidden in homeowner mode) ─────────────────────── #}
+{# ── View toggle (hidden in homeowner mode) ───────────────────────
+   Part 1 fix (July 2026): 10 tabs now (Overall + the new 8-sector Market
+   Snapshot-scoped taxonomy + Other), replacing the old 6 (Overall + 5
+   canonical categories). "Commercial" as a single tab no longer exists --
+   split into Retail/Industrial/Office/Hotel, per Diego's brief. The old
+   ?view=commercial URL still works (see app.py's _snapshot_view_where()
+   docstring) for old deep links from the nav dropdown / Search, it's just
+   not one of the buttons here anymore. #}
 {% if mode != 'homeowner' %}
 <div class="mb-4">
-  <div class="btn-group btn-group-sm" role="group">
+  <div class="btn-group btn-group-sm flex-wrap" role="group">
     <a href="/snapshot?view=overall"
        class="btn {% if view == 'overall' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Overall
@@ -47,9 +54,21 @@
        class="btn {% if view == 'multifamily' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Multi-Family
     </a>
-    <a href="/snapshot?view=commercial"
-       class="btn {% if view == 'commercial' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Commercial
+    <a href="/snapshot?view=retail"
+       class="btn {% if view == 'retail' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+      Retail
+    </a>
+    <a href="/snapshot?view=industrial"
+       class="btn {% if view == 'industrial' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+      Industrial
+    </a>
+    <a href="/snapshot?view=office"
+       class="btn {% if view == 'office' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+      Office
+    </a>
+    <a href="/snapshot?view=hotel"
+       class="btn {% if view == 'hotel' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+      Hotel
     </a>
     <a href="/snapshot?view=land"
        class="btn {% if view == 'land' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
@@ -59,16 +78,24 @@
        class="btn {% if view == 'agricultural' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Agricultural
     </a>
+    <a href="/snapshot?view=other"
+       class="btn {% if view == 'other' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+      Other
+    </a>
   </div>
-  <span class="text-muted ms-3" style="font-size:12px;">
-    {% if view == 'overall' %}All taxable real property — single-family, multi-family, commercial, land, ag
-    {% elif view == 'residential' %}A-prefix parcels (single-family, condos, townhomes)
-    {% elif view == 'multifamily' %}B-prefix parcels (duplex, triplex, fourplex, large multifamily)
-    {% elif view == 'commercial' %}F/L-prefix parcels (commercial improved + commercial land/RE) — AJR* excluded
+  <div class="text-muted mt-2" style="font-size:12px;">
+    {% if view == 'overall' %}All taxable real property — residential, multi-family, retail, industrial, office, hotel, land, ag, other
+    {% elif view == 'residential' %}Single-family, condos/townhomes, duplex–fourplex, mobile/manufactured homes (real property)
+    {% elif view == 'multifamily' %}Apartments (5+ units), dorms, fraternity/sorority, retirement/assisted living
+    {% elif view == 'retail' %}Stores, restaurants, shopping centers, grocery, auto dealerships, theaters — Market Snapshot's own taxonomy, see footer
+    {% elif view == 'industrial' %}Warehouses, self-storage, manufacturing, data centers, service stations/repair garages
+    {% elif view == 'office' %}Office buildings (small to hi-rise), medical office, bank branches
+    {% elif view == 'hotel' %}Full/limited-service hotels, extended-stay motels, bed & breakfast
     {% elif view == 'land' %}C-prefix parcels (vacant lots, tracts)
     {% elif view == 'agricultural' %}D/E-prefix parcels (open-space ag, rural land)
+    {% elif view == 'other' %}Hospitals, religious facilities, parking garages, country clubs, marinas, schools, and parcels with no recognized use code — see footer
     {% endif %}
-  </span>
+  </div>
 </div>
 {% endif %}{# /mode != homeowner — view toggle #}
 
@@ -125,8 +152,16 @@
   <div class="card-body" style="font-size:14px; line-height:1.65;">
     {% if rows %}
     <strong>
+      {# Part 4 fix (this round): retail/industrial/office/hotel/other added
+         for the new tabs; residential/multifamily/land/agricultural
+         unchanged; commercial kept for the legacy (non-tab-bar) view. #}
       {% if view == 'residential' %}Homeowner takeaway:
       {% elif view == 'multifamily' %}Multifamily investor takeaway:
+      {% elif view == 'retail' %}Retail investor takeaway:
+      {% elif view == 'industrial' %}Industrial investor takeaway:
+      {% elif view == 'office' %}Office investor takeaway:
+      {% elif view == 'hotel' %}Hospitality investor takeaway:
+      {% elif view == 'other' %}Other real property takeaway:
       {% elif view == 'commercial' %}Investor / developer takeaway:
       {% elif view == 'land' %}Land investor takeaway:
       {% elif view == 'agricultural' %}Agricultural landowner takeaway:
@@ -135,8 +170,16 @@
     </strong>
 
     {% if view == 'residential' %}
-      {% set sf  = rows | selectattr('ptype', 'equalto', 'Single-Family')    | list | first | default(none) %}
-      {% set ct  = rows | selectattr('ptype', 'equalto', 'Condo / Townhome') | list | first | default(none) %}
+      {# Issue B fix (July 2026): sf/ct used to look up rows by the old,
+         assumed-but-nonexistent 'Single-Family' / 'Condo / Townhome' labels.
+         Now that the breakdown groups by real TCAD use codes, there's no
+         fixed label to match — sub1/sub2 dynamically pick the two
+         highest-volume real subtypes instead (excluding the "Other
+         Residential" catch-all), so this stays correct no matter what the
+         actual subtype mix turns out to be. #}
+      {% set _res_subs = rows | rejectattr('ptype', 'equalto', 'Other Residential') | list %}
+      {% set sub1 = _res_subs[0] if _res_subs|length > 0 else none %}
+      {% set sub2 = _res_subs[1] if _res_subs|length > 1 else none %}
       {% if mode == 'homeowner' %}
         Across Travis County, the typical home's value
         <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
@@ -152,48 +195,139 @@
         {{ "declined" if totals.median_pct < 0 else "increased" }}
       </strong>
       on a median basis ({{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%) from 2025 certified to 2026 preliminary.
-      {% if sf %}
-        Single-family parcels: median {{ "+" if sf.median_pct >= 0 else "" }}{{ sf.median_pct }}%,
-        {{ "{:,}".format(sf.n_up) }} up / {{ "{:,}".format(sf.n_down) }} down.
+      {% if sub1 %}
+        {{ sub1.ptype }}: median {{ "+" if sub1.median_pct >= 0 else "" }}{{ sub1.median_pct }}%,
+        {{ "{:,}".format(sub1.n_up) }} up / {{ "{:,}".format(sub1.n_down) }} down.
       {% endif %}
-      {% if ct %}
-        Condos/townhomes: median {{ "+" if ct.median_pct >= 0 else "" }}{{ ct.median_pct }}%.
+      {% if sub2 %}
+        {{ sub2.ptype }}: median {{ "+" if sub2.median_pct >= 0 else "" }}{{ sub2.median_pct }}%.
       {% endif %}
       Total residential assessed value: ${{ "{:,.2f}B".format(totals.total_mv25_b) }} → ${{ "{:,.2f}B".format(totals.total_mv26_b) }}.
       {% endif %}
 
+    {% elif view in ('retail', 'industrial', 'office', 'hotel') %}
+      {# Part 1/4 fix (this round): the old single 'commercial' takeaway
+         block (below, kept for the legacy view) is split 4 ways here, one
+         per new tab. Same dynamic sub1/sub2 pattern as Residential/the old
+         Commercial block -- picks the two highest-volume real subtypes in
+         THIS sector, excluding its own "Other <Sector>" rollup row. #}
+      {% set _sec_fallback = {'retail':'Other Retail','industrial':'Other Industrial','office':'Other Office','hotel':'Other Hotel'}[view] %}
+      {% set _sec_subs = rows | rejectattr('ptype', 'equalto', _sec_fallback) | list %}
+      {% set sub1 = _sec_subs[0] if _sec_subs|length > 0 else none %}
+      {% set sub2 = _sec_subs[1] if _sec_subs|length > 1 else none %}
+      Travis County {{ {'retail':'retail','industrial':'industrial','office':'office','hotel':'hospitality'}[view] }} values show a median change of
+      <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+        {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
+      </strong>
+      ({{ "{:,}".format(totals.n_total) }} parcels, AJR* personal property supplements excluded).
+      {% if sub1 %}
+        {{ sub1.ptype }}: median {{ "+" if sub1.median_pct >= 0 else "" }}{{ sub1.median_pct }}%,
+        ${{ "{:,.2f}B".format(sub1.total_mv25_b) }} → ${{ "{:,.2f}B".format(sub1.total_mv26_b) }}.
+      {% endif %}
+      {% if sub2 %}
+        {{ sub2.ptype }}: median {{ "+" if sub2.median_pct >= 0 else "" }}{{ sub2.median_pct }}%,
+        ${{ "{:,.2f}B".format(sub2.total_mv25_b) }} → ${{ "{:,.2f}B".format(sub2.total_mv26_b) }}.
+      {% endif %}
+      This sector's Annual Trends card below borrows the canonical "Commercial"
+      county benchmark (the historical data available at that granularity covers
+      all of Retail/Industrial/Office/Hotel together, not this tab alone) —
+      treat it as sector-adjacent context, not a {{ {'retail':'retail','industrial':'industrial','office':'office','hotel':'hotel'}[view] }}-specific trend.
+
     {% elif view == 'commercial' %}
-      {% set fi = rows | selectattr('ptype', 'equalto', 'Commercial Improved') | list | first | default(none) %}
-      {% set li = rows | selectattr('ptype', 'equalto', 'Commercial Land / RE') | list | first | default(none) %}
+      {# Legacy view only (not one of the 10 tabs) — kept working, unchanged,
+         for old deep links. Issue B fix: fi/li used to key off assumed
+         'Commercial Improved' / 'Commercial Land / RE' labels (an F-vs-L
+         state_cd1 split that isn't how the real breakdown groups anymore).
+         sub1/sub2 dynamically pick the two highest-volume real commercial
+         use-code subtypes instead. #}
+      {% set _com_subs = rows | rejectattr('ptype', 'equalto', 'Other Commercial') | list %}
+      {% set sub1 = _com_subs[0] if _com_subs|length > 0 else none %}
+      {% set sub2 = _com_subs[1] if _com_subs|length > 1 else none %}
       Travis County commercial values show a median change of
       <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
       ({{ "{:,}".format(totals.n_total) }} parcels, AJR* personal property supplements excluded).
-      {% if fi %}
-        Commercial improved (F-prefix): median {{ "+" if fi.median_pct >= 0 else "" }}{{ fi.median_pct }}%,
-        ${{ "{:,.2f}B".format(fi.total_mv25_b) }} → ${{ "{:,.2f}B".format(fi.total_mv26_b) }}.
+      {% if sub1 %}
+        {{ sub1.ptype }}: median {{ "+" if sub1.median_pct >= 0 else "" }}{{ sub1.median_pct }}%,
+        ${{ "{:,.2f}B".format(sub1.total_mv25_b) }} → ${{ "{:,.2f}B".format(sub1.total_mv26_b) }}.
       {% endif %}
-      {% if li %}
-        Commercial land/RE (L-prefix): median {{ "+" if li.median_pct >= 0 else "" }}{{ li.median_pct }}%,
-        ${{ "{:,.2f}B".format(li.total_mv25_b) }} → ${{ "{:,.2f}B".format(li.total_mv26_b) }}.
+      {% if sub2 %}
+        {{ sub2.ptype }}: median {{ "+" if sub2.median_pct >= 0 else "" }}{{ sub2.median_pct }}%,
+        ${{ "{:,.2f}B".format(sub2.total_mv25_b) }} → ${{ "{:,.2f}B".format(sub2.total_mv26_b) }}.
       {% endif %}
       Note: 26 non-supplement commercial parcels had >500% increases (genuine TCAD reappraisals);
       the median is the reliable central-tendency statistic.
 
-    {% elif view in ('multifamily', 'land', 'agricultural') %}
-      Travis County <strong>{{ {'multifamily':'multi-family','land':'vacant land','agricultural':'agricultural'}[view] }}</strong>
+    {% elif view in ('land', 'agricultural') %}
+      {# Land/Ag fix (this round): these two sectors now group by land_sqft
+         size tiers instead of use-code subtypes (see app.py's
+         SNAPSHOT_LAND_SIZE_TIERS / SNAPSHOT_AG_SIZE_TIERS -- classi_cd is
+         structurally empty for vacant/ag land, since it's sourced entirely
+         from IMP_INFO.TXT improvement records and vacant land has no
+         improvement). sub1/sub2 dynamically pick the two highest-volume
+         real size tiers, same pattern as every other sector, excluding the
+         "Size Not Available" bucket (NULL land_sqft) since that's not a
+         meaningful size category to headline. #}
+      {% set _size_subs = rows | rejectattr('ptype', 'equalto', 'Size Not Available') | list %}
+      {% set sub1 = _size_subs[0] if _size_subs|length > 0 else none %}
+      {% set sub2 = _size_subs[1] if _size_subs|length > 1 else none %}
+      Travis County <strong>{{ {'land':'vacant land','agricultural':'agricultural'}[view] }}</strong>
+      values show a median change of
+      <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+        {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
+      </strong>
+      ({{ "{:,}".format(totals.n_total) }} parcels, {{ "{:,}".format(totals.n_up) }} up / {{ "{:,}".format(totals.n_down) }} down).
+      {% if sub1 %}
+        Most {{ {'land':'Land/Vacant','agricultural':'Agricultural'}[view] }} parcels in Travis County are
+        <strong>{{ sub1.ptype | lower }}</strong> ({{ "{:,}".format(sub1.n_parcels) }} parcels),
+        with a median change of {{ "+" if sub1.median_pct >= 0 else "" }}{{ sub1.median_pct }}%,
+        ${{ "{:,.2f}B".format(sub1.total_mv25_b) }} → ${{ "{:,.2f}B".format(sub1.total_mv26_b) }}.
+      {% endif %}
+      {% if sub2 %}
+        {{ sub2.ptype }}: {{ "{:,}".format(sub2.n_parcels) }} parcels, median {{ "+" if sub2.median_pct >= 0 else "" }}{{ sub2.median_pct }}%.
+      {% endif %}
+      Total market value: ${{ "{:,.2f}B".format(totals.total_mv25_b) }} → ${{ "{:,.2f}B".format(totals.total_mv26_b) }}.
+
+    {% elif view in ('multifamily', 'other') %}
+      {# 'other' (added Part 4) — a genuinely heterogeneous residual bucket
+         (hospitals, parking garages, country clubs, marinas, schools,
+         religious facilities, plus O/G/J state_cd1 parcels and any F/L
+         parcel with no classi_cd match), so it gets the plain median/up/
+         down summary rather than a bespoke sub1/sub2 narrative — there's no
+         single "top subtype" story worth highlighting the way there is for
+         the other sectors. multifamily has real use-code subtype data (see
+         SNAPSHOT_MULTIFAMILY_CODES) but was never given a dedicated sub1/
+         sub2 narrative block in earlier rounds either -- out of scope for
+         this specific fix, unchanged. #}
+      Travis County <strong>{{ {'multifamily':'multi-family','other':'other real property'}[view] }}</strong>
       values show a median change of
       <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
       ({{ "{:,}".format(totals.n_total) }} parcels, {{ "{:,}".format(totals.n_up) }} up / {{ "{:,}".format(totals.n_down) }} down).
       Total market value: ${{ "{:,.2f}B".format(totals.total_mv25_b) }} → ${{ "{:,.2f}B".format(totals.total_mv26_b) }}.
+      {% if view == 'other' %}
+      This tab has no dedicated county benchmark history — it's a mix of several
+      canonical categories' residuals, not one of them (see footer).
+      {% endif %}
 
     {% else %} {# overall #}
+      {# Part 1 fix (this round): res/mf still look up the same canonical
+         labels (unchanged — Overall's breakdown now uses the new 9-way
+         Market Snapshot taxonomy, but 'Residential' and 'Multi-Family' are
+         spelled identically in both systems). The old single "Commercial"
+         lookup no longer matches anything (that label doesn't exist in the
+         new taxonomy) — replaced with an aggregate across the 4 new
+         commercial-adjacent sectors (Retail/Industrial/Office/Hotel),
+         highlighting whichever has the most parcels rather than guessing
+         which one Diego would want called out by name. #}
       {% set res = rows | selectattr('ptype', 'equalto', 'Residential')  | list | first | default(none) %}
-      {% set com = rows | selectattr('ptype', 'equalto', 'Commercial')   | list | first | default(none) %}
       {% set mf  = rows | selectattr('ptype', 'equalto', 'Multi-Family') | list | first | default(none) %}
+      {% set _com_sectors = rows | selectattr('ptype', 'in', ['Retail', 'Industrial', 'Office', 'Hotel']) | list %}
+      {% set _com_total_mv25 = _com_sectors | sum(attribute='total_mv25_b') %}
+      {% set _com_total_mv26 = _com_sectors | sum(attribute='total_mv26_b') %}
+      {% set _com_largest = (_com_sectors | sort(attribute='n_parcels', reverse=true) | list)[0] if _com_sectors else none %}
       {% if res %}
         Residential owners should expect
         <strong class="{% if res.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
@@ -202,8 +336,9 @@
         (median {{ "+" if res.median_pct >= 0 else "" }}{{ res.median_pct }}%,
         {{ "{:,}".format(res.n_down) }} down / {{ "{:,}".format(res.n_up) }} up).
       {% endif %}
-      {% if com %}
-        Commercial added ${{ "{:,.1f}B".format(com.total_mv26_b - com.total_mv25_b) }} in aggregate preliminary value (median {{ "+" if com.median_pct >= 0 else "" }}{{ com.median_pct }}%).
+      {% if _com_sectors %}
+        Retail/Industrial/Office/Hotel combined added ${{ "{:,.1f}B".format(_com_total_mv26 - _com_total_mv25) }} in aggregate preliminary value
+        {%- if _com_largest %} ({{ _com_largest.ptype }} is the largest of the four by parcel count, median {{ "+" if _com_largest.median_pct >= 0 else "" }}{{ _com_largest.median_pct }}%){% endif %}.
       {% endif %}
       {% if mf %}
         Multi-family median: {{ "+" if mf.median_pct >= 0 else "" }}{{ mf.median_pct }}%.
@@ -238,15 +373,36 @@
           </tr>
         </thead>
         <tbody>
+          {# Issue A fix (July 2026): this used to skip any row whose ptype
+             was literally 'Other' entirely, hiding it from the table (and
+             the chart below) with no way to tell it existed. That "Other"
+             bucket used to silently absorb M (manufactured homes) in
+             addition to genuinely uncategorized parcels; now that M is
+             mapped to Residential in classify.py, 'Other' here means only
+             the parcels classify.py deliberately leaves unmapped (state_cd1
+             = O -- see classify.py's _STATE_PREFIX_LABEL comment). Showing
+             it as its own row is the "honest label, not eliminated"
+             behavior the brief asked for, instead of hiding it. #}
+          {# Part 2 fix (July 2026): a row can now be a capped "Other <Sector>"
+             rollup (see app.py's _cap_subtype_rows()) whose median_pct/
+             p25_pct/p75_pct are deliberately None -- a percentile of a
+             merged group isn't derivable from the member groups' own
+             percentiles without re-running the calculation against
+             per-parcel data, so the rollup shows "--" there rather than a
+             fabricated number. Every numeric comparison below is guarded
+             with `is not none` first (None >= 0 raises in Python/Jinja). #}
           {% for r in rows %}
-          {% if r.ptype != 'Other' %}
           {% set delta_b = r.total_mv26_b - r.total_mv25_b %}
-          <tr>
+          <tr{% if r.ptype == 'Other' or r.ptype.startswith('Other ') or r.ptype == 'Uncategorized' %} class="text-muted"{% endif %}>
 {# task5-snapshot-drill #}
             <td class="fw-semibold" data-label="Type">
-              <a href="/parcels?view={{ view }}&ptype={{ r.ptype | urlencode }}"
+              {# Part 2 fix: a rolled-up row's drill-through must match every
+                 real subtype folded into it (r._rolled_ptypes), not just a
+                 literal ptype-string equality -- see app.py's
+                 _ptype_drill_where() `rolled` handling. #}
+              <a href="/parcels?view={{ view }}&ptype={{ r.ptype | urlencode }}{% if r._rolled_ptypes is defined %}{% for rp in r._rolled_ptypes %}&rolled={{ rp | urlencode }}{% endfor %}{% endif %}"
                  class="text-decoration-none"
-                 title="View all {{ r.ptype }} parcels">
+                 title="View all {{ r.ptype }} parcels{% if r._rolled_ptypes is defined %} (includes {{ r._rolled_ptypes | length }} rolled-up subtypes){% endif %}">
                 {{ r.ptype }}
                 <span style="font-size:10px; color:var(--text-3); margin-left:4px;">↗</span>
               </a>
@@ -255,11 +411,11 @@
             <td class="text-end text-danger" data-label="↑ Up">{{ "{:,}".format(r.n_up) }}</td>
             <td class="text-end text-success" data-label="↓ Down">{{ "{:,}".format(r.n_down) }}</td>
             <td class="text-end text-muted" data-label="= Flat">{{ "{:,}".format(r.n_flat) }}</td>
-            <td class="text-end fw-semibold {% if r.median_pct > 0 %}text-danger{% elif r.median_pct < 0 %}text-success{% endif %}" data-label="Median Δ">
-              {{ "+" if r.median_pct >= 0 else "" }}{{ r.median_pct }}%
+            <td class="text-end fw-semibold {% if r.median_pct is not none and r.median_pct > 0 %}text-danger{% elif r.median_pct is not none and r.median_pct < 0 %}text-success{% endif %}" data-label="Median Δ">
+              {% if r.median_pct is not none %}{{ "+" if r.median_pct >= 0 else "" }}{{ r.median_pct }}%{% else %}<span class="na-cell" title="Not meaningful for a rolled-up group of several real subtypes -- see footer">—</span>{% endif %}
             </td>
             <td class="text-end text-muted small" data-label="P25 / P75">
-              {{ "+" if r.p25_pct >= 0 else "" }}{{ r.p25_pct }}% / {{ "+" if r.p75_pct >= 0 else "" }}{{ r.p75_pct }}%
+              {% if r.p25_pct is not none and r.p75_pct is not none %}{{ "+" if r.p25_pct >= 0 else "" }}{{ r.p25_pct }}% / {{ "+" if r.p75_pct >= 0 else "" }}{{ r.p75_pct }}%{% else %}—{% endif %}
             </td>
             <td class="text-end text-muted" data-label="2025 Total MV">${{ "{:,.2f}B".format(r.total_mv25_b) }}</td>
             <td class="text-end" data-label="2026 Total MV">${{ "{:,.2f}B".format(r.total_mv26_b) }}</td>
@@ -267,7 +423,6 @@
               {{ "+" if delta_b >= 0 else "" }}${{ "{:,.2f}B".format(delta_b) }}
             </td>
           </tr>
-          {% endif %}
           {% endfor %}
         </tbody>
         <tfoot>
@@ -277,6 +432,11 @@
             <td>
               {% if view == 'residential' %}All Residential
               {% elif view == 'multifamily' %}All Multi-Family
+              {% elif view == 'retail' %}All Retail
+              {% elif view == 'industrial' %}All Industrial
+              {% elif view == 'office' %}All Office
+              {% elif view == 'hotel' %}All Hotel
+              {% elif view == 'other' %}All Other
               {% elif view == 'commercial' %}All Commercial
               {% elif view == 'land' %}All Land / Vacant
               {% elif view == 'agricultural' %}All Agricultural
@@ -306,7 +466,15 @@
     Subject to change at certification (July 25, 2026).
     Excludes: tax-exempt accounts (X state_cd1 prefix), personal property accounts (N prefix, 3 accounts),
     and AJR* personal property supplement records (placeholder $1 values in certified data).
-    M (manufactured homes) and O (other real property) are included as real property.
+    M (manufactured homes) and O/G/J (other real property, minerals, utilities) are included as real property.
+    Sector tabs (Residential/Multi-Family/Retail/Industrial/Office/Hotel/Land/Agricultural/Other) use a
+    Market-Snapshot-specific classification separate from the rest of the site's canonical property-type
+    system, built from real TCAD use codes — see /info or ask Diego for the full code-to-tab mapping.
+    "Other" combines the canonical-unclassified O/G/J parcels with any commercial-adjacent parcel whose
+    use code doesn't cleanly sort into Retail/Industrial/Office/Hotel.
+    Within a sector, only the top {{ subtype_cap }} real subtypes by parcel count are shown individually; the rest
+    are combined into one "Other &lt;Sector&gt;" row (real summed parcel counts and dollar totals, but no
+    median/percentile — see that row's tooltip).
     Median Δ = median parcel-level % change; P25/P75 = 25th/75th percentiles.
     Red = increasing burden, green = decreasing.
   </div>
@@ -603,9 +771,13 @@
 </script>
 {% if rows %}
 <script>
-const snapLabels = {{ rows | selectattr('ptype', 'ne', 'Other') | map(attribute='ptype') | list | tojson }};
+{# Issue A fix: previously excluded 'Other' from the chart along with the
+   table, hiding it entirely with no indication it existed. Now shown like
+   any other real category — see the tbody comment above for why "Other"
+   is smaller and more honest post-fix than it used to be. #}
+const snapLabels = {{ rows | map(attribute='ptype') | list | tojson }};
 const snapDeltas = [
-  {% for r in rows %}{% if r.ptype != 'Other' %}{{ (r.total_mv26_b - r.total_mv25_b) | round(2) }},{% endif %}{% endfor %}
+  {% for r in rows %}{{ (r.total_mv26_b - r.total_mv25_b) | round(2) }},{% endfor %}
 ];
 // % view = aggregate value change per sector (2026 total ÷ 2025 total − 1),
 // the same underlying totals as snapDeltas, just normalized by sector size —
@@ -613,7 +785,7 @@ const snapDeltas = [
 // holds the most value." Same sign as snapDeltas per row (dividing/multiplying
 // by a positive base preserves sign), so snapColors below applies to both.
 const snapPcts = [
-  {% for r in rows %}{% if r.ptype != 'Other' %}{{ (((r.total_mv26_b - r.total_mv25_b) / r.total_mv25_b * 100) if r.total_mv25_b else 0) | round(2) }},{% endif %}{% endfor %}
+  {% for r in rows %}{{ (((r.total_mv26_b - r.total_mv25_b) / r.total_mv25_b * 100) if r.total_mv25_b else 0) | round(2) }},{% endfor %}
 ];
 // Color logic UNCHANGED from before this round — held pending confirmation,
 // see final report: this currently matches the rest of THIS page's own

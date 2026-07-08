@@ -16,6 +16,18 @@
                    else (current.exemption_codes if current else "")) or "") %}
 {% set excodes_year = 2026 if (current_2026 and current_2026.exemption_codes) else 2025 %}
 {% set has_hs = "HS" in excodes %}
+{# Homeowner-mode gating fix (July 2026): Homeowner mode had no check
+   anywhere for whether a parcel is even eligible for homestead treatment —
+   confirmed via a commercial LLC-owned restaurant (1201 S Lamar Blvd)
+   showing "What your home is worth," a homestead-savings estimate, and an
+   apply-for-homestead link, none of which can legally apply (homestead
+   exemptions require an owner-occupied primary residence). bench_label is
+   the canonical classify.py category for this exact parcel (already passed
+   in from property_detail()), so it's the right, single source of truth to
+   gate on — defaults to treating unknown (bench_label is None, e.g. Phase 2
+   metrics not yet populated) as residential rather than risk hiding real
+   content when classification is simply unavailable. #}
+{% set is_residential = (not bench_label) or bench_label == 'Residential' %}
 {% set _exmap = {"HS":"Homestead", "OV65":"Over-65", "O65":"Over-65", "OV65S":"Over-65 Surviving Spouse",
                  "DP":"Disabled Person", "DPS":"Disabled Person Surviving Spouse",
                  "DV":"Disabled Veteran", "DVHS":"Disabled Veteran Homestead (100%)", "DVHSS":"Disabled Veteran Homestead — Surviving Spouse",
@@ -40,14 +52,31 @@
   <div class="text-muted">Travis County, TX · Parcel {{ parcel.geo_id }}</div>
 </div>
 
+{% if not is_residential %}
+{# Explanatory banner — chosen over disabling the Homeowner/Investor toggle
+   itself (base.html's toggle is a shared, parcel-agnostic nav control with
+   no awareness of which parcel is currently open, so disabling it here
+   wouldn't be consistent site-wide; a homeowner could still land back on
+   this same URL from the toggle on any other page). Instead: keep
+   Homeowner mode's genuinely-still-useful sections (value history,
+   exemptions table, entity tax breakdown, links) but neutralize the
+   homestead-specific / "your home"-framed pieces below, and say so clearly
+   here rather than let the mismatch speak for itself. #}
+<div class="alert alert-warning" style="font-size:13px; border-radius:8px;">
+  This parcel is classified <strong>{{ bench_label or "non-residential" }}</strong>, not Residential —
+  homeowner-specific features like homestead savings don't apply here and are hidden below.
+  <a href="?mode=investor">Switch to Investor mode ↗</a> for analysis suited to non-residential property.
+</div>
+{% endif %}
+
 {# ── Section 1 — Your Home ───────────────────────────────────────────── #}
 <div class="row g-3 mb-4">
   <div class="col-md-4">
     <div class="card h-100"><div class="card-body">
-      <div class="text-muted" style="font-size:13px; font-weight:600;">What your home is worth</div>
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home is worth{% else %}What this property is worth{% endif %}</div>
       <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">{% if mv25 %}${{ "{:,.0f}".format(mv25) }}{% else %}—{% endif %}</div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
-        Your home's 2025 certified value.
+        {% if is_residential %}Your home's{% else %}This property's{% endif %} 2025 certified value.
         {% if mv25 and mv26 and ((mv26 - mv25) / mv25)|abs > 0.05 %}
         TCAD's 2026 preliminary estimate is <strong>${{ "{:,.0f}".format(mv26) }}</strong>
         ({{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }}).
@@ -57,19 +86,50 @@
   </div>
   <div class="col-md-4">
     <div class="card h-100"><div class="card-body">
+      {# Estimate-as-fact fix (July 2026): this used to say "You paid this in
+         property taxes in 2025" for tax25 unconditionally, whenever ANY
+         value landed in current.total_tax -- real single billing field,
+         a payment-receipt-derived amount (billing_source == 'portal_scrape',
+         real but Partial: reflects what was paid, not necessarily the full
+         levy), or a sum reconstructed from entity-level amounts that
+         silently skips any entity with no amount_due on file
+         (total_tax_derived, tagged in property_detail() -- see that
+         comment for why "present" isn't the same as "fully confirmed").
+         Investor mode's Value History table already distinguishes these
+         cases with Verified/Partial/Computed badges; this card now applies
+         the same tiers, in Homeowner mode's plain-language register,
+         instead of treating every case as an equally-certain fact. #}
       <div class="text-muted" style="font-size:13px; font-weight:600;">What you paid in taxes</div>
       <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">
-        {% if tax25 %}${{ "{:,.0f}".format(tax25) }}{% else %}<span style="font-size:18px; font-weight:700;">Not available yet</span>{% endif %}
+        {% if tax25 %}${{ "{:,.0f}".format(tax25) }}{% elif current and current.computed_total_tax %}~${{ "{:,.0f}".format(current.computed_total_tax) }}{% else %}<span style="font-size:18px; font-weight:700;">Not available yet</span>{% endif %}
       </div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
-        {% if tax25 %}You paid this in property taxes in 2025.{% else %}We don't have your 2025 tax bill on record yet.{% endif %}
+        {% if tax25 and current.billing_source == 'portal_scrape' %}
+          Based on a payment receipt from the county tax portal — reflects what was paid, which may not match the full amount billed.
+          <span class="badge-partial" style="font-size:9px;">Partial</span>
+        {% elif tax25 and current.total_tax_derived %}
+          Estimated by adding up 2025 entity-level billing records — some taxing entities may be missing from this total.
+          <span class="badge-partial" style="font-size:9px;">Partial</span>
+        {% elif tax25 %}
+          You paid this in property taxes in 2025.
+        {% elif current and current.computed_total_tax %}
+          Your estimated 2025 tax, based on certified value × certified rates — not a confirmed billed amount.
+          <span class="badge-estimated" style="font-size:9px;">Estimated</span>
+        {% else %}
+          We don't have your 2025 tax bill on record yet.
+        {% endif %}
       </div>
     </div></div>
   </div>
   <div class="col-md-4">
     <div class="card h-100"><div class="card-body">
-      <div class="text-muted" style="font-size:13px; font-weight:600;">Your homestead savings</div>
-      {% if has_hs and mv25 and tv25 and rate and mv25 > tv25 %}
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Your homestead savings{% else %}Homestead Exemption{% endif %}</div>
+      {% if not is_residential %}
+      <div style="font-size:18px; font-weight:700;">Not applicable</div>
+      <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+        Homestead exemptions apply only to an owner-occupied primary residence. This parcel is classified {{ bench_label }}, so this doesn't apply here.
+      </div>
+      {% elif has_hs and mv25 and tv25 and rate and mv25 > tv25 %}
       {% set savings = (mv25 - tv25) * rate / 100 %}
       <div style="font-size:27px; font-weight:800; color:#2e7d32; font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(savings) }}</div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">Your homestead exemption saved you an estimated <strong>${{ "{:,.0f}".format(savings) }}</strong> in 2025.</div>
@@ -150,7 +210,7 @@
     <p class="mb-0">No exemptions are currently applied. If this is your primary residence, you may qualify for a homestead exemption —
       <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">visit traviscad.org to apply ↗</a>.</p>
     {% endif %}
-    {% if not has_hs and hs_potential_savings %}
+    {% if is_residential and not has_hs and hs_potential_savings %}
     {# Estimated tier only — a modeled "what if you filed" figure, never blended
        with a real/verified number. Gated on has_hs (not excodes_list) so a
        parcel with some OTHER exemption but no Homestead specifically still
@@ -182,6 +242,14 @@
 </div>
 
 {# ── Section 3 — How you compare to your neighborhood ────────────────── #}
+{# Median-comparison mislabeling fix (July 2026): benchmark_by_year is built
+   in app.py from bench_label = property_type_label(classi_cd, state_cd1) —
+   the parcel's REAL category — so this was already comparing a commercial
+   parcel to the Commercial median, not a residential one. Confirmed: the
+   query was always correct; the copy just always said "home"/"your
+   neighborhood" regardless of what was actually being compared, which is
+   what made the Commercial median ($1,374,858 for 1201 S Lamar) read as if
+   it were a residential figure. Fix is copy-only — no query change. #}
 {% set _b25 = benchmark_by_year.get(2025) if benchmark_by_year else none %}
 {% if _b25 and _b25.median_market_value and mv25 %}
 {% set _med = _b25.median_market_value %}
@@ -189,11 +257,12 @@
 {% if _ratio > 1.1 %}{% set _cmp = "higher than" %}{% set _taxcmp = "higher than" %}
 {% elif _ratio < 0.9 %}{% set _cmp = "lower than" %}{% set _taxcmp = "lower than" %}
 {% else %}{% set _cmp = "about the same as" %}{% set _taxcmp = "about the same as" %}{% endif %}
-<div class="card mb-3"><div class="card-header">How You Compare to Your Neighborhood</div>
+{% set _peer_group = "the typical home" if is_residential else ("the typical " ~ bench_label ~ " property") %}
+<div class="card mb-3"><div class="card-header">{% if is_residential %}How You Compare to Your Neighborhood{% else %}How You Compare to {{ bench_label }} Peers{% endif %}</div>
   <div class="card-body">
-    <p class="mb-2">Your home's value is <strong>{{ _cmp }}</strong> the typical home in Travis County
+    <p class="mb-2">{% if is_residential %}Your home's{% else %}This property's{% endif %} value is <strong>{{ _cmp }}</strong> {{ _peer_group }} in Travis County
       (county median: <strong>${{ "{:,.0f}".format(_med) }}</strong>).</p>
-    <p class="mb-0">Because property taxes are based on value, your tax bill is likely <strong>{{ _taxcmp }}</strong> similar homes.</p>
+    <p class="mb-0">Because property taxes are based on value, {% if is_residential %}your{% else %}the{% endif %} tax bill is likely <strong>{{ _taxcmp }}</strong> similar {% if is_residential %}homes{% else %}properties{% endif %}.</p>
   </div>
 </div>
 {% endif %}
@@ -213,9 +282,9 @@
 </div>{# /row #}
 
 {# ── Section 4 — Your value over time ────────────────────────────────── #}
-<div class="card mb-4"><div class="card-header">Your Home's Value Over Time</div>
+<div class="card mb-4"><div class="card-header">{% if is_residential %}Your Home's Value Over Time{% else %}This Property's Value Over Time{% endif %}</div>
   <div class="card-body">
-    <p class="text-muted mb-3" style="font-size:13px;">Here's how your home's value has changed over the past 6 years.</p>
+    <p class="text-muted mb-3" style="font-size:13px;">Here's how {% if is_residential %}your home's{% else %}this property's{% endif %} value has changed over the past 6 years.</p>
     <canvas id="hoValueChart" height="90"></canvas>
   </div>
 </div>
@@ -1646,7 +1715,17 @@
                 {% endif %}
               </td>
               <td class="text-end">
-                {% if current and current.total_tax %}<span class="primary-value">${{ "{:,.2f}".format(current.total_tax) }}</span>
+                {# Masking-bug fix (July 2026): same pattern found and fixed in the
+                   Value History table below — this cell was showing current.total_tax
+                   as a bare, unqualified dollar figure even when it was reconstructed
+                   via the derived_tax fallback (total_tax_derived, property_detail())
+                   or sourced from a portal payment receipt (billing_source ==
+                   'portal_scrape'), neither of which is a confirmed complete billed
+                   amount. Reuses the same provenance flags, not reimplemented. #}
+                {% if current and current.total_tax and (current.total_tax_derived or current.billing_source == 'portal_scrape') %}
+                  <span class="primary-value" title="{% if current.billing_source == 'portal_scrape' %}Amount paid per portal receipt — reflects payment, not necessarily levy; entity breakdown unavailable{% else %}Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total{% endif %}" style="cursor:help;">~${{ "{:,.2f}".format(current.total_tax) }}</span>
+                  <span class="badge-partial ms-1" style="font-size:9px;">Partial</span>
+                {% elif current and current.total_tax %}<span class="primary-value">${{ "{:,.2f}".format(current.total_tax) }}</span>
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
               <td></td>
@@ -1735,6 +1814,19 @@
                     ~${{ "{:,.2f}".format(r.total_tax) }}
                   </span>
                   <span class="badge-partial ms-1" style="font-size:9px;">Partial</span>
+                {% elif r.total_tax and r.total_tax_derived %}
+                  {# Masking-bug fix (July 2026): same total_tax_derived provenance flag
+                     already used by Homeowner mode's "What you paid in taxes" card
+                     (property_detail(), derived_tax fallback) — this row's total_tax was
+                     reconstructed by summing entity_detail amount_due, which silently
+                     skips any entity with no amount_due on file, so it's real but not a
+                     confirmed complete total. Was previously falling into the plain
+                     "{{ '${:,.2f}'.format(r.total_tax) }}" branch below with no caveat. #}
+                  <span title="Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total"
+                        style="font-style:italic; color:var(--text-muted); cursor:help;">
+                    ~${{ "{:,.2f}".format(r.total_tax) }}
+                  </span>
+                  <span class="badge-partial ms-1" style="font-size:9px;">Partial</span>
                 {% elif r.total_tax %}
                   ${{ "{:,.2f}".format(r.total_tax) }}
                 {% elif r.data_source == 'preliminary' %}
@@ -1749,12 +1841,27 @@
                 {% endif %}
               </td>
               <td {% if r.tax_year in [2021,2022,2023,2024] %}id="bsrc-{{ r.tax_year }}"{% endif %}>
-                {% if r.tax_year == 2025 %}
+                {# Masking-bug fix (July 2026, per Diego): this badge used to check
+                   `r.tax_year == 2025` FIRST and unconditionally award "Verified" —
+                   so a 2025 row whose total_tax was derived (total_tax_derived), a
+                   portal-scrape payment receipt, or (in the COMPUTED_HIST_TAX_ENABLED
+                   edge case) had no real total_tax at all and fell back to
+                   computed_total_tax, all still showed "Verified" here regardless of
+                   which of those applied — even though the Total Tax cell to the left
+                   already correctly badges those same cases Partial/Computed. Reordered
+                   so a 2025 row only gets "Verified" once every lower-confidence
+                   provenance case has been ruled out, reusing the exact same
+                   total_tax_derived / billing_source / computed_total_tax checks the
+                   Total Tax cell and Homeowner mode's card already use — not
+                   reimplemented. #}
+                {% if r.billing_source == 'portal_scrape' %}
+                  <span class="badge-partial" title="Payment receipt from Travis County portal — amount paid, not levied; entity breakdown unavailable">Partial</span>
+                {% elif r.total_tax_derived %}
+                  <span class="badge-partial" title="Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total">Partial</span>
+                {% elif r.tax_year == 2025 and r.total_tax %}
                   <span class="badge-verified">Verified</span>
                 {% elif r.data_source == 'preliminary' %}
                   <span class="badge-preliminary">Preliminary</span>
-                {% elif r.billing_source == 'portal_scrape' %}
-                  <span class="badge-partial" title="Payment receipt from Travis County portal — amount paid, not levied; entity breakdown unavailable">Partial</span>
                 {% elif r.computed_total_tax %}
                   <span class="badge-estimated" title="Computed from certified taxable value × combined entity rate — not actual billing data">Computed</span>
                 {% elif r.data_source %}
