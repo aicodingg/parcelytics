@@ -8,6 +8,7 @@
 {% set mv25 = current.market_value if current else none %}
 {% set mv26 = current_2026.market_value if current_2026 else none %}
 {% set tv25 = current.taxable_value if current else none %}
+{% set tv26 = current_2026.taxable_value if current_2026 else none %}
 {% set tax25 = current.total_tax if current else none %}
 {% set rate = insights.total_rate_2025 if insights else none %}
 {# Use the latest year's exemptions (2026 preliminary if available) so newly
@@ -69,18 +70,132 @@
 </div>
 {% endif %}
 
-{# ── Section 1 — Your Home ───────────────────────────────────────────── #}
+{# ── Homestead savings card body — shared logic, macro'd (July 2026, per
+   Diego, Two-Year Card Redesign) so the 2025 and 2026 cards below call the
+   EXACT SAME branching, not two hand-copied versions that could drift. This
+   is byte-for-byte the same three-branch logic that existed before this
+   redesign (savings / fully-exempt-no-rate / no-exemption), parameterized by
+   mv/tv/rate/year instead of hardcoded to 2025. #}
+{% macro homestead_savings_card(is_residential, bench_label, has_hs, mv, tv, rate, year, ceiling_check_tax, excodes_year) %}
+  {% if not is_residential %}
+  <div style="font-size:18px; font-weight:700;">Not applicable</div>
+  <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+    Homestead exemptions apply only to an owner-occupied primary residence. This parcel is classified {{ bench_label }}, so this doesn't apply here.
+  </div>
+  {# Homestead status contradiction fix (July 2026, per Diego — parcel 0438011527):
+     has_hs and the "Your Exemptions" list elsewhere on this page both already read
+     from the same `excodes` source (line 18/44) — that part was never in
+     disagreement. The actual bug was here: `tv` was used as a plain truthiness
+     check, so a genuinely correct $0 taxable value (a 100% Disabled Veteran
+     Homestead exemption, DVHS, legitimately zeroes out taxable value) was treated
+     as "missing data" the same way None is, and fell through to the "No homestead
+     exemption on record" branch below — even though has_hs was True and Your
+     Exemptions correctly listed HS + DVHS the whole time. Fixed by checking
+     `tv is not none` instead of truthy `tv` (order matters: must be evaluated
+     before `mv > tv`, since comparing a real number to None raises in
+     Jinja/Python — `is not none` short-circuits that).
+     CONFIRMED (round 3, live debug values for parcel 0438011527): has_hs=True,
+     tv25=1430, rate=2.346485, mv25=1430 — tv25 exactly equals mv25, and
+     current.exemption_codes (2025) = None while current_2026.exemption_codes
+     (2026 preliminary) = 'HS,DVHS'. This logic was correct the whole time: no
+     exemption reduced the 2025 certified figures because none existed yet as
+     of that roll; the homestead was filed after 2025 certified and first
+     appears on the 2026 preliminary roll. The remaining fix was copy-only —
+     see the cross-year "no exemption YET" branch below, not this logic. #}
+  {% elif has_hs and mv and tv is not none and rate and mv > tv %}
+  {% set savings = (mv - tv) * rate / 100 %}
+  <div style="font-size:27px; font-weight:800; color:#2e7d32; font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(savings) }}</div>
+  <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+    {% if tv == 0 %}
+    Your homestead exemptions fully exempt this property from property tax — an estimated <strong>${{ "{:,.0f}".format(savings) }}</strong> {{ "saved" if year == 2025 else "in projected savings" }} in {{ year }}.
+    {% else %}
+    Your homestead exemption {{ "saved you" if year == 2025 else "is projected to save you" }} an estimated <strong>${{ "{:,.0f}".format(savings) }}</strong> in {{ year }}.
+    {% endif %}
+  </div>
+  {% if ceiling_check_tax and savings > ceiling_check_tax %}
+  <div class="text-muted" style="font-size:11px; line-height:1.45; margin-top:6px;">
+    Estimated savings may exceed your {{ "tax bill" if year == 2025 else "estimated tax" }} if a senior freeze, disability freeze, or other ceiling applies to your account. Your actual savings depend on your specific exemption history.
+  </div>
+  {% endif %}
+  {# Fully-exempt-parcel fix (July 2026, per Diego — parcel 0438011527, second
+     finding on this card): the elif above requires `rate` to be truthy, and for
+     a 100% Disabled Veteran Homestead exemption `rate` is 0 (falsy) for a
+     data-completeness reason, not a real one. Tax Code §11.131 exempts the
+     FULL value from EVERY taxing unit for a 100% DV exemption, so every entity
+     bills $0. loaders/load_tax_current.py's `if ent_code and (due or paid)`
+     filter (a separate, pre-existing behavior, not touched here) silently drops
+     any entity row where both amounts are $0/blank -- so entity_detail comes
+     back empty, and build_insights()'s `rate_2025 = sum(e["rate"] for e in
+     entity_detail if e["rate"])` sums an empty list to 0, not None.
+     Deliberately NOT fixed by loosening the elif above to `rate is not none`:
+     unlike tv == 0 (a real, correct fact -- fully exempt), rate == 0 here is
+     NOT real -- the entities' actual rates aren't zero, we just have no billed
+     rows to sum. Passing it through would compute (mv - 0) * 0 / 100 = $0 and
+     display a confident-looking "$0 saved," which is a fabricated number, worse
+     than the honest gap it would be covering. This branch instead names the
+     real, known fact (fully exempt) without inventing a dollar figure the data
+     can't actually support. #}
+  {% elif has_hs and tv == 0 and not rate %}
+  <div style="font-size:18px; font-weight:700; color:#2e7d32;">Fully exempt from property tax</div>
+  <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+    Your homestead exemptions fully exempt this property from property tax. An exact dollar savings figure isn't available because none of your taxing entities billed you anything for {{ year }}, so a combined rate can't be derived to calculate one.
+  </div>
+  {# Cross-year "no exemption YET" fix (round 3, per Diego, confirmed against
+     live data): has_hs reflects the MOST RECENT year with exemption codes on
+     file (line 16-18, "Use the latest year's exemptions... so newly added
+     exemptions are reflected" -- a deliberate design choice from an earlier
+     round, not a bug). So has_hs can be True purely because a LATER roll
+     (excodes_year) already carries the exemption, even when THIS card's own
+     year never did -- the flat "No homestead exemption on record" wording
+     read as a contradiction next to a card explicitly labeled "(2025)" when
+     Your Exemptions, sourced from that same later roll, listed one. Both
+     sections were individually correct the whole time; only this copy needed
+     to say which year it's talking about. excodes_year > year is the general,
+     data-driven signal for this (not hardcoded to 2025/2026): it's only ever
+     true when a later year's roll carries an exemption this card's own year
+     didn't, so it can't accidentally fire for the 2026 card itself (2026 is
+     already the latest year available). #}
+  {% elif has_hs and excodes_year and excodes_year > year %}
+  <div style="font-size:18px; font-weight:700;">No homestead exemption was on record for {{ year }}</div>
+  <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+    A homestead exemption now appears on the {{ excodes_year }} preliminary roll — it should reduce your {{ excodes_year }} taxes, though it wasn't reflected in {{ year }}'s certified figures shown here.
+  </div>
+  {% else %}
+  <div style="font-size:18px; font-weight:700;">No homestead exemption on record</div>
+  <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+    If this is your primary residence, you may be eligible —
+    <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">apply at traviscad.org ↗</a>.
+  </div>
+  {% endif %}
+{% endmacro %}
+
+{# ── Two-Year Card Redesign (July 2026, per Diego): replaces the single row of
+   three 2025-only cards with two labeled sections — "2025 — Verified" (real,
+   certified figures) and "2026 — Preliminary" (TCAD's preliminary appraisal
+   plus an assumed-rate projection, since 2026 entity rates aren't adopted
+   until Aug/Sept). Confidence labeling stays precise WITHIN each section even
+   though the section header is a single label: the 2026 value card badges
+   Preliminary (a real appraisal figure, just not certified); the 2026 tax and
+   savings cards badge Estimated (a projection using last year's rates, not an
+   appraisal-confidence question at all) — "Preliminary" would misdescribe a
+   rate assumption, so it's deliberately not used there.
+   estimated_tax_2026 and assumed_rate_2026 are NOT new computations — both
+   already existed (assumed_rate_2026 newly exposed to the template, but it's
+   the same blended_rate_2025 value Investor mode's own 2026 tax estimate
+   already used) in property_detail(), reused here rather than reimplemented. #}
+{# ── 2025 — Verified ───────────────────────────────────────────────────── #}
+<div class="d-flex align-items-center gap-2 mb-2">
+  <span style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3);">2025</span>
+  <span class="badge-verified" style="font-size:9px;">Verified</span>
+</div>
 <div class="row g-3 mb-4">
   <div class="col-md-4">
     <div class="card h-100"><div class="card-body">
-      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home is worth{% else %}What this property is worth{% endif %}</div>
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home was worth{% else %}What this property was worth{% endif %}</div>
       <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">{% if mv25 %}${{ "{:,.0f}".format(mv25) }}{% else %}—{% endif %}</div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if is_residential %}Your home's{% else %}This property's{% endif %} 2025 certified value.
-        {% if mv25 and mv26 and ((mv26 - mv25) / mv25)|abs > 0.05 %}
-        TCAD's 2026 preliminary estimate is <strong>${{ "{:,.0f}".format(mv26) }}</strong>
-        ({{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }}).
-        {% endif %}
+        <span class="badge-verified" style="font-size:9px;">Verified</span>
       </div>
     </div></div>
   </div>
@@ -98,7 +213,9 @@
          Investor mode's Value History table already distinguishes these
          cases with Verified/Partial/Computed badges; this card now applies
          the same tiers, in Homeowner mode's plain-language register,
-         instead of treating every case as an equally-certain fact. #}
+         instead of treating every case as an equally-certain fact. Unchanged
+         by the Two-Year Card Redesign — same logic, just moved into the new
+         "2025 — Verified" section. #}
       <div class="text-muted" style="font-size:13px; font-weight:600;">What you paid in taxes</div>
       <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">
         {% if tax25 %}${{ "{:,.0f}".format(tax25) }}{% elif current and current.computed_total_tax %}~${{ "{:,.0f}".format(current.computed_total_tax) }}{% else %}<span style="font-size:18px; font-weight:700;">Not available yet</span>{% endif %}
@@ -112,6 +229,7 @@
           <span class="badge-partial" style="font-size:9px;">Partial</span>
         {% elif tax25 %}
           You paid this in property taxes in 2025.
+          <span class="badge-verified" style="font-size:9px;">Verified</span>
         {% elif current and current.computed_total_tax %}
           Your estimated 2025 tax, based on certified value × certified rates — not a confirmed billed amount.
           <span class="badge-estimated" style="font-size:9px;">Estimated</span>
@@ -123,26 +241,62 @@
   </div>
   <div class="col-md-4">
     <div class="card h-100"><div class="card-body">
-      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Your homestead savings{% else %}Homestead Exemption{% endif %}</div>
-      {% if not is_residential %}
-      <div style="font-size:18px; font-weight:700;">Not applicable</div>
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Your homestead savings (2025){% else %}Homestead Exemption{% endif %}</div>
+      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv25, tv25, rate, 2025, tax25, excodes_year) }}
+    </div></div>
+  </div>
+</div>
+
+{# ── 2026 — Preliminary ────────────────────────────────────────────────── #}
+<div class="d-flex align-items-center gap-2 mb-2">
+  <span style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3);">2026</span>
+  <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
+</div>
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card h-100"><div class="card-body">
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home is worth (2026 preliminary){% else %}What this property is worth (2026 preliminary){% endif %}</div>
+      <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">{% if mv26 %}${{ "{:,.0f}".format(mv26) }}{% else %}—{% endif %}</div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
-        Homestead exemptions apply only to an owner-occupied primary residence. This parcel is classified {{ bench_label }}, so this doesn't apply here.
+        {% if mv26 %}
+        TCAD's 2026 preliminary appraisal{% if mv25 %} — {{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }} vs. 2025{% endif %}. A real appraisal figure, not yet certified.
+        <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
+        {% else %}
+        2026 preliminary value not yet available for this parcel.
+        {% endif %}
       </div>
-      {% elif has_hs and mv25 and tv25 and rate and mv25 > tv25 %}
-      {% set savings = (mv25 - tv25) * rate / 100 %}
-      <div style="font-size:27px; font-weight:800; color:#2e7d32; font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(savings) }}</div>
-      <div class="text-muted" style="font-size:12.5px; line-height:1.5;">Your homestead exemption saved you an estimated <strong>${{ "{:,.0f}".format(savings) }}</strong> in 2025.</div>
-      {% if tax25 and savings > tax25 %}
-      <div class="text-muted" style="font-size:11px; line-height:1.45; margin-top:6px;">
-        Estimated savings may exceed your tax bill if a senior freeze, disability freeze, or other ceiling applies to your account. Your actual savings depend on your specific exemption history.
+    </div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100"><div class="card-body">
+      {# Labeled "Estimated," not "Preliminary": Preliminary describes the 2026
+         appraisal value itself (a real TCAD figure, just not yet certified).
+         This card projects a TAX amount using last year's (2025) entity
+         rates, since 2026 rates aren't adopted until Aug/Sept — that's an
+         assumption layered on top of the preliminary value, a genuinely
+         different kind of uncertainty, so it gets its own badge rather than
+         inheriting "Preliminary" from the value it's built on. #}
+      <div class="text-muted" style="font-size:13px; font-weight:600;">Estimated 2026 taxes</div>
+      <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">
+        {% if estimated_tax_2026 %}~${{ "{:,.0f}".format(estimated_tax_2026) }}{% else %}<span style="font-size:18px; font-weight:700;">Not available yet</span>{% endif %}
       </div>
-      {% endif %}
-      {% else %}
-      <div style="font-size:18px; font-weight:700;">No homestead exemption on record</div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
-        If this is your primary residence, you may be eligible —
-        <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">apply at traviscad.org ↗</a>.
+        {% if estimated_tax_2026 %}
+          2026 taxable value × your entities' 2025 rates — 2026 rates aren't adopted until August/September, so this uses last year's rates as the best available assumption.
+          <span class="badge-estimated" style="font-size:9px;">Estimated</span>
+        {% else %}
+          We don't have enough billing data to project a 2026 tax estimate yet.
+        {% endif %}
+      </div>
+    </div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100"><div class="card-body">
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Estimated 2026 homestead savings{% else %}Homestead Exemption{% endif %}</div>
+      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv26, tv26, assumed_rate_2026, 2026, estimated_tax_2026, excodes_year) }}
+      {% if is_residential and (has_hs or bench_label == 'Residential' or not bench_label) %}
+      <div class="text-muted" style="font-size:10.5px; line-height:1.4; margin-top:4px;">
+        <span class="badge-estimated" style="font-size:9px;">Estimated</span> uses the same last-known (2025) rate assumption as the tax estimate above — not TCAD's Preliminary badge, since that describes the appraisal value, not this rate assumption.
       </div>
       {% endif %}
     </div></div>
@@ -269,13 +423,36 @@
 
 </div>{# /col-lg-7 #}
 <div class="col-lg-5">
-  <div class="card h-100" id="hoSatCard" style="display:none;">
+  {# Missing-imagery fallback fix (July 2026, per Diego — parcel 0438011527):
+     this card used to be `display:none` in the HTML and only ever unhidden by
+     the JS below once /api/geocode/<geo_id> came back with real coordinates —
+     so on any parcel where geocoding failed, the card simply never appeared:
+     no placeholder, no explanation, indistinguishable from the section not
+     existing at all. Same "always show a labeled state instead of silently
+     hiding something" convention already used everywhere else on this page
+     (na-cell "—", confidence badges, "No exemptions are currently applied,"
+     etc.) — the card container and header now always render; only the
+     content underneath switches between the map and an honest fallback.
+     Why imagery can be missing (see /api/geocode in app.py): (1) the parcel
+     has no cached latitude/longitude AND no situs_address on file to geocode
+     from ("no_address"); (2) the free U.S. Census onelineaddress geocoder
+     doesn't confidently match the address on file ("no_match") — plausible
+     for a sparse/rural address like this parcel's; or (3) the geocode request
+     itself times out or errors ("geocode_failed"). Not distinguished in the
+     fallback copy below since the endpoint's own error detail isn't surfaced
+     to this script today — flagged, not fixed, out of scope for this round. #}
+  <div class="card h-100">
     <div class="card-header d-flex justify-content-between align-items-center">
       <span>Satellite View</span>
       <span class="text-muted" style="font-size:11px; font-weight:400;">Imagery: Esri</span>
     </div>
     <div class="card-body p-0" style="display:flex;">
-      <div id="hoSatMap" style="flex:1 1 auto; min-height:320px; width:100%; border-radius:0 0 8px 8px;"></div>
+      <div id="hoSatMap" style="display:none; flex:1 1 auto; min-height:320px; width:100%; border-radius:0 0 8px 8px;"></div>
+      <div id="hoSatFallback" class="d-flex flex-column align-items-center justify-content-center text-center text-muted"
+           style="flex:1 1 auto; min-height:320px; width:100%; padding:20px; border-radius:0 0 8px 8px;">
+        <div style="font-size:14px; font-weight:600; margin-bottom:4px;">Satellite image not available</div>
+        <div style="font-size:12px; max-width:280px;">We couldn't locate this property on the map — this can happen for parcels whose address our geocoder can't confidently match.</div>
+      </div>
     </div>
   </div>
 </div>
@@ -345,106 +522,111 @@
 </div>
 
 {# ── How exemptions reduce your bill, per taxing entity ───────────────────────
-   REDESIGNED (layout only — every data-integrity behavior below is byte-for-byte
-   identical to the prior version: same namespace accumulation, same no-rate
-   detection/Not Available treatment, same total-row Not-Available-on-partial-sum
-   guard, same footnote text). What changed is purely visual:
-     1. The 6 columns are now grouped under two labeled headers — "Taxable Value
-        Walk" (Assessed / − Exemption / = Net Taxable) and "Your Bill" (× Rate /
-        = Tax) — with a heavier divider between the groups, so the two different
-        "jobs" those columns do read as two steps instead of one flat row.
-     2. Arrow/operator prefixes (−, =, ×, =) on the sub-headers make the left-to-
-        right Assessed → Exemption → Net Taxable → Rate → Tax flow explicit
-        instead of implicit in six unlabeled numbers.
-     3. No-rate rows now carry a one-line inline explanation directly under the
-        entity name (not just a hover title + a footnote you have to scroll to)
-        so "why is this Not Available" is answered at the point of confusion.
-     4. The total row gets a tinted background (var(--surface-2), the project's
-        existing "table foot / subtle fill" token) so it reads as a summary line
-        rather than just another row with a bold weight. ───────────────────── #}
+   TCAD-style redesign, finalized (July 2026, per Diego): first pass matched
+   TCAD's independent-per-entity convention but kept Assessed and Exemption
+   columns; this pass drops both, per Diego's own markup against TCAD's real
+   page. TCAD's "Net Appraised" is the flat, pre-exemption value — identical
+   across every entity, so showing it per row here added nothing (Assessed is
+   already the single parcel-level figure shown at the top of this page).
+   "Taxable Value" is deliberately NOT renamed to "Net Appraised" — that would
+   misuse TCAD's own terminology for a different concept: TCAD's Net Appraised
+   is the pre-exemption figure; this column is the post-exemption figure that
+   varies per entity, which is what TCAD itself calls Taxable Value. Final
+   columns: Taxing Entity / Taxable Value / Rate / Tax.
+
+   Total row: Rate and Tax now both genuinely sum (Rate sums the entities that
+   publish one, with the same "n of n" partial-sum disclosure already used for
+   the Combined Rate rows in "Where Your Tax Dollars Went" and Historical Tax
+   Rates by Entity above — reused, not reinvented). Taxable Value stays "—":
+   each entity's own independent figure, still doesn't add up to anything real
+   summed across entities with different exemptions and rates.
+
+   Taxable Value itself is still DERIVED (tax ÷ rate) — tax_billing_entity has
+   no real per-entity taxable-value field, only amount_due and rate — clamped
+   at _assessed so it can never display above Assessed (Net Taxable / Assessed
+   contradiction fix, parcel 0438011527: reverse-dividing a cent-rounded dollar
+   amount by a small rate can overshoot the true taxable value by a few
+   dollars, invisible on a normal-sized parcel but visible on this parcel's
+   $1,430 assessed value). Taxable Value can never legitimately exceed
+   Assessed — that would imply a negative exemption, which isn't a real
+   category in TX property tax law — so the clamp only ever suppresses
+   rounding noise, never a real figure. #}
 {% if entity_detail and entity_detail | selectattr('amount_due') | list and current and current.assessed_value %}
 {% set _assessed = current.assessed_value | float %}
 <div class="card mb-4"><div class="card-header">How Your Exemptions Reduce Your Bill — by Taxing Entity</div>
   <p class="text-muted px-3 pt-3 mb-2" style="font-size:11.5px;">
-    Read each row left to right: your assessed value, minus what that entity exempts, equals what they actually
-    tax you on — then multiplied by their rate is what you owed them.
+    Each taxing entity applies its own exemptions to your assessed value and calculates its own taxable value and
+    tax independently — shown entity by entity, the way <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">TCAD's own property page</a> does, rather than as a combined
+    "taxable value" that wouldn't mean anything summed across entities with different exemptions and rates.
   </p>
   <div class="card-body p-0">
     <div class="table-responsive">
     <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
       <thead class="text-muted" style="font-size:10px; text-transform:uppercase;">
         <tr>
-          <th class="ps-3" rowspan="2" style="vertical-align:bottom;">Taxing Entity</th>
-          <th class="text-center" colspan="3" style="border-bottom:2px solid var(--border-strong, #cbd0dc); padding-bottom:4px;">Taxable Value Walk</th>
-          <th class="text-center" colspan="2" style="border-bottom:2px solid var(--border-strong, #cbd0dc); padding-bottom:4px; border-left:2px solid var(--border-strong, #cbd0dc);">Your Bill</th>
-        </tr>
-        <tr style="font-size:10px;">
-          <th class="text-end">Assessed</th>
-          <th class="text-end">− Exemption</th>
-          <th class="text-end">= Net Taxable</th>
-          <th class="text-end" style="border-left:2px solid var(--border-strong, #cbd0dc);">× Rate</th>
-          <th class="text-end pe-3">= Tax</th>
+          <th class="ps-3">Taxing Entity</th>
+          <th class="text-end">Taxable Value</th>
+          <th class="text-end">Rate</th>
+          <th class="text-end pe-3">Tax</th>
         </tr>
       </thead>
       <tbody>
         {% set _no_rate_entities = [] %}
-        {% set _tot = namespace(net=0, exempt=0, tax=0) %}
+        {% set _tot = namespace(tax=0, rate=0) %}
         {% for e in entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
         {% set _tot.tax = _tot.tax + (e.amount_due|float) %}
         {% if e.rate %}
-        {% set _net = e.amount_due|float * 100 / (e.rate|float) %}
-        {% set _exempt = _assessed - _net %}
-        {% set _tot.net = _tot.net + _net %}
-        {% set _tot.exempt = _tot.exempt + (_exempt if _exempt > 1 else 0) %}
+        {% set _tot.rate = _tot.rate + (e.rate|float) %}
+        {% set _net_raw = e.amount_due|float * 100 / (e.rate|float) %}
+        {% set _net = _net_raw if _net_raw <= _assessed else _assessed %}
         <tr>
           <td class="ps-3">{{ e.entity_name or e.entity_code }}</td>
-          <td class="text-end">${{ "{:,.0f}".format(_assessed) }}</td>
-          <td class="text-end" style="color:#2e7d32;">{% if _exempt > 1 %}−${{ "{:,.0f}".format(_exempt) }}{% else %}—{% endif %}</td>
           <td class="text-end">${{ "{:,.0f}".format(_net) }}</td>
-          <td class="text-end text-muted" style="border-left:2px solid var(--border-strong, #cbd0dc);">{{ "{:.4f}%".format(e.rate|float) }}</td>
+          <td class="text-end text-muted">{{ "{:.4f}%".format(e.rate|float) }}</td>
           <td class="text-end pe-3">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
         </tr>
         {% else %}
         {# PID / Special District entity billed in 2025 but absent from county_tax_rate
            (KNOWN_LIMITATIONS.md — "PID/Special-District entity codes missing from
            county_tax_rate", CORRECTNESS-CRITICAL, ~6% of parcels / $38.05M in 2025
-           billing county-wide). Without a rate we cannot derive net taxable / exemption
-           split, so show the row honestly (real, verified amount_due; Not Available for
-           the derived fields) instead of dropping it — matches the pass-through pattern
+           billing county-wide). Without a rate we cannot derive Taxable Value, so
+           show the row honestly (real, verified amount_due; Not Available for the
+           derived field) instead of dropping it — matches the pass-through pattern
            already used in the /api/estimate_acq PID handling below on this same page. #}
         {% set _ = _no_rate_entities.append(e) %}
         <tr>
           <td class="ps-3">
             {{ e.entity_name or e.entity_code }}
             <span class="badge-estimated ms-1" style="font-size:9px;" title="No certified 2025 rate published for this entity — likely a PID/Special District">no rate</span>
-            <div class="text-muted" style="font-size:10px; font-weight:400; line-height:1.4; margin-top:1px; max-width:220px;">No certified rate on file for this entity — Net Taxable can't be derived. This is not a $0 exemption.</div>
+            <div class="text-muted" style="font-size:10px; font-weight:400; line-height:1.4; margin-top:1px; max-width:220px;">No certified rate on file for this entity — Taxable Value can't be derived. This is not a $0 exemption.</div>
           </td>
-          <td class="text-end">${{ "{:,.0f}".format(_assessed) }}</td>
-          <td class="text-end">—</td>
           <td class="text-end" style="font-style:italic; color:var(--text-3);">Not Available</td>
-          <td class="text-end text-muted" style="border-left:2px solid var(--border-strong, #cbd0dc);">—</td>
+          <td class="text-end text-muted">—</td>
           <td class="text-end pe-3">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
         </tr>
         {% endif %}
         {% endfor %}
       </tbody>
+      {% set _ent_for_total = entity_detail | selectattr('amount_due') | list %}
+      {% set _rate_n = _ent_for_total | selectattr('rate') | list | length %}
+      {% set _ent_n  = _ent_for_total | length %}
       <tfoot>
+        {# Rate and Tax both genuinely sum, so both are totaled -- Taxable Value
+           doesn't (each entity's own independent figure) and stays "—", same
+           reasoning as "Where Your Tax Dollars Went" above. Rate's partial-sum
+           disclosure (badge-partial "n of n") is the exact convention already
+           used for the Combined Rate rows elsewhere on this page -- reused,
+           not reinvented, so a no-rate PID/district entity is never silently
+           excluded from a number labeled "Total" without saying so. #}
         <tr style="font-weight:700; border-top:2px solid var(--border-strong, #dee2e6); background:var(--surface-2, #f4f5f8);">
           <td class="ps-3">Total</td>
           <td class="text-end">—</td>
-          {# Exemption / Net Taxable totals are only a true total when every row had a
-             rate to derive them from. If any row is Not Available (no-rate entity), a
-             silent sum here would quietly present an incomplete total as the real one —
-             so both columns show Not Available instead, matching the row-level treatment,
-             not a number that excludes those rows without saying so. #}
-          {% if _no_rate_entities %}
-          <td class="text-end" style="font-style:italic; color:var(--text-3);">Not Available</td>
-          <td class="text-end" style="font-style:italic; color:var(--text-3);">Not Available</td>
-          {% else %}
-          <td class="text-end" style="color:#2e7d32;">{% if _tot.exempt > 1 %}−${{ "{:,.0f}".format(_tot.exempt) }}{% else %}—{% endif %}</td>
-          <td class="text-end">${{ "{:,.0f}".format(_tot.net) }}</td>
-          {% endif %}
-          <td class="text-end text-muted" style="border-left:2px solid var(--border-strong, #cbd0dc);">—</td>
+          <td class="text-end text-muted">
+            {% if _rate_n > 0 %}
+              {{ "{:.4f}%".format(_tot.rate) }}
+              {% if _rate_n < _ent_n %}<span class="badge-partial d-block" style="font-size:9px; margin-top:2px; font-weight:400;">{{ _rate_n }} of {{ _ent_n }}</span>{% endif %}
+            {% else %}<span class="na-cell">—</span>{% endif %}
+          </td>
           <td class="text-end pe-3">${{ "{:,.0f}".format(_tot.tax) }}</td>
         </tr>
       </tfoot>
@@ -452,10 +634,9 @@
     </div>
   </div>
   <div class="card-footer text-muted" style="font-size:10.5px;">
-    Each entity grants different exemptions, so your <strong>net taxable value</strong> — the amount it actually taxes you on — differs by entity, even though the assessed value is the same. Net taxable is derived from your tax ÷ that entity's rate.
+    Each entity grants different exemptions, so your <strong>taxable value</strong> — the amount it actually taxes you on — differs by entity, even though the assessed value is the same. Taxable Value is derived from your tax ÷ that entity's rate (there's no separate per-entity taxable-value figure in the county's billing data), which is also why it's shown per entity rather than added into one number — summing it wouldn't represent anything real.
     {% if _no_rate_entities %}
-    <br><strong>{{ _no_rate_entities | length }}</strong> of your entities ({{ _no_rate_entities | map(attribute='entity_code') | join(', ') }}) bill you directly but don't publish a rate Parcelytics has on file — usually a Public Improvement District or Water Control district. The amount billed is real and verified; Net Taxable for those rows is Not Available because it can't be derived without a rate.
-    Total Tax below sums every entity including these — that figure is real either way. Total Net Taxable / Exemption show Not Available rather than a partial sum that would quietly exclude them.
+    <br><strong>{{ _no_rate_entities | length }}</strong> of your entities ({{ _no_rate_entities | map(attribute='entity_code') | join(', ') }}) bill you directly but don't publish a rate Parcelytics has on file — usually a Public Improvement District or Water Control district. The amount billed is real and verified and is included in the Tax total below; Taxable Value for those rows is Not Available because it can't be derived without a rate.
     {% endif %}
   </div>
 </div>
@@ -2532,13 +2713,20 @@
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 // ── Satellite view — geocode the address, render Esri World Imagery ──────────
+// Missing-imagery fallback fix (July 2026, per Diego): the card container and
+// its "Satellite image not available" fallback (see comment above hoSatCard)
+// now always render; this script's only job is to swap the fallback for the
+// real map on success. On any failure (no d, !d.ok, or d.lat == null) the
+// fallback is left exactly as it started — no fabricated location, and no
+// silently-missing card either.
 (function () {
-  const card = document.getElementById('hoSatCard');
   const mapEl = document.getElementById('hoSatMap');
-  if (!card || !mapEl || !window.L) return;
+  const fallbackEl = document.getElementById('hoSatFallback');
+  if (!mapEl || !window.L) return;
   fetch('/api/geocode/{{ parcel.geo_id }}').then(r => r.json()).then(d => {
-    if (!d || !d.ok || d.lat == null) return;   // no fabricated location
-    card.style.display = '';
+    if (!d || !d.ok || d.lat == null) return;   // no fabricated location — fallback stays visible
+    if (fallbackEl) fallbackEl.style.display = 'none';
+    mapEl.style.display = '';
     const map = L.map('hoSatMap', { zoomControl: true, scrollWheelZoom: false }).setView([d.lat, d.lng], 18);
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
       maxZoom: 19, attribution: 'Imagery &copy; Esri' }).addTo(map);

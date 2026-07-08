@@ -1539,6 +1539,7 @@ def property_detail(geo_id):
     # Uses this parcel's specific entity mix (not county-wide avg) for accuracy.
     # Only computed when taxable_value is available for 2026 — never falls back to MV.
     estimated_tax_2026 = None
+    assumed_rate_2026 = None
     if current_2026 and current_2026.get("taxable_value") and entity_detail:
         tv26 = current_2026["taxable_value"]
         blended_rate_2025 = sum(
@@ -1546,6 +1547,15 @@ def property_detail(geo_id):
         )
         if blended_rate_2025 > 0:
             estimated_tax_2026 = round(tv26 * blended_rate_2025 / 100.0, 2)
+            # Exposed to the template (Two-Year Card Redesign, July 2026, per Diego)
+            # so the Homeowner-mode "Estimated 2026 homestead savings" card can apply
+            # this SAME assumed rate to the 2026 preliminary values, the same way the
+            # 2025 card applies insights.total_rate_2025 to the 2025 values — reusing
+            # this exact number rather than a second independently-computed one.
+            # Real 2026 entity rates aren't adopted until Aug/Sept, so "assumed" here
+            # explicitly means "last known (2025) rates," same assumption
+            # estimated_tax_2026 already makes.
+            assumed_rate_2026 = blended_rate_2025
 
     # Est. 2026 effective tax rate (Task 3) — same-year basis, Estimated badge:
     # estimated 2026 tax ÷ 2026 preliminary market value. Kept separate from the
@@ -1665,6 +1675,7 @@ def property_detail(geo_id):
         chart_entity_data=chart_entity_data,
         chart_years=chart_years,
         estimated_tax_2026=estimated_tax_2026,
+        assumed_rate_2026=assumed_rate_2026,
         kpi=kpi,
         narrative=narrative,
         annual_trends=annual_trends,
