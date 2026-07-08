@@ -22,11 +22,26 @@
         <a href="#" class="list-group-item list-group-item-action active" data-topic="homestead">
           Homestead Exemptions
         </a>
+        <a href="#" class="list-group-item list-group-item-action" data-topic="protests">
+          Protests
+        </a>
+        <a href="#" class="list-group-item list-group-item-action" data-topic="ag-valuation">
+          Ag Valuation (1-d-1)
+        </a>
+        <a href="#" class="list-group-item list-group-item-action" data-topic="delinquency">
+          Delinquency
+        </a>
+        <a href="#" class="list-group-item list-group-item-action" data-topic="bill-calculated">
+          How Your Bill Is Calculated
+        </a>
+        <a href="#" class="list-group-item list-group-item-action" data-topic="homestead-cap">
+          Homestead Cap (10% Limit)
+        </a>
         {# Add future topics here as: <a class="list-group-item list-group-item-action" data-topic="...">...</a>
            plus a matching <div class="info-topic" id="topic-..."> block below. #}
       </div>
       <div class="card-footer text-muted" style="font-size:11px;">
-        More topics — protests, agricultural valuation, delinquency — coming as Parcelytics builds them out.
+        Six topics live today — more coming as Parcelytics expands into new states and counties.
       </div>
     </div>
   </div>
@@ -38,8 +53,8 @@
       <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
         <h2 class="fw-bold mb-0">Homestead Exemptions</h2>
         <div class="d-flex align-items-center gap-2" style="font-size:13px;">
-          <label class="text-muted mb-0" for="stateSelect">State</label>
-          <select id="stateSelect" class="form-select form-select-sm" style="width:auto;">
+          <label class="text-muted mb-0" for="stateSelect-homestead">State</label>
+          <select id="stateSelect-homestead" class="topic-state-select form-select form-select-sm" style="width:auto;">
             <option value="tx" selected>Texas</option>
           </select>
         </div>
@@ -94,8 +109,8 @@
 
       {# ── County selector — one county today, structured for more later ─── #}
       <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
-        <label class="text-muted mb-0" for="countySelect">County</label>
-        <select id="countySelect" class="form-select form-select-sm" style="width:auto;">
+        <label class="text-muted mb-0" for="countySelect-homestead">County</label>
+        <select id="countySelect-homestead" class="topic-county-select form-select form-select-sm" style="width:auto;">
           <option value="travis" selected>Travis County</option>
         </select>
         <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
@@ -150,6 +165,689 @@
       </div>
 
     </div>
+
+    <div class="info-topic" id="topic-protests" style="display:none;">
+      <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+        <h2 class="fw-bold mb-0">Protests</h2>
+        <div class="d-flex align-items-center gap-2" style="font-size:13px;">
+          <label class="text-muted mb-0" for="stateSelect-protests">State</label>
+          <select id="stateSelect-protests" class="topic-state-select form-select form-select-sm" style="width:auto;">
+            <option value="tx" selected>Texas</option>
+          </select>
+        </div>
+      </div>
+      <p class="text-muted mb-3" style="font-size:11.5px;">
+        Protest rules are set partly by state law and partly by how each local appraisal district runs its own
+        process — so this page has a state-level section that applies everywhere in Texas, and a county-level
+        section for how Travis Central Appraisal District (TCAD) and the Travis Appraisal Review Board (ARB) run
+        it locally. Only Texas / Travis County are built out today; more states will show here as Parcelytics
+        expands.
+      </p>
+
+      {# ── State-level section (Texas) ──────────────────────────────────── #}
+      <div class="info-state-panel" data-state="tx">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Texas — general rules (state law)</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              Every property owner has the right to protest to their county's Appraisal Review Board (ARB) if
+              they disagree with the appraisal district's determination of their property's value, or with most
+              other appraisal-district actions concerning their property
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.41.htm#41.41" target="_blank" rel="noopener noreferrer">Tax Code &sect;41.41</a>).
+              An appraisal district cannot charge a fee for filing a protest.
+            </p>
+            <p>
+              The appraisal district must mail a Notice of Appraised Value by <strong>April 1</strong> for a
+              residence homestead, or <strong>May 1</strong> for other property (or as soon as practicable after
+              those dates)
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.25.htm#25.19" target="_blank" rel="noopener noreferrer">Tax Code &sect;25.19</a>).
+              The protest deadline is <strong>May 15, or the 30th day after that notice was mailed to you —
+              whichever is later.</strong> The clock runs from the date the appraisal district mailed the notice,
+              not the date you received it
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.41.htm#41.44" target="_blank" rel="noopener noreferrer">Tax Code &sect;41.44(a)(1)</a>).
+            </p>
+            <p>
+              A protest doesn't have to use the official form to be valid — a written notice is sufficient as
+              long as it identifies the property, the owner, and some basis for dissatisfaction with the
+              appraisal district's decision. The Comptroller's Form 50-132 is the standard form appraisal
+              districts must provide on request
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.41.htm#41.44" target="_blank" rel="noopener noreferrer">Tax Code &sect;41.44(d)</a>,
+              <a href="https://comptroller.texas.gov/forms/50-132.pdf" target="_blank" rel="noopener noreferrer">Form 50-132 ↗</a>).
+            </p>
+            <p>
+              <strong>Missed the deadline?</strong> There are two separate late-filing paths, and they're easy to
+              conflate — this is one where the deadline that actually applies to you depends on which situation
+              you're in:
+            </p>
+            <ul style="padding-left:20px;">
+              <li style="margin-bottom:8px;">
+                <strong>Filed your protest late in the first place:</strong> if you missed the May 15 / 30-day
+                deadline but file before the ARB approves the appraisal records for the year (typically mid-summer),
+                you're still entitled to a hearing if you can show "good cause" to the board for the delay
+                (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.41.htm#41.44" target="_blank" rel="noopener noreferrer">Tax Code &sect;41.44(b)</a>).
+                This is a general exception for a late-filed <em>notice of protest</em>.
+              </li>
+              <li>
+                <strong>Filed on time but missed your hearing:</strong> this is a different situation, governed
+                locally rather than by this statute — see the Travis County section below for TCAD's specific
+                no-show / reopening rule, which runs on its own, much shorter clock.
+              </li>
+            </ul>
+            <p>
+              <strong>Commercial, multifamily, industrial, and utility properties</strong> above a
+              Comptroller-published, inflation-adjusted value threshold are entitled to have their protest heard
+              by a special ARB panel with specific qualifications, rather than a standard panel — relevant mainly
+              to larger investment-grade assets
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.6.htm#6.425" target="_blank" rel="noopener noreferrer">Tax Code &sect;6.425(b)</a>).
+              The threshold is <strong>$62,883,169, current as of 2026</strong> — it's adjusted for inflation
+              every year, so confirm the current-year figure on the Comptroller's site before relying on it for
+              another tax year.
+            </p>
+            <p class="mb-0">
+              If you're dissatisfied with the ARB's ruling, you can appeal further — to state district court, or
+              (depending on the property's value and type) to the State Office of Administrative Hearings (SOAH)
+              or regular binding arbitration. Each path has its own deadlines and deposit requirements; this page
+              doesn't walk through them in detail yet.
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://comptroller.texas.gov/taxes/property-tax/protests/" target="_blank" rel="noopener noreferrer">Texas Comptroller — Appraisal Protests and Appeals ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.41.htm#41.41" target="_blank" rel="noopener noreferrer">Tax Code &sect;41.41 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.41.htm#41.44" target="_blank" rel="noopener noreferrer">Tax Code &sect;41.44 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.6.htm#6.425" target="_blank" rel="noopener noreferrer">Tax Code &sect;6.425 ↗</a>
+          </div>
+        </details>
+      </div>
+
+      {# ── County selector ─────────────────────────────────────────────── #}
+      <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
+        <label class="text-muted mb-0" for="countySelect-protests">County</label>
+        <select id="countySelect-protests" class="topic-county-select form-select form-select-sm" style="width:auto;">
+          <option value="travis" selected>Travis County</option>
+        </select>
+        <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
+      </div>
+
+      {# ── County-level section (Travis) ────────────────────────────────── #}
+      <div class="info-county-panel" data-county="travis">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Travis County — how the process works locally</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              TCAD applies the same statewide deadline locally: <strong>May 15, or 30 days after your Notice of
+              Appraised Value was mailed, whichever is later.</strong> TCAD grants no extensions, so file as early
+              as you can once you have your notice.
+            </p>
+            <p>
+              You can file your protest three ways: <strong>online</strong> through TCAD's portal (fastest —
+              gives an immediate confirmation and lets you upload evidence, review TCAD's evidence, and
+              accept/decline settlement offers), <strong>by mail</strong> (Travis Central Appraisal District,
+              PO Box 149012, Austin, TX 78714), or <strong>in person</strong> (850 East Anderson Lane, Austin,
+              TX 78752).
+            </p>
+            <p>
+              After filing, you're eligible for an informal meeting with a TCAD appraiser to try to resolve the
+              protest before it goes further. If you don't accept a settlement offer at that stage, you'll be
+              scheduled for a formal hearing before the Travis Appraisal Review Board. The ARB must send you the
+              hearing notice at least 15 days in advance; TCAD must also send the Comptroller's Taxpayer
+              Assistance Pamphlet and the ARB's hearing procedures at least 14 days before the hearing.
+            </p>
+            <p>
+              <strong>Missed your scheduled formal hearing?</strong> This is the second, separate late-filing
+              scenario flagged in the state-level section above — it's not the same as filing your original
+              protest late. Your protest will be dismissed if you don't appear in person, by valid affidavit, by
+              agent, or by a pre-scheduled phone hearing. You can ask the ARB Chairperson to reopen it, but only
+              by sending a letter within <strong>4 days of your scheduled hearing date</strong> citing good cause
+              for the no-show — a much shorter and stricter window than the general late-filing exception above.
+              If you know in advance you can't make a scheduled hearing, TCAD allows you to request a
+              reschedule instead of risking a dismissal.
+            </p>
+            <p class="mb-0">
+              Want someone else to handle it for you — a family member, neighbor, attorney, or tax consultant?
+              File TCAD's Appointment of Agent form to authorize a representative to handle the protest hearing
+              on your behalf.
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://traviscad.org/protests/" target="_blank" rel="noopener noreferrer">Travis Central Appraisal District — The Protest Process ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://traviscad.org/arbhearings/" target="_blank" rel="noopener noreferrer">TCAD — ARB Hearings ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://comptroller.texas.gov/taxes/property-tax/protests/" target="_blank" rel="noopener noreferrer">Texas Comptroller — Appraisal Protests and Appeals ↗</a>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="info-topic" id="topic-ag-valuation" style="display:none;">
+      <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+        <h2 class="fw-bold mb-0">Ag Valuation (1-d-1)</h2>
+        <div class="d-flex align-items-center gap-2" style="font-size:13px;">
+          <label class="text-muted mb-0" for="stateSelect-ag">State</label>
+          <select id="stateSelect-ag" class="topic-state-select form-select form-select-sm" style="width:auto;">
+            <option value="tx" selected>Texas</option>
+          </select>
+        </div>
+      </div>
+      <p class="text-muted mb-3" style="font-size:11.5px;">
+        Agricultural (1-d-1, "open-space") valuation lets qualifying land be taxed on what it can produce
+        agriculturally rather than its market value — set by state law, with the qualification standard applied
+        locally by each county's appraisal district. Only Texas / Travis County are built out today; more states
+        will show here as Parcelytics expands.
+      </p>
+
+      {# ── State-level section (Texas) ──────────────────────────────────── #}
+      <div class="info-state-panel" data-state="tx">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Texas — general rules (state law)</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              Article VIII, &sect;1-d-1 of the Texas Constitution allows qualifying land to be appraised on its
+              capacity to produce agricultural products — its <strong>productivity value</strong> — instead of
+              market value. Tax Code Subchapter D (&sect;&sect;23.51&ndash;23.60) sets the rules for this "open-space"
+              valuation
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.51" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.51</a>,
+              <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.52" target="_blank" rel="noopener noreferrer">&sect;23.52</a>).
+            </p>
+            <p>
+              To qualify, land must be <strong>currently devoted principally to agricultural use</strong>, to the
+              degree of intensity generally accepted in the area, <strong>and</strong> have been devoted
+              principally to agricultural use (or timber production) for <strong>5 of the preceding 7 years</strong>
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.51" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.51(1)</a>).
+              Qualifying activities include cultivating soil, producing crops, floriculture, viticulture and
+              horticulture, raising livestock, and several related uses — the exact list is broad but not
+              unlimited; see the Travis County section below for TCAD's own summary of qualifying activities.
+            </p>
+            <p>
+              Applications use <strong>Form 50-129</strong>, filed with the county's chief appraiser
+              <strong>before May 1</strong> of the tax year. The chief appraiser may grant a good-cause extension
+              of up to 60 days. Once approved, the land generally stays qualified in future years without
+              refiling, unless ownership changes or the land's eligibility ends
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.54" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.54(d)&ndash;(e)</a>).
+              If a landowner fails to notify the appraisal office when eligibility ends, a penalty equal to 10%
+              of the resulting tax difference applies
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.54" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.54(h)</a>).
+            </p>
+            <p>
+              <strong>Rollback tax exposure:</strong> if the land's use changes away from agriculture, an
+              additional "rollback" tax applies — the difference between what was actually paid and what would
+              have been owed at market value, for <strong>each of the 3 years preceding</strong> the change of
+              use. (This was reduced from a 5-year lookback by 2021's H.B. 3833; older sources describing a
+              5-year rollback period are out of date.) A tax lien attaches to the land on the date the change of
+              use occurs
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.55" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.55(a)&ndash;(b)</a>).
+            </p>
+            <p>
+              One specific, commonly-misunderstood carve-out: converting the land to your own residence homestead
+              does <strong>not</strong>, by itself, count as a change of use that triggers rollback
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.55" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.55(i)</a>).
+              A handful of narrower exceptions also exist — right-of-way sales, condemnation, and transfers to
+              government or certain qualifying nonprofit uses among them
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.55" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.55(f)&ndash;(q)</a>).
+            </p>
+            <p class="mb-0">
+              Wildlife management use is a related, separate qualifying category available only to land that
+              already has ag valuation, governed by its own standard
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.521" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.521</a>)
+              — see the Travis County section below for how TCAD applies it.
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.51" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.51 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.54" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.54 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.55" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.55 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://comptroller.texas.gov/taxes/property-tax/ag-timber/index.php" target="_blank" rel="noopener noreferrer">Texas Comptroller — Agricultural, Timberland and Wildlife Management Use ↗</a>
+          </div>
+        </details>
+      </div>
+
+      {# ── County selector ─────────────────────────────────────────────── #}
+      <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
+        <label class="text-muted mb-0" for="countySelect-ag">County</label>
+        <select id="countySelect-ag" class="topic-county-select form-select form-select-sm" style="width:auto;">
+          <option value="travis" selected>Travis County</option>
+        </select>
+        <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
+      </div>
+
+      {# ── County-level section (Travis) ────────────────────────────────── #}
+      <div class="info-county-panel" data-county="travis">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Travis County — how TCAD applies it locally</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              TCAD's own guidance lists qualifying agricultural activities as: cultivating soil; producing crops
+              for human food, animal feed, or fiber; floriculture, viticulture, and horticulture; raising or
+              keeping livestock; raising or keeping exotic animals for commercial product; participating in
+              certain government cover-crop / idle-land programs; normal crop or livestock rotation; and raising
+              or keeping bees for pollination or commercial product.
+            </p>
+            <p>
+              <strong>Minimum acreage and stocking-rate requirements are set locally by TCAD</strong> and vary by
+              activity type and by where in the county the land sits — this is inherent to the "degree of
+              intensity generally accepted in the area" standard in state law, which is deliberately local rather
+              than a fixed statewide number. TCAD publishes its specific current thresholds in its own Ag
+              Guidelines, available through TCAD's forms database.
+              <span class="text-muted" style="font-size:11.5px; font-style:italic;">
+                (We looked for TCAD's specific per-activity acreage minimums to publish here directly, but
+                TCAD's forms database is not accessible to our tools for direct citation. Some third-party sites
+                cite specific numbers for Travis County — including a minimum-acreage split based on which side
+                of I-35 the land sits on — but we found at least one of those same sites stating an outdated
+                rollback rule (the pre-2021 5-year lookback) elsewhere on the same page, which undermines our
+                confidence in citing their numbers here without TCAD's own document in hand. We'd rather point
+                you to TCAD's guidelines directly than repeat a number we can't personally verify.)
+              </span>
+            </p>
+            <p>
+              <strong>Wildlife management valuation</strong> is available only to land that already carries ag
+              valuation. It requires filing a new Form 50-129 along with a 5-year Texas Parks and Wildlife
+              Department Wildlife Management Plan (PWD 885-W7000), plus an annual report documenting the
+              activities actually performed each year.
+            </p>
+            <p class="mb-0">
+              TCAD's own plain-language description of the rollback tax: an additional tax imposed when a
+              property owner stops using the land for qualified agricultural purposes and changes it to another
+              use — <em>excluding</em> building a house for a personal homestead, which does not by itself
+              trigger a rollback. The rollback recoups the tax the owner would have paid had the land been taxed
+              at market value for the years covered.
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://traviscad.org/faq-items/what-types-of-activities-can-qualify-for-agricultural-valuation/" target="_blank" rel="noopener noreferrer">TCAD FAQ — Qualifying Agricultural Activities ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://traviscad.org/faq-items/what-is-a-wildlife-valuation-and-how-do-i-qualify/" target="_blank" rel="noopener noreferrer">TCAD FAQ — Wildlife Valuation ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://traviscad.org/faq-items/what-is-an-ag-rollback/" target="_blank" rel="noopener noreferrer">TCAD FAQ — What is an Ag Rollback? ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://traviscad.org/forms" target="_blank" rel="noopener noreferrer">TCAD — Forms Database (Ag Guidelines) ↗</a>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="info-topic" id="topic-delinquency" style="display:none;">
+      <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+        <h2 class="fw-bold mb-0">Delinquency</h2>
+        <div class="d-flex align-items-center gap-2" style="font-size:13px;">
+          <label class="text-muted mb-0" for="stateSelect-delinquency">State</label>
+          <select id="stateSelect-delinquency" class="topic-state-select form-select form-select-sm" style="width:auto;">
+            <option value="tx" selected>Texas</option>
+          </select>
+        </div>
+      </div>
+      <p class="text-muted mb-3" style="font-size:11.5px;">
+        This page covers what happens when property tax goes unpaid — penalties, interest, and legal exposure —
+        set by state law and applied locally by the county tax office. It's scoped narrowly to consequences of
+        non-payment; the mechanics of paying in installments or deferring collection are covered in the
+        Homestead Cap and How Your Bill Is Calculated topics, not duplicated here. Only Texas / Travis County
+        are built out today; more states will show here as Parcelytics expands.
+      </p>
+
+      {# ── State-level section (Texas) ──────────────────────────────────── #}
+      <div class="info-state-panel" data-state="tx">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Texas — general rules (state law)</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              A tax lien attaches to the property on <strong>January 1</strong> each year, securing that year's
+              tax, penalties, and interest before the tax is even billed
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.32.htm#32.01" target="_blank" rel="noopener noreferrer">Tax Code &sect;32.01</a>).
+              Taxes are due on receipt of the bill and become delinquent if not paid before February 1 of the
+              following year — in practice, the deadline is <strong>January 31</strong>
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.31.htm#31.02" target="_blank" rel="noopener noreferrer">Tax Code &sect;31.02</a>).
+            </p>
+            <p>
+              Once delinquent, a tax incurs a <strong>penalty</strong> of 6% for the first month, plus 1% for
+              each additional month, up to a maximum of <strong>12%</strong> once the tax has been delinquent
+              since July 1 — that 12% cap applies regardless of how many additional months pass after that.
+              Separately, a delinquent tax also accrues <strong>interest</strong> at 1% per month, with no cap,
+              for as long as it remains unpaid — so total cost keeps climbing even after the penalty maxes out
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.33.htm#33.01" target="_blank" rel="noopener noreferrer">Tax Code &sect;33.01(a), (c)</a>).
+            </p>
+            <p>
+              A taxing unit can sue to foreclose the tax lien, enforce personal liability for the tax, or both,
+              at any time after the tax becomes delinquent — there's no waiting period. If the suit results in a
+              judgment for foreclosure, the court orders the property sold to satisfy the debt
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.33.htm#33.41" target="_blank" rel="noopener noreferrer">Tax Code &sect;33.41</a>).
+            </p>
+            <p class="mb-0">
+              Homeowners who are 65+, disabled, or qualifying disabled veterans have a specific protection on
+              their <em>residence homestead</em>: filing a deferral affidavit blocks a taxing unit from suing to
+              collect or selling the property (with a 181-day tail after the homeowner stops occupying it), no
+              standard &sect;33.01 penalty applies during that period, and interest is capped at a flat
+              <strong>5% per year</strong> instead of the standard penalty/interest structure above
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.33.htm#33.06" target="_blank" rel="noopener noreferrer">Tax Code &sect;33.06(a), (b), (d)</a>).
+              This deferral is a distinct mechanism from the installment options covered in the Homestead Cap and
+              How Your Bill Is Calculated topics — this page only covers that it exists and what it changes about
+              non-payment consequences, not how to apply for it.
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.32.htm#32.01" target="_blank" rel="noopener noreferrer">Tax Code &sect;32.01 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.31.htm#31.02" target="_blank" rel="noopener noreferrer">Tax Code &sect;31.02 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.33.htm#33.01" target="_blank" rel="noopener noreferrer">Tax Code &sect;33.01 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.33.htm#33.41" target="_blank" rel="noopener noreferrer">Tax Code &sect;33.41 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.33.htm#33.06" target="_blank" rel="noopener noreferrer">Tax Code &sect;33.06 ↗</a>
+          </div>
+        </details>
+      </div>
+
+      {# ── County selector ─────────────────────────────────────────────── #}
+      <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
+        <label class="text-muted mb-0" for="countySelect-delinquency">County</label>
+        <select id="countySelect-delinquency" class="topic-county-select form-select form-select-sm" style="width:auto;">
+          <option value="travis" selected>Travis County</option>
+        </select>
+        <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
+      </div>
+
+      {# ── County-level section (Travis) ────────────────────────────────── #}
+      <div class="info-county-panel" data-county="travis">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Travis County — what actually happens locally</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              The Travis County Tax Office applies the statewide penalty/interest schedule directly. Combined
+              penalty and interest starts at <strong>7%</strong> the moment a tax becomes delinquent (Feb. 1),
+              and climbs to <strong>24%</strong> by the following January if it's never paid — interest keeps
+              accruing 1% per month after that, uncapped, for as long as the balance remains unpaid.
+            </p>
+            <p>
+              Partial payments made <strong>before</strong> the January 31 deadline are not charged any penalty
+              or interest — paying down as much as you can before the deadline directly reduces what's exposed
+              to the schedule above.
+            </p>
+            <p class="mb-0">
+              Travis County's own guidance is direct about the legal risk: it offers several delinquent payment
+              plans specifically because having a written agreement in place — even though penalty and interest
+              still accrue under it — prevents the office from pursuing a lawsuit to foreclose while the
+              agreement is honored. The mechanics of those plans (eligibility, monthly schedules, what
+              "freezing" the penalty rate means) are covered in the Homestead Cap and How Your Bill Is Calculated
+              topics rather than duplicated here.
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://tax-office.traviscountytx.gov/properties/taxes/delinquent/penalties-interest" target="_blank" rel="noopener noreferrer">Travis County Tax Office — Delinquent Property Tax Penalties and Interest ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://tax-office.traviscountytx.gov/properties/taxes/delinquent/installment" target="_blank" rel="noopener noreferrer">Travis County Tax Office — Delinquent Property Taxes, Payment Plans ↗</a>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="info-topic" id="topic-bill-calculated" style="display:none;">
+      <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+        <h2 class="fw-bold mb-0">How Your Bill Is Calculated</h2>
+        <div class="d-flex align-items-center gap-2" style="font-size:13px;">
+          <label class="text-muted mb-0" for="stateSelect-bill-calculated">State</label>
+          <select id="stateSelect-bill-calculated" class="topic-state-select form-select form-select-sm" style="width:auto;">
+            <option value="tx" selected>Texas</option>
+          </select>
+        </div>
+      </div>
+      <p class="text-muted mb-3" style="font-size:11.5px;">
+        This walks through the mechanical pipeline connecting your property's value to your final tax bill — the
+        statutory sequence, set by state law, applied locally by TCAD and the Travis County Tax Office. It's
+        scoped to that pipeline specifically: the homestead cap (which affects the appraised-value step for
+        capped homesteads) and installment/deferral payment options (which affect what happens after the bill
+        exists) each have their own topic rather than being re-explained here. Only Texas / Travis County are
+        built out today; more states will show here as Parcelytics expands.
+      </p>
+
+      {# ── State-level section (Texas) ──────────────────────────────────── #}
+      <div class="info-state-panel" data-state="tx">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Texas — the statutory sequence (state law)</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              Four values, defined in state law, each building on the last:
+              <strong>market value</strong> (what the property would sell for), <strong>appraised value</strong>
+              (the appraisal district's estimate of market value as of January 1 — for a homestead subject to the
+              10% cap, this can be lower than market value; see the Homestead Cap topic), <strong>assessed
+              value</strong> (appraised value times the assessment ratio — currently 100% for essentially all
+              property, so assessed value normally equals appraised value), and <strong>taxable value</strong>
+              (assessed value minus whatever exemptions apply)
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.1.htm#1.04" target="_blank" rel="noopener noreferrer">Tax Code &sect;1.04</a>,
+              <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.26.htm#26.02" target="_blank" rel="noopener noreferrer">&sect;26.02</a>).
+            </p>
+            <p>
+              The statute lays out the calculation as four steps: (1) subtract any partial exemption that
+              applies to appraised value (uncommon — mostly disaster-related exemptions) to get net appraised
+              value; (2) multiply by the assessment ratio to get assessed value; (3) subtract any partial
+              exemption that applies to assessed value (this is where homestead exemptions land) to get taxable
+              value; (4) multiply taxable value by the tax rate
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.26.htm#26.09" target="_blank" rel="noopener noreferrer">Tax Code &sect;26.09(c)</a>).
+              Tax rates are expressed per $100 of taxable value. This whole sequence runs <strong>separately for
+              each taxing entity</strong>, because each entity can have its own exemptions and its own rate — a
+              parcel's taxable value for the school district is often different from its taxable value for the
+              county, even though they started from the same appraised value.
+            </p>
+            <p class="mb-0" style="background:var(--surface-2, #f7f8fa); border-radius:8px; padding:12px 14px;">
+              <strong>Worked example</strong> (illustrative numbers, not any specific real parcel or this year's
+              actual adopted rates): a property with a <strong>$450,000 market value</strong>, no cap in effect,
+              and no exemptions — say, an investment property. Appraised value: $450,000 (equals market value —
+              no cap applies here). Step 1: nothing to subtract at this stage for most properties, so net
+              appraised value stays $450,000. Step 2: assessment ratio is 100%, so assessed value is also
+              $450,000. Step 3: no exemptions in this example, so taxable value is $450,000 for every entity.
+              Step 4: multiply by each entity's own rate and add them up —
+            </p>
+            <div class="table-responsive mt-2 mb-2">
+              <table class="table table-sm mb-0" style="font-size:13px;">
+                <thead><tr><th>Entity</th><th>Illustrative rate (per $100)</th><th>Tax owed</th></tr></thead>
+                <tbody>
+                  <tr><td>Austin ISD</td><td>$0.9578</td><td>$450,000 &times; 0.9578 &divide; 100 = $4,310.10</td></tr>
+                  <tr><td>City of Austin</td><td>$0.4776</td><td>$450,000 &times; 0.4776 &divide; 100 = $2,149.20</td></tr>
+                  <tr><td>Travis County</td><td>$0.3287</td><td>$450,000 &times; 0.3287 &divide; 100 = $1,479.15</td></tr>
+                  <tr class="fw-semibold"><td colspan="2">Total (this simplified 3-entity example)</td><td>$7,938.45</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="mb-0 text-muted" style="font-size:11.5px;">
+              A real Travis County bill usually includes more than three entities (school district, city or MUD,
+              county, hospital district, junior college, and others depending on the parcel's location), and if
+              the property carried a homestead exemption, taxable value would be lower — and different per
+              entity, since the mandatory $140,000 school exemption and each entity's own local-option percentage
+              apply separately. See the Homestead Exemptions topic for how that math actually works, and check
+              the Rate Trends page for this year's real adopted rates rather than the illustrative ones above.
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.1.htm#1.04" target="_blank" rel="noopener noreferrer">Tax Code &sect;1.04 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.26.htm#26.02" target="_blank" rel="noopener noreferrer">Tax Code &sect;26.02 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.26.htm#26.09" target="_blank" rel="noopener noreferrer">Tax Code &sect;26.09 ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://comptroller.texas.gov/taxes/property-tax/truth-in-taxation/" target="_blank" rel="noopener noreferrer">Texas Comptroller — Truth-in-Taxation: Tax Rate Adoption ↗</a>
+          </div>
+        </details>
+      </div>
+
+      {# ── County selector ─────────────────────────────────────────────── #}
+      <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
+        <label class="text-muted mb-0" for="countySelect-bill-calculated">County</label>
+        <select id="countySelect-bill-calculated" class="topic-county-select form-select form-select-sm" style="width:auto;">
+          <option value="travis" selected>Travis County</option>
+        </select>
+        <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
+      </div>
+
+      {# ── County-level section (Travis) ────────────────────────────────── #}
+      <div class="info-county-panel" data-county="travis">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Travis County — who does what</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              Three separate offices touch your bill, each with a distinct role. <strong>TCAD (the appraisal
+              district)</strong> determines property values, sends Notices of Appraised Value, handles protests,
+              and administers exemption and deferral applications. <strong>Taxing entities</strong> — the school
+              district, city, county, and any special districts covering the parcel — set their own budgets and
+              tax rates. The <strong>Travis County Tax Assessor-Collector</strong> calculates and distributes the
+              actual bill and collects payment. TCAD is explicit that it does not calculate bills and does not
+              accept tax payments — that's the Tax Office's role, not TCAD's.
+            </p>
+            <p>
+              Travis County property tax supports <strong>127 local taxing entities</strong>: 21 cities, 16
+              emergency districts, the county, the hospital district, the junior college, 54 municipal utility
+              districts, 1 road district, 15 school districts, and 17 water control improvement districts. Which
+              of these apply to any given parcel depends entirely on its location — most parcels fall within only
+              a handful of these 127.
+            </p>
+            <p class="mb-0">
+              The annual calendar: <strong>January 1</strong> — property values are set. <strong>Mid-April</strong>
+              — Notices of Appraised Value go out. <strong>May 15</strong> — protest deadline. <strong>July 25</strong>
+              — appraisal roll certified. <strong>August/September</strong> — taxing entities set their rates.
+              <strong>October</strong> — tax bills begin mailing. <strong>November</strong> — voter-approval
+              elections, if any were triggered. <strong>January 31</strong> — payment due (see the Delinquency
+              topic for what happens after that date).
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://traviscad.org/propertytaxsystem/" target="_blank" rel="noopener noreferrer">TCAD — Property Tax System ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://tax-office.traviscountytx.gov/properties/taxes/truth-in-taxation-summary" target="_blank" rel="noopener noreferrer">Travis County Tax Office — Truth in Taxation Summary ↗</a>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="info-topic" id="topic-homestead-cap" style="display:none;">
+      <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+        <h2 class="fw-bold mb-0">Homestead Cap (10% Limit)</h2>
+        <div class="d-flex align-items-center gap-2" style="font-size:13px;">
+          <label class="text-muted mb-0" for="stateSelect-homestead-cap">State</label>
+          <select id="stateSelect-homestead-cap" class="topic-state-select form-select form-select-sm" style="width:auto;">
+            <option value="tx" selected>Texas</option>
+          </select>
+        </div>
+      </div>
+      <p class="text-muted mb-3" style="font-size:11.5px;">
+        This is a distinct, commonly-confused-with-the-exemption concept: the homestead <strong>cap</strong>
+        limits how fast your home's <em>appraised value</em> can grow year over year. It's separate from the
+        homestead <strong>exemption</strong>, which reduces the dollar amount of value that actually gets taxed
+        — see the Homestead Exemptions topic for that. Set by state law, applied locally by TCAD. Only Texas /
+        Travis County are built out today; more states will show here as Parcelytics expands.
+      </p>
+
+      {# ── State-level section (Texas) ──────────────────────────────────── #}
+      <div class="info-state-panel" data-state="tx">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Texas — general rules (state law)</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              For a residence homestead, the appraisal office can only raise appraised value each year up to the
+              <strong>lesser of</strong>: (1) the property's actual current market value, or (2) last year's
+              appraised value, plus 10% of that value, plus the market value of any new improvements. TCAD still
+              determines and records real market value every year regardless — the cap only limits what gets
+              used for tax purposes, it doesn't stop the district from tracking true value
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.23" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.23(a)&ndash;(b)</a>).
+            </p>
+            <p>
+              <strong>The cap vs. the exemption — genuinely different mechanics:</strong> the exemption
+              subtracts a dollar amount from <em>taxable</em> value, and it's entity-specific — the mandatory
+              $140,000 school exemption plus whatever local-option percentage each county/city/district has
+              separately adopted (see Homestead Exemptions, and How Your Bill Is Calculated for how that math
+              works). The cap, by contrast, limits growth of <em>appraised</em> value itself — the number that
+              exists before any entity's exemption is even subtracted — so it's the same figure for every taxing
+              entity on the parcel, not something that varies entity by entity the way exemptions do.
+            </p>
+            <p>
+              <strong>Timing catch people miss:</strong> the cap does not start protecting you the moment you buy
+              and homestead a property. It only takes effect on January 1 of the year <em>after</em> the first
+              year you qualify for the homestead exemption — so a home bought and homesteaded this year gets no
+              cap benefit on next year's valuation; the earliest it applies is the year after that. The cap also
+              isn't permanent to the property — it expires on January 1 of the first year that neither the
+              original qualifying owner nor their spouse or surviving spouse still holds the homestead exemption
+              there, which in practice usually means it resets when the home is sold to an unrelated buyer
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.23" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.23(c)</a>).
+            </p>
+            <p class="mb-0" style="background:var(--surface-2, #f7f8fa); border-radius:8px; padding:12px 14px;">
+              <strong>Worked example</strong> (illustrative numbers only): say a home's capped appraised value
+              last year was <strong>$400,000</strong>, and TCAD determines this year's true market value is
+              <strong>$460,000</strong> — a 15% jump, with no new improvements. The cap ceiling this year is
+              $400,000 + 10% of $400,000 = <strong>$440,000</strong>. Since market value ($460,000) is higher
+              than the ceiling ($440,000), the lesser number wins — this year's appraised value for tax purposes
+              is <strong>$440,000</strong>, even though the notice will also show the real $460,000 market value.
+              Now say next year market value holds flat at $460,000: the new ceiling is $440,000 + 10% of
+              $440,000 = $484,000. Since $460,000 is now below that ceiling, appraised value catches all the way
+              up to the real $460,000 market value — the cap only binds in years the ceiling is actually the
+              lower number, and it stops mattering once value growth slows enough for the two figures to meet.
+            </p>
+            <p class="mb-0 text-muted" style="font-size:11.5px; margin-top:10px;">
+              "New improvements" (which aren't subject to the cap — they get added at full value) specifically
+              excludes ordinary repairs and maintenance. And the cap doesn't apply at all to property valued
+              under the special-appraisal methods — agricultural/open-space land, for instance, is valued on
+              productivity rather than market value in the first place, so this cap mechanism doesn't come into
+              play there; see the Ag Valuation topic
+              (<a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.23" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.23(d)&ndash;(e)</a>).
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://statutes.capitol.texas.gov/Docs/TX/htm/TX.23.htm#23.23" target="_blank" rel="noopener noreferrer">Tax Code &sect;23.23 ↗</a>
+          </div>
+        </details>
+      </div>
+
+      {# ── County selector ─────────────────────────────────────────────── #}
+      <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
+        <label class="text-muted mb-0" for="countySelect-homestead-cap">County</label>
+        <select id="countySelect-homestead-cap" class="topic-county-select form-select form-select-sm" style="width:auto;">
+          <option value="travis" selected>Travis County</option>
+        </select>
+        <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
+      </div>
+
+      {# ── County-level section (Travis) ────────────────────────────────── #}
+      <div class="info-county-panel" data-county="travis">
+        <details class="card mb-3" open>
+          <summary class="card-header" style="cursor:pointer;">Travis County — how TCAD applies it</summary>
+          <div class="card-body" style="font-size:14px; line-height:1.7;">
+            <p>
+              TCAD confirms the cap applies automatically to homesteads — no separate application is needed
+              beyond the homestead exemption application itself. TCAD's own materials on its related, newer
+              Circuit Breaker program are explicit that properties already receiving a homestead exemption
+              "continue to receive the standard 10 percent limitation" rather than the circuit breaker's
+              different limitation — confirming the 10% homestead cap is TCAD's live, current standard for
+              homesteaded property.
+            </p>
+            <p class="mb-0">
+              <strong>Don't confuse this with the Circuit Breaker limitation</strong> — a separate, newer, and
+              explicitly <em>temporary</em> program (authorized by the legislature only for the 2024, 2025, and
+              2026 tax years) that caps appraised-value growth at 20% for <em>non-homesteaded</em> real property
+              valued at $5.16 million or less. A property can benefit from the homestead cap or the circuit
+              breaker, not both — TCAD's own FAQ says explicitly that properties already receiving a homestead
+              exemption are not eligible for the circuit breaker. This page covers the homestead cap only; the
+              circuit breaker isn't built out as its own topic yet.
+            </p>
+          </div>
+          <div class="card-footer text-muted" style="font-size:10.5px;">
+            <strong>Sources:</strong>
+            <a href="https://traviscad.org/circuitbreaker/" target="_blank" rel="noopener noreferrer">TCAD — Circuit Breaker Limitation ↗</a>
+            &nbsp;·&nbsp;
+            <a href="https://traviscad.org/homesteadexemptions/" target="_blank" rel="noopener noreferrer">TCAD — Homestead Exemptions ↗</a>
+          </div>
+        </details>
+      </div>
+    </div>
     {# Add future topics here as: <div class="info-topic" id="topic-..." style="display:none;">...</div> #}
 
   </div>
@@ -158,10 +856,12 @@
 
 {% block scripts %}
 <script>
-// Topic / state / county switching. Only one option exists in each selector
-// today, so this is inert in practice -- it's here so adding a second topic,
-// state, or county later is a matter of adding markup + an <option>, not
-// rewriting this logic.
+// Topic / state / county switching. Each topic panel has its own state/county
+// selectors (scoped by class + closest .info-topic, not by a shared id) so
+// multiple topics can coexist without id collisions. Only one option exists
+// in most selectors today, so this is largely inert in practice -- it's here
+// so adding another topic, state, or county is a matter of adding markup +
+// an <option>, not rewriting this logic.
 (function () {
   const topicLinks = document.querySelectorAll('#topicList [data-topic]');
   topicLinks.forEach((link) => {
@@ -176,23 +876,23 @@
     });
   });
 
-  const stateSelect = document.getElementById('stateSelect');
-  if (stateSelect) {
-    stateSelect.addEventListener('change', function () {
-      document.querySelectorAll('.info-state-panel').forEach((panel) => {
+  document.querySelectorAll('.topic-state-select').forEach((select) => {
+    select.addEventListener('change', function () {
+      const scope = this.closest('.info-topic') || document;
+      scope.querySelectorAll('.info-state-panel').forEach((panel) => {
         panel.style.display = (panel.getAttribute('data-state') === this.value) ? '' : 'none';
       });
     });
-  }
+  });
 
-  const countySelect = document.getElementById('countySelect');
-  if (countySelect) {
-    countySelect.addEventListener('change', function () {
-      document.querySelectorAll('.info-county-panel').forEach((panel) => {
+  document.querySelectorAll('.topic-county-select').forEach((select) => {
+    select.addEventListener('change', function () {
+      const scope = this.closest('.info-topic') || document;
+      scope.querySelectorAll('.info-county-panel').forEach((panel) => {
         panel.style.display = (panel.getAttribute('data-county') === this.value) ? '' : 'none';
       });
     });
-  }
+  });
 })();
 </script>
 {% endblock %}
