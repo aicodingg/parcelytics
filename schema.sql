@@ -139,6 +139,12 @@ CREATE TABLE IF NOT EXISTS parcel_metrics (
     -- (e.g. market_value=1, assessed_value=normal), overflowing NUMERIC(7,4).
     assessment_ratio             NUMERIC(10,4),  -- assessed_value / market_value; NULL if market = 0 or ratio > 100
     effective_tax_rate           NUMERIC(10,4),  -- total_tax / market_value; NULL for 2021–2024
+    effective_tax_rate_derived   BOOLEAN,        -- TRUE when effective_tax_rate was computed from
+                                                  -- SUM(tax_billing_entity.amount_due) rather than a
+                                                  -- real, present tax_billing.total_tax value -- same
+                                                  -- provenance concept as total_tax_derived at the
+                                                  -- display layer (app.py). NULL when effective_tax_rate
+                                                  -- itself is NULL (not applicable).
 
     -- Cumulative (only set on the most-recent-year row per parcel)
     cumulative_value_growth_pct  NUMERIC(15,4),  -- earliest valid year → 2025
@@ -162,6 +168,13 @@ CREATE INDEX IF NOT EXISTS idx_metrics_year        ON parcel_metrics (tax_year);
 CREATE INDEX IF NOT EXISTS idx_metrics_risk_jump   ON parcel_metrics (risk_large_value_jump) WHERE risk_large_value_jump = TRUE;
 CREATE INDEX IF NOT EXISTS idx_metrics_cap_expiry  ON parcel_metrics (risk_homestead_cap_expiry) WHERE risk_homestead_cap_expiry = TRUE;
 CREATE INDEX IF NOT EXISTS idx_metrics_delinquent  ON parcel_metrics (risk_delinquent) WHERE risk_delinquent = TRUE;
+
+-- Migration: effective_tax_rate provenance flag (Effective Tax Rate KPI masking-bug
+-- fix, July 2026, per Diego). CREATE TABLE IF NOT EXISTS above is a no-op on an
+-- already-existing parcel_metrics table, so this ADD COLUMN IF NOT EXISTS is what
+-- actually lands the new column on the live table -- same pattern already used for
+-- tax_billing.data_source in scrape_billing_history.py. Safe to re-run.
+ALTER TABLE parcel_metrics ADD COLUMN IF NOT EXISTS effective_tax_rate_derived BOOLEAN;
 
 
 -- county_benchmark: one row per property type per year, county-wide aggregates.

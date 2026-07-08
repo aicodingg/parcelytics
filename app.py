@@ -1585,7 +1585,17 @@ def property_detail(geo_id):
     _m25 = metrics_by_year.get(2025)
     if _m25 and _m25.get("effective_tax_rate") is not None:
         kpi["effective_tax_rate"]      = round(float(_m25["effective_tax_rate"]) * 100, 4)
-        kpi["effective_tax_rate_year"] = 2025  # Verified: 2025 tax ÷ 2025 market value
+        kpi["effective_tax_rate_year"] = 2025
+        # Masking-bug fix (July 2026, per Diego): effective_tax_rate_derived is TRUE
+        # when the figure above came from summing tax_billing_entity.amount_due rather
+        # than a real tax_billing.total_tax value -- same provenance concept as
+        # total_tax_derived elsewhere on this page. Deliberately NOT coerced with
+        # bool() here: that would silently turn a missing/pre-recompute None into
+        # False and badge those rows "Verified" by accident. Passed through as-is
+        # (True / False / None) so the template only shows "Verified" when this is
+        # explicitly False -- True *and* None (not yet recomputed) both fall through
+        # to the Partial treatment, fail-safe rather than fail-open.
+        kpi["effective_tax_rate_derived"] = _m25.get("effective_tax_rate_derived")
     elif insights and insights.get("total_rate_2025"):
         # Fallback: if no billing data, show the combined rate as an approximation
         kpi["rate_approx"] = round(float(insights["total_rate_2025"]), 4)

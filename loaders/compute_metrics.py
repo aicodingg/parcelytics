@@ -239,6 +239,7 @@ def compute_parcel_metrics(conn):
                 yoy_tax_amount_pct,
                 assessment_ratio,
                 effective_tax_rate,
+                effective_tax_rate_derived,
                 risk_delinquent,
                 risk_data_incomplete,
                 computation_version
@@ -318,6 +319,40 @@ def compute_parcel_metrics(conn):
                         )::NUMERIC / pty.market_value,
                         6
                     )
+                END,
+
+                -- effective_tax_rate_derived (Effective Tax Rate KPI masking-bug fix,
+                -- July 2026, per Diego): the CASE above always derives effective_tax_rate
+                -- from SUM(tax_billing_entity.amount_due) -- it never uses tb.total_tax as
+                -- the numerator, because TOTAL_TAX is blank for ~93% of 2025 rows (see
+                -- comment above). This flag is the general, per-row signal of whether a
+                -- real tax_billing.total_tax figure was even available to cross-check
+                -- against, mirroring total_tax_derived's provenance concept at the display
+                -- layer (app.py). It is NOT hardcoded TRUE: it reads tb.total_tax directly
+                -- (already LEFT JOINed below), so it will correctly flip to FALSE for any
+                -- parcel whose total_tax field is genuinely populated, now or after a
+                -- future reload. Confirmed via live query (July 2026): of 411,043 rows
+                -- with a populated effective_tax_rate, only 11,501 (~2.8%) currently have
+                -- a usable tax_billing.total_tax on file.
+                -- Same WHEN conditions as the effective_tax_rate CASE above, so this flag
+                -- is non-NULL in exactly the same rows effective_tax_rate is -- NULL
+                -- (Not Available) everywhere else.
+                CASE
+                    WHEN pty.tax_year = 2025
+                     AND pty.market_value > 0
+                     AND (
+                         SELECT SUM(tbe.amount_due)
+                         FROM   tax_billing_entity tbe
+                         WHERE  tbe.geo_id    = pty.geo_id
+                           AND  tbe.tax_year  = 2025
+                     ) > 0
+                     AND (
+                         SELECT SUM(tbe.amount_due)
+                         FROM   tax_billing_entity tbe
+                         WHERE  tbe.geo_id    = pty.geo_id
+                           AND  tbe.tax_year  = 2025
+                     )::NUMERIC / pty.market_value <= 1
+                    THEN (tb.total_tax IS NULL OR tb.total_tax <= 0)
                 END,
 
                 -- Delinquency flag
@@ -560,6 +595,7 @@ def print_sample(conn):
                        yoy_market_value_pct,
                        assessment_ratio,
                        effective_tax_rate,
+                       effective_tax_rate_derived,
                        cumulative_value_growth_pct,
                        risk_large_value_jump,
                        risk_large_value_jump_pct,
@@ -574,6 +610,7 @@ def print_sample(conn):
                       f"  yoy_mkt={d['yoy_market_value_pct']}"
                       f"  ratio={d['assessment_ratio']}"
                       f"  eff_rate={d['effective_tax_rate']}"
+                      f"  eff_rate_derived={d['effective_tax_rate_derived']}"
                       f"  cum={d['cumulative_value_growth_pct']}"
                       f"  jump={d['risk_large_value_jump']}"
                       f"  cap={d['risk_homestead_cap_expiry']}")

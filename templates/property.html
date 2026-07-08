@@ -582,9 +582,23 @@
       {% else %}—{% endif %}
     </div>
     <div class="kpi-sub">
-      {% if kpi.effective_tax_rate is defined %}
+      {# Masking-bug fix (July 2026, per Diego): this used to badge "Verified"
+         whenever kpi.effective_tax_rate was merely present, regardless of whether
+         it came from a real tax_billing.total_tax or was reconstructed by summing
+         tax_billing_entity.amount_due -- the same provenance gap already fixed on
+         the Value History table and Homeowner-mode cards. effective_tax_rate_derived
+         is set in app.py from the new parcel_metrics.effective_tax_rate_derived
+         column (compute_metrics.py); only badge "Verified" when it is explicitly
+         False. `is False` (not `is not true`/truthiness) so that True *and* None
+         (rows not yet covered by a compute_metrics.py rerun) both fall through to
+         Partial -- fail-safe rather than fail-open. #}
+      {% if kpi.effective_tax_rate is defined and kpi.effective_tax_rate_derived is sameas false %}
         2025 Tax ÷ 2025 Market Value
         <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
+      {% elif kpi.effective_tax_rate is defined %}
+        2025 Tax ÷ 2025 Market Value
+        <span class="badge-partial" style="font-size:9px; padding:1px 5px;"
+              title="Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total; no confirmed total_tax figure exists to cross-check against">Partial</span>
       {% elif kpi.rate_approx is defined %}
         2025 Combined Rate
         <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Est.</span>
