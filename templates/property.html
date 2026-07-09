@@ -569,7 +569,28 @@
           <td class="ps-3">{{ yr }}</td>
           <td class="text-end" style="font-variant-numeric:tabular-nums;">{% if _r and _r.total_rate %}{{ "{:.4f}%".format(_r.total_rate|float) }}{% else %}—{% endif %}</td>
           <td class="text-end pe-3" style="font-variant-numeric:tabular-nums;">
-            {% if _h and _h.total_tax %}${{ "{:,.0f}".format(_h.total_tax|float) }}{% if yr != 2025 %} <span class="text-muted" style="font-size:10px;">(partial)</span>{% endif %}
+            {% if _h and _h.total_tax %}
+              {# Badge history (July 2026, per Diego), condensed -- see app.py for the
+                 full writeup: (1) label used to hardcode `yr != 2025`, mislabeling
+                 2021's real PIR billing "(partial)"; (2) fixed to check real
+                 provenance, but as a Jinja-local {% set %} independently re-derived
+                 from Investor mode's own copy of the same check; (3) a full
+                 truth-table comparison found 8/36 field combinations where the two
+                 independent checks could silently diverge, so the boolean was
+                 consolidated into `is_billing_verified`, computed ONCE per history
+                 row in app.py (property_detail(), right after total_tax_derived) --
+                 both this table and the Investor Value History table now read that
+                 single value instead of each re-deriving it. (4) also switched from
+                 silent-when-verified to always showing an explicit badge pill
+                 (badge-verified/badge-partial, reused verbatim from
+                 static/style.css), matching the "always show a labeled state"
+                 convention used everywhere else on this page. #}
+              ${{ "{:,.0f}".format(_h.total_tax|float) }}
+              {% if _h.is_billing_verified %}
+                <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
+              {% else %}
+                <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
+              {% endif %}
             {% elif _h and _h.computed_total_tax %}
               {# Wired in (July 2026, per Diego): same computed_total_tax field and
                  the same display convention already used by Investor mode's Value
@@ -590,7 +611,7 @@
                     style="font-style:italic; color:var(--text-muted); cursor:help;">
                 ~${{ "{:,.0f}".format(_h.computed_total_tax|float) }}
               </span>
-              <span class="text-muted" style="font-size:10px;">(computed)</span>
+              <span class="badge-estimated" style="font-size:9px; padding:1px 5px;">Computed</span>
             {% else %}<span class="text-muted">Not available</span>{% endif %}
           </td>
         </tr>
@@ -599,10 +620,18 @@
     </table>
   </div>
   <div class="card-footer text-muted" style="font-size:10.5px;">
-    Combined rate = the total of all your taxing entities' rates that year. 2025 taxes are verified from the Tax Office;
-    2021–2024 are from county payment receipts (marked “partial”) and may not reflect every adjustment. Where no
-    billing record exists for a year, an estimate computed from that year's certified taxable value × combined rate
-    may be shown instead (marked “computed”) — not an actual billed amount.
+    {# Footer copy updated (July 2026, per Diego) to match the badge labels above --
+       this used to describe 2021–2024 as a block ("from county payment receipts,
+       marked partial"), which was accurate before the 2021 PIR bulk load but became
+       stale once 2021 became independently verified. Capitalization matches the
+       badge text ("Verified"/"Partial"/"Computed") now that these are pills, not
+       lowercase parenthetical text. #}
+    Combined rate = the total of all your taxing entities' rates that year. Years marked
+    “Verified” are confirmed directly from the Travis County Tax Office. Years marked
+    “Partial” are reconstructed from portal payment receipts or incomplete billing records
+    and may not reflect every adjustment. Where no billing record exists for a year, an
+    estimate computed from that year's certified taxable value × combined rate may be shown
+    instead (marked “Computed”) — not an actual billed amount.
   </div>
 </div>
 {% endif %}
@@ -1971,25 +2000,28 @@
                 {% endif %}
               </td>
               <td {% if r.tax_year in [2021,2022,2023,2024] %}id="bsrc-{{ r.tax_year }}"{% endif %}>
-                {# Masking-bug fix (July 2026, per Diego): this badge used to check
-                   `r.tax_year == 2025` FIRST and unconditionally award "Verified" —
-                   so a 2025 row whose total_tax was derived (total_tax_derived), a
-                   portal-scrape payment receipt, or (in the COMPUTED_HIST_TAX_ENABLED
-                   edge case) had no real total_tax at all and fell back to
-                   computed_total_tax, all still showed "Verified" here regardless of
-                   which of those applied — even though the Total Tax cell to the left
-                   already correctly badges those same cases Partial/Computed. Reordered
-                   so a 2025 row only gets "Verified" once every lower-confidence
-                   provenance case has been ruled out, reusing the exact same
-                   total_tax_derived / billing_source / computed_total_tax checks the
-                   Total Tax cell and Homeowner mode's card already use — not
-                   reimplemented. #}
+                {# Badge history (July 2026, per Diego), condensed -- see app.py for the
+                   full writeup: this badge used to check `r.tax_year == 2025` FIRST
+                   and unconditionally award "Verified", masking derived/portal-scrape/
+                   computed 2025 rows. Fixed to check real provenance, then consolidated:
+                   the "is this row verified" determination was two independently-
+                   written checks (this table's own chain, and Homeowner mode's
+                   `_bill_verified`) that only agreed by coincidence of what today's
+                   loaders happen to write -- a truth-table comparison found 8/36 field
+                   combinations where they'd silently diverge. Now both read
+                   `r.is_billing_verified`, computed once in app.py
+                   (property_detail(), right after total_tax_derived). portal_scrape
+                   and total_tax_derived are still checked first here (ahead of the
+                   verified check) so their own specific tooltip text keeps showing --
+                   is_billing_verified already excludes both cases internally, so this
+                   ordering is redundant-but-harmless, kept only for the distinct
+                   copy. #}
                 {% if r.billing_source == 'portal_scrape' %}
                   <span class="badge-partial" title="Payment receipt from Travis County portal — amount paid, not levied; entity breakdown unavailable">Partial</span>
                 {% elif r.total_tax_derived %}
                   <span class="badge-partial" title="Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total">Partial</span>
-                {% elif r.tax_year == 2025 and r.total_tax %}
-                  <span class="badge-verified">Verified</span>
+                {% elif r.is_billing_verified and r.total_tax %}
+                  <span class="badge-verified" title="Verified — confirmed directly from the Travis County Tax Office">Verified</span>
                 {% elif r.data_source == 'preliminary' %}
                   <span class="badge-preliminary">Preliminary</span>
                 {% elif r.computed_total_tax %}
@@ -2660,7 +2692,21 @@
   if (!mapEl || !window.L) return;
   fetch('/api/geocode/{{ parcel.geo_id }}').then(r => r.json()).then(d => {
     if (!d || !d.ok || d.lat == null) return;   // no fabricated location — fallback stays visible
-    if (fallbackEl) fallbackEl.style.display = 'none';
+    // Both-visible-at-once bug fix (July 2026, per Diego — parcel 0100030109):
+    // #hoSatFallback carries Bootstrap's `d-flex` utility class, which Bootstrap
+    // defines as `display: flex !important` in its stylesheet. A plain
+    // `fallbackEl.style.display = 'none'` sets a NON-important inline style,
+    // which loses to that stylesheet !important rule — so the fallback's
+    // inline style attribute correctly said "none" while it kept rendering
+    // as a flex item anyway, splitting the row with the now-visible map.
+    // Removing the class (not just setting the inline style) eliminates the
+    // competing !important rule entirely, so the inline display:none actually
+    // takes effect. mapEl has no such utility class, so its own toggle below
+    // was never affected.
+    if (fallbackEl) {
+      fallbackEl.classList.remove('d-flex');
+      fallbackEl.style.display = 'none';
+    }
     mapEl.style.display = '';
     const map = L.map('hoSatMap', { zoomControl: true, scrollWheelZoom: false }).setView([d.lat, d.lng], 18);
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {

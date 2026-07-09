@@ -1432,18 +1432,53 @@ def property_detail(geo_id):
     # provenance-tracking principle as billing_source == 'portal_scrape'
     # already gets a Partial badge, this fallback should too.
     #
-    # NOTE (flagged, not fixed here): `current` is the same dict object as
-    # the matching row inside `history`, so this key also becomes visible to
-    # the Investor mode Value History table's 2025 row -- which currently
-    # does NOT check it, and unconditionally badges every 2025 row
-    # "Verified" regardless of provenance. That's a real, separate masking
-    # bug in Investor mode, out of scope for this Homeowner-mode-copy brief
-    # -- flagged in the report rather than silently changed.
+    # NOTE (was flagged here, now resolved): `current` is the same dict object
+    # as the matching row inside `history`, so this key is also visible to the
+    # Investor mode Value History table's 2025 row. That table's own masking
+    # bug (unconditionally badging every 2025 row "Verified" regardless of
+    # provenance) was fixed in a later round, and the resulting badge logic
+    # was further consolidated into the single is_billing_verified computation
+    # below -- both templates now read one shared value instead of each
+    # re-deriving this independently.
     if current is not None and not current.get("total_tax") and entity_detail:
         derived_tax = sum(e["amount_due"] for e in entity_detail if e["amount_due"])
         if derived_tax:
             current["total_tax"] = derived_tax
             current["total_tax_derived"] = True
+
+    # Consolidation (July 2026, per Diego): is_billing_verified used to be two
+    # independently-written checks -- Homeowner mode's "Your Tax Rate & Bill"
+    # table (`_bill_verified`, a Jinja {% set %}) and Investor mode's Value
+    # History table (its own inline elif-chain) -- that happened to agree for
+    # every row this codebase can currently produce, but weren't the same
+    # code. A full truth-table comparison found 8/36 field combinations where
+    # they'd silently diverge if a future loader ever wrote one of them (e.g.
+    # a 2025 row tagged confidence_level='verified', or 'portal_scrape' paired
+    # with 'verified' -- neither reachable today, but nothing in the code
+    # prevented it). Computed once here instead, same pattern as
+    # total_tax_derived just above: a single source of truth both templates
+    # read, not two chains to keep in sync by hand.
+    #
+    # Must run AFTER the total_tax_derived fallback above, since the formula
+    # depends on it for the 2025 case (below) -- computing this any earlier
+    # would see total_tax_derived as always-unset for the 2025 row.
+    #
+    # Union of what both prior checks correctly handled (confirmed equivalent
+    # for every currently-reachable case via the truth-table investigation):
+    #   - billing_confidence == 'verified'  (covers 2021's PIR bulk data, and
+    #     any future loader that explicitly tags a row verified)
+    #   - tax_year == 2025 and billing_source != 'portal_scrape' and not
+    #     total_tax_derived  (covers 2025's real current-year billing, which
+    #     load_tax_current.py never explicitly tags with a confidence_level)
+    for _r in history:
+        _r["is_billing_verified"] = bool(
+            _r.get("billing_confidence") == "verified"
+            or (
+                _r["tax_year"] == 2025
+                and _r.get("billing_source") != "portal_scrape"
+                and not _r.get("total_tax_derived")
+            )
+        )
 
     # Historical combined tax rate for this parcel's entities (for trend projection)
     rate_history = query("""
