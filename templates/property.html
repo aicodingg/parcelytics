@@ -473,10 +473,29 @@
     <div class="row align-items-center">
       <div class="col-md-5"><canvas id="hoEntityChart" height="180"></canvas></div>
       <div class="col-md-7">
+        {# Redundant-table cleanup (July 2026, per Diego): "How Your Exemptions
+           Reduce Your Bill — by Taxing Entity" was removed entirely (it was
+           Entity/Taxable Value/Rate/Tax, fully redundant with this table's
+           Entity/Rate/Tax/Share once the TCAD-style redesign dropped its
+           Assessed/Exemption columns). Its one genuinely new column — Taxable
+           Value — is folded in here instead, so no real information was lost.
+           Same clamp logic reused verbatim, not reimplemented: Taxable Value
+           is derived (tax ÷ rate, since tax_billing_entity has no real
+           per-entity taxable-value field) and clamped at the parcel's
+           assessed value, because a derived figure can never legitimately
+           exceed it (see the removed table's original comment for the full
+           rounding-noise rationale on tiny-assessed-value parcels). Wrapped
+           in .table-responsive (which this table didn't have before) since a
+           5th column is tighter at this card's width — the removed table
+           already used that wrapper, so this just extends the same pattern
+           rather than risking overflow on narrow viewports. #}
+        {% set _assessed = (current.assessed_value | float) if (current and current.assessed_value) else none %}
+        <div class="table-responsive">
         <table class="table table-sm mb-0" style="font-size:13px;">
           <thead class="text-muted" style="font-size:11px; text-transform:uppercase;">
             <tr>
               <th>Taxing Entity</th>
+              <th class="text-end">Taxable Value</th>
               <th class="text-end">2025 Rate</th>
               <th class="text-end">You Paid</th>
               <th class="text-end">Share</th>
@@ -487,6 +506,15 @@
             {% for e in entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
             <tr>
               <td>{{ e.entity_name or e.entity_code }}</td>
+              <td class="text-end" style="font-variant-numeric:tabular-nums;">
+                {% if e.rate and _assessed %}
+                  {% set _net_raw = e.amount_due|float * 100 / (e.rate|float) %}
+                  {% set _net = _net_raw if _net_raw <= _assessed else _assessed %}
+                  ${{ "{:,.0f}".format(_net) }}
+                {% else %}
+                  <span class="text-muted" style="font-style:italic;">Not Available</span>
+                {% endif %}
+              </td>
               <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">{% if e.rate %}{{ "{:.4f}%".format(e.rate|float) }}{% else %}—{% endif %}</td>
               <td class="text-end" style="font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
               <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">{{ "{:.0f}%".format(e.amount_due|float / _tot * 100) }}</td>
@@ -498,13 +526,17 @@
              would quietly exclude no-rate PID/Special-District entities (see
              KNOWN_LIMITATIONS.md) from a number labeled "Total" with no disclosure.
              Same partial-sum-disclosure convention as the Combined Rate row in the
-             Historical Tax Rates by Entity table above (badge-partial "n of n"). #}
+             Historical Tax Rates by Entity table above (badge-partial "n of n").
+             Taxable Value stays "—" in the total row, same reasoning the removed
+             table used: each entity's own independent figure, doesn't add up to
+             anything real summed across entities with different exemptions/rates. #}
           {% set _ent_for_total = entity_detail | selectattr('amount_due') | list %}
           {% set _rate_n = _ent_for_total | selectattr('rate') | list | length %}
           {% set _ent_n  = _ent_for_total | length %}
           <tfoot>
             <tr style="font-weight:700; border-top:2px solid var(--border,#dee2e6);">
               <td>Total</td>
+              <td class="text-end">—</td>
               <td class="text-end" style="font-variant-numeric:tabular-nums;">
                 {% if _rate_n > 0 %}
                   {{ "{:.4f}%".format(_ent_for_total | selectattr('rate') | sum(attribute='rate') | float) }}
@@ -516,131 +548,11 @@
             </tr>
           </tfoot>
         </table>
+        </div>
       </div>
     </div>
   </div>
 </div>
-
-{# ── How exemptions reduce your bill, per taxing entity ───────────────────────
-   TCAD-style redesign, finalized (July 2026, per Diego): first pass matched
-   TCAD's independent-per-entity convention but kept Assessed and Exemption
-   columns; this pass drops both, per Diego's own markup against TCAD's real
-   page. TCAD's "Net Appraised" is the flat, pre-exemption value — identical
-   across every entity, so showing it per row here added nothing (Assessed is
-   already the single parcel-level figure shown at the top of this page).
-   "Taxable Value" is deliberately NOT renamed to "Net Appraised" — that would
-   misuse TCAD's own terminology for a different concept: TCAD's Net Appraised
-   is the pre-exemption figure; this column is the post-exemption figure that
-   varies per entity, which is what TCAD itself calls Taxable Value. Final
-   columns: Taxing Entity / Taxable Value / Rate / Tax.
-
-   Total row: Rate and Tax now both genuinely sum (Rate sums the entities that
-   publish one, with the same "n of n" partial-sum disclosure already used for
-   the Combined Rate rows in "Where Your Tax Dollars Went" and Historical Tax
-   Rates by Entity above — reused, not reinvented). Taxable Value stays "—":
-   each entity's own independent figure, still doesn't add up to anything real
-   summed across entities with different exemptions and rates.
-
-   Taxable Value itself is still DERIVED (tax ÷ rate) — tax_billing_entity has
-   no real per-entity taxable-value field, only amount_due and rate — clamped
-   at _assessed so it can never display above Assessed (Net Taxable / Assessed
-   contradiction fix, parcel 0438011527: reverse-dividing a cent-rounded dollar
-   amount by a small rate can overshoot the true taxable value by a few
-   dollars, invisible on a normal-sized parcel but visible on this parcel's
-   $1,430 assessed value). Taxable Value can never legitimately exceed
-   Assessed — that would imply a negative exemption, which isn't a real
-   category in TX property tax law — so the clamp only ever suppresses
-   rounding noise, never a real figure. #}
-{% if entity_detail and entity_detail | selectattr('amount_due') | list and current and current.assessed_value %}
-{% set _assessed = current.assessed_value | float %}
-<div class="card mb-4"><div class="card-header">How Your Exemptions Reduce Your Bill — by Taxing Entity</div>
-  <p class="text-muted px-3 pt-3 mb-2" style="font-size:11.5px;">
-    Each taxing entity applies its own exemptions to your assessed value and calculates its own taxable value and
-    tax independently — shown entity by entity, the way <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">TCAD's own property page</a> does, rather than as a combined
-    "taxable value" that wouldn't mean anything summed across entities with different exemptions and rates.
-  </p>
-  <div class="card-body p-0">
-    <div class="table-responsive">
-    <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
-      <thead class="text-muted" style="font-size:10px; text-transform:uppercase;">
-        <tr>
-          <th class="ps-3">Taxing Entity</th>
-          <th class="text-end">Taxable Value</th>
-          <th class="text-end">Rate</th>
-          <th class="text-end pe-3">Tax</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% set _no_rate_entities = [] %}
-        {% set _tot = namespace(tax=0, rate=0) %}
-        {% for e in entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
-        {% set _tot.tax = _tot.tax + (e.amount_due|float) %}
-        {% if e.rate %}
-        {% set _tot.rate = _tot.rate + (e.rate|float) %}
-        {% set _net_raw = e.amount_due|float * 100 / (e.rate|float) %}
-        {% set _net = _net_raw if _net_raw <= _assessed else _assessed %}
-        <tr>
-          <td class="ps-3">{{ e.entity_name or e.entity_code }}</td>
-          <td class="text-end">${{ "{:,.0f}".format(_net) }}</td>
-          <td class="text-end text-muted">{{ "{:.4f}%".format(e.rate|float) }}</td>
-          <td class="text-end pe-3">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
-        </tr>
-        {% else %}
-        {# PID / Special District entity billed in 2025 but absent from county_tax_rate
-           (KNOWN_LIMITATIONS.md — "PID/Special-District entity codes missing from
-           county_tax_rate", CORRECTNESS-CRITICAL, ~6% of parcels / $38.05M in 2025
-           billing county-wide). Without a rate we cannot derive Taxable Value, so
-           show the row honestly (real, verified amount_due; Not Available for the
-           derived field) instead of dropping it — matches the pass-through pattern
-           already used in the /api/estimate_acq PID handling below on this same page. #}
-        {% set _ = _no_rate_entities.append(e) %}
-        <tr>
-          <td class="ps-3">
-            {{ e.entity_name or e.entity_code }}
-            <span class="badge-estimated ms-1" style="font-size:9px;" title="No certified 2025 rate published for this entity — likely a PID/Special District">no rate</span>
-            <div class="text-muted" style="font-size:10px; font-weight:400; line-height:1.4; margin-top:1px; max-width:220px;">No certified rate on file for this entity — Taxable Value can't be derived. This is not a $0 exemption.</div>
-          </td>
-          <td class="text-end" style="font-style:italic; color:var(--text-3);">Not Available</td>
-          <td class="text-end text-muted">—</td>
-          <td class="text-end pe-3">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
-        </tr>
-        {% endif %}
-        {% endfor %}
-      </tbody>
-      {% set _ent_for_total = entity_detail | selectattr('amount_due') | list %}
-      {% set _rate_n = _ent_for_total | selectattr('rate') | list | length %}
-      {% set _ent_n  = _ent_for_total | length %}
-      <tfoot>
-        {# Rate and Tax both genuinely sum, so both are totaled -- Taxable Value
-           doesn't (each entity's own independent figure) and stays "—", same
-           reasoning as "Where Your Tax Dollars Went" above. Rate's partial-sum
-           disclosure (badge-partial "n of n") is the exact convention already
-           used for the Combined Rate rows elsewhere on this page -- reused,
-           not reinvented, so a no-rate PID/district entity is never silently
-           excluded from a number labeled "Total" without saying so. #}
-        <tr style="font-weight:700; border-top:2px solid var(--border-strong, #dee2e6); background:var(--surface-2, #f4f5f8);">
-          <td class="ps-3">Total</td>
-          <td class="text-end">—</td>
-          <td class="text-end text-muted">
-            {% if _rate_n > 0 %}
-              {{ "{:.4f}%".format(_tot.rate) }}
-              {% if _rate_n < _ent_n %}<span class="badge-partial d-block" style="font-size:9px; margin-top:2px; font-weight:400;">{{ _rate_n }} of {{ _ent_n }}</span>{% endif %}
-            {% else %}<span class="na-cell">—</span>{% endif %}
-          </td>
-          <td class="text-end pe-3">${{ "{:,.0f}".format(_tot.tax) }}</td>
-        </tr>
-      </tfoot>
-    </table>
-    </div>
-  </div>
-  <div class="card-footer text-muted" style="font-size:10.5px;">
-    Each entity grants different exemptions, so your <strong>taxable value</strong> — the amount it actually taxes you on — differs by entity, even though the assessed value is the same. Taxable Value is derived from your tax ÷ that entity's rate (there's no separate per-entity taxable-value figure in the county's billing data), which is also why it's shown per entity rather than added into one number — summing it wouldn't represent anything real.
-    {% if _no_rate_entities %}
-    <br><strong>{{ _no_rate_entities | length }}</strong> of your entities ({{ _no_rate_entities | map(attribute='entity_code') | join(', ') }}) bill you directly but don't publish a rate Parcelytics has on file — usually a Public Improvement District or Water Control district. The amount billed is real and verified and is included in the Tax total below; Taxable Value for those rows is Not Available because it can't be derived without a rate.
-    {% endif %}
-  </div>
-</div>
-{% endif %}
 
 {# ── Your tax rate & bill, last 5 years ──────────────────────────────── #}
 <div class="card mb-4"><div class="card-header">Your Tax Rate &amp; Bill — Last 5 Years</div>
@@ -658,6 +570,27 @@
           <td class="text-end" style="font-variant-numeric:tabular-nums;">{% if _r and _r.total_rate %}{{ "{:.4f}%".format(_r.total_rate|float) }}{% else %}—{% endif %}</td>
           <td class="text-end pe-3" style="font-variant-numeric:tabular-nums;">
             {% if _h and _h.total_tax %}${{ "{:,.0f}".format(_h.total_tax|float) }}{% if yr != 2025 %} <span class="text-muted" style="font-size:10px;">(partial)</span>{% endif %}
+            {% elif _h and _h.computed_total_tax %}
+              {# Wired in (July 2026, per Diego): same computed_total_tax field and
+                 the same display convention already used by Investor mode's Value
+                 History table (~$X,XXX, italic, muted, identical tooltip text) —
+                 reused, not reimplemented. One deliberate difference: this table's
+                 real total_tax already renders at whole-dollar precision ("{:,.0f}"),
+                 not Investor mode's "{:,.2f}", so computed_total_tax matches that to
+                 stay internally consistent within THIS table rather than copying
+                 Investor mode's decimal precision verbatim. The "(computed)" label
+                 reuses this table's own existing secondary-annotation pattern (see
+                 "(partial)" above) instead of Investor mode's separate Source-column
+                 badge, since this table has no badge column to put one in.
+                 Only ever reachable when COMPUTED_HIST_TAX_ENABLED=1 (off by
+                 default) — see the fabrication-risk comment in app.py above the
+                 computed_total_tax assignment for why this can't show a figure for
+                 a year the parcel didn't exist. #}
+              <span title="Computed: taxable value × combined entity rate — billing data not available for this year"
+                    style="font-style:italic; color:var(--text-muted); cursor:help;">
+                ~${{ "{:,.0f}".format(_h.computed_total_tax|float) }}
+              </span>
+              <span class="text-muted" style="font-size:10px;">(computed)</span>
             {% else %}<span class="text-muted">Not available</span>{% endif %}
           </td>
         </tr>
@@ -667,7 +600,9 @@
   </div>
   <div class="card-footer text-muted" style="font-size:10.5px;">
     Combined rate = the total of all your taxing entities' rates that year. 2025 taxes are verified from the Tax Office;
-    2021–2024 are from county payment receipts (marked “partial”) and may not reflect every adjustment.
+    2021–2024 are from county payment receipts (marked “partial”) and may not reflect every adjustment. Where no
+    billing record exists for a year, an estimate computed from that year's certified taxable value × combined rate
+    may be shown instead (marked “computed”) — not an actual billed amount.
   </div>
 </div>
 {% endif %}

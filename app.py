@@ -1463,6 +1463,35 @@ def property_detail(geo_id):
     # receive a computed estimate: taxable_value × combined_rate / 100.
     # Stored as computed_total_tax (separate key) — never overwrites real billing data.
     # Label: "computed from certified value × rate; billing unconfirmed"
+    #
+    # Fabrication-risk investigation (July 2026, per Diego, parcel 0438011527 —
+    # a parcel with no certified record at all until 2024): this loop has NO
+    # explicit "did the parcel exist in year `yr`" check of its own. It computes
+    # for whatever `row` it's handed. The only reason it can't fabricate a
+    # figure for a year the parcel didn't exist is that `history` (above) is
+    # built FROM parcel_tax_year, not from a fixed 2021–2026 range — so a year
+    # the parcel has no parcel_tax_year row for never becomes a `row` here in
+    # the first place, and this loop never gets a chance to run for it.
+    #
+    # That protection is IMPLICIT and NOT enforced by this code — it's a
+    # structural side effect of every current parcel_tax_year writer
+    # (load_certified_historical.py, load_ajr.py, load_cert_2021.py,
+    # load_certified_2025.py, load_2026_preliminary.py) independently parsing
+    # only its own year's source file, with no carry-forward/backfill logic
+    # between years. Confirmed by reading all of them — none of them ever
+    # invents a parcel_tax_year row for a year a parcel wasn't actually present
+    # in that year's county export.
+    #
+    # If a future loader (e.g. the still-unbuilt load_pir_tcad.py, referenced
+    # in run_all.py's docstring but not yet written) ever back-fills or
+    # synthesizes parcel_tax_year rows for years a parcel didn't really exist
+    # — even for a reasonable-sounding reason like "give every parcel a full
+    # 2021–2026 row set for UI consistency" — it would silently reintroduce
+    # exactly the fabrication risk this comment is warning about: a real
+    # dollar figure, with a "computed" confidence label, for a year the
+    # property wasn't a taxable entity yet. Anyone changing a parcel_tax_year
+    # writer should re-verify this loop's safety before doing so, not assume
+    # it's guarded here.
     if config.COMPUTED_HIST_TAX_ENABLED:
         _rate_map = {r["tax_year"]: float(r["total_rate"])
                      for r in rate_history if r.get("total_rate")}
