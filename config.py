@@ -49,6 +49,17 @@ PIR_TCAD_FILES = {
     # 2024: os.path.join(DATA_DIR, "pir_tcad_2024.csv"),
 }
 
+# Travis County Tax Office 2021 PIR response, full per-entity export (received
+# ~Jul 2026): a real, comprehensive 418,159-row bulk billing file, one row per
+# taxing account, up to 10 entities per account with base/due/penalty/attorney-
+# fee/collected columns each -- far richer AND far messier than the simple
+# TaxCurOpenData-format PIR_BILLING_FILES below. Loaded by a dedicated script
+# (loaders/load_pir_billing_2021_full.py, not load_pir_billing.py) because the
+# column layout is completely different. See that script's module docstring
+# for the full investigation writeup (geo_id mapping, duplicate-account
+# handling, field semantics) before touching this loader.
+PIR_2021_FULL_XLSX = os.path.join(DATA_DIR, "DiegoPIR2021 Revised.xlsx")
+
 # Travis County Tax Office (sent Jun 21 2026): historical billing for 2021–2024
 # Each file is expected to be TaxCurOpenData-format with TAXYEAR column present.
 # If the office sends one multi-year file instead, list it once with any key (e.g. 0).
