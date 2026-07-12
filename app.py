@@ -3745,11 +3745,48 @@ def api_geocode(geo_id):
 
 @app.route("/api/peer_set/<geo_id>")
 def api_peer_set(geo_id):
-    """Task 7 — 5 comparable parcels for the Submarket Position section.
+    """Task 7 — up to 5 comparable parcels for the Submarket Position section.
 
-    Same classi_cd-first property type, same neighborhood (relaxed to same
-    state_cd1 prefix in the neighborhood if too few), 2025 market value within
-    ±25% of the subject. Excludes the subject and AJR* accounts.
+    Tightened filter (July 2026, per Diego): this used to match on the BROAD
+    classify.py category (property_type_label — e.g. "Commercial"), which is
+    why a use-code-59 parcel (Office/Retail SFR Conv.) could appear as a
+    "comparable" for a use-code-53 subject (Office Small) — confirmed as
+    working-as-designed, not a bug, in an earlier investigation, with the
+    recommendation to relabel the footnote rather than change the filter.
+    Diego has now made the call directly: tighten the filter itself to
+    require the SAME EXACT classi_cd as the subject, not just the same broad
+    category.
+
+    Thin-result risk (per Diego's brief — investigate before finalizing):
+    this sandbox has no live DB, so the real distribution of "how many
+    parcels share this parcel's exact use code in its neighborhood" can't be
+    queried here — see PEER_SET_DISTRIBUTION_CHECK.sql (repo root) for a
+    ready-to-run diagnostic Diego can execute to get real counts before/after
+    this ships. Regardless of what that distribution turns out to be, the
+    code below has to behave sanely across the whole range from "plenty of
+    exact-use-code neighbors" to "this use code is rare in this parcel's
+    area" to "no other parcel in the county shares this exact code" — so it's
+    built as an explicit, reported cascade rather than a single query that
+    might silently return zero rows:
+      1. exact classi_cd + same neighborhood_cd (tightest, most relevant)
+      2. exact classi_cd + same state_cd1 prefix, any neighborhood (existing
+         relaxation pattern, now applied on top of the exact-code match
+         instead of instead of it)
+      3. exact classi_cd, county-wide (drop neighborhood/state-prefix), and
+         widen the market-value band from ±25% to ±40% — Diego's suggested
+         "widen the geographic/value radius while keeping the exact use
+         code" fallback
+      4. only if the subject itself has no classi_cd on file at all (exact
+         matching is impossible, not just thin) OR tier 3 still returns
+         zero: fall back to the old broad-category behavior, but flagged
+         explicitly via `scope` so the UI can say so rather than silently
+         reverting to the pre-tightening behavior unlabeled
+    Each tier is tried only if the previous one came up short (<5 peers);
+    `scope` in the response tells the frontend which tier actually produced
+    the results shown, and `limited` flags anything other than tier 1 so the
+    UI can render an honest "limited comps" note instead of presenting a
+    widened or broad-category result as if it were the tightest possible
+    match.
     """
     parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
     if not parcel:
@@ -3763,12 +3800,13 @@ def api_peer_set(geo_id):
         return jsonify({"ok": False, "error": "No 2025 market value for subject"})
 
     subj_label = property_type_label(parcel.get("classi_cd"), parcel.get("state_cd1"))
+    subj_cc    = (parcel.get("classi_cd") or "").strip().upper()
     nb         = (parcel.get("neighborhood_cd") or "").strip()
     sc1        = (parcel.get("state_cd1") or "").strip()[:1]
     subj_mv    = float(subj["market_value"])
     lbl_sql    = label_case_sql("p.classi_cd", "p.state_cd1")
 
-    base_select = f"""
+    common_cols = """
         SELECT p.geo_id, p.prop_id, p.situs_address, p.classi_cd,
                p.living_area_sqft, p.land_sqft, p.year_built,
                pty.market_value, pty.assessed_value,
@@ -3782,21 +3820,51 @@ def api_peer_set(geo_id):
         JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
         WHERE p.geo_id <> %(geo)s
           AND p.geo_id NOT LIKE 'AJR%%'
-          AND pty.market_value BETWEEN %(lo)s AND %(hi)s
-          AND ({lbl_sql}) IS NOT DISTINCT FROM %(lbl)s
     """
-    params = {"geo": geo_id, "lo": subj_mv * 0.75, "hi": subj_mv * 1.25, "lbl": subj_label, "nb": nb, "sc1": sc1}
+    exact_select = common_cols + " AND UPPER(TRIM(p.classi_cd)) = %(cc)s"
+    broad_select = common_cols + f" AND ({lbl_sql}) IS NOT DISTINCT FROM %(lbl)s"
 
-    peers = []
-    if nb:
-        peers = query(base_select + " AND p.neighborhood_cd = %(nb)s"
-                      " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5",
-                      {**params, "mv": subj_mv})
-    if len(peers) < 5:
-        # relax: same state_cd1 prefix, any neighborhood
-        peers = query(base_select + " AND LEFT(p.state_cd1,1) = %(sc1)s"
-                      " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5",
-                      {**params, "mv": subj_mv})
+    params = {
+        "geo": geo_id, "lo": subj_mv * 0.75, "hi": subj_mv * 1.25,
+        "lo_wide": subj_mv * 0.60, "hi_wide": subj_mv * 1.40,
+        "lbl": subj_label, "nb": nb, "sc1": sc1, "cc": subj_cc, "mv": subj_mv,
+    }
+
+    peers, scope = [], "none"
+    if subj_cc:
+        # Tier 1: exact use code, same neighborhood
+        if nb:
+            peers = query(exact_select + " AND pty.market_value BETWEEN %(lo)s AND %(hi)s"
+                          " AND p.neighborhood_cd = %(nb)s"
+                          " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5", params)
+            if peers:
+                scope = "exact_neighborhood"
+        # Tier 2: exact use code, same state_cd1 prefix (any neighborhood)
+        if len(peers) < 5:
+            wider = query(exact_select + " AND pty.market_value BETWEEN %(lo)s AND %(hi)s"
+                          " AND LEFT(UPPER(p.state_cd1),1) = %(sc1)s"
+                          " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5", params)
+            if len(wider) > len(peers):
+                peers, scope = wider, "exact_state_prefix"
+        # Tier 3: exact use code, county-wide, wider value band (±40%) — the
+        # "widen the radius, keep the exact use code" fallback for a genuinely
+        # rare use code rather than silently reverting to broad category.
+        if len(peers) < 3:
+            widest = query(exact_select + " AND pty.market_value BETWEEN %(lo_wide)s AND %(hi_wide)s"
+                           " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5", params)
+            if len(widest) > len(peers):
+                peers, scope = widest, "exact_widened"
+
+    # Tier 4: subject has no classi_cd on file (can't exact-match at all), or
+    # even the widened exact search above still came up empty. Falls back to
+    # the pre-tightening broad-category behavior — but explicitly flagged via
+    # `scope`, not silently, so the UI can say a real comp search came up
+    # short rather than presenting this as an ordinary result.
+    if not peers:
+        peers = query(broad_select + " AND pty.market_value BETWEEN %(lo)s AND %(hi)s"
+                      " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5", params)
+        if peers:
+            scope = "broad_category_fallback" if subj_cc else "broad_category_no_subject_code"
 
     out = []
     for p in peers:
@@ -3815,7 +3883,16 @@ def api_peer_set(geo_id):
             "assessment_ratio": float(p["assessment_ratio"]) if p.get("assessment_ratio") is not None else None,
             "total_tax_rate":   float(p["total_tax_rate"]) if p.get("total_tax_rate") is not None else None,
         })
-    return jsonify({"ok": True, "subject_label": subj_label, "neighborhood": nb, "peers": out, "count": len(out)})
+    return jsonify({
+        "ok": True,
+        "subject_label": subj_label,
+        "subject_use_code": subj_cc or None,
+        "neighborhood": nb,
+        "scope": scope,
+        "limited": scope not in ("exact_neighborhood",),
+        "peers": out,
+        "count": len(out),
+    })
 
 
 # ── On-demand billing fetch ────────────────────────────────────────────────────

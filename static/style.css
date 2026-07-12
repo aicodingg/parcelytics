@@ -423,6 +423,19 @@ main.container.is-frontdoor { max-width: var(--maxw); }
 @media (max-width: 900px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 540px) { .kpi-row { grid-template-columns: 1fr 1fr; } }
 
+/* Investor Overview two-year restructure (July 2026, per Diego): 3 cards per
+   row (Market Value / Assessed-Taxable Value / Effective Tax Rate), one row
+   for 2025 and one for 2026 — a 3-column variant of .kpi-row, which is fixed
+   at 4 columns and would otherwise leave a visible empty gap. */
+.kpi-row-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s-3);
+  margin-bottom: var(--s-5);
+}
+@media (max-width: 900px) { .kpi-row-3 { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 540px) { .kpi-row-3 { grid-template-columns: 1fr; } }
+
 .kpi-card {
   background: var(--surface);
   border: 1px solid var(--border);

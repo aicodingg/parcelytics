@@ -3,6 +3,153 @@
 
 {% block content %}
 
+{# ── Post-Acquisition Tax Estimator — shared macro (July 2026, per Diego) ───
+   Was Investor-mode-only markup, hand-copied in place. Diego asked for the
+   same feature in Homeowner mode too, reusing the existing structure/logic
+   rather than rebuilding it — and the one piece that's supposed to DIFFER
+   between modes (the Buyer Type toggle: dropped in Investor, since the mode
+   already implies an investor buyer; kept in Homeowner, since someone
+   evaluating a purchase in Homeowner mode isn't necessarily going to occupy
+   it themselves, and that materially changes whether a homestead exemption
+   would apply) is exactly the kind of thing that drifts if this is
+   maintained as two hand-copied cards. Converted to a macro — same pattern
+   this template already uses for homestead_savings_card() above (Homeowner
+   branch) — defined here, outside both mode branches, so both can call it.
+   `entity_detail`/`current`/`parcel` are top-level render_template variables
+   (confirmed available in both branches already, e.g. entity_detail is read
+   in both the Homeowner entity-breakdown card and this same Investor card
+   before this change), passed explicitly rather than relied on as closure
+   context, matching homestead_savings_card()'s own explicit-parameter style.
+   The client-side JS (runEstimator(), in the scripts block below)
+   is UNCHANGED — it already defaulted to buyer='non_owner_occupant' whenever
+   no buyerType radio is checked (`checked ? checked.value : 'non_owner_occupant'`),
+   so Investor mode's card (no toggle) needs no JS change at all; it was
+   already written to handle this. That script was moved out of the
+   Investor-only scripts branch into the shared/unconditional area (same
+   move already done for the Satellite View init script last round) so it
+   also runs for Homeowner mode now that Homeowner has a matching card with
+   the same element ids. #}
+{% macro post_acq_estimator_card(entity_detail, current, parcel, show_buyer_toggle) %}
+{% if entity_detail and current %}
+<div class="card mb-4 estimator-card" id="postAcqEstimator">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Post-Acquisition Tax Estimate</span>
+    <span class="estimates-badge">Estimate · Not a prediction</span>
+  </div>
+  <div class="card-body">
+
+    {# Size context (Task 5) — gives the buyer scale while reviewing the estimate #}
+    {% if parcel.living_area_sqft or parcel.gross_building_area_sqft or parcel.land_sqft %}
+    <div class="mb-3" style="font-size:12px; color:var(--text-3); font-variant-numeric:tabular-nums;">
+      Property:
+      {% if parcel.living_area_sqft %}<strong>{{ "{:,.0f}".format(parcel.living_area_sqft|float) }} SF</strong> main area{% endif %}
+      {% if parcel.gross_building_area_sqft %}&middot; {{ "{:,.0f}".format(parcel.gross_building_area_sqft|float) }} SF gross{% endif %}
+      {% if parcel.land_sqft %}&middot; {{ "{:,.3f}".format(parcel.land_sqft|float / 43560.0) }} ac lot{% endif %}
+    </div>
+    {% endif %}
+
+    {# Input row #}
+    <div class="d-flex flex-wrap gap-3 align-items-end mb-3">
+      <div>
+        <label class="form-label small text-muted mb-1" for="acqPrice">Purchase Price</label>
+        <div class="input-group input-group-sm" style="max-width:200px;">
+          <span class="input-group-text">$</span>
+          <input type="text" id="acqPrice" class="form-control"
+                 placeholder="e.g. 4500000"
+                 value="{{ current.market_value | int if current.market_value else '' }}"
+                 style="font-family:var(--font-mono); font-size:13px;">
+        </div>
+      </div>
+      {% if show_buyer_toggle %}
+      {# Buyer Type toggle — Homeowner mode only (July 2026, per Diego): a
+         Homeowner-mode visitor evaluating a potential purchase isn't
+         necessarily going to occupy the property — a non-occupant investor
+         could be using Homeowner mode too — and that distinction changes
+         whether a homestead exemption applies post-purchase, so it isn't a
+         redundant question here the way it is in Investor mode (where the
+         mode itself already implies an investor buyer). #}
+      <div>
+        <label class="form-label small text-muted mb-1">Buyer Type</label>
+        <div class="btn-group btn-group-sm" role="group" id="buyerToggle">
+          <input type="radio" class="btn-check" name="buyerType" id="buyerInvestor" value="non_owner_occupant" checked>
+          <label class="btn btn-outline-secondary" for="buyerInvestor">Investor</label>
+          <input type="radio" class="btn-check" name="buyerType" id="buyerOwner" value="owner_occupant">
+          <label class="btn btn-outline-secondary" for="buyerOwner">Owner-Occupant</label>
+        </div>
+      </div>
+      {% endif %}
+      <div>
+        <label class="form-label small text-muted mb-1">Tax Rates</label>
+        <div class="btn-group btn-group-sm" role="group" id="rateToggle">
+          <input type="radio" class="btn-check" name="rateMode" id="rateCertified" value="certified" checked>
+          <label class="btn btn-outline-secondary" for="rateCertified">2025 Certified</label>
+          <input type="radio" class="btn-check" name="rateMode" id="rateProjected" value="projected">
+          <label class="btn btn-outline-secondary" for="rateProjected">Projected trend</label>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-dark" id="acqRunBtn" onclick="runEstimator()">
+        Estimate
+      </button>
+      <span id="acqSpinner" class="text-muted small" style="display:none;">Calculating…</span>
+    </div>
+
+    {# Disclaimer #}
+    <p class="small text-muted mb-3" style="font-size:11.5px; line-height:1.5;">
+      Estimate only. The appraisal district sets value as of Jan 1 (not at sale price).
+      A sale is strong evidence of market value and is typically reflected in the next
+      Jan 1 valuation. Taxing units set rates annually. Modeled from government data —
+      not a legal or tax opinion.
+    </p>
+
+    {# Results pane (hidden until first run) #}
+    <div id="acqResults" style="display:none;">
+
+      {# Tax-year + rate-vintage label #}
+      <div id="acqRateVintage" class="mb-3" style="font-size:12px;"></div>
+
+      {# Summary row #}
+      <div class="d-flex flex-wrap gap-3 mb-3" id="acqSummary"></div>
+
+      {# Entity breakdown table #}
+      <div class="table-responsive">
+        <table class="table table-sm mb-0" id="acqTable">
+          <thead class="table-light small text-muted text-uppercase">
+            <tr>
+              <th>Entity</th>
+              <th class="text-end">Rate</th>
+              <th class="text-end">~Taxable Base</th>
+              <th class="text-end">~Est. Tax</th>
+              <th class="text-end">Seller Tax</th>
+              <th class="text-end">~Delta</th>
+            </tr>
+          </thead>
+          <tbody id="acqTbody"></tbody>
+          <tfoot id="acqTfoot"></tfoot>
+        </table>
+      </div>
+
+      {# Multi-year projection #}
+      <div id="acqMultiyear" class="mt-4"></div>
+
+      {# Homestead-exemption explainer (owner-occupant) #}
+      <div id="acqHsExplainer" class="mt-4"></div>
+
+      {# Circuit-breaker / gap-year notes #}
+      <div id="acqNotes" class="mt-3"></div>
+
+      {# Assumptions list #}
+      <div id="acqAssumptions" class="mt-3"></div>
+
+    </div>{# /acqResults #}
+
+    {# Error pane #}
+    <div id="acqError" class="search-error-block" style="display:none;"></div>
+
+  </div>{# /card-body #}
+</div>
+{% endif %}
+{% endmacro %}
+
 {% if mode == 'homeowner' %}
 {# ═══════════════ HOMEOWNER MODE — plain-language view ═══════════════ #}
 {% set mv25 = current.market_value if current else none %}
@@ -104,7 +251,17 @@
      see the cross-year "no exemption YET" branch below, not this logic. #}
   {% elif has_hs and mv and tv is not none and rate and mv > tv %}
   {% set savings = (mv - tv) * rate / 100 %}
-  <div style="font-size:27px; font-weight:800; color:#2e7d32; font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(savings) }}</div>
+  {# Headline-number uniformity fix (July 2026, per Diego — scoped Item 6
+     follow-up): was a one-off inline font-size:27px/weight:800, one of three
+     different implementations of the same "big headline number in a card"
+     role found across the page (the others: .kpi-value, and this same inline
+     style repeated four more times below and in the 2025/2026 value/tax
+     cards). Unified to .kpi-value's treatment (27.2px/mono/700, tabular
+     nums) — the more considered of the three and already used in the most
+     places (all of Investor mode's KPI cards). Green color is this card's
+     own semantic signal (savings), kept as an inline override on top of the
+     shared class rather than folded into .kpi-value itself. #}
+  <div class="kpi-value" style="color:#2e7d32;">${{ "{:,.0f}".format(savings) }}</div>
   <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
     {% if tv == 0 %}
     Your homestead exemptions fully exempt this property from property tax — an estimated <strong>${{ "{:,.0f}".format(savings) }}</strong> {{ "saved" if year == 2025 else "in projected savings" }} in {{ year }}.
@@ -203,7 +360,7 @@
   <div class="col-md-4">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home was worth{% else %}What this property was worth{% endif %}</div>
-      <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">{% if mv25 %}${{ "{:,.0f}".format(mv25) }}{% else %}—{% endif %}</div>
+      <div class="kpi-value">{% if mv25 %}${{ "{:,.0f}".format(mv25) }}{% else %}—{% endif %}</div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if is_residential %}Your home's{% else %}This property's{% endif %} 2025 certified value.
         <span class="badge-verified" style="font-size:9px;">Verified</span>
@@ -236,7 +393,7 @@
          identical kind of derived/partial figure with "~". Reuses the exact same
          two provenance flags already driving the sub-line's own Partial branches,
          not a new check. #}
-      <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">
+      <div class="kpi-value">
         {% if tax25 and (current.billing_source == 'portal_scrape' or current.total_tax_derived) %}~${{ "{:,.0f}".format(tax25) }}
         {% elif tax25 %}${{ "{:,.0f}".format(tax25) }}
         {% elif current and current.computed_total_tax %}~${{ "{:,.0f}".format(current.computed_total_tax) }}
@@ -278,7 +435,7 @@
   <div class="col-md-4">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home is worth (2026 preliminary){% else %}What this property is worth (2026 preliminary){% endif %}</div>
-      <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">{% if mv26 %}${{ "{:,.0f}".format(mv26) }}{% else %}—{% endif %}</div>
+      <div class="kpi-value">{% if mv26 %}${{ "{:,.0f}".format(mv26) }}{% else %}—{% endif %}</div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if mv26 %}
         TCAD's 2026 preliminary appraisal{% if mv25 %} — {{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }} vs. 2025{% endif %}. A real appraisal figure, not yet certified.
@@ -299,7 +456,7 @@
          different kind of uncertainty, so it gets its own badge rather than
          inheriting "Preliminary" from the value it's built on. #}
       <div class="text-muted" style="font-size:13px; font-weight:600;">Estimated 2026 taxes</div>
-      <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">
+      <div class="kpi-value">
         {% if estimated_tax_2026 %}~${{ "{:,.0f}".format(estimated_tax_2026) }}{% else %}<span style="font-size:18px; font-weight:700;">Not available yet</span>{% endif %}
       </div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
@@ -653,14 +810,14 @@
               {# Wired in (July 2026, per Diego): same computed_total_tax field and
                  the same display convention already used by Investor mode's Value
                  History table (~$X,XXX, italic, muted, identical tooltip text) —
-                 reused, not reimplemented. One deliberate difference: this table's
-                 real total_tax already renders at whole-dollar precision ("{:,.0f}"),
-                 not Investor mode's "{:,.2f}", so computed_total_tax matches that to
-                 stay internally consistent within THIS table rather than copying
-                 Investor mode's decimal precision verbatim. The "(computed)" label
-                 reuses this table's own existing secondary-annotation pattern (see
-                 "(partial)" above) instead of Investor mode's separate Source-column
-                 badge, since this table has no badge column to put one in.
+                 reused, not reimplemented. Both tables render at whole-dollar
+                 precision ("{:,.0f}") — Investor mode's Value History table was
+                 updated off ".2f" in the same July 2026 whole-dollar-everywhere
+                 pass, so there's no longer any precision mismatch to reconcile here.
+                 The "(computed)" label reuses this table's own existing
+                 secondary-annotation pattern (see "(partial)" above) instead of
+                 Investor mode's separate Source-column badge, since this table has
+                 no badge column to put one in.
                  Only ever reachable when COMPUTED_HIST_TAX_ENABLED=1 (off by
                  default) — see the fabrication-risk comment in app.py above the
                  computed_total_tax assignment for why this can't show a figure for
@@ -694,6 +851,18 @@
 </div>
 {% endif %}
 
+{# ── Post-Acquisition Tax Estimator (July 2026, per Diego — new in Homeowner
+   mode) ───────────────────────────────────────────────────────────────────
+   Previously Investor-only. Reuses the exact same card/logic via the shared
+   macro (defined at the top of this template, outside both mode branches) —
+   not rebuilt. show_buyer_toggle=true here: someone using Homeowner mode to
+   evaluate a potential purchase isn't necessarily going to occupy the
+   property themselves (a non-occupant investor could be using Homeowner
+   mode too), and that distinction genuinely changes whether a homestead
+   exemption would apply to the post-purchase estimate — so, unlike Investor
+   mode, this field isn't redundant here. #}
+{{ post_acq_estimator_card(entity_detail, current, parcel, true) }}
+
 {# ── Property-tax news (homeowner) ───────────────────────────────────── #}
 <div class="card mb-4" id="newsCard">
   <div class="card-header">Property Tax News for Homeowners</div>
@@ -716,121 +885,15 @@
   </button>
 </div>
 
-{# ── CoStar KPI headline cards ────────────────────────────────────────── #}
-{% if kpi %}
-<div class="kpi-row mt-3">
-
-  {# Card 1: Market Value #}
-  <div class="kpi-card">
-    <div class="kpi-label">Market Value</div>
-    <div class="kpi-value">
-      {% if kpi.market_value %}
-        ${{ "{:,.0f}".format(kpi.market_value) }}
-      {% else %}—{% endif %}
-    </div>
-    <div class="kpi-sub">
-      {% if kpi.market_value_year %}
-        {{ kpi.market_value_year }}
-        {% if kpi.market_value_source == 'preliminary' %}
-          <span class="badge-preliminary" style="font-size:9px; padding:1px 5px;">Pre</span>
-        {% else %}
-          <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
-        {% endif %}
-      {% endif %}
-    </div>
-  </div>
-
-  {# Card 2: YoY Value Change #}
-  <div class="kpi-card">
-    <div class="kpi-label">YoY Value Change</div>
-    {# Coherence fix (July 2026, per Fable review finding 6): this is a raw
-       market-value change (see label above: "YoY Value Change"), not a
-       tax-burden figure -- was borrowing the burden red=rising/green=falling
-       convention, which reads backwards to an investor (a value drop showing
-       green implies "good news"). Neutral color now; burden figures
-       elsewhere are untouched. #}
-    <div class="kpi-value" style="{% if kpi.yoy_pct is defined %}color:var(--accent);{% endif %}">
-      {% if kpi.yoy_pct is defined %}
-        {{ "{:+.1f}%".format(kpi.yoy_pct) }}
-      {% else %}—{% endif %}
-    </div>
-    <div class="kpi-sub">
-      {{ kpi.yoy_label if kpi.yoy_label is defined else "—" }}
-    </div>
-  </div>
-
-  {# Card 3: Assessment Ratio #}
-  <div class="kpi-card">
-    <div class="kpi-label">Assessment Ratio</div>
-    <div class="kpi-value">
-      {% if kpi.assessment_ratio is defined %}
-        {{ "{:.1f}%".format(kpi.assessment_ratio) }}
-      {% else %}—{% endif %}
-    </div>
-    <div class="kpi-sub">
-      Assessed ÷ Market
-      {% if kpi.assessment_ratio_year is defined %}· {{ kpi.assessment_ratio_year }}{% endif %}
-    </div>
-  </div>
-
-  {# Card 4: Effective Tax Rate (2025) — year-specific, same-year basis #}
-  <div class="kpi-card">
-    <div class="kpi-label"
-         title="Total 2025 tax paid ÷ 2025 certified market value">
-      {% if kpi.effective_tax_rate is defined %}
-        Effective Tax Rate ({{ kpi.effective_tax_rate_year | default(2025) }})
-      {% else %}
-        Effective Tax Rate
-      {% endif %}
-    </div>
-    <div class="kpi-value">
-      {% if kpi.effective_tax_rate is defined %}
-        {{ "{:.4f}%".format(kpi.effective_tax_rate) }}
-      {% elif kpi.rate_approx is defined %}
-        {{ "{:.4f}%".format(kpi.rate_approx) }}
-      {% else %}—{% endif %}
-    </div>
-    <div class="kpi-sub">
-      {# Masking-bug fix (July 2026, per Diego): this used to badge "Verified"
-         whenever kpi.effective_tax_rate was merely present, regardless of whether
-         it came from a real tax_billing.total_tax or was reconstructed by summing
-         tax_billing_entity.amount_due -- the same provenance gap already fixed on
-         the Value History table and Homeowner-mode cards. effective_tax_rate_derived
-         is set in app.py from the new parcel_metrics.effective_tax_rate_derived
-         column (compute_metrics.py); only badge "Verified" when it is explicitly
-         False. `is False` (not `is not true`/truthiness) so that True *and* None
-         (rows not yet covered by a compute_metrics.py rerun) both fall through to
-         Partial -- fail-safe rather than fail-open. #}
-      {% if kpi.effective_tax_rate is defined and kpi.effective_tax_rate_derived is sameas false %}
-        2025 Tax ÷ 2025 Market Value
-        <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
-      {% elif kpi.effective_tax_rate is defined %}
-        2025 Tax ÷ 2025 Market Value
-        <span class="badge-partial" style="font-size:9px; padding:1px 5px;"
-              title="Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total; no confirmed total_tax figure exists to cross-check against">Partial</span>
-      {% elif kpi.rate_approx is defined %}
-        2025 Combined Rate
-        <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Est.</span>
-      {% else %}
-        No billing data
-      {% endif %}
-    </div>
-    {% if kpi.effective_tax_rate_2026_est is defined %}
-    <div class="kpi-sub" style="margin-top:6px; border-top:1px solid var(--border, #e5e7eb); padding-top:5px;"
-         title="Estimated 2026 tax (2026 taxable value × 2025 blended entity rate) ÷ 2026 preliminary market value">
-      <span style="font-variant-numeric:tabular-nums; font-weight:600;">{{ "{:.4f}%".format(kpi.effective_tax_rate_2026_est) }}</span>
-      Est. 2026 ETR
-      <span class="badge-estimated" style="font-size:9px; padding:1px 5px;">Estimated</span>
-    </div>
-    {% endif %}
-  </div>
-
-</div>
-{% endif %}
-
-
-
 {# ── Property header ─────────────────────────────────────────────────── #}
+{# Header-above-cards fix (July 2026, per Diego): MOVED here from below the
+   KPI cards — the title/address block used to render after the 2025/2026
+   KPI rows, so the page read cards-first, then title, backwards from
+   Homeowner mode, which has always shown its title/address (line ~52 above,
+   Homeowner branch) before its own two-year cards. Now both modes read
+   title/address first, then KPI cards, in the same order. Content/logic
+   below is UNCHANGED from before the move — same property-type derivation,
+   same confidence badges, same fields. #}
 {# Property type label — classi_cd-first (Task 1): use the same classification
    bench_label the benchmarks use, so apartments aren't mislabeled single-family.
    Fall back to the state_cd1 prefix only when no bench_label is available. #}
@@ -913,6 +976,222 @@
     {% endif %}
   </div>
 </div>
+
+{# ── CoStar KPI headline cards — Two-Year Restructure (July 2026, per Diego) ──
+   REPLACES the prior single row of 4 cards (Market Value / YoY Value Change /
+   Assessment Ratio / Effective Tax Rate with Est. 2026 ETR nested as a
+   secondary line) with the same 2025/2026 two-row structure Homeowner mode
+   already has (see the "Two-Year Card Redesign" comment above, Homeowner
+   branch) — investor-relevant figures instead of Homeowner's personal
+   "what you paid" framing. Reuses .kpi-card/.kpi-row styling (not Homeowner's
+   Bootstrap .card treatment) since that's the component Investor mode's own
+   KPI section already established, and everything else on this page still
+   uses it — switching to Homeowner's card style here would itself be a new
+   inconsistency (see the item 6 audit for the same class of issue elsewhere).
+
+   Card count note (Diego's brief: "your call on exact card count/layout"):
+   the prior single row's Assessment Ratio card has no natural slot in either
+   3-card year row below and isn't mentioned in Diego's proposed structure —
+   it's dropped as a direct consequence of the restructure, not a separate
+   unilateral call on its standalone-value question (that's flagged in the
+   brief as a later decision). kpi.assessment_ratio is still computed in
+   app.py; simply unused here now.
+
+   Assessed/Taxable Value card: shows Assessed as the primary figure (the
+   Net Appraised value TCAD actually certifies/preliminaries); Taxable only
+   appears as a second line when it genuinely differs from Assessed (i.e. an
+   exemption is reducing it) — showing both unconditionally would repeat the
+   same number on every parcel with no exemption (the common case for
+   non-residential parcels), which is most of Investor mode's audience. #}
+{% if kpi %}
+{% set inv_mv25 = current.market_value if current else none %}
+{% set inv_mv26 = current_2026.market_value if current_2026 else none %}
+{% set inv_av25 = current.assessed_value if current else none %}
+{% set inv_av26 = current_2026.assessed_value if current_2026 else none %}
+{% set inv_tv25 = current.taxable_value if current else none %}
+{% set inv_tv26 = current_2026.taxable_value if current_2026 else none %}
+{# Total Tax swap (July 2026, per Diego): inv_tax25 is the exact same
+   current.total_tax field Homeowner mode's "What you paid in taxes" card
+   and the Value History/Current & Preliminary Values tables already use —
+   not a new field, not recomputed. estimated_tax_2026 (below, 2026 row) is
+   likewise the same top-level variable Homeowner mode's "Estimated 2026
+   taxes" card already uses (property_detail(), computed once, passed to
+   both mode branches). #}
+{% set inv_tax25 = current.total_tax if current else none %}
+
+<div class="d-flex align-items-center gap-2 mt-3 mb-2">
+  <span style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3);">2025</span>
+  <span class="badge-verified" style="font-size:9px;">Certified</span>
+</div>
+<div class="kpi-row-3">
+
+  {# Card 1: Market Value (2025 certified) #}
+  <div class="kpi-card">
+    <div class="kpi-label">Market Value</div>
+    <div class="kpi-value">
+      {% if inv_mv25 %}${{ "{:,.0f}".format(inv_mv25) }}{% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      {% if inv_mv25 %}
+        2025 <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
+      {% else %}—{% endif %}
+    </div>
+  </div>
+
+  {# Card 2: Total Tax (2025) — swapped in for Assessed/Taxable Value (July
+     2026, per Diego): matches Homeowner mode's middle-card structure and
+     badge tiers exactly (Verified / Partial / Estimated-via-computed), reusing
+     current.total_tax / current.billing_source / current.total_tax_derived /
+     current.computed_total_tax verbatim — same fields, same tiers, same
+     branch order as Homeowner's "What you paid in taxes" card (see that
+     card's own comment, Homeowner branch) and the Value History table.
+     Assessed/Taxable Value isn't lost — it's already shown in the Current &
+     Preliminary Values table further down the page; this just stops
+     showing it twice at the top. #}
+  <div class="kpi-card">
+    <div class="kpi-label">Total Tax</div>
+    <div class="kpi-value">
+      {% if inv_tax25 and (current.billing_source == 'portal_scrape' or current.total_tax_derived) %}~${{ "{:,.0f}".format(inv_tax25) }}
+      {% elif inv_tax25 %}${{ "{:,.0f}".format(inv_tax25) }}
+      {% elif current and current.computed_total_tax %}~${{ "{:,.0f}".format(current.computed_total_tax) }}
+      {% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      {% if inv_tax25 and current.billing_source == 'portal_scrape' %}
+        2025 <span class="badge-partial" style="font-size:9px; padding:1px 5px;" title="Amount paid per portal receipt — reflects payment, not necessarily levy; entity breakdown unavailable">Partial</span>
+      {% elif inv_tax25 and current.total_tax_derived %}
+        2025 <span class="badge-partial" style="font-size:9px; padding:1px 5px;" title="Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total">Partial</span>
+      {% elif inv_tax25 %}
+        2025 <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
+      {% elif current and current.computed_total_tax %}
+        2025 <span class="badge-estimated" style="font-size:9px; padding:1px 5px;" title="Computed: taxable value × combined entity rate — billing data not available for this year">Estimated</span>
+      {% else %}—{% endif %}
+    </div>
+  </div>
+
+  {# Card 3: Effective Tax Rate (2025) — year-specific, same-year basis.
+     Badge logic below is UNCHANGED from the prior single-row Card 4 — moved
+     here verbatim, not reimplemented. #}
+  <div class="kpi-card">
+    <div class="kpi-label"
+         title="Total 2025 tax paid ÷ 2025 certified market value">
+      {% if kpi.effective_tax_rate is defined %}
+        Effective Tax Rate ({{ kpi.effective_tax_rate_year | default(2025) }})
+      {% else %}
+        Effective Tax Rate
+      {% endif %}
+    </div>
+    <div class="kpi-value">
+      {% if kpi.effective_tax_rate is defined %}
+        {{ "{:.4f}%".format(kpi.effective_tax_rate) }}
+      {% elif kpi.rate_approx is defined %}
+        {{ "{:.4f}%".format(kpi.rate_approx) }}
+      {% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      {# Masking-bug fix (July 2026, per Diego): this used to badge "Verified"
+         whenever kpi.effective_tax_rate was merely present, regardless of whether
+         it came from a real tax_billing.total_tax or was reconstructed by summing
+         tax_billing_entity.amount_due -- the same provenance gap already fixed on
+         the Value History table and Homeowner-mode cards. effective_tax_rate_derived
+         is set in app.py from the new parcel_metrics.effective_tax_rate_derived
+         column (compute_metrics.py); only badge "Verified" when it is explicitly
+         False. `is False` (not `is not true`/truthiness) so that True *and* None
+         (rows not yet covered by a compute_metrics.py rerun) both fall through to
+         Partial -- fail-safe rather than fail-open. #}
+      {% if kpi.effective_tax_rate is defined and kpi.effective_tax_rate_derived is sameas false %}
+        2025 Tax ÷ 2025 Market Value
+        <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
+      {% elif kpi.effective_tax_rate is defined %}
+        2025 Tax ÷ 2025 Market Value
+        <span class="badge-partial" style="font-size:9px; padding:1px 5px;"
+              title="Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total; no confirmed total_tax figure exists to cross-check against">Partial</span>
+      {% elif kpi.rate_approx is defined %}
+        2025 Combined Rate
+        <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Est.</span>
+      {% else %}
+        No billing data
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+
+<div class="d-flex align-items-center gap-2 mb-2">
+  <span style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3);">2026</span>
+  <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
+</div>
+<div class="kpi-row-3">
+
+  {# Card 1: Market Value (2026 preliminary) — folds the prior standalone
+     "YoY Value Change" card into this card's subtext instead, per Diego's
+     brief, matching the pattern Homeowner mode's own 2026 Market Value card
+     already uses (a value with its YoY delta as a sub-line, not a separate
+     tile). kpi.yoy_pct/kpi.yoy_label are the exact same figures the old
+     standalone card showed — reused, not recomputed. #}
+  <div class="kpi-card">
+    <div class="kpi-label">Market Value</div>
+    <div class="kpi-value">
+      {% if inv_mv26 %}${{ "{:,.0f}".format(inv_mv26) }}{% else %}—{% endif %}
+    </div>
+    {# Coherence fix (July 2026, per Fable review finding 6): raw market-value
+       change, not tax burden -- neutral color, not red/green (unchanged from
+       the standalone card this replaces). #}
+    <div class="kpi-sub" style="{% if kpi.yoy_pct is defined %}color:var(--accent);{% endif %}">
+      {% if kpi.yoy_pct is defined %}
+        {{ "{:+.1f}%".format(kpi.yoy_pct) }} {{ kpi.yoy_label if kpi.yoy_label is defined else "" }}
+      {% else %}—{% endif %}
+      {% if inv_mv26 %}<span class="badge-preliminary" style="font-size:9px; padding:1px 5px;">Preliminary</span>{% endif %}
+    </div>
+  </div>
+
+  {# Card 2: Estimated 2026 Total Tax — swapped in for Assessed/Taxable Value
+     (July 2026, per Diego): reuses estimated_tax_2026 verbatim, the exact
+     same top-level variable Homeowner mode's "Estimated 2026 taxes" card
+     already uses (property_detail(), 2026 taxable value × 2025 blended
+     entity rate — 2026 rates aren't adopted until Aug/Sept) — not
+     recomputed here. Assessed/Taxable Value for 2026 preliminary is still
+     available in the Current & Preliminary Values table below. #}
+  <div class="kpi-card">
+    <div class="kpi-label">Est. 2026 Total Tax</div>
+    <div class="kpi-value">
+      {% if estimated_tax_2026 %}~${{ "{:,.0f}".format(estimated_tax_2026) }}{% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      {% if estimated_tax_2026 %}
+        2026 <span class="badge-estimated" style="font-size:9px; padding:1px 5px;" title="2026 taxable value × your entities' 2025 rates — 2026 rates aren't adopted until August/September, so this uses last year's rates as the best available assumption">Estimated</span>
+      {% else %}—{% endif %}
+    </div>
+  </div>
+
+  {# Card 3: Estimated 2026 Effective Tax Rate — was a secondary line nested
+     inside the 2025 ETR card; now its own card in the 2026 row, per Diego's
+     brief. Reuses kpi.effective_tax_rate_2026_est exactly as before — not a
+     new computation. #}
+  <div class="kpi-card">
+    <div class="kpi-label"
+         title="Estimated 2026 tax (2026 taxable value × 2025 blended entity rate) ÷ 2026 preliminary market value">
+      Est. 2026 Effective Tax Rate
+    </div>
+    <div class="kpi-value">
+      {% if kpi.effective_tax_rate_2026_est is defined %}
+        {{ "{:.4f}%".format(kpi.effective_tax_rate_2026_est) }}
+      {% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      {% if kpi.effective_tax_rate_2026_est is defined %}
+        Est. 2026 Tax ÷ 2026 Market Value
+        <span class="badge-estimated" style="font-size:9px; padding:1px 5px;">Estimated</span>
+      {% else %}
+        Not available yet
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endif %}
+
+
 
 {# ── Scroll-anchor section nav (Task 4) ───────────────────────────────────── #}
 <div id="sectionNavBar" class="section-nav-bar mb-2">
@@ -1141,95 +1420,38 @@
   </div>
   {% endif %}
 
-  {# ── Improvement Detail — TCAD-pattern grouped block (Part 4 redesign) ──────
-     REDESIGNED — was a single flat component table. Restructured into TCAD's
-     "per-improvement header block, then a table of that improvement's
-     components" pattern, using Parcelytics' existing card/grid conventions
-     (not TCAD's cream/yellow styling).
-     DATA-INTEGRITY NOTE (surfaced in full in the brief report, not glossed
-     over here): TCAD's own page groups components under MULTIPLE
-     improvements when a parcel has more than one (main dwelling, solar
-     array, ADU, etc.), each with its own Class CD / Exterior Wall / Number
-     of Units / EFF Year Built header fields and an "Improvement Features"
-     block (Foundation, Roof Style, Floor Factor, Roof Covering, Shape
-     Factor). Parcelytics' loader (loaders/load_parcel_attrs.py load_imp())
-     reads IMP_DET.TXT but discards imp_id — the field that would separate
-     one improvement from another — and never reads quality_class/eff_year
-     per component or any wall/roof/foundation attribute data; those live in
-     TCAD export files this repo doesn't currently ingest. So this block
-     shows ONE improvement group per parcel — the real granularity our data
-     supports today — with the header fields we actually have. It does not
-     invent a multi-improvement split or Improvement Features data. #}
-  {% if imp_det %}
-  {% set _gba = parcel.gross_building_area_sqft %}
-  <div class="card mb-4" id="impDetailCard">
-    <div class="card-header">Improvement Detail</div>
-    <div class="card-body p-3">
-
-      {# Per-improvement header — compact grid of label:value pairs, TCAD's
-         pattern, single group (see Data-Integrity note above). #}
-      <div class="row g-3 mb-2" style="font-size:12.5px;">
-        <div class="col-6 col-md-3">
-          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Improvement Value</div>
-          <div style="font-weight:700;">{% if current and current.imprv_value %}${{ "{:,.0f}".format(current.imprv_value) }}{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
-        </div>
-        <div class="col-6 col-md-3">
-          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Main Area</div>
-          <div style="font-weight:700;">{% if parcel.living_area_sqft %}{{ "{:,.0f}".format(parcel.living_area_sqft|float) }} SF{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
-        </div>
-        <div class="col-6 col-md-3">
-          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Gross Building Area</div>
-          <div style="font-weight:700;">{% if _gba %}{{ "{:,.0f}".format(_gba|float) }} SF{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
-        </div>
-        <div class="col-6 col-md-3">
-          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Year Built</div>
-          <div style="font-weight:700;">{% if parcel.year_built %}{{ parcel.year_built }}{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
-        </div>
-      </div>
-      <div class="text-muted mb-1" style="font-size:10.5px; line-height:1.5;">
-        TCAD's page also shows Class CD, Exterior Wall, Number of Units, and EFF Year Built per component, plus an
-        "Improvement Features" block (Foundation, Roof Style, Roof Covering, etc.) — not in Parcelytics' current
-        dataset (see footer), so left out here rather than guessed.
-      </div>
-
-      <details>
-        <summary style="cursor:pointer; list-style:none; font-size:11px; color:var(--text-3); font-weight:600; margin-top:8px;">{{ imp_det|length }} components · show ▾</summary>
-        <div class="table-responsive mt-2">
-          <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
-            <thead class="table-light text-muted text-uppercase" style="font-size:10px;">
-              <tr>
-                <th>Code</th>
-                <th>Description</th>
-                <th class="text-end">SF</th>
-                <th class="text-center" title="Included in Gross Building Area?">In Gross</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for c in imp_det %}
-              <tr>
-                <td><span class="entity-badge">{{ c.code or "—" }}</span></td>
-                <td>{{ c.desc or "—" }}</td>
-                <td class="text-end">{{ "{:,.0f}".format(c.sqft) if c.sqft else "—" }} SF</td>
-                <td class="text-center">
-                  {% if c.excluded %}<span style="color:var(--down);" title="Excluded — site improvement, attribute, or unconfirmed sketch">✗</span>
-                  {% else %}<span style="color:var(--up);" title="Included in gross building area">✓</span>{% endif %}
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </details>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+  {# ── Satellite View (July 2026, per Diego) ───────────────────────────────
+     Investor mode's Overview tab had no satellite imagery at all — Homeowner
+     mode's card (including its honest "not available" fallback, built a few
+     nights ago) is reused EXACTLY here: identical markup, identical element
+     ids (hoSatMap/hoSatFallback). Safe to reuse the same ids because `mode`
+     is a full server-side branch (?mode=investor is a fresh page load, per
+     base.html's mode-toggle link), so Homeowner's and Investor's HTML are
+     never both in the DOM at the same time. The init script (see scripts
+     block) was moved out of the `{% if mode == 'homeowner' %}` guard to run
+     unconditionally instead of being duplicated here — same code, not a
+     second copy of it. Placed where Improvement Detail used to sit in this
+     column. Improvement Detail moved twice since: first to full-width below
+     the two-column section, then (per Diego's follow-up review, since
+     full-width left its own excess white space) into the col-lg-8 right
+     column, directly after Property Tax & County News — see that card's own
+     comment. Either way, it no longer sits in this col-lg-4 column, so this
+     card owns the slot alone now. #}
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Satellite View</span>
+      <span class="text-muted" style="font-size:11px; font-weight:400;">Imagery: Esri</span>
     </div>
-    <div class="card-footer text-muted" style="font-size:10.5px;">
-      Source: TCAD Improvement Detail Records. ✓ included in Gross Building Area · ✗ excluded
-      (site improvement, SF-measured attribute, or unconfirmed "Sketch Only"). Component list is aggregated by
-      component code across the whole parcel — TCAD's own per-improvement (imp_id) grouping and wall/roof/
-      foundation attribute data are not captured by Parcelytics' current loader.
+    <div class="card-body p-0" style="display:flex;">
+      <div id="hoSatMap" style="display:none; flex:1 1 auto; min-height:320px; width:100%; border-radius:0 0 8px 8px;"></div>
+      <div id="hoSatFallback" class="d-flex flex-column align-items-center justify-content-center text-center text-muted"
+           style="flex:1 1 auto; min-height:320px; width:100%; padding:20px; border-radius:0 0 8px 8px;">
+        <div style="font-size:14px; font-weight:600; margin-bottom:4px;">Satellite image not available</div>
+        <div style="font-size:12px; max-width:280px;">We couldn't locate this property on the map — this can happen for parcels whose address our geocoder can't confidently match.</div>
+      </div>
     </div>
   </div>
-  <style>#impDetailCard details > summary::-webkit-details-marker{display:none;}</style>
-  {% endif %}
 
 </div>{# /col-lg-4 #}
 
@@ -1502,120 +1724,136 @@
     </div>
   </div>
 
+  {# ── Improvement Detail — TCAD-pattern grouped block (Part 4 redesign) ──────
+     MOVED BACK into the col-lg-8 right column, directly after Property Tax &
+     County News (July 2026, per Diego — partial reversal of last round's
+     full-width move). Full-width technically fixed "constrained to one
+     column" but created its own problem: Satellite View (col-lg-4, left) is
+     visually taller than this column's own content (Property Info, Current
+     Values, Delinquency, News), leaving a real empty gap under News in THIS
+     column specifically — full-width Improvement Detail sat below both
+     columns and did nothing to close that gap, just added its own separate
+     block of white space underneath. Placing it here, directly after News,
+     targets the actual gap. Content/logic UNCHANGED from either prior
+     version — same imp_det data, same TCAD-pattern header grid, same
+     collapsible component table.
+     REDESIGNED — was a single flat component table. Restructured into TCAD's
+     "per-improvement header block, then a table of that improvement's
+     components" pattern, using Parcelytics' existing card/grid conventions
+     (not TCAD's cream/yellow styling).
+     DATA-INTEGRITY NOTE (surfaced in full in the brief report, not glossed
+     over here): TCAD's own page groups components under MULTIPLE
+     improvements when a parcel has more than one (main dwelling, solar
+     array, ADU, etc.), each with its own Class CD / Exterior Wall / Number
+     of Units / EFF Year Built header fields and an "Improvement Features"
+     block (Foundation, Roof Style, Floor Factor, Roof Covering, Shape
+     Factor). Parcelytics' loader (loaders/load_parcel_attrs.py load_imp())
+     reads IMP_DET.TXT but discards imp_id — the field that would separate
+     one improvement from another — and never reads quality_class/eff_year
+     per component or any wall/roof/foundation attribute data; those live in
+     TCAD export files this repo doesn't currently ingest. So this block
+     shows ONE improvement group per parcel — the real granularity our data
+     supports today — with the header fields we actually have. It does not
+     invent a multi-improvement split or Improvement Features data. #}
+  {% if imp_det %}
+  {% set _gba = parcel.gross_building_area_sqft %}
+  <div class="card mb-4" id="impDetailCard">
+    <div class="card-header">Improvement Detail</div>
+    <div class="card-body p-3">
+
+      {# Per-improvement header — compact grid of label:value pairs, TCAD's
+         pattern, single group (see Data-Integrity note above). #}
+      <div class="row g-3 mb-2" style="font-size:12.5px;">
+        <div class="col-6 col-md-3">
+          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Improvement Value</div>
+          <div style="font-weight:700;">{% if current and current.imprv_value %}${{ "{:,.0f}".format(current.imprv_value) }}{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Main Area</div>
+          <div style="font-weight:700;">{% if parcel.living_area_sqft %}{{ "{:,.0f}".format(parcel.living_area_sqft|float) }} SF{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Gross Building Area</div>
+          <div style="font-weight:700;">{% if _gba %}{{ "{:,.0f}".format(_gba|float) }} SF{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted" style="font-size:10px; text-transform:uppercase; letter-spacing:.04em;">Year Built</div>
+          <div style="font-weight:700;">{% if parcel.year_built %}{{ parcel.year_built }}{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
+        </div>
+      </div>
+      <div class="text-muted mb-1" style="font-size:10.5px; line-height:1.5;">
+        TCAD's page also shows Class CD, Exterior Wall, Number of Units, and EFF Year Built per component, plus an
+        "Improvement Features" block (Foundation, Roof Style, Roof Covering, etc.) — not in Parcelytics' current
+        dataset (see footer), so left out here rather than guessed.
+      </div>
+
+      {# Default-expand fix (July 2026, per Diego — confirmed live): this table
+         used to load collapsed, requiring a click to reveal — which also made
+         this card shorter than it could be, working against last round's fix
+         (moving Improvement Detail into the col-lg-8 right column specifically
+         to help fill the white-space gap beside Satellite View). `open` makes
+         it visible on page load; the toggle control itself is kept (Diego: "if
+         there's a reason to allow collapsing it") since a long component list
+         is still collapsible for anyone who wants to shrink it back down. The
+         "show ▾" / "hide ▴" label text is driven by [open] via CSS below (see
+         #impDetailCard style block) rather than hardcoded, so it stays accurate
+         in either state instead of always claiming "show" even while already
+         expanded. #}
+      <details open>
+        <summary style="cursor:pointer; list-style:none; font-size:11px; color:var(--text-3); font-weight:600; margin-top:8px;">{{ imp_det|length }} components · <span class="imp-det-toggle-show">show ▾</span><span class="imp-det-toggle-hide">hide ▴</span></summary>
+        <div class="table-responsive mt-2">
+          <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
+            <thead class="table-light text-muted text-uppercase" style="font-size:10px;">
+              <tr>
+                <th>Code</th>
+                <th>Description</th>
+                <th class="text-end">SF</th>
+                <th class="text-center" title="Included in Gross Building Area?">In Gross</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for c in imp_det %}
+              <tr>
+                <td><span class="entity-badge">{{ c.code or "—" }}</span></td>
+                <td>{{ c.desc or "—" }}</td>
+                <td class="text-end">{{ "{:,.0f}".format(c.sqft) if c.sqft else "—" }} SF</td>
+                <td class="text-center">
+                  {% if c.excluded %}<span style="color:var(--down);" title="Excluded — site improvement, attribute, or unconfirmed sketch">✗</span>
+                  {% else %}<span style="color:var(--up);" title="Included in gross building area">✓</span>{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+    <div class="card-footer text-muted" style="font-size:10.5px;">
+      Source: TCAD Improvement Detail Records. ✓ included in Gross Building Area · ✗ excluded
+      (site improvement, SF-measured attribute, or unconfirmed "Sketch Only"). Component list is aggregated by
+      component code across the whole parcel — TCAD's own per-improvement (imp_id) grouping and wall/roof/
+      foundation attribute data are not captured by Parcelytics' current loader.
+    </div>
+  </div>
+  <style>
+    #impDetailCard details > summary::-webkit-details-marker{display:none;}
+    #impDetailCard details .imp-det-toggle-hide{display:none;}
+    #impDetailCard details[open] .imp-det-toggle-show{display:none;}
+    #impDetailCard details[open] .imp-det-toggle-hide{display:inline;}
+  </style>
+  {% endif %}
+
 </div>{# /col-lg-8 — insight report #}
 </div>{# /row — top two-column section #}
 
 {# ── Post-Acquisition Tax Estimator (Task 1) ─────────────────────────── #}
-{# post-acq-estimator-card #}
-{% if entity_detail and current %}
-<div class="card mb-4 estimator-card" id="postAcqEstimator">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <span>Post-Acquisition Tax Estimate</span>
-    <span class="estimates-badge">Estimate · Not a prediction</span>
-  </div>
-  <div class="card-body">
-
-    {# Size context (Task 5) — gives the buyer scale while reviewing the estimate #}
-    {% if parcel.living_area_sqft or parcel.gross_building_area_sqft or parcel.land_sqft %}
-    <div class="mb-3" style="font-size:12px; color:var(--text-3); font-variant-numeric:tabular-nums;">
-      Property:
-      {% if parcel.living_area_sqft %}<strong>{{ "{:,.0f}".format(parcel.living_area_sqft|float) }} SF</strong> main area{% endif %}
-      {% if parcel.gross_building_area_sqft %}&middot; {{ "{:,.0f}".format(parcel.gross_building_area_sqft|float) }} SF gross{% endif %}
-      {% if parcel.land_sqft %}&middot; {{ "{:,.3f}".format(parcel.land_sqft|float / 43560.0) }} ac lot{% endif %}
-    </div>
-    {% endif %}
-
-    {# Input row #}
-    <div class="d-flex flex-wrap gap-3 align-items-end mb-3">
-      <div>
-        <label class="form-label small text-muted mb-1" for="acqPrice">Purchase Price</label>
-        <div class="input-group input-group-sm" style="max-width:200px;">
-          <span class="input-group-text">$</span>
-          <input type="text" id="acqPrice" class="form-control"
-                 placeholder="e.g. 4500000"
-                 value="{{ current.market_value | int if current.market_value else '' }}"
-                 style="font-family:var(--font-mono); font-size:13px;">
-        </div>
-      </div>
-      <div>
-        <label class="form-label small text-muted mb-1">Buyer Type</label>
-        <div class="btn-group btn-group-sm" role="group" id="buyerToggle">
-          <input type="radio" class="btn-check" name="buyerType" id="buyerInvestor" value="non_owner_occupant" checked>
-          <label class="btn btn-outline-secondary" for="buyerInvestor">Investor</label>
-          <input type="radio" class="btn-check" name="buyerType" id="buyerOwner" value="owner_occupant">
-          <label class="btn btn-outline-secondary" for="buyerOwner">Owner-Occupant</label>
-        </div>
-      </div>
-      <div>
-        <label class="form-label small text-muted mb-1">Tax Rates</label>
-        <div class="btn-group btn-group-sm" role="group" id="rateToggle">
-          <input type="radio" class="btn-check" name="rateMode" id="rateCertified" value="certified" checked>
-          <label class="btn btn-outline-secondary" for="rateCertified">2025 Certified</label>
-          <input type="radio" class="btn-check" name="rateMode" id="rateProjected" value="projected">
-          <label class="btn btn-outline-secondary" for="rateProjected">Projected trend</label>
-        </div>
-      </div>
-      <button class="btn btn-sm btn-dark" id="acqRunBtn" onclick="runEstimator()">
-        Estimate
-      </button>
-      <span id="acqSpinner" class="text-muted small" style="display:none;">Calculating…</span>
-    </div>
-
-    {# Disclaimer #}
-    <p class="small text-muted mb-3" style="font-size:11.5px; line-height:1.5;">
-      Estimate only. The appraisal district sets value as of Jan 1 (not at sale price).
-      A sale is strong evidence of market value and is typically reflected in the next
-      Jan 1 valuation. Taxing units set rates annually. Modeled from government data —
-      not a legal or tax opinion.
-    </p>
-
-    {# Results pane (hidden until first run) #}
-    <div id="acqResults" style="display:none;">
-
-      {# Tax-year + rate-vintage label #}
-      <div id="acqRateVintage" class="mb-3" style="font-size:12px;"></div>
-
-      {# Summary row #}
-      <div class="d-flex flex-wrap gap-3 mb-3" id="acqSummary"></div>
-
-      {# Entity breakdown table #}
-      <div class="table-responsive">
-        <table class="table table-sm mb-0" id="acqTable">
-          <thead class="table-light small text-muted text-uppercase">
-            <tr>
-              <th>Entity</th>
-              <th class="text-end">Rate</th>
-              <th class="text-end">~Taxable Base</th>
-              <th class="text-end">~Est. Tax</th>
-              <th class="text-end">Seller Tax</th>
-              <th class="text-end">~Delta</th>
-            </tr>
-          </thead>
-          <tbody id="acqTbody"></tbody>
-          <tfoot id="acqTfoot"></tfoot>
-        </table>
-      </div>
-
-      {# Multi-year projection #}
-      <div id="acqMultiyear" class="mt-4"></div>
-
-      {# Homestead-exemption explainer (owner-occupant) #}
-      <div id="acqHsExplainer" class="mt-4"></div>
-
-      {# Circuit-breaker / gap-year notes #}
-      <div id="acqNotes" class="mt-3"></div>
-
-      {# Assumptions list #}
-      <div id="acqAssumptions" class="mt-3"></div>
-
-    </div>{# /acqResults #}
-
-    {# Error pane #}
-    <div id="acqError" class="search-error-block" style="display:none;"></div>
-
-  </div>{# /card-body #}
-</div>
-{% endif %}
+{# Buyer-type field fix (July 2026, per Diego): removed the Buyer Type toggle
+   from THIS (Investor) card — the mode already implies an investor buyer, so
+   asking again was redundant. Now rendered via the shared macro (defined
+   above, outside both mode branches) with show_buyer_toggle=false. Homeowner
+   mode calls the same macro with show_buyer_toggle=true — see that branch's
+   own call for why the toggle stays meaningful there. #}
+{{ post_acq_estimator_card(entity_detail, current, parcel, false) }}
 
 {# ── Overview narrative — collapsed (Task 4) ─────────────────────────────── #}
 {% if narrative %}
@@ -2003,9 +2241,27 @@
                 {% if estimated_tax_2026 %}<span class="d-block" style="font-size:10px; font-weight:400; color:var(--text-3);">2026 = estimate</span>{% endif %}
               </th>
               <td class="text-end">
+                {# Alignment root-cause fix (July 2026, per Diego — confirmed live
+                   even after last round's size/badge-position fix): every other
+                   row in this table (Market/Assessed/Land/Improvement/Taxable
+                   Value) has ONLY a number in its cell, so text-align:right (via
+                   .text-end) flushes that number's own right edge against the
+                   cell's right edge. This row's cells had a number AND a badge
+                   as two inline siblings on the same line — text-align:right
+                   treats them as one inline run and flushes the BADGE's right
+                   edge against the cell edge instead, pushing the number itself
+                   left of where every other row's number sits. That's the actual
+                   cause: not a width/padding difference, an inline-run vs.
+                   lone-number layout difference. Fixed by putting the number on
+                   its own block-level line (its own <div>, still text-end,
+                   inheriting the cell's right-align) so its right edge lines up
+                   with every plain-number row above/below it, with the badge
+                   demoted to a second line underneath — same relationship the
+                   KPI cards already use (value, then a smaller sub-line below),
+                   not a new pattern. #}
                 {% if estimated_tax_2026 %}
-                  <span class="badge-estimated me-1">Estimated</span>
-                  <span style="font-size:13px; font-weight:600;">~${{ "{:,.0f}".format(estimated_tax_2026) }}</span>
+                  <div><span class="primary-value" title="2026 taxable value × your entities' 2025 rates — 2026 rates aren't adopted until August/September, so this uses last year's rates as the best available assumption" style="cursor:help;">~${{ "{:,.0f}".format(estimated_tax_2026) }}</span></div>
+                  <div class="mt-1"><span class="badge-estimated" style="font-size:9px;">Estimated</span></div>
                 {% elif current_2026 and current_2026.taxable_value %}
                   <span class="na-cell" title="Blended 2025 entity rates not available for this parcel">Not available</span>
                 {% else %}
@@ -2020,10 +2276,18 @@
                    or sourced from a portal payment receipt (billing_source ==
                    'portal_scrape'), neither of which is a confirmed complete billed
                    amount. Reuses the same provenance flags, not reimplemented. #}
+                {# Whole-dollar formatting (July 2026, per Diego): this cell used ".2f"
+                   (cents) while every other value figure on this page — Market/Assessed/
+                   Land/Improvement/Taxable Value, all rows above — already uses ".0f".
+                   Reverses an earlier explicit decision to show cents here specifically;
+                   Diego now wants whole dollars for Total Tax everywhere, no exceptions. #}
+                {# Alignment root-cause fix (July 2026, per Diego) — see the 2026
+                   cell's comment above for the full explanation. Same fix here:
+                   number on its own right-aligned line, badge demoted below it. #}
                 {% if current and current.total_tax and (current.total_tax_derived or current.billing_source == 'portal_scrape') %}
-                  <span class="primary-value" title="{% if current.billing_source == 'portal_scrape' %}Amount paid per portal receipt — reflects payment, not necessarily levy; entity breakdown unavailable{% else %}Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total{% endif %}" style="cursor:help;">~${{ "{:,.2f}".format(current.total_tax) }}</span>
-                  <span class="badge-partial ms-1" style="font-size:9px;">Partial</span>
-                {% elif current and current.total_tax %}<span class="primary-value">${{ "{:,.2f}".format(current.total_tax) }}</span>
+                  <div><span class="primary-value" title="{% if current.billing_source == 'portal_scrape' %}Amount paid per portal receipt — reflects payment, not necessarily levy; entity breakdown unavailable{% else %}Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current.total_tax) }}</span></div>
+                  <div class="mt-1"><span class="badge-partial" style="font-size:9px;">Partial</span></div>
+                {% elif current and current.total_tax %}<span class="primary-value">${{ "{:,.0f}".format(current.total_tax) }}</span>
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
               <td></td>
@@ -2111,13 +2375,25 @@
               </td>
               <td class="text-end">${{ "{:,.0f}".format(r.taxable_value) if r.taxable_value else "—" }}</td>
               <td class="text-end" {% if r.tax_year in [2021,2022,2023,2024] %}id="btax-{{ r.tax_year }}"{% endif %}>
+                {# Whole-dollar formatting (July 2026, per Diego): all four branches below
+                   used ".2f" (cents) — the only cents-formatted figures in this table;
+                   every other column (Market/Land/Imprv/Assessed/Taxable Value) already
+                   uses ".0f". Reverses an earlier explicit decision to show cents here
+                   specifically; Diego now wants whole dollars for Total Tax everywhere. #}
+                {# Redundant-badge fix (July 2026, per Diego): the portal_scrape and
+                   total_tax_derived branches below used to repeat the same "Partial"
+                   badge inline here AND in the separate Source column a few cells to
+                   the right (which already shows Partial/Verified/Preliminary/Computed
+                   for this exact row, with its own fuller tooltip — see that column's
+                   comment). Showing the identical badge twice for the same fact added
+                   nothing; removed from here, kept in Source, which is the one place a
+                   reader needs to check for this row's confidence. #}
                 {% if r.total_tax and r.billing_source == 'portal_scrape' %}
                   {# Payment receipt from portal — amount paid, not necessarily levied #}
                   <span title="Amount paid per portal receipt — reflects payment, not necessarily levy; entity breakdown unavailable"
                         style="font-style:italic; color:var(--text-muted); cursor:help;">
-                    ~${{ "{:,.2f}".format(r.total_tax) }}
+                    ~${{ "{:,.0f}".format(r.total_tax) }}
                   </span>
-                  <span class="badge-partial ms-1" style="font-size:9px;">Partial</span>
                 {% elif r.total_tax and r.total_tax_derived %}
                   {# Masking-bug fix (July 2026): same total_tax_derived provenance flag
                      already used by Homeowner mode's "What you paid in taxes" card
@@ -2125,20 +2401,19 @@
                      reconstructed by summing entity_detail amount_due, which silently
                      skips any entity with no amount_due on file, so it's real but not a
                      confirmed complete total. Was previously falling into the plain
-                     "{{ '${:,.2f}'.format(r.total_tax) }}" branch below with no caveat. #}
+                     "{{ '${:,.0f}'.format(r.total_tax) }}" branch below with no caveat. #}
                   <span title="Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total"
                         style="font-style:italic; color:var(--text-muted); cursor:help;">
-                    ~${{ "{:,.2f}".format(r.total_tax) }}
+                    ~${{ "{:,.0f}".format(r.total_tax) }}
                   </span>
-                  <span class="badge-partial ms-1" style="font-size:9px;">Partial</span>
                 {% elif r.total_tax %}
-                  ${{ "{:,.2f}".format(r.total_tax) }}
+                  ${{ "{:,.0f}".format(r.total_tax) }}
                 {% elif r.data_source == 'preliminary' %}
                   <span class="na-cell">Not yet — post-cert</span>
                 {% elif r.computed_total_tax %}
                   <span title="Computed: taxable value × combined entity rate — billing data not available for this year"
                         style="font-style:italic; color:var(--text-muted); cursor:help;">
-                    ~${{ "{:,.2f}".format(r.computed_total_tax) }}
+                    ~${{ "{:,.0f}".format(r.computed_total_tax) }}
                   </span>
                 {% else %}
                   <span class="na-cell" id="bna-{{ r.tax_year }}">Not available yet</span>
@@ -2804,12 +3079,28 @@
   </div>
   {% endif %}
 
-  {# ── Peer Set — 5 comparable parcels (Task 7) ───────────────────────── #}
+  {# ── Peer Set — up to 5 comparable parcels (Task 7) ─────────────────── #}
+  {# Exact-use-code filter fix (July 2026, per Diego): api_peer_set() now
+     requires the subject's exact classi_cd, not just its broad classify.py
+     category — see that function's own comment for the tiered fallback
+     (same neighborhood -> same state_cd1 prefix -> county-wide widened value
+     band -> broad-category, in that order) and PEER_SET_DISTRIBUTION_CHECK.sql
+     for the live-DB check on how often each tier actually gets used.
+     The footnote below used to be a static claim ("Same property type and
+     neighborhood") that was accurate for the OLD broad-category filter but
+     imprecise about what actually got matched (confirmed in an earlier
+     investigation: neither this table nor Per-SF Peer Benchmark filtered on
+     exact use code at the time). Now that the filter really is exact-use-code
+     first, the footnote is driven by `scope` from the API response instead of
+     hardcoded, so it always describes what actually produced the rows shown —
+     including the honest cases (widened search, or a fallback to broader
+     category) rather than always claiming the tightest possible match. #}
   <div id="peerSetSection" class="mb-4" style="display:none;">
     <div class="section-hdr">Peer Set <span class="section-hdr-badge">Comparables</span></div>
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span>Comparable Parcels <span id="peerSetNote" class="text-muted" style="font-size:11.5px; font-weight:400;"></span></span>
+        <span id="peerSetLimitedBadge" class="badge-partial" style="font-size:9px; display:none;">Limited comps</span>
       </div>
       <div class="card-body p-0">
         <div class="table-responsive">
@@ -2830,8 +3121,8 @@
             <tbody id="peerSetBody"></tbody>
           </table>
         </div>
-        <div class="text-muted px-3 py-2" style="font-size:10.5px;">
-          Same property type and neighborhood, 2025 market value within ±25% of this parcel. Excludes AJR accounts. Click an address to open that parcel.
+        <div id="peerSetFootnote" class="text-muted px-3 py-2" style="font-size:10.5px;">
+          Same exact use code and neighborhood, 2025 market value within ±25% of this parcel. Excludes AJR accounts. Click an address to open that parcel.
         </div>
       </div>
     </div>
@@ -2898,10 +3189,16 @@
 {% endblock %}
 
 {% block scripts %}
-{% if mode == 'homeowner' %}
+{# ── Satellite view — geocode the address, render Esri World Imagery ──────────
+   Moved OUT of the `{% if mode == 'homeowner' %}` guard below (July 2026, per
+   Diego) so it also runs for Investor mode, which now has the identical
+   hoSatMap/hoSatFallback markup (see that card's own comment in the Investor
+   Overview tab). Not duplicated — this is the exact same script both modes
+   share, unconditionally; the `if (!mapEl || !window.L) return;` guard below
+   already handles either element being absent, so making this unconditional
+   is safe regardless of which mode actually rendered. #}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-// ── Satellite view — geocode the address, render Esri World Imagery ──────────
 // Missing-imagery fallback fix (July 2026, per Diego): the card container and
 // its "Satellite image not available" fallback (see comment above hoSatCard)
 // now always render; this script's only job is to swap the fallback for the
@@ -2937,7 +3234,263 @@
     setTimeout(() => map.invalidateSize(), 200);
   }).catch(() => {});
 })();
+</script>
 
+{# ── Post-Acquisition Tax Estimator — client logic (July 2026, per Diego) ────
+   Moved OUT of the Investor-only scripts branch below, same reasoning and
+   same pattern as the satellite-view script just above: Homeowner mode now
+   has a matching card (see post_acq_estimator_card() macro, top of this
+   template) with the identical element ids (acqPrice, acqResults, acqTbody,
+   etc.), so this one script needs to run for both modes rather than being
+   duplicated. No logic changes were needed to make this safe — the code
+   already read `document.querySelector('input[name="buyerType"]:checked')`
+   and fell back to `buyer = 'non_owner_occupant'` whenever that returns
+   null, which is exactly what happens on Investor mode's card now that its
+   Buyer Type toggle has been removed (Item 5) — this script was already
+   written to handle "no toggle present" correctly, it just hadn't been
+   exercised that way before. #}
+<script>
+// ── Post-Acquisition Tax Estimator (Task 1) — client logic ───────────────────
+// Calls GET /api/estimate_acq/<geo_id>?price&buyer and renders the result as an
+// explicit ESTIMATE (~ prefix, muted/estimate styling) — never as recorded fact.
+(function () {
+  const GEO_ID = {{ parcel.geo_id | tojson }};
+
+  const $ = id => document.getElementById(id);
+  const fmt0  = n => '$' + Math.round(n).toLocaleString('en-US');
+  const fmtSeller = n => (n === null || n === undefined) ? '<span class="na-cell">—</span>'
+                                                         : '$' + Number(n).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  // Signed delta, with tax-context colour (more tax = risk/red, less = relief/green)
+  function deltaHtml(d, approx) {
+    if (d === null || d === undefined) return '<span class="na-cell">—</span>';
+    const sign = d > 0 ? '+' : (d < 0 ? '−' : '');
+    const cls  = d > 0.5 ? 'text-danger' : (d < -0.5 ? 'text-success' : 'text-muted');
+    const pre  = approx ? '~' : '';
+    return `<span class="${cls}">${pre}${sign}$${Math.abs(Math.round(d)).toLocaleString('en-US')}</span>`;
+  }
+
+  function showError(msg) {
+    const err = $('acqError'); const res = $('acqResults'); const sp = $('acqSpinner');
+    if (sp)  sp.style.display  = 'none';
+    if (res) res.style.display = 'none';
+    if (err) { err.textContent = msg; err.style.display = 'block'; }
+  }
+
+  window.runEstimator = function () {
+    const priceEl = $('acqPrice');
+    const err = $('acqError'); const res = $('acqResults'); const sp = $('acqSpinner');
+    if (err) err.style.display = 'none';
+
+    const raw = (priceEl ? priceEl.value : '').replace(/[$,\s]/g, '');
+    if (!raw || !/^\d+$/.test(raw) || parseInt(raw, 10) <= 0) {
+      showError('Enter a purchase price as a positive whole number (e.g. 4500000).');
+      if (priceEl) priceEl.focus();
+      return;
+    }
+    const checked = document.querySelector('input[name="buyerType"]:checked');
+    const buyer = checked ? checked.value : 'non_owner_occupant';
+    const rmEl = document.querySelector('input[name="rateMode"]:checked');
+    const rateMode = rmEl ? rmEl.value : 'certified';
+
+    if (sp) sp.style.display = 'inline';
+    const btn = $('acqRunBtn'); if (btn) btn.disabled = true;
+
+    fetch(`/api/estimate_acq/${encodeURIComponent(GEO_ID)}?price=${encodeURIComponent(raw)}&buyer=${encodeURIComponent(buyer)}&rate_mode=${encodeURIComponent(rateMode)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (sp) sp.style.display = 'none';
+        if (btn) btn.disabled = false;
+        if (!d || !d.ok) { showError((d && d.error) ? d.error : 'Could not compute an estimate for this parcel.'); return; }
+        render(d, buyer);
+      })
+      .catch(() => {
+        if (sp) sp.style.display = 'none';
+        if (btn) btn.disabled = false;
+        showError('Estimator service is unavailable right now. Please try again.');
+      });
+  };
+
+  function render(d, buyer) {
+    // ── Summary chips ─────────────────────────────────────────────────────────
+    const isOwner = buyer === 'owner_occupant';
+    // PID pass-through helpers (ENTITY_CODE_AUDIT.md fix)
+    const hasPid       = (d.pid_passthrough || 0) > 0;
+    const totalDisplay = hasPid ? d.estimated_total_incl_pid : d.estimated_total_tax;
+    const deltaDisplay = hasPid ? d.delta_incl_pid           : d.delta;
+    const chips = [];
+    chips.push(`
+      <div class="estimator-chip is-primary">
+        <div class="estimator-chip-label">${isOwner ? '~Est. Annual Tax · Yr 2+' : '~Est. Annual Tax'}${hasPid ? ' · incl. PID/Special' : ''}</div>
+        <div class="estimator-chip-val">~${fmt0(totalDisplay)}</div>
+      </div>`);
+    chips.push(`
+      <div class="estimator-chip">
+        <div class="estimator-chip-label">~Δ vs Seller's Current Bill</div>
+        <div class="estimator-chip-val">${deltaHtml(deltaDisplay, true)}</div>
+      </div>`);
+    if (isOwner && d.gap_year_tax != null) {
+      chips.push(`
+        <div class="estimator-chip">
+          <div class="estimator-chip-label">~Year 1 (Gap Year)</div>
+          <div class="estimator-chip-val">~${fmt0(d.gap_year_tax)}</div>
+        </div>`);
+    }
+    chips.push(`
+      <div class="estimator-chip">
+        <div class="estimator-chip-label">Base Value</div>
+        <div class="estimator-chip-val">${fmt0(d.base_value)}</div>
+      </div>`);
+    chips.push(`
+      <div class="estimator-chip">
+        <div class="estimator-chip-label">Seller's 2025 Bill</div>
+        <div class="estimator-chip-val">${fmt0(d.seller_total_tax)}</div>
+      </div>`);
+    if (hasPid) {
+      chips.push(`
+        <div class="estimator-chip" style="border-color:var(--accent-border); background:var(--accent-soft);">
+          <div class="estimator-chip-label">+ PID / Special Districts</div>
+          <div class="estimator-chip-val" style="color:var(--text-2);">~${fmt0(d.pid_passthrough)}</div>
+          <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">prior-year billing · not rate-computed</div>
+        </div>`);
+    }
+    $('acqSummary').innerHTML = chips.join('');
+
+    // ── Entity breakdown rows ─────────────────────────────────────────────────
+    const rows = (d.entity_breakdown || []).map(e => `
+      <tr>
+        <td>
+          <span class="entity-badge me-1">${e.entity_code}</span>
+          <span style="font-size:12px; color:var(--text-2);">${e.entity_name || ''}</span>
+          ${e.is_school && isOwner ? '<span class="badge-estimated ms-1" style="font-size:9px;">HS −$140k</span>' : ''}
+        </td>
+        <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">${Number(e.rate_used != null ? e.rate_used : e.rate).toFixed(4)}%${e.rate_projected ? ' <span class="badge-estimated" style="font-size:8px; padding:0 4px;">proj</span>' : ''}</td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(e.taxable)}</td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(e.est_tax)}</td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums;">${fmtSeller(e.seller_tax)}</td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums;">${deltaHtml(e.delta, true)}</td>
+      </tr>`).join('');
+    $('acqTbody').innerHTML = rows;
+
+    $('acqTfoot').innerHTML = (hasPid ? `
+      <tr style="background:var(--surface-2);">
+        <td colspan="2" style="font-size:11.5px; color:var(--text-2); padding-top:6px;">
+          <span class="badge-estimated" style="font-size:9px;">billing-derived</span>
+          <span class="ms-1">PID / Special Districts</span>
+          <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">${(d.pid_entity_codes || []).join(', ')} — prior-year billing; no certified rate available</div>
+        </td>
+        <td></td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2); padding-top:6px;">~${fmt0(d.pid_passthrough)}</td>
+        <td class="text-end" style="font-variant-numeric:tabular-nums; padding-top:6px;">${fmtSeller(d.pid_passthrough)}</td>
+        <td></td>
+      </tr>` : '') + `
+      <tr>
+        <td class="fw-bold">Total</td>
+        <td></td>
+        <td></td>
+        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text);">~${fmt0(totalDisplay)}</td>
+        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${fmtSeller(d.seller_total_tax)}</td>
+        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${deltaHtml(deltaDisplay, true)}</td>
+      </tr>`;
+
+    // ── Rate-vintage label ────────────────────────────────────────────────────
+    const projected = d.rate_mode === 'projected';
+    $('acqRateVintage').innerHTML = `
+      <span class="badge-${projected ? 'estimated' : 'verified'}" style="font-size:10px;">
+        ${projected ? 'Projected rates' : '2025 certified rates'}</span>
+      <span class="text-muted ms-2">Tax year ${d.first_tax_year} · ${d.rate_vintage}</span>`;
+
+    // ── Multi-year projection table ───────────────────────────────────────────
+    const my = d.multiyear || [];
+    if (my.length) {
+      const highlight = new Set([1, 3, 5]);
+      const myRows = my.map(r => {
+        const hl = highlight.has(r.year_index);
+        const labelMap = { 1: isOwner ? 'Year 1 (gap)' : 'Year 1', 2: 'Year 2', 3: 'Year 3', 4: 'Year 4', 5: 'Year 5' };
+        return `
+          <tr${hl ? ' style="background:var(--surface-2);"' : ''}>
+            <td${hl ? ' class="fw-semibold"' : ''}>${labelMap[r.year_index] || ('Year ' + r.year_index)}
+              <span class="text-muted" style="font-size:11px;">TY${r.tax_year}</span></td>
+            <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(r.assessed)}</td>
+            <td class="text-end${hl ? ' fw-semibold' : ''}" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text);">~${fmt0(r.est_tax)}</td>
+          </tr>`;
+      }).join('');
+      $('acqMultiyear').innerHTML = `
+        <div class="section-hdr" style="font-size:13px; margin:0 0 8px;">Multi-Year Projection
+          <span class="estimates-badge">Projection</span></div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead class="table-light small text-muted text-uppercase">
+              <tr><th>Year</th><th class="text-end">~Assessed Base</th><th class="text-end">~Est. Tax</th></tr>
+            </thead>
+            <tbody>${myRows}</tbody>
+          </table>
+        </div>
+        <div class="text-muted" style="font-size:11px; margin-top:6px; line-height:1.5;">
+          Projection only — assumes ${(d.market_growth * 100).toFixed(1)}%/yr market appreciation${projected ? ' and projected (trend) rates' : ' and 2025 rates held flat'}.
+          ${isOwner
+            ? 'Owner-occupant: Year 1 is the gap year; Year 2+ applies the homestead exemption and the 10%/yr assessed-value cap.'
+            : 'Investor: no homestead exemption; 20%/yr circuit-breaker cap through TY' + (d.first_tax_year) + ' (where it applies), uncapped after.'}
+          ${hasPid ? 'Note: PID/special district charges (~$' + Math.round(d.pid_passthrough).toLocaleString() + '/yr from prior-year billing) are not included in the projection — no rate history available. Add approximately this amount to each year’s estimated tax.' : ''}
+        </div>`;
+    } else {
+      $('acqMultiyear').innerHTML = '';
+    }
+
+    // ── Homestead-exemption explainer (owner-occupant only) ───────────────────
+    if (isOwner) {
+      $('acqHsExplainer').innerHTML = `
+        <div class="card" style="background:var(--accent-soft); border-color:var(--accent-border);">
+          <div class="card-body p-3">
+            <div class="label-caps mb-2" style="color:var(--accent-active);">Residence Homestead Exemption — how it works</div>
+            <div class="hs-grid">
+              <div><span class="hs-k">What it is</span><span class="hs-v">A reduction in the taxable value of your primary residence. Requires you to own <em>and occupy</em> the home.</span></div>
+              <div><span class="hs-k">School exemption</span><span class="hs-v">$140,000 off the school-district (ISD) taxable value — state-mandated (§11.13(b)(1), 2025).</span></div>
+              <div><span class="hs-k">10% appraisal cap</span><span class="hs-v">Once homesteaded, assessed value can rise at most 10%/yr regardless of market — caps your tax growth.</span></div>
+              <div><span class="hs-k">Filing</span><span class="hs-v">File with TCAD by April 30 of the year after purchase. Free; no annual refiling needed.</span></div>
+              <div><span class="hs-k">Year-1 gap</span><span class="hs-v">Neither the exemption nor the cap applies in the purchase year — full value is taxable until they activate.</span></div>
+            </div>
+          </div>
+        </div>`;
+    } else {
+      $('acqHsExplainer').innerHTML = '';
+    }
+
+    // ── Notes (gap-year + circuit-breaker) as risk blocks ─────────────────────
+    let notes = '';
+    if (d.gap_year_note) {
+      notes += `<div class="risk-block info"><div class="risk-icon">i</div><div class="risk-desc">${d.gap_year_note}</div></div>`;
+    }
+    if (d.circuit_breaker_note) {
+      notes += `<div class="risk-block warn"><div class="risk-icon">!</div><div class="risk-desc">${d.circuit_breaker_note}</div></div>`;
+    }
+    $('acqNotes').innerHTML = notes;
+
+    // ── Assumptions ───────────────────────────────────────────────────────────
+    const asum = (d.assumptions || []).map(a => `<li style="margin-bottom:3px;">${a}</li>`).join('');
+    $('acqAssumptions').innerHTML = asum
+      ? `<div class="label-caps mb-1">Assumptions</div><ul class="text-muted" style="font-size:11.5px; line-height:1.5; padding-left:18px; margin-bottom:0;">${asum}</ul>`
+      : '';
+
+    $('acqResults').style.display = 'block';
+  }
+
+  // Convenience: Enter in the price field runs the estimate; toggling buyer
+  // re-runs only if a result is already shown.
+  document.addEventListener('DOMContentLoaded', function () {
+    const priceEl = document.getElementById('acqPrice');
+    if (priceEl) priceEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); window.runEstimator(); } });
+    document.querySelectorAll('input[name="buyerType"], input[name="rateMode"]').forEach(r =>
+      r.addEventListener('change', () => {
+        const res = document.getElementById('acqResults');
+        if (res && res.style.display === 'block') window.runEstimator();
+      })
+    );
+  });
+})();
+</script>
+
+{% if mode == 'homeowner' %}
+<script>
 // ── Homeowner mode: value-over-time bar, tax-money donut, homestead news ─────
 (function () {
   // Value over time — single-color bar, no jargon
@@ -3704,19 +4257,45 @@ if (rCtx) {
     .catch(() => { body.innerHTML = '<span class="text-muted">News is temporarily unavailable.</span>'; });
 })();
 
-// ── Peer Set — 5 comparable parcels (Task 7) ────────────────────────────────
+// ── Peer Set — up to 5 comparable parcels (Task 7) ──────────────────────────
+// Exact-use-code filter fix (July 2026, per Diego): the API now reports which
+// fallback tier actually produced the peers (`scope`) and a `limited` flag
+// for anything looser than "exact use code, same neighborhood". This used to
+// bail out silently (`if (!d.peers.length) return`) whenever the query came
+// back empty, leaving the whole section hidden with no explanation — exactly
+// the "silently break or show a misleadingly empty table" outcome Diego said
+// not to let happen. Now the section always shows once the API responds ok,
+// with an honest message for the zero-peer case instead of just disappearing.
 (function () {
   const GEO_ID  = "{{ parcel.geo_id }}";
   const section = document.getElementById('peerSetSection');
   const body    = document.getElementById('peerSetBody');
   const note    = document.getElementById('peerSetNote');
+  const limitedBadge = document.getElementById('peerSetLimitedBadge');
+  const footnote = document.getElementById('peerSetFootnote');
   if (!section || !body) return;
   const fmt0 = n => (n == null) ? '—' : Number(n).toLocaleString();
+  const SCOPE_FOOTNOTES = {
+    exact_neighborhood: 'Same exact use code and neighborhood, 2025 market value within ±25% of this parcel. Excludes AJR accounts. Click an address to open that parcel.',
+    exact_state_prefix: 'Same exact use code, same broad state-code group (neighborhood match not available), 2025 market value within ±25% of this parcel. Excludes AJR accounts. Click an address to open that parcel.',
+    exact_widened: 'Same exact use code, widened to a countywide search with a broader ±40% market-value band — this use code has few nearby matches. Excludes AJR accounts. Click an address to open that parcel.',
+    broad_category_fallback: 'No parcels shared this exact use code within a reasonable range, so this shows the broader property-category match instead (same category, not necessarily the same exact use). Excludes AJR accounts. Click an address to open that parcel.',
+    broad_category_no_subject_code: 'This parcel has no use code on file, so an exact-use-code match isn\'t possible — showing the broader property-category match instead. Excludes AJR accounts. Click an address to open that parcel.',
+  };
   fetch(`/api/peer_set/${encodeURIComponent(GEO_ID)}`)
     .then(r => r.json())
     .then(d => {
-      if (!d.ok || !d.peers || !d.peers.length) return;
-      if (note) note.textContent = '— ' + (d.subject_label || '') + (d.neighborhood ? ', nbhd ' + d.neighborhood : '');
+      if (!d.ok) return;
+      section.style.display = '';
+      if (note) note.textContent = '— ' + (d.subject_label || '') + (d.subject_use_code ? ' · use ' + d.subject_use_code : '') + (d.neighborhood ? ', nbhd ' + d.neighborhood : '');
+      if (limitedBadge) limitedBadge.style.display = d.limited ? '' : 'none';
+      if (footnote) footnote.textContent = SCOPE_FOOTNOTES[d.scope] || SCOPE_FOOTNOTES.exact_neighborhood;
+      if (!d.peers || !d.peers.length) {
+        body.innerHTML = `<tr><td colspan="9" class="text-muted text-center py-3" style="font-size:12px;">
+          No comparable parcels found for this exact use code, even after widening the search countywide.
+        </td></tr>`;
+        return;
+      }
       body.innerHTML = d.peers.map(p => `
         <tr>
           <td><a href="/parcel/${encodeURIComponent(p.geo_id)}">${p.address || '—'}</a></td>
@@ -3729,7 +4308,6 @@ if (rCtx) {
           <td class="text-end">${p.total_tax_rate != null ? p.total_tax_rate.toFixed(4) + '%' : '—'}</td>
           <td class="text-end">${p.assessment_ratio != null ? (p.assessment_ratio * 100).toFixed(1) + '%' : '—'}</td>
         </tr>`).join('');
-      section.style.display = '';
     })
     .catch(() => {});
 })();
@@ -3919,247 +4497,6 @@ if (rCtx) {
   }
 })();
 </script>
-
-<script>
-// ── Post-Acquisition Tax Estimator (Task 1) — client logic ───────────────────
-// Calls GET /api/estimate_acq/<geo_id>?price&buyer and renders the result as an
-// explicit ESTIMATE (~ prefix, muted/estimate styling) — never as recorded fact.
-(function () {
-  const GEO_ID = {{ parcel.geo_id | tojson }};
-
-  const $ = id => document.getElementById(id);
-  const fmt0  = n => '$' + Math.round(n).toLocaleString('en-US');
-  const fmtSeller = n => (n === null || n === undefined) ? '<span class="na-cell">—</span>'
-                                                         : '$' + Number(n).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-  // Signed delta, with tax-context colour (more tax = risk/red, less = relief/green)
-  function deltaHtml(d, approx) {
-    if (d === null || d === undefined) return '<span class="na-cell">—</span>';
-    const sign = d > 0 ? '+' : (d < 0 ? '−' : '');
-    const cls  = d > 0.5 ? 'text-danger' : (d < -0.5 ? 'text-success' : 'text-muted');
-    const pre  = approx ? '~' : '';
-    return `<span class="${cls}">${pre}${sign}$${Math.abs(Math.round(d)).toLocaleString('en-US')}</span>`;
-  }
-
-  function showError(msg) {
-    const err = $('acqError'); const res = $('acqResults'); const sp = $('acqSpinner');
-    if (sp)  sp.style.display  = 'none';
-    if (res) res.style.display = 'none';
-    if (err) { err.textContent = msg; err.style.display = 'block'; }
-  }
-
-  window.runEstimator = function () {
-    const priceEl = $('acqPrice');
-    const err = $('acqError'); const res = $('acqResults'); const sp = $('acqSpinner');
-    if (err) err.style.display = 'none';
-
-    const raw = (priceEl ? priceEl.value : '').replace(/[$,\s]/g, '');
-    if (!raw || !/^\d+$/.test(raw) || parseInt(raw, 10) <= 0) {
-      showError('Enter a purchase price as a positive whole number (e.g. 4500000).');
-      if (priceEl) priceEl.focus();
-      return;
-    }
-    const checked = document.querySelector('input[name="buyerType"]:checked');
-    const buyer = checked ? checked.value : 'non_owner_occupant';
-    const rmEl = document.querySelector('input[name="rateMode"]:checked');
-    const rateMode = rmEl ? rmEl.value : 'certified';
-
-    if (sp) sp.style.display = 'inline';
-    const btn = $('acqRunBtn'); if (btn) btn.disabled = true;
-
-    fetch(`/api/estimate_acq/${encodeURIComponent(GEO_ID)}?price=${encodeURIComponent(raw)}&buyer=${encodeURIComponent(buyer)}&rate_mode=${encodeURIComponent(rateMode)}`)
-      .then(r => r.json())
-      .then(d => {
-        if (sp) sp.style.display = 'none';
-        if (btn) btn.disabled = false;
-        if (!d || !d.ok) { showError((d && d.error) ? d.error : 'Could not compute an estimate for this parcel.'); return; }
-        render(d, buyer);
-      })
-      .catch(() => {
-        if (sp) sp.style.display = 'none';
-        if (btn) btn.disabled = false;
-        showError('Estimator service is unavailable right now. Please try again.');
-      });
-  };
-
-  function render(d, buyer) {
-    // ── Summary chips ─────────────────────────────────────────────────────────
-    const isOwner = buyer === 'owner_occupant';
-    // PID pass-through helpers (ENTITY_CODE_AUDIT.md fix)
-    const hasPid       = (d.pid_passthrough || 0) > 0;
-    const totalDisplay = hasPid ? d.estimated_total_incl_pid : d.estimated_total_tax;
-    const deltaDisplay = hasPid ? d.delta_incl_pid           : d.delta;
-    const chips = [];
-    chips.push(`
-      <div class="estimator-chip is-primary">
-        <div class="estimator-chip-label">${isOwner ? '~Est. Annual Tax · Yr 2+' : '~Est. Annual Tax'}${hasPid ? ' · incl. PID/Special' : ''}</div>
-        <div class="estimator-chip-val">~${fmt0(totalDisplay)}</div>
-      </div>`);
-    chips.push(`
-      <div class="estimator-chip">
-        <div class="estimator-chip-label">~Δ vs Seller's Current Bill</div>
-        <div class="estimator-chip-val">${deltaHtml(deltaDisplay, true)}</div>
-      </div>`);
-    if (isOwner && d.gap_year_tax != null) {
-      chips.push(`
-        <div class="estimator-chip">
-          <div class="estimator-chip-label">~Year 1 (Gap Year)</div>
-          <div class="estimator-chip-val">~${fmt0(d.gap_year_tax)}</div>
-        </div>`);
-    }
-    chips.push(`
-      <div class="estimator-chip">
-        <div class="estimator-chip-label">Base Value</div>
-        <div class="estimator-chip-val">${fmt0(d.base_value)}</div>
-      </div>`);
-    chips.push(`
-      <div class="estimator-chip">
-        <div class="estimator-chip-label">Seller's 2025 Bill</div>
-        <div class="estimator-chip-val">${fmt0(d.seller_total_tax)}</div>
-      </div>`);
-    if (hasPid) {
-      chips.push(`
-        <div class="estimator-chip" style="border-color:var(--accent-border); background:var(--accent-soft);">
-          <div class="estimator-chip-label">+ PID / Special Districts</div>
-          <div class="estimator-chip-val" style="color:var(--text-2);">~${fmt0(d.pid_passthrough)}</div>
-          <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">prior-year billing · not rate-computed</div>
-        </div>`);
-    }
-    $('acqSummary').innerHTML = chips.join('');
-
-    // ── Entity breakdown rows ─────────────────────────────────────────────────
-    const rows = (d.entity_breakdown || []).map(e => `
-      <tr>
-        <td>
-          <span class="entity-badge me-1">${e.entity_code}</span>
-          <span style="font-size:12px; color:var(--text-2);">${e.entity_name || ''}</span>
-          ${e.is_school && isOwner ? '<span class="badge-estimated ms-1" style="font-size:9px;">HS −$140k</span>' : ''}
-        </td>
-        <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">${Number(e.rate_used != null ? e.rate_used : e.rate).toFixed(4)}%${e.rate_projected ? ' <span class="badge-estimated" style="font-size:8px; padding:0 4px;">proj</span>' : ''}</td>
-        <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(e.taxable)}</td>
-        <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(e.est_tax)}</td>
-        <td class="text-end" style="font-variant-numeric:tabular-nums;">${fmtSeller(e.seller_tax)}</td>
-        <td class="text-end" style="font-variant-numeric:tabular-nums;">${deltaHtml(e.delta, true)}</td>
-      </tr>`).join('');
-    $('acqTbody').innerHTML = rows;
-
-    $('acqTfoot').innerHTML = (hasPid ? `
-      <tr style="background:var(--surface-2);">
-        <td colspan="2" style="font-size:11.5px; color:var(--text-2); padding-top:6px;">
-          <span class="badge-estimated" style="font-size:9px;">billing-derived</span>
-          <span class="ms-1">PID / Special Districts</span>
-          <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">${(d.pid_entity_codes || []).join(', ')} — prior-year billing; no certified rate available</div>
-        </td>
-        <td></td>
-        <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2); padding-top:6px;">~${fmt0(d.pid_passthrough)}</td>
-        <td class="text-end" style="font-variant-numeric:tabular-nums; padding-top:6px;">${fmtSeller(d.pid_passthrough)}</td>
-        <td></td>
-      </tr>` : '') + `
-      <tr>
-        <td class="fw-bold">Total</td>
-        <td></td>
-        <td></td>
-        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text);">~${fmt0(totalDisplay)}</td>
-        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${fmtSeller(d.seller_total_tax)}</td>
-        <td class="text-end fw-bold" style="font-variant-numeric:tabular-nums;">${deltaHtml(deltaDisplay, true)}</td>
-      </tr>`;
-
-    // ── Rate-vintage label ────────────────────────────────────────────────────
-    const projected = d.rate_mode === 'projected';
-    $('acqRateVintage').innerHTML = `
-      <span class="badge-${projected ? 'estimated' : 'verified'}" style="font-size:10px;">
-        ${projected ? 'Projected rates' : '2025 certified rates'}</span>
-      <span class="text-muted ms-2">Tax year ${d.first_tax_year} · ${d.rate_vintage}</span>`;
-
-    // ── Multi-year projection table ───────────────────────────────────────────
-    const my = d.multiyear || [];
-    if (my.length) {
-      const highlight = new Set([1, 3, 5]);
-      const myRows = my.map(r => {
-        const hl = highlight.has(r.year_index);
-        const labelMap = { 1: isOwner ? 'Year 1 (gap)' : 'Year 1', 2: 'Year 2', 3: 'Year 3', 4: 'Year 4', 5: 'Year 5' };
-        return `
-          <tr${hl ? ' style="background:var(--surface-2);"' : ''}>
-            <td${hl ? ' class="fw-semibold"' : ''}>${labelMap[r.year_index] || ('Year ' + r.year_index)}
-              <span class="text-muted" style="font-size:11px;">TY${r.tax_year}</span></td>
-            <td class="text-end" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text-2);">~${fmt0(r.assessed)}</td>
-            <td class="text-end${hl ? ' fw-semibold' : ''}" style="font-variant-numeric:tabular-nums; font-style:italic; color:var(--text);">~${fmt0(r.est_tax)}</td>
-          </tr>`;
-      }).join('');
-      $('acqMultiyear').innerHTML = `
-        <div class="section-hdr" style="font-size:13px; margin:0 0 8px;">Multi-Year Projection
-          <span class="estimates-badge">Projection</span></div>
-        <div class="table-responsive">
-          <table class="table table-sm mb-0">
-            <thead class="table-light small text-muted text-uppercase">
-              <tr><th>Year</th><th class="text-end">~Assessed Base</th><th class="text-end">~Est. Tax</th></tr>
-            </thead>
-            <tbody>${myRows}</tbody>
-          </table>
-        </div>
-        <div class="text-muted" style="font-size:11px; margin-top:6px; line-height:1.5;">
-          Projection only — assumes ${(d.market_growth * 100).toFixed(1)}%/yr market appreciation${projected ? ' and projected (trend) rates' : ' and 2025 rates held flat'}.
-          ${isOwner
-            ? 'Owner-occupant: Year 1 is the gap year; Year 2+ applies the homestead exemption and the 10%/yr assessed-value cap.'
-            : 'Investor: no homestead exemption; 20%/yr circuit-breaker cap through TY' + (d.first_tax_year) + ' (where it applies), uncapped after.'}
-          ${hasPid ? 'Note: PID/special district charges (~$' + Math.round(d.pid_passthrough).toLocaleString() + '/yr from prior-year billing) are not included in the projection — no rate history available. Add approximately this amount to each year’s estimated tax.' : ''}
-        </div>`;
-    } else {
-      $('acqMultiyear').innerHTML = '';
-    }
-
-    // ── Homestead-exemption explainer (owner-occupant only) ───────────────────
-    if (isOwner) {
-      $('acqHsExplainer').innerHTML = `
-        <div class="card" style="background:var(--accent-soft); border-color:var(--accent-border);">
-          <div class="card-body p-3">
-            <div class="label-caps mb-2" style="color:var(--accent-active);">Residence Homestead Exemption — how it works</div>
-            <div class="hs-grid">
-              <div><span class="hs-k">What it is</span><span class="hs-v">A reduction in the taxable value of your primary residence. Requires you to own <em>and occupy</em> the home.</span></div>
-              <div><span class="hs-k">School exemption</span><span class="hs-v">$140,000 off the school-district (ISD) taxable value — state-mandated (§11.13(b)(1), 2025).</span></div>
-              <div><span class="hs-k">10% appraisal cap</span><span class="hs-v">Once homesteaded, assessed value can rise at most 10%/yr regardless of market — caps your tax growth.</span></div>
-              <div><span class="hs-k">Filing</span><span class="hs-v">File with TCAD by April 30 of the year after purchase. Free; no annual refiling needed.</span></div>
-              <div><span class="hs-k">Year-1 gap</span><span class="hs-v">Neither the exemption nor the cap applies in the purchase year — full value is taxable until they activate.</span></div>
-            </div>
-          </div>
-        </div>`;
-    } else {
-      $('acqHsExplainer').innerHTML = '';
-    }
-
-    // ── Notes (gap-year + circuit-breaker) as risk blocks ─────────────────────
-    let notes = '';
-    if (d.gap_year_note) {
-      notes += `<div class="risk-block info"><div class="risk-icon">i</div><div class="risk-desc">${d.gap_year_note}</div></div>`;
-    }
-    if (d.circuit_breaker_note) {
-      notes += `<div class="risk-block warn"><div class="risk-icon">!</div><div class="risk-desc">${d.circuit_breaker_note}</div></div>`;
-    }
-    $('acqNotes').innerHTML = notes;
-
-    // ── Assumptions ───────────────────────────────────────────────────────────
-    const asum = (d.assumptions || []).map(a => `<li style="margin-bottom:3px;">${a}</li>`).join('');
-    $('acqAssumptions').innerHTML = asum
-      ? `<div class="label-caps mb-1">Assumptions</div><ul class="text-muted" style="font-size:11.5px; line-height:1.5; padding-left:18px; margin-bottom:0;">${asum}</ul>`
-      : '';
-
-    $('acqResults').style.display = 'block';
-  }
-
-  // Convenience: Enter in the price field runs the estimate; toggling buyer
-  // re-runs only if a result is already shown.
-  document.addEventListener('DOMContentLoaded', function () {
-    const priceEl = document.getElementById('acqPrice');
-    if (priceEl) priceEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); window.runEstimator(); } });
-    document.querySelectorAll('input[name="buyerType"], input[name="rateMode"]').forEach(r =>
-      r.addEventListener('change', () => {
-        const res = document.getElementById('acqResults');
-        if (res && res.style.display === 'block') window.runEstimator();
-      })
-    );
-  });
-})();
-</script>
-
 
 <script>
 /* ── On-demand billing fetch ─────────────────────────────────────────────────
