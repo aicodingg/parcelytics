@@ -116,14 +116,17 @@
   </div>
   <div class="kpi-card">
     <div class="kpi-label">Net Change</div>
-    <div class="kpi-value {% if mv_delta_b >= 0 %}text-danger{% else %}text-success{% endif %}">
+    {# Coherence fix (July 2026, per Fable review finding 6): raw aggregate
+       market-value change, not tax burden -- neutral color, not red/green
+       (matches the same fix on the property page's KPI-header value deltas). #}
+    <div class="kpi-value" style="color:var(--accent);">
       {{ "+" if mv_delta_b >= 0 else "" }}${{ "{:,.2f}B".format(mv_delta_b) }}
     </div>
     <div class="kpi-sub">{{ "+" if mv_delta_pct >= 0 else "" }}{{ mv_delta_pct }}% vs 2025</div>
   </div>
   <div class="kpi-card">
     <div class="kpi-label">Median Parcel Change</div>
-    <div class="kpi-value {% if totals.median_pct >= 0 %}text-danger{% else %}text-success{% endif %}">
+    <div class="kpi-value" style="color:var(--accent);">
       {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
     </div>
     <div class="kpi-sub">{{ "{:,}".format(totals.n_up) }} ↑&nbsp;&nbsp;{{ "{:,}".format(totals.n_down) }} ↓</div>
@@ -182,7 +185,9 @@
       {% set sub2 = _res_subs[1] if _res_subs|length > 1 else none %}
       {% if mode == 'homeowner' %}
         Across Travis County, the typical home's value
-        <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+        {# Coherence fix (July 2026, per Fable review finding 6): raw value
+           change, not tax burden -- neutral color. #}
+        <strong style="color:var(--accent);">
           {{ "went down" if totals.median_pct < 0 else "went up" }}</strong>
         about {{ totals.median_pct|abs }}% from 2025 to 2026.
         {% if totals.n_up is defined and totals.n_down is defined %}
@@ -191,7 +196,7 @@
         Remember: a higher value usually means a higher tax bill, and a homestead exemption helps limit how fast your taxable value can rise.
       {% else %}
       Travis County residential values
-      <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+      <strong style="color:var(--accent);">
         {{ "declined" if totals.median_pct < 0 else "increased" }}
       </strong>
       on a median basis ({{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%) from 2025 certified to 2026 preliminary.
@@ -216,7 +221,7 @@
       {% set sub1 = _sec_subs[0] if _sec_subs|length > 0 else none %}
       {% set sub2 = _sec_subs[1] if _sec_subs|length > 1 else none %}
       Travis County {{ {'retail':'retail','industrial':'industrial','office':'office','hotel':'hospitality'}[view] }} values show a median change of
-      <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+      <strong style="color:var(--accent);">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
       ({{ "{:,}".format(totals.n_total) }} parcels, AJR* personal property supplements excluded).
@@ -244,7 +249,7 @@
       {% set sub1 = _com_subs[0] if _com_subs|length > 0 else none %}
       {% set sub2 = _com_subs[1] if _com_subs|length > 1 else none %}
       Travis County commercial values show a median change of
-      <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+      <strong style="color:var(--accent);">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
       ({{ "{:,}".format(totals.n_total) }} parcels, AJR* personal property supplements excluded).
@@ -274,7 +279,7 @@
       {% set sub2 = _size_subs[1] if _size_subs|length > 1 else none %}
       Travis County <strong>{{ {'land':'vacant land','agricultural':'agricultural'}[view] }}</strong>
       values show a median change of
-      <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+      <strong style="color:var(--accent);">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
       ({{ "{:,}".format(totals.n_total) }} parcels, {{ "{:,}".format(totals.n_up) }} up / {{ "{:,}".format(totals.n_down) }} down).
@@ -302,7 +307,7 @@
          this specific fix, unchanged. #}
       Travis County <strong>{{ {'multifamily':'multi-family','other':'other real property'}[view] }}</strong>
       values show a median change of
-      <strong class="{% if totals.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+      <strong style="color:var(--accent);">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
       ({{ "{:,}".format(totals.n_total) }} parcels, {{ "{:,}".format(totals.n_up) }} up / {{ "{:,}".format(totals.n_down) }} down).
@@ -330,7 +335,7 @@
       {% set _com_largest = (_com_sectors | sort(attribute='n_parcels', reverse=true) | list)[0] if _com_sectors else none %}
       {% if res %}
         Residential owners should expect
-        <strong class="{% if res.median_pct < 0 %}text-success{% else %}text-danger{% endif %}">
+        <strong style="color:var(--accent);">
           {{ "relief" if res.median_pct < 0 else "increases" }}
         </strong>
         (median {{ "+" if res.median_pct >= 0 else "" }}{{ res.median_pct }}%,
@@ -408,10 +413,12 @@
               </a>
             </td>
             <td class="text-end text-muted" data-label="Parcels">{{ "{:,}".format(r.n_parcels) }}</td>
-            <td class="text-end text-danger" data-label="↑ Up">{{ "{:,}".format(r.n_up) }}</td>
-            <td class="text-end text-success" data-label="↓ Down">{{ "{:,}".format(r.n_down) }}</td>
+            {# Coherence fix (July 2026, per Fable review finding 6): raw parcel-count
+               up/down and median value change, not tax burden -- neutral color. #}
+            <td class="text-end" style="color:var(--accent);" data-label="↑ Up">{{ "{:,}".format(r.n_up) }}</td>
+            <td class="text-end" style="color:var(--accent);" data-label="↓ Down">{{ "{:,}".format(r.n_down) }}</td>
             <td class="text-end text-muted" data-label="= Flat">{{ "{:,}".format(r.n_flat) }}</td>
-            <td class="text-end fw-semibold {% if r.median_pct is not none and r.median_pct > 0 %}text-danger{% elif r.median_pct is not none and r.median_pct < 0 %}text-success{% endif %}" data-label="Median Δ">
+            <td class="text-end fw-semibold" style="{% if r.median_pct is not none %}color:var(--accent);{% endif %}" data-label="Median Δ">
               {% if r.median_pct is not none %}{{ "+" if r.median_pct >= 0 else "" }}{{ r.median_pct }}%{% else %}<span class="na-cell" title="Not meaningful for a rolled-up group of several real subtypes -- see footer">—</span>{% endif %}
             </td>
             <td class="text-end text-muted small" data-label="P25 / P75">
@@ -419,7 +426,9 @@
             </td>
             <td class="text-end text-muted" data-label="2025 Total MV">${{ "{:,.2f}B".format(r.total_mv25_b) }}</td>
             <td class="text-end" data-label="2026 Total MV">${{ "{:,.2f}B".format(r.total_mv26_b) }}</td>
-            <td class="text-end fw-semibold {% if delta_b > 0 %}text-danger{% elif delta_b < 0 %}text-success{% endif %}" data-label="Net Δ ($B)">
+            {# Coherence fix (July 2026, per Fable review finding 6): raw aggregate
+               value change, not tax burden -- neutral color. #}
+            <td class="text-end fw-semibold" style="color:var(--accent);" data-label="Net Δ ($B)">
               {{ "+" if delta_b >= 0 else "" }}${{ "{:,.2f}B".format(delta_b) }}
             </td>
           </tr>
@@ -444,16 +453,18 @@
               {% endif %}
             </td>
             <td class="text-end">{{ "{:,}".format(t.n_total) }}</td>
-            <td class="text-end text-danger">{{ "{:,}".format(t.n_up) }}</td>
-            <td class="text-end text-success">{{ "{:,}".format(t.n_down) }}</td>
+            {# Coherence fix (July 2026, per Fable review finding 6): raw aggregate
+               value change, not tax burden -- neutral color. #}
+            <td class="text-end" style="color:var(--accent);">{{ "{:,}".format(t.n_up) }}</td>
+            <td class="text-end" style="color:var(--accent);">{{ "{:,}".format(t.n_down) }}</td>
             <td class="text-end text-muted">{{ "{:,}".format(t.n_flat) }}</td>
-            <td class="text-end {% if t.median_pct > 0 %}text-danger{% elif t.median_pct < 0 %}text-success{% endif %}">
+            <td class="text-end" style="color:var(--accent);">
               {{ "+" if t.median_pct >= 0 else "" }}{{ t.median_pct }}%
             </td>
             <td class="text-end text-muted">—</td>
             <td class="text-end">${{ "{:,.2f}B".format(t.total_mv25_b) }}</td>
             <td class="text-end">${{ "{:,.2f}B".format(t.total_mv26_b) }}</td>
-            <td class="text-end {% if t_delta >= 0 %}text-danger{% else %}text-success{% endif %}">
+            <td class="text-end" style="color:var(--accent);">
               {{ "+" if t_delta >= 0 else "" }}${{ "{:,.2f}B".format(t_delta) }}
             </td>
           </tr>
@@ -510,7 +521,9 @@
                 <a href="/snapshot/neighborhood/{{ n.neighborhood_cd | urlencode }}?view={{ view | urlencode }}"
                    title="View {{ n.neighborhood_cd }} parcel detail">{{ n.neighborhood_cd }}</a>
               </td>
-              <td class="text-end fw-semibold {% if n.median_pct > 0 %}text-danger{% elif n.median_pct < 0 %}text-success{% endif %}">
+              {# Coherence fix (July 2026, per Fable review finding 6): raw
+                 neighborhood-level value change, not tax burden -- neutral color. #}
+              <td class="text-end fw-semibold" style="color:var(--accent);">
                 {{ "+" if n.median_pct >= 0 else "" }}{{ n.median_pct }}%
               </td>
               <td class="text-end text-muted small">{{ "{:,}".format(n.n_parcels) }} parcels</td>
@@ -533,7 +546,9 @@
                 <a href="/snapshot/neighborhood/{{ n.neighborhood_cd | urlencode }}?view={{ view | urlencode }}"
                    title="View {{ n.neighborhood_cd }} parcel detail">{{ n.neighborhood_cd }}</a>
               </td>
-              <td class="text-end fw-semibold {% if n.median_pct > 0 %}text-danger{% elif n.median_pct < 0 %}text-success{% endif %}">
+              {# Coherence fix (July 2026, per Fable review finding 6): raw
+                 neighborhood-level value change, not tax burden -- neutral color. #}
+              <td class="text-end fw-semibold" style="color:var(--accent);">
                 {{ "+" if n.median_pct >= 0 else "" }}{{ n.median_pct }}%
               </td>
               <td class="text-end text-muted small">{{ "{:,}".format(n.n_parcels) }} parcels</td>
@@ -623,7 +638,9 @@
             {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
             <td class="text-end">
               {% if _row and _row.median_yoy_value_change_pct is not none %}
-                <span class="{% if _row.median_yoy_value_change_pct > 0 %}text-danger{% elif _row.median_yoy_value_change_pct < 0 %}text-success{% endif %}">
+                {# Coherence fix (July 2026, per Fable review finding 6): raw
+                   median value YoY change, not tax burden -- neutral color. #}
+                <span style="color:var(--accent);">
                   {{ "{:+.1f}%".format(_row.median_yoy_value_change_pct) }}
                 </span>
               {% else %}<span class="text-muted small">base yr</span>{% endif %}

@@ -47,7 +47,9 @@
             <td class="text-end" style="font-family:var(--font-mono); font-size:12px;" data-label="2026 Preliminary Value">
               {{ "$" + "{:,.0f}".format(p.mv26) if p.mv26 else "—" }}
             </td>
-            <td class="text-end fw-semibold {% if p.pct_chg > 0 %}text-danger{% elif p.pct_chg < 0 %}text-success{% endif %}" data-label="% Change">
+            {# Coherence fix (July 2026, per Fable review finding 6): raw market-value
+               change, not tax burden -- neutral color, not red/green. #}
+            <td class="text-end fw-semibold" style="{% if p.pct_chg is not none %}color:var(--accent);{% endif %}" data-label="% Change">
               {% if p.pct_chg is not none %}{{ "{:+.1f}%".format(p.pct_chg) }}{% else %}—{% endif %}
             </td>
             {% if view == 'overall' %}<td class="text-muted small" data-label="Property Type">{{ p.prop_type }}</td>{% endif %}

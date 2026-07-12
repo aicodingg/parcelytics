@@ -122,24 +122,47 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5, state
 
     Task 10 — CAGR baseline extension:
     If 2026 preliminary market value exists and is non-anomalous (assessed ≤ market),
-    extend the CAGR window to 2021–2026 for a 6-year baseline. Projections still
-    start from the 2025 certified values; the 2026 data only calibrates the CAGR.
+    extend the CAGR window to 2021–2026 for a 6-year baseline.
+
+    Coherence fix (July 2026, per Fable review finding 1): projections now also
+    START from that same 2026 preliminary figure when one exists, instead of
+    always starting from 2025 regardless. Previously this function calibrated
+    its growth rate using 2026 data (above) but still modeled a "2026" row from
+    2025 * CAGR -- a computed guess that could (and on real parcels, did)
+    contradict the actual, real 2026 preliminary market value already shown
+    elsewhere on the same page (Value History / homeowner cards). Confirmed on
+    parcel 0100030109: real 2026 preliminary = $55,410,000; the old modeled
+    "2026" projection row showed ~$62,628,505 instead -- a real, visible
+    self-contradiction. Anchoring the projection to the same cagr_endpoint used
+    for calibration means the projection table's first row is now the next
+    year WITHOUT a real figure yet (2027, not 2026) whenever a 2026 preliminary
+    exists -- it never re-models a year the page already shows a real number
+    for.
 
     Agricultural guard (D/E parcels):
     AJR 2021 stores productivity/use values in the market_value field for agricultural
     property classes. Using 2021 as the CAGR starting point for D/E parcels produces
     meaningless projections. 2021 is excluded and 2022 used as the earliest reliable year.
     """
+    # Pre-existing bug fix (found incidentally while fixing item 1 above, not
+    # part of that brief): these early returns used to be a 2-tuple ([], None)
+    # while the call site (`projections, proj_baseline, proj_bands =
+    # build_projections(...)`) always unpacks 3 values, and the normal-path
+    # return below is a 3-tuple. Any parcel hitting one of these early
+    # returns (fewer than 2 years of market_value history, or an
+    # agricultural parcel where excluding 2021 drops it below 2 years) would
+    # raise `ValueError: not enough values to unpack` and 500 the whole
+    # property page. Fixed to always return a 3-tuple.
     hist = sorted([r for r in history if r["market_value"]], key=lambda r: r["tax_year"])
     if len(hist) < 2:
-        return [], None
+        return [], None, None
 
     # Agricultural guard: skip 2021 baseline for D/E property classes
     _is_ag = (state_cd1 or "").strip()[:1].upper() in ("D", "E")
     if _is_ag:
         hist = [r for r in hist if r["tax_year"] != 2021]
         if len(hist) < 2:
-            return [], None
+            return [], None, None
 
     earliest = hist[0]
 
@@ -154,20 +177,24 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5, state
     cagr_endpoint = r2026 if r2026 else next(
         (r for r in hist if r["tax_year"] == 2025), hist[-1]
     )
+    # Label now also states the projection's actual starting point (matches
+    # the coherence fix above -- base_row == cagr_endpoint), not just the CAGR
+    # calibration window, so it's clear from the footnote alone why the first
+    # projected row is 2027 (not 2026) whenever a real 2026 preliminary exists.
     if _is_ag:
         baseline_label = (
-            "Based on 2022–2026 preliminary trend" if r2026
-            else "Based on 2022–2025 certified trend"
+            "Based on 2022–2026 preliminary trend, projected forward from 2026" if r2026
+            else "Based on 2022–2025 certified trend, projected forward from 2025"
         )
     else:
         baseline_label = (
-            "Based on 2021–2026 preliminary trend" if r2026
-            else "Based on 2021–2025 certified trend"
+            "Based on 2021–2026 preliminary trend, projected forward from 2026" if r2026
+            else "Based on 2021–2025 certified trend, projected forward from 2025"
         )
 
     span = cagr_endpoint["tax_year"] - earliest["tax_year"]
     if span <= 0 or not earliest["market_value"]:
-        return [], None
+        return [], None, None
 
     # CAGR uses earliest → cagr_endpoint
     value_cagr = (cagr_endpoint["market_value"] / earliest["market_value"]) ** (1 / span) - 1
@@ -190,8 +217,11 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5, state
     )
     has_hs_cap = hs_row is not None
 
-    # Always project from 2025 certified base values
-    base_row      = next((r for r in hist if r["tax_year"] == 2025), hist[-1])
+    # Project from the most recent REAL figure available -- reuses
+    # cagr_endpoint (the 2026 preliminary when non-anomalous, else 2025
+    # certified) instead of hardcoding tax_year == 2025. See the coherence-fix
+    # note in this function's docstring for why.
+    base_row      = cagr_endpoint
     base_assessed = float(base_row["assessed_value"] or base_row["market_value"] or 0)
     base_market   = float(base_row["market_value"])
     base_year     = base_row["tax_year"]
@@ -3254,6 +3284,16 @@ def api_peer_benchmark_local(geo_id):
     # source (see KNOWN_LIMITATIONS.md) — entity_tax_sum is the per-geo_id
     # SUM(amount_due) from tax_billing_entity, used as a fallback below so a
     # real, verified figure isn't silently dropped for the median/percentile.
+    #
+    # Self-contamination fix (July 2026, per Fable review finding, wave 2):
+    # this query never excluded the subject parcel itself. The WHERE clause
+    # (same neighborhood, same state_cd1 prefix, MV within ±50% of this_mv)
+    # is trivially satisfied by the subject's own row -- it's centered on
+    # this_mv by construction -- so the subject was always its own peer,
+    # skewing median/percentile stats toward its own value on small peer
+    # sets (confirmed live: "Peer Median Tax" exactly equaling the subject's
+    # own tax figure on a peer set of only ~5 properties). AND p.geo_id !=
+    # %(geo_id)s added to both this query and its fallback below.
     peers = query("""
         SELECT
             p.geo_id,
@@ -3274,9 +3314,10 @@ def api_peer_benchmark_local(geo_id):
           AND  LEFT(p.state_cd1, 1) = %(sc1)s
           AND  pty.market_value BETWEEN %(lo)s AND %(hi)s
           AND  p.geo_id NOT LIKE 'AJR%%'
+          AND  p.geo_id != %(geo_id)s
           AND  pty.market_value > 0
         ORDER  BY pty.market_value
-    """, {"nb": neighborhood, "sc1": state_cd1, "lo": mv_lo, "hi": mv_hi})
+    """, {"nb": neighborhood, "sc1": state_cd1, "lo": mv_lo, "hi": mv_hi, "geo_id": geo_id})
 
     n = len(peers)
     if n < 3:
@@ -3296,9 +3337,10 @@ def api_peer_benchmark_local(geo_id):
             WHERE  p.neighborhood_cd = %(nb)s
               AND  LEFT(p.state_cd1, 1) = %(sc1)s
               AND  p.geo_id NOT LIKE 'AJR%%'
+              AND  p.geo_id != %(geo_id)s
               AND  pty.market_value > 0
             ORDER  BY pty.market_value
-        """, {"nb": neighborhood, "sc1": state_cd1})
+        """, {"nb": neighborhood, "sc1": state_cd1, "geo_id": geo_id})
         n = len(peers)
         band_note = "Size band relaxed (neighbourhood + type only — fewer than 3 ±50% MV peers)"
     else:
@@ -3428,6 +3470,13 @@ def api_peer_benchmark_sf(geo_id):
     peers = []
     band_note = ""
 
+    # Self-contamination fix (July 2026, per Fable review finding, wave 2):
+    # found while fixing the same bug in api_peer_benchmark_local() just above
+    # -- this query has the identical gap. The subject parcel trivially
+    # satisfies its own neighborhood/type/size-band filters (the band is
+    # centered on its own sqft), so it was always included in its own peer
+    # set here too. AND p.geo_id != %(geo_id)s added; geo_id added to every
+    # params dict below.
     for band in band_attempts:
         if band is not None:
             sqft_lo = sqft * (1.0 - band)
@@ -3435,11 +3484,11 @@ def api_peer_benchmark_sf(geo_id):
             size_clause = "AND p.living_area_sqft BETWEEN %(sqft_lo)s AND %(sqft_hi)s"
             params = {
                 "nb": neighborhood, "sc1": state_cd1,
-                "sqft_lo": sqft_lo, "sqft_hi": sqft_hi,
+                "sqft_lo": sqft_lo, "sqft_hi": sqft_hi, "geo_id": geo_id,
             }
         else:
             size_clause = ""
-            params = {"nb": neighborhood, "sc1": state_cd1}
+            params = {"nb": neighborhood, "sc1": state_cd1, "geo_id": geo_id}
 
         peers = query(f"""
             SELECT
@@ -3460,6 +3509,7 @@ def api_peer_benchmark_sf(geo_id):
               AND  LEFT(p.state_cd1, 1) = %(sc1)s
               AND  p.living_area_sqft > 0
               AND  p.geo_id NOT LIKE 'AJR%%'
+              AND  p.geo_id != %(geo_id)s
               AND  pty.market_value   > 0
               AND  pty.assessed_value > 0
               {size_clause}
@@ -3593,6 +3643,21 @@ def _fetch_news(query):
                 date_iso = ""
             if title and link:
                 items.append({"title": title, "link": link, "source": source, "date": date_iso})
+        # Sort order fix (July 2026, per Fable review, wave 2): items came back
+        # in whatever order Google News RSS happened to return them for a given
+        # query -- confirmed live: investor-mode items appeared as Apr 21, Jun
+        # 22, Mar 09, not sorted by any consistent rule. There was no explicit
+        # sort call anywhere in this function, for any query -- "homeowner mode
+        # sorts ascending" (Diego's reference behavior) was a coincidence of
+        # that specific query's RSS ordering, not a real code difference between
+        # modes; every query (homeowner and every property-type tab) shares this
+        # exact function. Sorted explicitly, once, here -- ascending by date
+        # (oldest first, matching the homeowner-mode ordering used as the
+        # reference) -- so every current and future caller gets the same
+        # deterministic order instead of depending on Google's per-query RSS
+        # quirks. Items with an unparseable date (empty date_iso) sort last
+        # regardless of direction, not first.
+        items.sort(key=lambda it: (it["date"] == "", it["date"]))
         return items
     except Exception:
         return None

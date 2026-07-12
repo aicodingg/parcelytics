@@ -183,10 +183,21 @@
    already existed (assumed_rate_2026 newly exposed to the template, but it's
    the same blended_rate_2025 value Investor mode's own 2026 tax estimate
    already used) in property_detail(), reused here rather than reimplemented. #}
-{# ── 2025 — Verified ───────────────────────────────────────────────────── #}
+{# ── 2025 — Appraisal Certified ──────────────────────────────────────────
+   Coherence fix (July 2026, per Fable review finding 4, wave 2): this section
+   badge used to say "Verified" unconditionally for the whole "2025" group,
+   which contains BOTH the value card (always genuinely certified for 2025)
+   AND the tax-paid card just below it (whose own badge can independently be
+   Partial, Estimated, or "not available yet"). On a parcel like 0100030109,
+   where 2025's tax figure is a reconstructed/Partial total, this section
+   header claimed "Verified" two inches above a card that itself says
+   "Partial" -- the exact contradiction this review flagged. Reworded to
+   describe only what's unconditionally true here (the appraisal is
+   certified for 2025); each card underneath keeps its own, already-correct
+   billing-specific badge for anything that varies. #}
 <div class="d-flex align-items-center gap-2 mb-2">
   <span style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3);">2025</span>
-  <span class="badge-verified" style="font-size:9px;">Verified</span>
+  <span class="badge-verified" style="font-size:9px;">Appraisal Certified</span>
 </div>
 <div class="row g-3 mb-4">
   <div class="col-md-4">
@@ -217,8 +228,19 @@
          by the Two-Year Card Redesign — same logic, just moved into the new
          "2025 — Verified" section. #}
       <div class="text-muted" style="font-size:13px; font-weight:600;">What you paid in taxes</div>
+      {# Coherence fix (July 2026, per Fable review finding, wave 2): the sub-line
+         below already correctly distinguishes portal-scrape/derived (Partial) tax25
+         from a confirmed billed figure (Verified) -- with a "Partial" badge -- but
+         the headline dollar figure above showed no "~" prefix for either case,
+         unlike Investor mode's Value History table, which already prefixes the
+         identical kind of derived/partial figure with "~". Reuses the exact same
+         two provenance flags already driving the sub-line's own Partial branches,
+         not a new check. #}
       <div style="font-size:27px; font-weight:800; font-variant-numeric:tabular-nums;">
-        {% if tax25 %}${{ "{:,.0f}".format(tax25) }}{% elif current and current.computed_total_tax %}~${{ "{:,.0f}".format(current.computed_total_tax) }}{% else %}<span style="font-size:18px; font-weight:700;">Not available yet</span>{% endif %}
+        {% if tax25 and (current.billing_source == 'portal_scrape' or current.total_tax_derived) %}~${{ "{:,.0f}".format(tax25) }}
+        {% elif tax25 %}${{ "{:,.0f}".format(tax25) }}
+        {% elif current and current.computed_total_tax %}~${{ "{:,.0f}".format(current.computed_total_tax) }}
+        {% else %}<span style="font-size:18px; font-weight:700;">Not available yet</span>{% endif %}
       </div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if tax25 and current.billing_source == 'portal_scrape' %}
@@ -313,7 +335,14 @@
   <div class="card-body">
     <div class="row" style="font-size:14px; line-height:2;">
       <div class="col-sm-6">
+        {# Coherence fix (July 2026, per Fable review finding 4): this link used to
+           show unconditionally, even on non-residential parcels where a homestead
+           exemption cannot legally apply -- the same contradiction the KPI-card
+           gating fix addressed a few nights ago, just not caught here too. Reuses
+           the exact same is_residential check (set once, line 31), not a new one. #}
+        {% if is_residential %}
         <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">Apply for a homestead exemption ↗</a><br>
+        {% endif %}
         <a href="https://traviscad.org/protests" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a>
       </div>
       <div class="col-sm-6">
@@ -361,8 +390,16 @@
       </tbody>
     </table>
     {% else %}
-    <p class="mb-0">No exemptions are currently applied. If this is your primary residence, you may qualify for a homestead exemption —
-      <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">visit traviscad.org to apply ↗</a>.</p>
+    {# Coherence fix (July 2026, per Fable review finding 4): the homestead-apply
+       suggestion below used to show unconditionally, including on non-residential
+       parcels where it can't legally apply -- the same gate already used on the
+       KPI-level savings card (is_residential, set once at line 31), reused here
+       rather than reimplemented. #}
+    <p class="mb-0">No exemptions are currently applied.
+      {% if is_residential %}If this is your primary residence, you may qualify for a homestead exemption —
+      <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">visit traviscad.org to apply ↗</a>.
+      {% else %}This parcel is classified {{ bench_label or "non-residential" }}, so the homestead exemption (which requires an owner-occupied primary residence) doesn't apply here.
+      {% endif %}</p>
     {% endif %}
     {% if is_residential and not has_hs and hs_potential_savings %}
     {# Estimated tier only — a modeled "what if you filed" figure, never blended
@@ -509,7 +546,21 @@
               <td class="text-end" style="font-variant-numeric:tabular-nums;">
                 {% if e.rate and _assessed %}
                   {% set _net_raw = e.amount_due|float * 100 / (e.rate|float) %}
-                  {% set _net = _net_raw if _net_raw <= _assessed else _assessed %}
+                  {# Coherence fix (July 2026, per Fable review finding 5): extends the
+                     existing ceiling clamp (_net_raw can never legitimately exceed
+                     Assessed, so it's capped there) to also handle the same
+                     reverse-derivation rounding noise (tax ÷ rate) landing just
+                     BELOW Assessed. With no exemptions on this parcel (excodes_list
+                     empty), every entity's taxable value should equal Assessed
+                     exactly -- there's no exemption to produce a real per-entity
+                     difference, so ANY deviation (above or below) is provably noise,
+                     not signal, and is normalized to Assessed exactly. When
+                     exemptions DO exist, entities can legitimately apply different
+                     exemption amounts/types, so a below-Assessed figure there may be
+                     real and is left alone -- only the ceiling clamp still applies
+                     (a derived value can never legitimately exceed Assessed, with or
+                     without exemptions). #}
+                  {% set _net = _assessed if not excodes_list else (_net_raw if _net_raw <= _assessed else _assessed) %}
                   ${{ "{:,.0f}".format(_net) }}
                 {% else %}
                   <span class="text-muted" style="font-style:italic;">Not Available</span>
@@ -585,10 +636,17 @@
                  (badge-verified/badge-partial, reused verbatim from
                  static/style.css), matching the "always show a labeled state"
                  convention used everywhere else on this page. #}
-              ${{ "{:,.0f}".format(_h.total_tax|float) }}
-              {% if _h.is_billing_verified %}
+              {# Coherence fix (July 2026, per Fable review finding, wave 2): Investor
+                 mode's Value History table already prefixes derived/partial total_tax
+                 figures with "~" (a plain dollar figure implies a confirmed exact
+                 amount); this table's Partial branch showed the identical kind of
+                 figure with no such prefix, only the badge -- confirmed, real
+                 inconsistency between the two modes for the same underlying data.
+                 Reuses the exact same is_billing_verified check already driving the
+                 badge, not a new condition. #}
+              {% if _h.is_billing_verified %}${{ "{:,.0f}".format(_h.total_tax|float) }}
                 <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
-              {% else %}
+              {% else %}~${{ "{:,.0f}".format(_h.total_tax|float) }}
                 <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
               {% endif %}
             {% elif _h and _h.computed_total_tax %}
@@ -685,7 +743,13 @@
   {# Card 2: YoY Value Change #}
   <div class="kpi-card">
     <div class="kpi-label">YoY Value Change</div>
-    <div class="kpi-value {% if kpi.yoy_pct is defined %}{% if kpi.yoy_pct > 0 %}text-danger{% elif kpi.yoy_pct < 0 %}text-success{% endif %}{% endif %}">
+    {# Coherence fix (July 2026, per Fable review finding 6): this is a raw
+       market-value change (see label above: "YoY Value Change"), not a
+       tax-burden figure -- was borrowing the burden red=rising/green=falling
+       convention, which reads backwards to an investor (a value drop showing
+       green implies "good news"). Neutral color now; burden figures
+       elsewhere are untouched. #}
+    <div class="kpi-value" style="{% if kpi.yoy_pct is defined %}color:var(--accent);{% endif %}">
       {% if kpi.yoy_pct is defined %}
         {{ "{:+.1f}%".format(kpi.yoy_pct) }}
       {% else %}—{% endif %}
@@ -797,12 +861,41 @@
       <span class="sep">&middot;</span>
       <span>{{ _prop_type }}</span>
     {% endif %}
-    {# Property-level confidence badge — 2025 data_source + 2021-24 billing completeness (Fix 3) #}
+    {# Property-level confidence badges (Fable review finding 4, wave 2): this
+       used to be ONE badge -- "2025 Verified" -- driven only by
+       current.data_source, an APPRAISAL-domain signal (was TCAD's export
+       certified, or still preliminary?). It said nothing about BILLING
+       confidence, so on a parcel whose 2025 total_tax is a reconstructed/
+       partial figure (confirmed live on 0100030109), the header still read
+       "Verified" unconditionally -- directly contradicting the same page's
+       own Your Tax Rate & Bill table ("(partial)" via is_billing_verified),
+       the Investor tax card's "some taxing entities may be missing" note,
+       and the footer's "2021–24 billing partial" text a few pixels away.
+       One ambiguous badge is now two explicit ones, each reading a field the
+       rest of the page already uses -- not new logic: Appraisal status from
+       current.data_source, Billing status from current.is_billing_verified
+       (computed once in app.py, same value the Homeowner and Investor tables
+       already read). #}
     {%- set _hist_prior  = history | rejectattr('tax_year', 'equalto', 2025) | list -%}
     {%- set _hist_billed = _hist_prior | selectattr('total_tax') | list | length -%}
     {%- set _hist_total  = _hist_prior | length -%}
-    {% if current and current.data_source == "certified" %}
-      <span class="badge-verified ms-2">2025 Verified</span>
+    {% if current %}
+      {% if current.data_source == "certified" %}
+        <span class="badge-verified ms-2" title="TCAD's 2025 appraisal roll is certified — final, not subject to change.">Appraisal: 2025 Certified</span>
+      {% elif current.data_source == "preliminary" %}
+        <span class="badge-preliminary ms-2" title="This reflects the 2026 preliminary appraisal roll, subject to change until certification.">Appraisal: 2026 Preliminary</span>
+      {% else %}
+        <span class="badge-partial ms-2" title="Appraisal certification status isn't tracked for this record.">Appraisal: Unknown</span>
+      {% endif %}
+      {% if current.total_tax and current.is_billing_verified %}
+        <span class="badge-verified ms-1" title="2025 tax billing confirmed directly from Travis County Tax Office records.">Billing: 2025 Verified</span>
+      {% elif current.total_tax %}
+        <span class="badge-partial ms-1" title="This 2025 total is a reconstructed or partial figure — see the Your Tax Rate &amp; Bill table below for why.">Billing: 2025 Partial</span>
+      {% elif current.computed_total_tax %}
+        <span class="badge-estimated ms-1" style="font-size:9px; padding:1px 5px;" title="Modeled from taxable value × combined rate — no billing record on file for 2025.">Billing: 2025 Computed</span>
+      {% else %}
+        <span class="badge-estimated ms-1" style="font-style:italic; color:var(--text-3);" title="No 2025 billing record on file.">Billing: Not Available</span>
+      {% endif %}
       {% if _hist_total > 0 %}
         {% if _hist_billed == _hist_total %}
           <span class="badge-verified ms-1" style="font-size:9px; padding:1px 5px;">2021–24 billing ✓</span>
@@ -812,10 +905,6 @@
           <span class="badge-partial ms-1" style="font-size:9px; padding:1px 5px;">2021–24 billing unavailable</span>
         {% endif %}
       {% endif %}
-    {% elif current and current.data_source == "preliminary" %}
-      <span class="badge-preliminary ms-2">Preliminary</span>
-    {% elif current %}
-      <span class="badge-partial ms-2">Partial</span>
     {% else %}
       <span class="badge-estimated ms-2" style="font-style:italic; color:var(--text-3);">Not Available</span>
     {% endif %}
@@ -1163,7 +1252,9 @@
         <strong>Appreciation:</strong>
         Market value has
         {% if insights.value_change_pct > 0 %}risen{% else %}fallen{% endif %}
-        <strong class="{% if insights.value_change_pct > 0 %}text-success{% else %}text-danger{% endif %}">
+        {# Coherence fix (July 2026, per Fable review finding 6): raw market-value
+           change, not tax burden -- neutral color, not red/green. #}
+        <strong style="color:var(--accent);">
           {{ "{:+.1f}%".format(insights.value_change_pct) }}
         </strong>
         from
@@ -1325,20 +1416,50 @@
       {% elif _med and _mv >= _med %}{% set _band = "upper-middle (50th–75th percentile)" %}
       {% elif _p25 and _mv >= _p25 %}{% set _band = "lower-middle (25th–50th percentile)" %}
       {% else %}{% set _band = "bottom quartile (<25th percentile)" %}{% endif %}
+      {# Coherence fix (July 2026, per Fable review finding 3): this paragraph is
+         pure server-rendered prose (no live/JS refinement path exists for it,
+         unlike the "Where This Property Stands" card below), and it is built
+         exclusively from benchmark_by_year -- which app.py populates from
+         `county_benchmark WHERE property_type_label = bench_label`, i.e. the
+         broad, canonical classify.py 5-category population (bench_label, e.g.
+         "Multi-Family" folds together apartments of every size, dorms, frat
+         houses, and clubhouses), never a narrower use-code-specific population.
+         For a large or unusual asset, comparing against that whole bucket can
+         produce a technically-correct but misleading comparison (a $62M
+         100+-unit complex vs. a county median driven mostly by small
+         apartment buildings). Rather than silently implying this is a
+         same-use-code comparison, the label now says plainly what population
+         it is and points to the narrower comparison available elsewhere on
+         the page. #}
       <p class="mb-2">
         <strong>Submarket Position:</strong>
         At ${{ "{:,.0f}".format(_mv) }}, this parcel sits in the <strong>{{ _band }}</strong>
         of {{ bench_label }} property in Travis County — county median ${{ "{:,.0f}".format(_med) }}
         (P25 ${{ "{:,.0f}".format(_p25) }} / P75 ${{ "{:,.0f}".format(_p75) }}{% if _b25.parcel_count %}, n={{ "{:,}".format(_b25.parcel_count) }}{% endif %}).
-        See the Peer Set and Per-SF benchmark below for parcel-level comparables.
+        <span class="text-muted" style="font-size:12.5px;">{{ bench_label }} here is the broad TCAD category — every {{ bench_label|lower }} property countywide, any size or use — not a use-code-specific peer group.</span>
+        See the Peer Set and the Where This Property Stands benchmark below, which narrows to this property's actual use code, for parcel-level comparables.
       </p>
       {% endif %}
 
       {# Forward outlook from the projection #}
-      {% if _proj and insights.value_cagr is defined %}
+      {# Coherence fix (July 2026, per Fable review finding 2): this sentence used to
+         state `insights.value_cagr` -- a SEPARATE CAGR computed independently in
+         build_insights(), always from earliest→2025 only, never aware of a 2026
+         preliminary -- right next to `_proj.market`/`_proj.est_tax`, which were
+         actually computed in build_projections() using its OWN, different CAGR
+         (`cagr_base`, which DOES extend to 2026 when a real preliminary exists).
+         These are two independently-derived numbers, not one -- confirmed on a real
+         case: a stated "3.3% CAGR" next to a dollar figure that could only be
+         produced by ~0.2%/yr, because build_projections()'s CAGR had been pulled
+         down by a real 2026 decline that build_insights() never saw. Fixed to read
+         proj_bands.cagr_base directly -- the exact rate build_projections() used to
+         produce _proj's figures (rows = _make_rows(cagr_base, 1.0), and
+         _proj = projections[-1]) -- so the stated rate and the shown result can
+         never drift apart; there's only one number now, not two. #}
+      {% if _proj and proj_bands and proj_bands.cagr_base is defined %}
       <p class="mb-2">
         <strong>Forward Outlook:</strong>
-        Holding the historical <strong>{{ insights.value_cagr }}%</strong> CAGR, the model projects market value near
+        Holding the <strong>{{ "{:+.1f}%".format(proj_bands.cagr_base) }}</strong> Base-scenario CAGR{% if proj_baseline %} ({{ proj_baseline }}){% endif %}, the model projects market value near
         <strong>${{ "{:,.0f}".format(_proj.market) }}</strong> by {{ _proj.year }}, with an estimated annual tax burden around
         <strong>${{ "{:,.0f}".format(_proj.est_tax) }}</strong>.
         <span class="badge-estimated" style="font-size:9px; padding:1px 5px;">Estimated</span>
@@ -1736,9 +1857,19 @@
                 2026 Preliminary
                 {% if current_2026 %}<span class="badge-preliminary ms-1" style="font-size:9.5px;">Preliminary</span>{% endif %}
               </th>
+              {# Coherence fix (July 2026, per Fable review finding 4, wave 2): this
+                 column includes a Total Tax row a few lines below, which can
+                 independently show its own Partial badge -- a bare "Verified"
+                 here, on the column header, read as a blanket claim about
+                 everything in the column. Changed to "Certified" (matching this
+                 table's own already-correct "2025 Certified" label text and the
+                 "Preliminary" badge's self-referential pattern in the 2026
+                 column) so it can't be misread as a billing claim; the Total Tax
+                 row keeps its own, already-correct Partial/Verified badge for
+                 whatever that year's billing actually is. #}
               <th class="text-end" style="width:26%;">
                 2025 Certified
-                {% if current %}<span class="badge-verified ms-1" style="font-size:9.5px;">Verified</span>{% endif %}
+                {% if current %}<span class="badge-verified ms-1" style="font-size:9.5px;">Certified</span>{% endif %}
               </th>
               <th class="text-end" style="width:26%;">Change 2025→2026</th>
             </tr>
@@ -1762,7 +1893,9 @@
               <td class="text-end">
                 {% if current_2026 and current_2026.market_value and current and current.market_value %}
                   {% set _c = (current_2026.market_value - current.market_value) / current.market_value * 100 %}
-                  <span class="fw-semibold {% if _c > 0 %}text-danger{% elif _c < 0 %}text-success{% endif %}">{{ "{:+.1f}%".format(_c) }}</span>
+                  {# Coherence fix (July 2026, per Fable review finding 6): raw asset
+                     value change, not tax burden -- neutral color. #}
+                  <span class="fw-semibold" style="color:var(--accent);">{{ "{:+.1f}%".format(_c) }}</span>
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
             </tr>
@@ -1780,7 +1913,9 @@
               <td class="text-end">
                 {% if current_2026 and current_2026.assessed_value and current and current.assessed_value %}
                   {% set _c = (current_2026.assessed_value - current.assessed_value) / current.assessed_value * 100 %}
-                  <span class="fw-semibold {% if _c > 0 %}text-danger{% elif _c < 0 %}text-success{% endif %}">{{ "{:+.1f}%".format(_c) }}</span>
+                  {# Coherence fix (July 2026, per Fable review finding 6): raw asset
+                     value change, not tax burden -- neutral color. #}
+                  <span class="fw-semibold" style="color:var(--accent);">{{ "{:+.1f}%".format(_c) }}</span>
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
             </tr>
@@ -1798,7 +1933,9 @@
               <td class="text-end">
                 {% if current_2026 and current_2026.land_value and current and current.land_value %}
                   {% set _c = (current_2026.land_value - current.land_value) / current.land_value * 100 %}
-                  <span class="fw-semibold {% if _c > 0 %}text-danger{% elif _c < 0 %}text-success{% endif %}">{{ "{:+.1f}%".format(_c) }}</span>
+                  {# Coherence fix (July 2026, per Fable review finding 6): raw asset
+                     value change, not tax burden -- neutral color. #}
+                  <span class="fw-semibold" style="color:var(--accent);">{{ "{:+.1f}%".format(_c) }}</span>
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
             </tr>
@@ -1816,7 +1953,9 @@
               <td class="text-end">
                 {% if current_2026 and current_2026.imprv_value and current and current.imprv_value %}
                   {% set _c = (current_2026.imprv_value - current.imprv_value) / current.imprv_value * 100 %}
-                  <span class="fw-semibold {% if _c > 0 %}text-danger{% elif _c < 0 %}text-success{% endif %}">{{ "{:+.1f}%".format(_c) }}</span>
+                  {# Coherence fix (July 2026, per Fable review finding 6): raw asset
+                     value change, not tax burden -- neutral color. #}
+                  <span class="fw-semibold" style="color:var(--accent);">{{ "{:+.1f}%".format(_c) }}</span>
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
             </tr>
@@ -1900,8 +2039,14 @@
       <span class="badge-estimated">Estimated</span> 2026 Total Tax = 2026 preliminary taxable value × 2025 blended entity rates.
       Actual 2026 tax set after certification and entity budget adoption.
       {% endif %}
-      Change%: <span class="text-danger fw-semibold">red</span> = higher burden,
+      {# Coherence fix (July 2026, per Fable review finding 6): this legend used to
+         cover the whole Change% column, but that column mixes raw asset-value
+         rows (Market/Assessed/Land/Improvement Value) with true tax-burden rows
+         (Taxable Value, Total Tax). Only the burden rows still carry red/green;
+         the value rows above are now neutral, so the legend is scoped to match. #}
+      Change% for Taxable Value and Total Tax: <span class="text-danger fw-semibold">red</span> = higher burden,
       <span class="text-success fw-semibold">green</span> = lower.
+      Market/Assessed/Land/Improvement Value changes are shown neutrally — a value change alone isn't inherently good or bad news.
     </div>
   </div>
   {% endif %}
@@ -2041,8 +2186,15 @@
       </div>
     </div>
     <div class="card-footer text-muted small">
+      {# Coherence fix (July 2026, per Fable review finding 4, wave 2): "(Verified)"
+         here described the APPRAISAL export only, but sits directly under a table
+         whose own Source column uses "Verified"/"Partial" to mean BILLING
+         confidence — the same word, two different domains, right next to each
+         other. Reworded to "(Appraisal: Certified)" so it can't be misread as a
+         billing claim; each row's own Source column is still the place to check
+         that row's billing confidence. #}
       <strong>Data sources:</strong>
-      2025 — TCAD Certified Appraisal Export (Verified).
+      2025 — TCAD Certified Appraisal Export (Appraisal: Certified — this describes property value data, not tax billing; see each row's Source column above for billing confidence).
       2021–2024 values — Texas Comptroller Annual Jurisdiction Roll (AJR).
       2021–2024 tax — computed from certified taxable value × entity rates (levy estimate); or portal payment receipt where available (Partial).
       Authoritative billing history pending Travis County Tax Office response.
@@ -2101,7 +2253,9 @@
               {# YoY market value % #}
               <td class="text-end">
                 {% if m and m.yoy_market_value_pct is not none %}
-                  <span class="{% if m.yoy_market_value_pct > 0 %}text-danger{% elif m.yoy_market_value_pct < 0 %}text-success{% endif %}">
+                  {# Coherence fix (July 2026, per Fable review finding 6): raw
+                     market-value YoY change, not tax burden -- neutral color. #}
+                  <span style="color:var(--accent);">
                     {{ "{:+.1f}%".format(m.yoy_market_value_pct) }}
                     {% if m.risk_large_value_jump %}
                       <span class="badge-partial ms-1" style="font-size:10px; padding: 1px 5px;" title="Large value jump (>{{ '{:.0f}'.format(m.risk_large_value_jump_pct) }}%)">!</span>
@@ -2117,7 +2271,9 @@
               {# YoY assessed value % #}
               <td class="text-end">
                 {% if m and m.yoy_assessed_value_pct is not none %}
-                  <span class="{% if m.yoy_assessed_value_pct > 0 %}text-danger{% elif m.yoy_assessed_value_pct < 0 %}text-success{% endif %}">
+                  {# Coherence fix (July 2026, per Fable review finding 6): raw
+                     assessed-value YoY change, not tax burden -- neutral color. #}
+                  <span style="color:var(--accent);">
                     {{ "{:+.1f}%".format(m.yoy_assessed_value_pct) }}
                   </span>
                 {% else %}
@@ -2147,10 +2303,35 @@
                 {% endif %}
               </td>
 
-              {# Coverage / confidence badge #}
+              {# Coverage / confidence badge (Fable review finding 4, wave 2):
+                 compute_metrics.py sets coverage_level = 'full' for EVERY 2025
+                 row unconditionally (`CASE WHEN pty.tax_year = 2025 THEN 'full'
+                 ELSE 'value_only' END` -- a pure year check, confirmed by reading
+                 the source), even though its own doc comment claims 'full' means
+                 "market + assessed + real billing (Verified)". It doesn't check
+                 whether that year's billing is a confirmed total_tax, a
+                 derived/reconstructed sum, or a portal-scrape partial receipt --
+                 so this badge said "Verified" for a parcel's 2025 row even when
+                 the same page's own tax table, a few cards away, correctly
+                 marked that same year's tax "(partial)". Cross-checked against
+                 r.is_billing_verified (the single source of truth already used
+                 everywhere else on this page) for the 2025 row specifically,
+                 rather than trusting coverage_level alone there -- 2021-2024
+                 rows are unaffected (coverage_level's 'value_only' for those
+                 years is accurate, no billing claim to cross-check). Fixing
+                 compute_metrics.py's CASE expression itself (so parcel_metrics
+                 is correct at the data layer, not just patched here) needs a
+                 live rerun this sandbox can't perform or verify -- flagged
+                 separately, not silently left as the only fix. #}
               <td class="text-center">
                 {% if m %}
-                  {% if m.coverage_level == 'full' %}
+                  {% if r.tax_year == 2025 %}
+                    {% if r.is_billing_verified %}
+                      <span class="badge-verified">Verified</span>
+                    {% else %}
+                      <span class="badge-partial">Partial</span>
+                    {% endif %}
+                  {% elif m.coverage_level == 'full' %}
                     <span class="badge-verified">Verified</span>
                   {% else %}
                     <span class="badge-partial">Partial</span>
@@ -2167,7 +2348,9 @@
             <tr class="table-light small text-muted">
               <td colspan="6" class="ps-2">
                 <em>Cumulative market value growth (earliest valid year → 2025):
-                  <strong class="{% if m25.cumulative_value_growth_pct > 0 %}text-danger{% else %}text-success{% endif %}">
+                  {# Coherence fix (July 2026, per Fable review finding 6): raw
+                     market-value growth, not tax burden -- neutral color. #}
+                  <strong style="color:var(--accent);">
                     {{ "{:+.1f}%".format(m25.cumulative_value_growth_pct) }}
                   </strong>
                 </em>
@@ -2500,22 +2683,51 @@
         {% set _medv = _b25.median_market_value %}
         {% set _p25v = _b25.p25_market_value %}
         {% set _p75v = _b25.p75_market_value %}
-        {% if _p75v and _mv >= _p75v %}{% set _pct_lbl = "top 25%" %}{% set _pct_clr = "var(--up)" %}
+        {# Coherence fix (July 2026, per Fable review finding 6): this positions a
+           RAW market value within its benchmark distribution -- not a tax-burden
+           figure -- so it must not carry the red=rising/green=falling burden
+           convention (var(--up)/var(--down)). Switched to a neutral slate/blue
+           scale; the burden convention is untouched everywhere it actually
+           describes tax burden. #}
+        {% if _p75v and _mv >= _p75v %}{% set _pct_lbl = "top 25%" %}{% set _pct_clr = "var(--accent)" %}
         {% elif _medv and _mv >= _medv %}{% set _pct_lbl = "50th–75th percentile" %}{% set _pct_clr = "var(--text-2)" %}
         {% elif _p25v and _mv >= _p25v %}{% set _pct_lbl = "25th–50th percentile" %}{% set _pct_clr = "var(--text-2)" %}
-        {% else %}{% set _pct_lbl = "bottom 25%" %}{% set _pct_clr = "var(--down)" %}{% endif %}
+        {% else %}{% set _pct_lbl = "bottom 25%" %}{% set _pct_clr = "var(--accent)" %}{% endif %}
         {% set _vs_med = (_mv - _medv) / _medv * 100 %}
+        {# Coherence fix (July 2026, per Fable review finding 3): once a raw
+           value is several multiples of the median (e.g. a large/unusual
+           asset compared against a broad category median), a percentage
+           ("+11938%") reads as a data error, not a real number. Past 3x,
+           render as a multiple ("120x") instead -- matches the JS-side
+           fmtVsMed() used when this pane is refreshed after a live filter
+           change, so the two never disagree. #}
+        {% set _ratio = (_mv / _medv) if _medv else none %}
         <p class="mb-3" style="font-size:13.5px; line-height:1.55;" id="benchSummaryText">
           In 2025, this property's market value of
           <strong>${{ "{:,.0f}".format(_mv) }}</strong>
           places it in the <strong style="color:{{ _pct_clr }};" id="benchPctLabel">{{ _pct_lbl }}</strong>
           for <span id="benchSummaryType">{{ bench_label }}</span> properties in Travis County
           (<span id="benchComparableCount">{{ _b25.parcel_count if _b25.parcel_count else "—" }}</span> comparable) —
-          <strong class="{% if _vs_med > 0 %}text-danger{% else %}text-success{% endif %}" id="benchVsMed">
-            {{ "{:+.0f}%".format(_vs_med) }}
+          <strong style="color:var(--accent);" id="benchVsMed">
+            {% if _ratio and _ratio|abs >= 3 %}{{ "{:.0f}".format(_ratio) }}×{% else %}{{ "{:+.0f}%".format(_vs_med) }}{% endif %}
           </strong>
-          {% if _vs_med > 0 %}above{% else %}below{% endif %} the county median of
+          <span id="benchVsMedWord">{% if _ratio and _ratio|abs >= 3 %}the county median of{% elif _vs_med > 0 %}above the county median of{% else %}below the county median of{% endif %}</span>
           <strong id="benchMedianVal">${{ "{:,.0f}".format(_medv) }}</strong>.
+          {# Coherence fix (July 2026, per Fable review finding 1, wave 2): this
+             sentence pulls from the exact same benchmark_by_year data (the broad
+             classify.py category, county_benchmark WHERE property_type_label =
+             bench_label) as the Overview tab's "Submarket Position" paragraph,
+             which already carries this caveat -- confirmed by tracing both back to
+             the same app.py query. This card's version didn't, so a user reading
+             only the Position tab had no way to know "Multi-Family" here means the
+             whole broad bucket, not a use-code-specific comparison. Shown only
+             while the card is actually displaying the broad population -- JS hides
+             it the moment a narrower Use Code filter is applied (see
+             updateSummary()), since once narrowed the caveat would itself become
+             wrong. #}
+          <span id="benchBroadCaveat" class="text-muted" style="font-size:12px; display:block; margin-top:4px;">
+            {{ bench_label }} here is the broad TCAD category — every {{ bench_label|lower }} property countywide, any size or use — not a use-code-specific peer group. Use the Use Code filter above to narrow to this property's actual type.
+          </span>
         </p>
       {% endif %}
     </div>
@@ -2546,19 +2758,24 @@
               <td class="text-end text-muted small bench-p25">${{ "{:,.0f}".format(b.p25_market_value) if b.p25_market_value else "—" }}</td>
               <td class="text-end text-muted small bench-med">${{ "{:,.0f}".format(b.median_market_value) if b.median_market_value else "—" }}</td>
               <td class="text-end text-muted small bench-p75">${{ "{:,.0f}".format(b.p75_market_value) if b.p75_market_value else "—" }}</td>
+              {# Coherence fix (July 2026, per Fable review finding 6): both cells
+                 below position/change a RAW market value, not tax burden --
+                 var(--up)/var(--down) and text-danger/text-success swapped for a
+                 neutral slate/blue scale, matching the JS-side posBand()/fmtVsMed()
+                 treatment used when this table's 2025 row is live-refreshed. #}
               <td class="text-center small bench-pos">
                 {% if r.market_value and b.median_market_value %}
                   {% set _mv = r.market_value %}{% set _p25v = b.p25_market_value %}
                   {% set _medv = b.median_market_value %}{% set _p75v = b.p75_market_value %}
-                  {% if _p75v and _mv >= _p75v %}<span style="color:var(--up);">↑ Top 25%</span>
+                  {% if _p75v and _mv >= _p75v %}<span style="color:var(--accent);">↑ Top 25%</span>
                   {% elif _mv >= _medv %}<span style="color:var(--text-2);">↑ Above median</span>
                   {% elif _p25v and _mv >= _p25v %}<span style="color:var(--text-2);">↓ Below median</span>
-                  {% else %}<span style="color:var(--down);">↓ Bottom 25%</span>{% endif %}
+                  {% else %}<span style="color:var(--accent);">↓ Bottom 25%</span>{% endif %}
                 {% else %}—{% endif %}
               </td>
               <td class="text-end small text-muted bench-yoy">
                 {% if b.median_yoy_value_change_pct is not none %}
-                  <span class="{% if b.median_yoy_value_change_pct > 0 %}text-danger{% elif b.median_yoy_value_change_pct < 0 %}text-success{% endif %}">
+                  <span style="color:var(--text-2);">
                     {{ "{:+.1f}%".format(b.median_yoy_value_change_pct) }}
                   </span>
                 {% else %}<span class="text-muted">base yr</span>{% endif %}
@@ -2577,7 +2794,12 @@
       Benchmark figures for the <span id="benchFooterType">{{ bench_label }}</span> group.
       Bottom 25% / Median / Top 25% = 25th, 50th, 75th percentiles of county market values.
       Use Code filter runs a live query — count shown reflects actual records for the selected group.
-      AJR data for 2021–2024 (Partial confidence); 2025 from Certified Export (Verified).
+      {# Coherence fix (July 2026, per Fable review finding 4, wave 2): "Verified"
+         without qualification, on a page that also uses "Verified" to mean
+         billing confidence elsewhere, invites misreading -- this entire card is
+         appraisal/value data only (no billing content), so it's labeled
+         explicitly as such. #}
+      AJR data for 2021–2024 (Appraisal: Partial confidence); 2025 from Certified Export (Appraisal: Certified).
     </div>
   </div>
   {% endif %}
@@ -3101,12 +3323,29 @@ if (rCtx) {
     if (n == null || isNaN(n)) return '—';
     return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
   }
+  // Coherence fix (July 2026, per Fable review finding 6): this positions a
+  // RAW market value within its benchmark distribution -- not a tax-burden
+  // figure -- so it should never carry the red=rising/green=falling burden
+  // convention (var(--up)/var(--down)). Switched to a neutral slate/blue
+  // scale; the burden convention is untouched everywhere it actually
+  // describes tax burden (e.g. the Taxes Paid history, YoY tax-rate deltas).
   function posBand(mv, p25, med, p75) {
     if (!mv || !med) return {label:'—', color:'var(--text-3)'};
-    if (p75 && mv >= p75) return {label:'↑ Top 25%', color:'var(--up)'};
+    if (p75 && mv >= p75) return {label:'↑ Top 25%', color:'var(--accent)'};
     if (mv >= med)         return {label:'↑ Above median', color:'var(--text-2)'};
     if (p25 && mv >= p25)  return {label:'↓ Below median', color:'var(--text-2)'};
-    return {label:'↓ Bottom 25%', color:'var(--down)'};
+    return {label:'↓ Bottom 25%', color:'var(--accent)'};
+  }
+  // Coherence fix (July 2026, per Fable review finding 3): once a raw value
+  // is several multiples of the median, a percentage ("+11938%") reads as a
+  // data error rather than a real number. Past 3x, render as a multiple
+  // ("120x") instead.
+  function fmtVsMed(mv, med) {
+    if (!med) return {text: '—', ratio: null};
+    const ratio = mv / med;
+    if (Math.abs(ratio) >= 3) return {text: Math.round(ratio) + '×', ratio};
+    const pct = (ratio - 1) * 100;
+    return {text: (pct >= 0 ? '+' : '') + pct.toFixed(0) + '%', ratio};
   }
 
   // ── Populate code options for a given prop type ──────────────────
@@ -3161,13 +3400,32 @@ if (rCtx) {
             const matchNb = nbs.find(item => item.code === parcelNeighborhood);
             if (matchNb) {
               taNb.select(matchNb.code, `${matchNb.code} (${matchNb.n.toLocaleString()})`);
-              fetchAndRender();
             }
           }
         } else {
           document.getElementById('benchNbInput').disabled = true;
           document.getElementById('benchNbInput').placeholder = 'No neighborhood data';
         }
+
+        // Coherence fix (July 2026, per Fable review finding 3): the initial
+        // fetch used to live ONLY inside the `if (parcelNeighborhood)` branch
+        // above, so it fired -- or didn't -- based on whether this parcel's
+        // neighborhood happened to match, a condition with no relationship to
+        // whether populateCodeOptions() just found and pre-selected this
+        // parcel's own classi_cd a few lines up. A parcel with no matching
+        // neighborhood_cd (or one below the neighborhoods list's population
+        // threshold) never got an initial fetch at all, regardless of whether
+        // a valid narrow use-code selection was sitting in the (unsubmitted)
+        // filter UI -- so the page just kept showing the static, server-
+        // rendered BROAD bench_label population indefinitely. That's the
+        // confirmed root cause of the Submarket benchmark showing the whole
+        // Multi-Family bucket (n=12,570, median $519,086) instead of this
+        // parcel's actual, much narrower use-code peer set: the narrow query
+        // path exists and is reachable (/api/benchmark?classi_cd=), but
+        // nothing on page load reliably called it. The refine-to-this-
+        // parcel's-own-type-(and-code-if-found) fetch must fire
+        // unconditionally, not be gated on an unrelated neighborhood match.
+        fetchAndRender();
       })
       .catch(() => {});
   }
@@ -3190,7 +3448,10 @@ if (rCtx) {
       `<span style="color:${pos.color};">${pos.label}</span>`;
     const yoyEl = row.querySelector('.bench-yoy');
     if (yoy != null) {
-      yoyEl.innerHTML = `<span class="${yoy > 0 ? 'text-danger' : yoy < 0 ? 'text-success' : ''}">${fmtPct(yoy)}</span>`;
+      // Coherence fix (July 2026, per Fable review finding 6): median YoY
+      // MARKET VALUE change -- not a tax-burden figure -- rendered neutrally
+      // rather than red/green.
+      yoyEl.innerHTML = `<span style="color:var(--text-2);">${fmtPct(yoy)}</span>`;
     } else {
       yoyEl.innerHTML = '<span class="text-muted">base yr</span>';
     }
@@ -3205,18 +3466,30 @@ if (rCtx) {
     const p75 = data.p75_market_value;
     const n   = data.n_parcels;
     const pos = posBand(parcelMv, p25, med, p75);
-    const vsMed = med ? ((parcelMv - med) / med * 100) : null;
+    const vm = fmtVsMed(parcelMv, med);
 
     document.getElementById('benchPctLabel').textContent = pos.label.replace(/[↑↓] /,'');
     document.getElementById('benchPctLabel').style.color = pos.color;
     document.getElementById('benchSummaryType').textContent = label;
     document.getElementById('benchComparableCount').textContent = n ? n.toLocaleString() : '—';
     const vsMedEl = document.getElementById('benchVsMed');
-    vsMedEl.textContent = vsMed != null ? (vsMed >= 0 ? '+' : '') + vsMed.toFixed(0) + '%' : '—';
-    vsMedEl.className = vsMed > 0 ? 'text-danger' : 'text-success';
+    vsMedEl.textContent = vm.text;
+    // Coherence fix (July 2026, per Fable review finding 6): raw market-value
+    // vs-median comparison, not tax burden -- neutral color, not red/green.
+    vsMedEl.className = '';
+    vsMedEl.style.color = 'var(--accent)';
     document.getElementById('benchMedianVal').textContent = fmt(med);
+    const aboveEl = document.getElementById('benchVsMedWord');
+    if (aboveEl) aboveEl.textContent = (vm.ratio != null && Math.abs(vm.ratio) >= 3) ? 'the county median of' : (vm.ratio >= 1 ? 'above the county median of' : 'below the county median of');
     const strongYr = summaryText.querySelector('strong');
     if (strongYr) strongYr.textContent = '$' + Math.round(parcelMv).toLocaleString();
+    // Coherence fix (July 2026, per Fable review finding 1, wave 2): the
+    // "broad category" caveat below is only true while this card is actually
+    // showing the broad bench_label population. The moment a narrower Use
+    // Code filter successfully narrows the result (label !== defaultBenchLabel),
+    // the caveat itself would be wrong, so hide it.
+    const caveatEl = document.getElementById('benchBroadCaveat');
+    if (caveatEl) caveatEl.style.display = (label === defaultBenchLabel) ? 'block' : 'none';
   }
 
   // ── Main fetch + render ──────────────────────────────────────────
@@ -3306,9 +3579,10 @@ if (rCtx) {
         return;
       }
       if (noteEl) noteEl.textContent = '— ' + (d.band_note || '');
+      // Coherence fix (July 2026, per Fable review finding 6): raw market-value
+      // percentile rank, not tax burden -- neutral color, not red/green.
       const clr = d.this_mv_pct_rank != null ? (
-        d.this_mv_pct_rank >= 75 ? 'var(--up)' :
-        d.this_mv_pct_rank <= 25 ? 'var(--down)' : 'var(--text)'
+        (d.this_mv_pct_rank >= 75 || d.this_mv_pct_rank <= 25) ? 'var(--accent)' : 'var(--text)'
       ) : 'var(--text)';
       body.innerHTML = `
         <div class="d-flex flex-wrap gap-3 mb-3">
@@ -3469,9 +3743,11 @@ if (rCtx) {
   if (!section || !body) return;
 
   const _fmtPsf = n => (n == null) ? '—' : '$' + Number(n).toFixed(2) + '/SF';
+  // Coherence fix (July 2026, per Fable review finding 6): raw $/SF market-value
+  // percentile rank, not tax burden -- neutral color, not red/green.
   function _rank(r) {
     if (r == null) return '—';
-    const clr = r >= 75 ? 'var(--up)' : (r <= 25 ? 'var(--down)' : 'var(--text)');
+    const clr = (r >= 75 || r <= 25) ? 'var(--accent)' : 'var(--text)';
     return `<span style="color:${clr}; font-weight:600;">${r}th pct</span>`;
   }
 
