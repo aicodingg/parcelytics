@@ -1491,6 +1491,64 @@
         {% else %}
         Growth has been relatively flat for this asset class.
         {% endif %}
+        {# Narrative expansion (July 2026, per Diego — Insight Report Expansion
+           brief): two additional sentences below, both grounded in data already
+           fetched for this same request — no new queries.
+
+           (1) Uneven-vs-steady check: a CAGR is a single smoothed number that
+           can hide a very different real story (e.g. flat for years, then one
+           reappraisal jump). Derived here from the SAME `history` rows the
+           Value History table already renders — not a new field, not a new
+           query, just a max-single-year-delta pass over data already on the
+           page. Only shown with >=3 real years on file (with 2 points,
+           "uneven vs steady" isn't a meaningful distinction — the CAGR IS the
+           only year-over-year change that exists). #}
+        {% set _hist_mv_app = history | selectattr('market_value') | list | sort(attribute='tax_year') %}
+        {% if _hist_mv_app | length >= 3 %}
+          {% set _jump = namespace(from_yr=none, to_yr=none, delta=none) %}
+          {% for _i in range(1, _hist_mv_app | length) %}
+            {% set _prev = _hist_mv_app[_i - 1] %}
+            {% set _cur  = _hist_mv_app[_i] %}
+            {% set _d = _cur.market_value - _prev.market_value %}
+            {% if _jump.delta is none or (_d | abs) > (_jump.delta | abs) %}
+              {% set _jump.from_yr = _prev.tax_year %}
+              {% set _jump.to_yr = _cur.tax_year %}
+              {% set _jump.delta = _d %}
+            {% endif %}
+          {% endfor %}
+          {% set _total_delta_app = insights.latest_market - insights.earliest_market %}
+          {% if _total_delta_app and _jump.delta is not none %}
+            {% set _jump_share = (_jump.delta / _total_delta_app * 100) %}
+            {% if _jump_share >= 60 %}
+            Most of this growth came in a single year ({{ _jump.from_yr }}→{{ _jump.to_yr }}), not a steady climb — worth checking what drove that reappraisal rather than assuming a smooth trend.
+            {% else %}
+            Growth has been fairly evenly spread across these years rather than concentrated in one jump.
+            {% endif %}
+          {% endif %}
+        {% endif %}
+        {# (2) Peer-growth comparison: uses `benchmark_by_year` and `bench_label`,
+           both already computed in property_detail() from county_benchmark for
+           THIS parcel's own bench_label — no new query. This is the
+           COUNTY-WIDE median-value benchmark (the same source the existing
+           "Submarket Position" paragraph below already uses for a point-in-time
+           percentile), read here at the SAME two years (earliest_year/
+           latest_year) as this parcel's own CAGR, for a like-for-like growth
+           comparison — not a value-level snapshot, which Submarket Position
+           already covers, so this doesn't restate it.
+           Investigated and NOT used: the Position tab's individual peer/
+           comparable-parcel growth data (Peer Set, Per-SF Peer Benchmark) is
+           fetched via separate async /api/ calls after the page loads, not
+           computed in this same server-side request — using it here would mean
+           building new synchronous plumbing, which the brief said to flag
+           instead of building silently. Flagged, not built. #}
+        {% set _bmk_early_app = benchmark_by_year.get(insights.earliest_year) %}
+        {% set _bmk_late_app  = benchmark_by_year.get(insights.latest_year) %}
+        {% if _bmk_early_app and _bmk_late_app and _bmk_early_app.median_market_value and _bmk_late_app.median_market_value %}
+          {% set _peer_pct_app = (_bmk_late_app.median_market_value - _bmk_early_app.median_market_value) / _bmk_early_app.median_market_value * 100 %}
+          Over the same span, the median {{ bench_label }} parcel countywide {{ "rose" if _peer_pct_app > 0 else "fell" }} <strong>{{ "{:+.1f}%".format(_peer_pct_app) }}</strong>, so this parcel has
+          {% if insights.value_change_pct > _peer_pct_app %}outpaced{% elif insights.value_change_pct < _peer_pct_app %}lagged{% else %}tracked{% endif %}
+          the broader {{ bench_label|lower }} market over the same period.
+        {% endif %}
       </p>
       {% endif %}
 
@@ -1513,6 +1571,31 @@
         {% if insights.est_annual_tax %}
           At the current taxable value, estimated annual taxes are
           <strong>${{ "{:,.0f}".format(insights.est_annual_tax) }}</strong>.
+        {% endif %}
+        {# Narrative expansion (July 2026, per Diego): largest-contributor
+           sentence, reusing `entity_detail` directly — the same sort-by-
+           amount_due-descending and %-of-total math the "2025 Tax Burden —
+           Entity Split" card below already does (_ent_sorted/_total_tax_bar/
+           _pct there), just named locally here so this paragraph doesn't
+           depend on a `{% set %}` from later in the template. Not a new
+           computation, the same one used twice now instead of once.
+
+           Investigated and NOT used: a delinquency-status sentence ("all
+           entities paid in full"), the brief's other Tax Burden candidate.
+           This exact card already has its own "Delinquent Taxes" / "No
+           delinquent taxes on record" paragraph a few lines below (driven by
+           insights.delinquent_amount, sourced from the official
+           tax_delinquent table) — adding a second delinquency-status line
+           here would restate that existing paragraph, which the brief said
+           not to do. #}
+        {% set _ent_ranked_tb = entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
+        {% if _ent_ranked_tb %}
+          {% set _tax_total_tb = _ent_ranked_tb | sum(attribute='amount_due') | float %}
+          {% if _tax_total_tb > 0 %}
+            {% set _top_tb = _ent_ranked_tb[0] %}
+            {% set _top_pct_tb = _top_tb.amount_due | float / _tax_total_tb * 100 %}
+            <strong>{{ _top_tb.entity_name or _top_tb.entity_code }}</strong> is the largest single contributor, at <strong>{{ "{:.1f}%".format(_top_pct_tb) }}</strong> of the total 2025 levy.
+          {% endif %}
         {% endif %}
       </p>
       {% endif %}
@@ -1565,6 +1648,29 @@
           Buyer should verify which exemptions carry and which reset at sale.
         {% elif "Agricultural" in insights.prop_class %}
           Agricultural valuation may be subject to rollback taxes if land use changes.
+        {% endif %}
+        {# Narrative expansion (July 2026, per Diego): valuation-method
+           sentence, reusing `val_method` — already computed in
+           property_detail() (USE_CODE_LOOKUP by classi_cd, falling back to
+           get_valuation_method(state_cd1)) and already shown in the Property
+           Info card's "Use Code" row. Reuses the SAME "rent roll drives the
+           underwriting" reasoning the Investment Snapshot's Value Composition
+           paragraph below already establishes for improvement-dominated
+           parcels (see that paragraph's improvement-dominated branch) instead
+           of inventing new framing.
+
+           Investigated and NOT used: a Year Built / building-size sentence,
+           the brief's other Asset Class candidate. The Investment Snapshot
+           section further down this SAME card already has a "Value
+           Composition" paragraph that connects land/improvement share to
+           property age ("under a ~NN-year-old structure...") — a second
+           age/size sentence here would restate that existing paragraph. #}
+        {% if val_method in ("Income", "Cost") %}
+          {% if val_method == "Income" %}
+          This is valued using the <strong>income approach</strong>, so changes in rent roll or occupancy move the appraisal more directly than they would for a cost-approach property.
+          {% else %}
+          This is valued using the <strong>cost approach</strong>, tied more to replacement cost and physical condition than to income performance.
+          {% endif %}
         {% endif %}
       </p>
       {% endif %}
