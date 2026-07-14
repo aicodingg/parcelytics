@@ -482,6 +482,54 @@
   </div>
 </div>
 
+{# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief) ────
+   The single highest-priority item the outside review found missing: a
+   plain-language breakdown of WHY the bill changed, not just that it did.
+   bill_waterfall is a single top-level variable computed once in
+   property_detail() (app.py, build_bill_waterfall()) — shared by both modes,
+   not a macro, so there's no branch-scoping concern. Renders nothing at all
+   when the 2024→2025 pair isn't both genuinely verified (see that function's
+   docstring) — never shows a guessed decomposition.
+   Homeowner framing: plain labels, no per-entity drill-down (see Investor
+   branch below for that). Burden-coloring (red = added to bill, green =
+   reduced it) is used here DELIBERATELY, even though raw value-change
+   figures elsewhere on this page are neutral-colored (see the "Coherence
+   fix" comments above) — this card is explicitly about bill impact, not
+   raw asset value, so the red/green convention is unambiguous here. #}
+{% if bill_waterfall %}
+<div class="card mb-4">
+  <div class="card-header">Why {{ "Your" if is_residential else "This Property's" }} Tax Bill Changed
+    <span class="text-muted" style="font-size:12px; font-weight:400;">({{ bill_waterfall.prior_year }} → {{ bill_waterfall.cur_year }})</span>
+  </div>
+  <div class="card-body">
+    <canvas id="billWaterfallChart" height="130"></canvas>
+    <div class="mt-3" style="font-size:13.5px; line-height:1.7;">
+      {% if bill_waterfall.value_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Value change added ${{ "{:,.0f}".format(bill_waterfall.value_effect) }}</span> — {{ "your home's" if is_residential else "this property's" }} taxable value went up.</div>
+      {% elif bill_waterfall.value_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Value change saved ${{ "{:,.0f}".format(-bill_waterfall.value_effect) }}</span> — {{ "your home's" if is_residential else "this property's" }} taxable value went down.</div>
+      {% endif %}
+      {% if bill_waterfall.rate_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Tax rates added ${{ "{:,.0f}".format(bill_waterfall.rate_effect) }}</span> — tax rates went up overall.</div>
+      {% elif bill_waterfall.rate_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Tax rates saved ${{ "{:,.0f}".format(-bill_waterfall.rate_effect) }}</span> — tax rates went down overall.</div>
+      {% endif %}
+      {% if bill_waterfall.exemption_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Exemption changes added ${{ "{:,.0f}".format(bill_waterfall.exemption_effect) }}</span> — {{ "you lost" if is_residential else "this parcel lost" }} some exemption value.</div>
+      {% elif bill_waterfall.exemption_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Exemption changes saved ${{ "{:,.0f}".format(-bill_waterfall.exemption_effect) }}</span> — {{ "you gained" if is_residential else "this parcel gained" }} exemption value.</div>
+      {% endif %}
+    </div>
+    {% if bill_waterfall.incomplete %}
+    <div class="text-muted mt-2" style="font-size:11px;">
+      <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
+      One or more taxing entities were missing rate or billing data for one of these two years and were left out of this breakdown.
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 {# ── Left: links + exemptions + neighborhood · Right: satellite ──────── #}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <div class="row g-3 mb-4">
@@ -878,11 +926,24 @@
 {# ── Back link ───────────────────────────────────────────────────────── #}
 <div class="d-flex justify-content-between align-items-center">
   <a href="/" class="back-link">&larr; New search</a>
-  {# task5-compare-pin #}
-  <button class="btn btn-sm btn-outline-secondary" id="comparePin"
-          onclick="pinToCompare()" title="Pin this parcel for comparison">
-    ⊞ Pin to Compare
-  </button>
+  <div class="d-flex gap-2">
+    {# Tax Due Diligence PDF export (July 2026, per Diego's outside-review
+       brief, item 3) -- placed alongside Pin to Compare per the brief's own
+       suggested location. Freely available for now (no accounts/paywall
+       infrastructure exists yet -- gating this is a separate, later task,
+       per the brief's explicit scope). Plain link, not a JS fetch: the
+       route returns a real PDF file directly (Content-Disposition: inline),
+       so the browser just opens/downloads it -- no extra JS needed. #}
+    <a class="btn btn-sm btn-outline-secondary" href="/parcel/{{ parcel.geo_id }}/export.pdf"
+       target="_blank" title="Download a citable one-page tax due diligence PDF for this parcel">
+      ⤓ Export Due Diligence PDF
+    </a>
+    {# task5-compare-pin #}
+    <button class="btn btn-sm btn-outline-secondary" id="comparePin"
+            onclick="pinToCompare()" title="Pin this parcel for comparison">
+      ⊞ Pin to Compare
+    </button>
+  </div>
 </div>
 
 {# ── Property header ─────────────────────────────────────────────────── #}
@@ -1188,6 +1249,78 @@
     </div>
   </div>
 
+</div>
+{% endif %}
+
+{# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief) ────
+   Same bill_waterfall top-level variable as the Homeowner branch (computed
+   once in property_detail(), app.py — see build_bill_waterfall()'s docstring
+   for the full math derivation/exactness proof). Investor framing: same
+   chart + effect summary, plus a per-entity rate-effect drill-down table
+   (which specific taxing entities drove the rate line), per Diego's brief.
+   Burden-coloring (red = added to bill, green = reduced it) is deliberately
+   used here even though raw value-change figures elsewhere in Investor mode
+   are neutral-colored (see the "Coherence fix" comments on the KPI cards
+   above) — this card is specifically about bill impact, not raw asset value. #}
+{% if bill_waterfall %}
+<div class="card mb-4">
+  <div class="card-header">Why This Property's Tax Bill Changed
+    <span class="text-muted" style="font-size:12px; font-weight:400;">({{ bill_waterfall.prior_year }} → {{ bill_waterfall.cur_year }})</span>
+  </div>
+  <div class="card-body">
+    <canvas id="billWaterfallChart" height="130"></canvas>
+    <div class="mt-3" style="font-size:13.5px; line-height:1.7;">
+      {% if bill_waterfall.value_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Value change added ${{ "{:,.0f}".format(bill_waterfall.value_effect) }}</span> — taxable value went up.</div>
+      {% elif bill_waterfall.value_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Value change saved ${{ "{:,.0f}".format(-bill_waterfall.value_effect) }}</span> — taxable value went down.</div>
+      {% endif %}
+      {% if bill_waterfall.rate_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Tax rates added ${{ "{:,.0f}".format(bill_waterfall.rate_effect) }}</span> — tax rates went up overall.</div>
+      {% elif bill_waterfall.rate_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Tax rates saved ${{ "{:,.0f}".format(-bill_waterfall.rate_effect) }}</span> — tax rates went down overall.</div>
+      {% endif %}
+      {% if bill_waterfall.exemption_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Exemption changes added ${{ "{:,.0f}".format(bill_waterfall.exemption_effect) }}</span> — this parcel lost some exemption value.</div>
+      {% elif bill_waterfall.exemption_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Exemption changes saved ${{ "{:,.0f}".format(-bill_waterfall.exemption_effect) }}</span> — this parcel gained exemption value.</div>
+      {% endif %}
+    </div>
+    {% if bill_waterfall.incomplete %}
+    <div class="text-muted mt-2" style="font-size:11px;">
+      <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
+      One or more taxing entities were missing rate or billing data for one of these two years and were left out of this breakdown.
+    </div>
+    {% endif %}
+    {% if bill_waterfall.entity_rate_effects %}
+    <hr>
+    <div class="small text-muted mb-2" style="font-weight:600; text-transform:uppercase; letter-spacing:.03em; font-size:11px;">Rate effect by entity</div>
+    <div class="table-responsive">
+      <table class="table table-sm mb-0" style="font-size:12.5px;">
+        <thead class="text-muted small">
+          <tr>
+            <th>Entity</th>
+            <th class="text-end">{{ bill_waterfall.prior_year }} Rate</th>
+            <th class="text-end">{{ bill_waterfall.cur_year }} Rate</th>
+            <th class="text-end">Rate Effect</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in bill_waterfall.entity_rate_effects %}
+          <tr>
+            <td>{{ e.entity_name }}</td>
+            <td class="text-end">{{ "{:.4f}%".format(e.rate_prior) }}</td>
+            <td class="text-end">{{ "{:.4f}%".format(e.rate_cur) }}</td>
+            <td class="text-end {{ 'text-danger' if e.rate_effect > 0 else 'text-success' if e.rate_effect < 0 else '' }}">
+              {{ "{:+,.0f}".format(e.rate_effect) }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
 </div>
 {% endif %}
 
@@ -1713,7 +1846,18 @@
         {{ stat('Land Value Share', ("{:.0f}%".format(_land_share)) if _land_share is not none else '—') }}
         {{ stat('Year Built', (parcel.year_built|string) if parcel.year_built else '—', ("~{} yrs old".format(_age)) if _age else '') }}
         {{ stat('Eff. Tax Rate', ("{:.3f}%".format(_etr)) if _etr is not none else '—', '2025') }}
-        {{ stat('Assessment Ratio', ("{:.1f}%".format(_ratio)) if _ratio is not none else '—') }}
+        {# Assessment Ratio conditional callout (July 2026, per Diego's
+           outside-review brief): assessed/market is ~100% for the vast
+           majority of Travis County parcels (no homestead cap in effect),
+           so showing it as a permanent tile here repeated the same
+           unremarkable "100.0%" on most pages. Now only rendered when it's
+           genuinely informative -- more than half a point off 100%, which
+           in practice means a real homestead cap or a data anomaly worth a
+           second look -- instead of a fixture on every parcel regardless of
+           whether it says anything. #}
+        {% if _ratio is not none and (_ratio - 100) | abs >= 0.5 %}
+        {{ stat('Assessment Ratio', "{:.1f}%".format(_ratio), 'below typical ~100%' if _ratio < 100 else 'above typical ~100% — check for a data anomaly') }}
+        {% endif %}
         {{ stat('Est. Annual Tax', ("${:,.0f}".format(insights.est_annual_tax)) if insights.est_annual_tax else '—', '2025 taxable × rate') }}
       </div>
 
@@ -2577,8 +2721,7 @@
       <strong>Data sources:</strong>
       2025 — TCAD Certified Appraisal Export (Appraisal: Certified — this describes property value data, not tax billing; see each row's Source column above for billing confidence).
       2021–2024 values — Texas Comptroller Annual Jurisdiction Roll (AJR).
-      2021–2024 tax — computed from certified taxable value × entity rates (levy estimate); or portal payment receipt where available (Partial).
-      Authoritative billing history pending Travis County Tax Office response.
+      2021–2024 tax — sourced directly from Travis County Tax Office billing records (Verified); this is a comprehensive countywide billing load, not a rate-based estimate or portal receipt. See the "2021–24 billing" badge above for this specific parcel's coverage.
       {% if _has_2026 %}2026 — TCAD Preliminary Export, June 9, 2026 (Preliminary — subject to change until July 25, 2026 certification).{% endif %}
       Billing detail is only available for 2025.
       <span class="badge-data-anomaly" title="AV > MV flag" style="margin-left:6px;">!</span> = assessed value exceeds market value in source data — known AJR data quality issue.
@@ -2662,10 +2805,25 @@
                 {% endif %}
               </td>
 
-              {# Assessment ratio #}
+              {# Assessment ratio -- conditional callout (July 2026, per
+                 Diego's outside-review brief): same "nearly always ~100%,
+                 low decision value" reasoning as the Investment Snapshot
+                 tile above. In this per-year table, showing the exact
+                 number on every row for every year would repeat that same
+                 unremarkable figure up to 5x on one page. Only the actual
+                 percentage is called out (bold + flagged) when it's more
+                 than half a point off 100%; otherwise a muted "~100%"
+                 keeps the column informative-at-a-glance (still confirms
+                 data exists for that year) without dwelling on a
+                 non-finding. #}
               <td class="text-end">
                 {% if m and m.assessment_ratio is not none %}
-                  {{ "{:.1f}%".format(m.assessment_ratio * 100) }}
+                  {% set _yr_ratio = m.assessment_ratio * 100 %}
+                  {% if (_yr_ratio - 100) | abs >= 0.5 %}
+                    <span class="fw-semibold" title="Below typical ~100%" style="color:var(--accent);">{{ "{:.1f}%".format(_yr_ratio) }}</span>
+                  {% else %}
+                    <span class="text-muted small">~100%</span>
+                  {% endif %}
                 {% else %}
                   <span class="text-muted small">—</span>
                 {% endif %}
@@ -2680,7 +2838,7 @@
                   <span class="na-cell" title="This parcel does not have a matching row in the 2025 Travis County tax billing data. It may be billed under a different account number or exempt from the open billing roll.">No billing data</span>
                 {% else %}
                   {# Pre-2025 rows — no billing history available #}
-                  <span class="na-cell" title="Effective tax rate requires actual billing data (total tax ÷ market value). Historical billing data (2021–2024) is not publicly available and is pending a public records request to Travis County.">Not available</span>
+                  <span class="na-cell" title="Effective tax rate requires actual billing data (total tax ÷ market value). Verified 2021–2024 billing now exists (see the Value & Tax History table above) but effective tax rate isn't computed for pre-2025 years in this table yet.">Not available</span>
                 {% endif %}
               </td>
 
@@ -2745,7 +2903,7 @@
     </div>
     <div class="card-footer">
       <span class="badge-verified">Verified</span> = 2025 data with real billing.
-      <span class="badge-partial ms-1">Partial</span> = 2021–2024 AJR values only — billing fields not available yet for these years.
+      <span class="badge-partial ms-1">Partial</span> = 2021–2024 rows in this table reflect AJR appraisal values; billing fields in this table aren't populated for those years (see the Value &amp; Tax History table above for verified 2021–2024 billing).
       YoY = year-over-year percent change. Assessment ratio = assessed ÷ market.
     </div>
   </div>
@@ -3594,6 +3752,115 @@
   });
 })();
 </script>
+
+{% if bill_waterfall %}
+{# ── Bill-Change Waterfall chart (July 2026, per Diego's outside-review
+   brief) — bill_waterfall is a top-level variable available regardless of
+   mode, and #billWaterfallChart exists in exactly one of the two mode
+   branches' HTML per request (mode is fixed per page load), same pattern
+   already used for #valueTrendChart elsewhere in this file — so a single,
+   mode-agnostic script here (rather than duplicating it inside both the
+   Homeowner and Investor script branches below) is correct, not a shortcut.
+
+   Standard Chart.js "floating horizontal bar" technique for a waterfall:
+   an invisible base dataset offsets each visible segment to its correct
+   starting point along the x-axis; running total is tracked in JS exactly
+   the way build_bill_waterfall() (app.py) tracked it in Python — same
+   left-to-right order (Value → Rate → Exemption → Other) the brief asked
+   for, ending on the real 2025 total. #}
+<script>
+(function () {
+  const wf  = {{ bill_waterfall | tojson }};
+  const cvs = document.getElementById('billWaterfallChart');
+  if (!cvs || !window.Chart) return;
+
+  const UP_COLOR      = '#D92D20';  // burden-negative (bill increase) — reuses the site's --up color
+  const DOWN_COLOR    = '#067647';  // burden-positive (bill decrease) — reuses the site's --down color
+  const NEUTRAL_COLOR = '#505A5B';
+  const FLAT_COLOR    = '#c8ccd2';
+
+  const steps = [
+    { label: String(wf.prior_year) + ' Total', delta: wf.start_total, isTotal: true },
+    { label: 'Value Change',     delta: wf.value_effect },
+    { label: 'Rate Change',      delta: wf.rate_effect },
+    { label: 'Exemption Change', delta: wf.exemption_effect },
+  ];
+  if (Math.abs(wf.other_effect || 0) >= 1) {
+    steps.push({ label: 'Other / Unmatched', delta: wf.other_effect });
+  }
+  steps.push({ label: String(wf.cur_year) + ' Total', delta: wf.end_total, isTotal: true });
+
+  let running = 0;
+  const base = [], val = [], colors = [];
+  steps.forEach(s => {
+    if (s.isTotal) {
+      base.push(0);
+      val.push(s.delta);
+      colors.push(NEUTRAL_COLOR);
+      running = s.delta;
+    } else {
+      const d = s.delta || 0;
+      if (d >= 0) { base.push(running); val.push(d); }
+      else        { base.push(running + d); val.push(-d); }
+      colors.push(d > 0 ? UP_COLOR : d < 0 ? DOWN_COLOR : FLAT_COLOR);
+      running += d;
+    }
+  });
+
+  new Chart(cvs.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: steps.map(s => s.label),
+      datasets: [
+        { data: base, backgroundColor: 'rgba(0,0,0,0)', stack: 'wf' },
+        { data: val,  backgroundColor: colors, stack: 'wf', borderRadius: 4, borderSkipped: false },
+      ]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          filter: item => item.datasetIndex === 1,
+          callbacks: {
+            title: items => steps[items[0].dataIndex].label,
+            label: item => {
+              const s = steps[item.dataIndex];
+              const sign = s.isTotal ? '' : (s.delta >= 0 ? '+' : '-');
+              return '$' + sign + Math.round(Math.abs(s.delta)).toLocaleString();
+            },
+          },
+        },
+      },
+      scales: {
+        x: { stacked: true, ticks: { callback: v => '$' + Number(v).toLocaleString() }, grid: { color: '#eee' } },
+        y: { stacked: true, grid: { display: false } },
+      },
+    },
+    plugins: [{
+      id: 'wfSegmentLabels',
+      afterDatasetsDraw(chart) {
+        const ctx  = chart.ctx;
+        const meta = chart.getDatasetMeta(1);
+        meta.data.forEach((bar, i) => {
+          const s = steps[i];
+          const sign = s.isTotal ? '' : (s.delta >= 0 ? '+' : '-');
+          const amt = '$' + Math.round(Math.abs(s.delta)).toLocaleString();
+          ctx.save();
+          ctx.fillStyle = '#1f2933';
+          ctx.font = '11px Inter, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(sign + amt, bar.x + 6, bar.y);
+          ctx.restore();
+        });
+      },
+    }],
+  });
+})();
+</script>
+{% endif %}
 
 {% if mode == 'homeowner' %}
 <script>

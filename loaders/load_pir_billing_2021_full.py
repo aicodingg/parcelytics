@@ -514,7 +514,23 @@ def load_and_aggregate(filepath, progress_every=100_000, row_limit=None):
             n_bad_accnum += 1
             continue
         year = row.get("TXACCYER")
-        if year and str(year).strip() not in (str(TAX_YEAR),):
+        # Hardened (July 2026, incident response -- same "check the actual
+        # handling, don't trust the filename" scrutiny just applied to
+        # load_tax_current.py): the original condition here was
+        # `if year and str(year).strip() not in (str(TAX_YEAR),):` -- since
+        # Python's `and` short-circuits on a falsy `year`, a row with a
+        # blank/None/0 TXACCYER would skip the whole check and fall through
+        # as INCLUDED, unverified. pir_xlsx_common.py's _year_matches() (used
+        # by the 2022/2023/2024 loaders) already gets this right by
+        # explicitly treating None/"" as non-matching. This rewrite requires
+        # an affirmative match instead of just checking for a mismatch, so
+        # a blank/missing year is correctly rejected here too. This is a
+        # narrower bug than load_tax_current.py's -- a stray row could only
+        # ever be folded into 2021's own totals (TAX_YEAR is a fixed
+        # constant, never row-derived, in write_to_db() below), never
+        # written to a different year -- but worth closing before this file
+        # is relied on for restoration.
+        if not year or str(year).strip() != str(TAX_YEAR):
             n_bad_year += 1
             continue
 

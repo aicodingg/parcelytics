@@ -143,6 +143,62 @@ billing rows regardless of type.
   `tax_billing.total_tax` is 0/NULL) but touches a live query path and
   should be scoped and reviewed as its own task.
 
+### 2025 tax_billing: 54,115 parcels with NO billing row at all (distinct from the 0.00-total issue above)
+
+Separate from the "`total_tax` = 0.00 for ~93% of rows" issue above (those
+parcels DO have a `tax_billing` row, just with a bad total) — this is a
+distinct set of 54,115 parcels with no 2025 `tax_billing` row whatsoever.
+`prop_type_cd`/`state_cd1` breakdown of the gap (confirmed against the
+population, not a sample): `L1` (Commercial Personal Property) = 31,452,
+`A` (Single-Family Residential) = 10,715, `M1` (Mobile Home, personal-
+property variant) = 5,988, plus ~20 smaller categories filling out the rest.
+
+**`state_cd1 = 'A'` sub-population — RESOLVED, confirmed genuinely absent
+from the source, not a loader bug.** A live pull of 50 real "A" rows
+confirmed ordinary, established, valued single-family homes
+(`data_source='certified'`, market/taxable values $355K–$618K, taxable
+value close to market value) — ruling out new-construction and full-
+exemption explanations. `loaders/check_geo_ids_in_taxcur_source.py` (a
+read-only diagnostic — never opens a DB connection, only scans the raw
+`TaxCurOpenData` CSV against a supplied geo_id list) checked all 10,715
+`A`-coded geo_ids against the source file, decomposing each row's raw
+`PARCEL` field into every possible 10-char substring so a mismatched offset
+or padding convention would still be caught. Result: **zero fuzzy matches —
+all 10,715 came back `NOT_FOUND`, in no form, anywhere in the file.** These
+accounts are genuinely not present in Travis County's current-year billing
+extract. Not a Parcelytics matching/parsing bug — this needs a conversation
+with the county (why are 10,715 ordinary residential accounts absent from
+the current-year billing file?), not a code fix.
+
+`L1`/`M1` (personal property / mobile-home-as-personal-property, ~69% of
+the gap combined) remain a plausible but **not yet confirmed** structural
+explanation — Travis County may bill these under an account-numbering
+scheme distinct from TCAD's certified-export `geo_id`, which the loader's
+`PARCEL[:10]` convention wouldn't catch even if they are billed. Not yet
+run through the same fuzzy-match check as the `A` set.
+
+### tax_billing.data_source / confidence_level — write-time fix (July 2026)
+
+`load_tax_current.py` now tags every row it writes with
+`data_source='taxcur_current'` and `confidence_level` = `'verified'`
+(source `TOTAL_TAX` genuinely populated), `'derived'` (source total was the
+0.00 quirk above; real total is the entity-DUE sum instead, corrected at
+write time), or `NULL` (no usable total at all). This moves the
+verified/derived distinction `app.py` previously re-derived on every page
+load into the data itself — see `app.py`'s `is_billing_verified` /
+`total_tax_derived` computation, now a direct read of these columns instead
+of a live recomputation. A one-time backfill
+(`loaders/backfill_tax_billing_2025_confidence.py`) applied this tagging to
+rows that predate the fix. The loader also gained a `--dry-run` mode (parses
+and classifies the whole file, zero DB writes, no DB connection opened at
+all unless combined with `--new-only`) and a `--new-only` mode (skips any
+`(geo_id, tax_year)` already tagged with a `data_source`, so a catch-up load
+against a grown source file only adds genuinely new rows instead of
+unconditionally re-writing everything already correctly tagged — the
+loader's upsert has no protective `WHERE` guard the way
+`scrape_billing_history.py`'s does, so this was worth adding deliberately
+rather than assuming a full rerun is safe).
+
 ## Out of Scope for Phase 1
 
 The following were explicitly excluded from this phase and should not be backfilled without a separate scoping decision:

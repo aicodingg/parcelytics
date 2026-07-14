@@ -7,7 +7,9 @@ import sys
 import json
 import re
 import time
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+from io import BytesIO
+from datetime import datetime
+from flask import Flask, render_template, request, redirect, url_for, jsonify, Response
 import psycopg2
 import psycopg2.extras
 
@@ -109,6 +111,151 @@ def build_insights(parcel, history, entity_detail, delinquent):
         out["delinquent_since"]  = delinquent.get("first_delinquent_yr")
 
     return out
+
+
+# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief) ─────
+def build_bill_waterfall(history, entity_detail, entity_detail_prev,
+                          cur_year, prior_year):
+    """
+    Decomposes the year-over-year change in total tax bill into three real,
+    reconciling effects: value change, rate change, exemption change.
+
+    INVESTIGATION / MATH DERIVATION (don't guess, don't approximate):
+    Only two real facts are needed per taxing entity, for each of the two
+    years being compared -- the entity's actual billed amount
+    (tax_billing_entity.amount_due, real dollars) and its actual rate
+    (county_tax_rate.rate, real, per $100 valuation, same convention already
+    used by the COMPUTED_HIST_TAX_ENABLED block above: tax = taxable * rate/100).
+    From those two real numbers we can back out the entity's own IMPLIED
+    taxable value for that year:
+
+        taxable_i(year) = amount_due_i(year) / rate_i(year) * 100
+
+    This is deliberately NOT the shared parcel_tax_year.taxable_value column,
+    because that column is computed against a single reference entity's
+    exemption schedule ("assessed minus entity exemptions (TCO entity used)"
+    per schema.sql) -- every other entity's real exemption can differ (e.g. a
+    school district's mandatory homestead exemption is larger than a city's).
+    Backing out taxable_i per entity from its own real amount_due/rate avoids
+    that gap entirely and guarantees Σ amount_due_i == the real total_tax by
+    construction.
+
+    Chain (Laspeyres-style) decomposition per entity, priced so the two terms
+    telescope EXACTLY to the entity's real delta (no residual, verified
+    algebraically and numerically -- see /tmp/waterfall/verify_decomposition.py,
+    both a synthetic multi-entity case with a genuine exemption change and a
+    real-numbers pass for 0100030105):
+
+        value_effect_i = (taxable_i(cur) - taxable_i(prior)) * rate_i(prior) / 100
+        rate_effect_i  = taxable_i(cur) * (rate_i(cur) - rate_i(prior)) / 100
+        value_effect_i + rate_effect_i == amount_due_i(cur) - amount_due_i(prior)   [exact]
+
+    value_effect_i is then split into a "pure" value effect (the parcel-wide
+    assessed_value change, which — unlike taxable_value — genuinely IS the
+    same number for every entity in Texas) and an exemption effect (whatever
+    is left over, i.e. the entity-specific change in its own exemption):
+
+        pure_value_effect_i = (assessed(cur) - assessed(prior)) * rate_i(prior) / 100
+        exemption_effect_i  = value_effect_i - pure_value_effect_i
+
+    Summed across entities, pure_value_effect_i collapses to
+    ΔAssessed * combined_rate(prior)/100 (ΔAssessed is entity-invariant), and
+    the three totals still telescope exactly to the real aggregate delta.
+
+    Only entities with real amount_due AND real rate on file for BOTH years
+    are included (`incomplete` flags when any were skipped) -- this never
+    fabricates a number for a gap in the data.
+
+    Reconciliation: start_total/end_total below are the REAL tax_billing.total_tax
+    figures already shown elsewhere on this page (KPI cards, Value History table),
+    not the entity-sum -- so if any entity was skipped/incomplete, the visible
+    "Other / Unmatched" gap makes that shortfall honest instead of silently
+    forcing the three segments to sum to a total they didn't actually produce.
+    """
+    cur_row   = next((r for r in history if r["tax_year"] == cur_year), None)
+    prior_row = next((r for r in history if r["tax_year"] == prior_year), None)
+    if not cur_row or not prior_row:
+        return None
+    # Only build this on two years whose billing is genuinely verified —
+    # same is_billing_verified flag already computed above, no new trust tier.
+    if not cur_row.get("is_billing_verified") or not prior_row.get("is_billing_verified"):
+        return None
+    assessed_cur   = cur_row.get("assessed_value")
+    assessed_prior = prior_row.get("assessed_value")
+    if not assessed_cur or not assessed_prior:
+        return None
+
+    prev_due_by_entity = {
+        r["entity_code"]: float(r["amount_due"])
+        for r in (entity_detail_prev or []) if r.get("amount_due")
+    }
+
+    rows = []
+    total_value = total_exemption = total_rate = 0.0
+    incomplete = False
+
+    for e in (entity_detail or []):
+        code       = e["entity_code"]
+        due_cur    = float(e["amount_due"]) if e.get("amount_due") else None
+        due_prior  = prev_due_by_entity.get(code)
+        rate_cur   = float(e["rate"])      if e.get("rate")      is not None else None
+        rate_prior = float(e["rate_prev"]) if e.get("rate_prev") is not None else None
+
+        if due_cur is None or not due_prior or not rate_cur or not rate_prior:
+            incomplete = True
+            continue  # can't decompose this entity without all four real inputs — skip, don't guess
+
+        taxable_cur   = due_cur   / rate_cur   * 100
+        taxable_prior = due_prior / rate_prior * 100
+
+        value_effect = (taxable_cur - taxable_prior) * rate_prior / 100
+        rate_effect  = taxable_cur * (rate_cur - rate_prior) / 100
+
+        pure_value_effect = (assessed_cur - assessed_prior) * rate_prior / 100
+        exemption_effect  = value_effect - pure_value_effect
+
+        rows.append({
+            "entity_code": code,
+            "entity_name": e.get("entity_name") or code,
+            "rate_cur": rate_cur,
+            "rate_prior": rate_prior,
+            "rate_effect": round(rate_effect, 2),
+        })
+        total_value     += pure_value_effect
+        total_exemption += exemption_effect
+        total_rate      += rate_effect
+
+    if not rows:
+        return None
+
+    # Real headline totals — the SAME tax_billing.total_tax figures already
+    # shown in the KPI cards / Value History table, so this card never shows
+    # a start/end total that disagrees with the rest of the page.
+    start_total = prior_row.get("total_tax")
+    end_total   = cur_row.get("total_tax")
+    if start_total is None or end_total is None:
+        return None
+    start_total, end_total = float(start_total), float(end_total)
+
+    modeled_delta = total_value + total_exemption + total_rate
+    real_delta    = end_total - start_total
+    other_effect  = real_delta - modeled_delta  # reconciliation gap, shown only if material
+
+    return {
+        "prior_year": prior_year,
+        "cur_year": cur_year,
+        "start_total": round(start_total, 2),
+        "end_total": round(end_total, 2),
+        "value_effect": round(total_value, 2),
+        "exemption_effect": round(total_exemption, 2),
+        "rate_effect": round(total_rate, 2),
+        "other_effect": round(other_effect, 2),
+        "real_delta": round(real_delta, 2),
+        "incomplete": incomplete,
+        "entity_rate_effects": sorted(
+            rows, key=lambda r: abs(r["rate_effect"]), reverse=True
+        ),
+    }
 
 
 def build_projections(history, rate_history, entity_detail, years_ahead=5, state_cd1=None):
@@ -1438,6 +1585,18 @@ def property_detail(geo_id):
         ORDER  BY tbe.amount_due DESC NULLS LAST
     """, (geo_id,))
 
+    # Prior-year (2024) entity breakdown — needed ONLY for the Bill-Change
+    # Waterfall (build_bill_waterfall, below). entity_detail above already
+    # carries 2025's amount_due plus BOTH 2025 (rate) and 2024 (rate_prev)
+    # rates — the one real field still missing is 2024's actual amount_due
+    # per entity, which this query adds. Real data (tax_billing_entity has
+    # had per-entity 2021-2024 rows since this session's PIR loader work).
+    entity_detail_prev = query("""
+        SELECT tbe.entity_code, tbe.amount_due
+        FROM   tax_billing_entity tbe
+        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2024
+    """, (geo_id,))
+
     # Delinquency
     delinquent = query(
         "SELECT * FROM tax_delinquent WHERE geo_id = %s", (geo_id,), one=True
@@ -1446,69 +1605,52 @@ def property_detail(geo_id):
     # Current year snapshot (2025)
     current = next((r for r in history if r["tax_year"] == 2025), None)
 
-    # If total_tax is NULL in tax_billing (common when TOTAL_TAX field is blank in
-    # TaxCurOpenData), derive it from the sum of entity amounts.
+    # Confidence now comes directly from tax_billing.confidence_level, set at
+    # WRITE time by the loader (load_tax_current.py, July 2026 fix, mirroring
+    # the tagging load_pir_billing_2021_full.py/scrape_billing_history.py
+    # already do for other years) instead of being re-derived here on every
+    # page load from total_tax truthiness + an ad hoc entity-sum recomputation.
+    # 'verified' -> real, source-reported total. 'derived' -> total_tax was
+    # reconstructed from entity-level DUE amounts because the source's own
+    # total was missing/zero (the TaxCurOpenData "0.00" quirk documented in
+    # KNOWN_LIMITATIONS.md). NULL -> no usable total at all (rare; e.g. a row
+    # this loader fix hasn't reached yet, or a row with neither a source total
+    # nor any entity data).
     #
-    # Provenance tag (Estimate-as-Fact investigation, July 2026): this sum
-    # silently skips any entity with a NULL amount_due (`if e["amount_due"]`),
-    # so it can understate the true total when entity-level data is
-    # incomplete -- and until now, nothing downstream could tell this figure
-    # apart from a single authoritative tax_billing.total_tax value. Every
-    # consumer (Homeowner mode's "What you paid in taxes" card, Investor
-    # mode's Value History table) treated it identically to real, complete
-    # billing data. total_tax_derived is the provenance marker that lets
-    # templates apply the correct confidence framing instead of assuming
-    # "present in total_tax" == "fully confirmed real bill" -- same
-    # provenance-tracking principle as billing_source == 'portal_scrape'
-    # already gets a Partial badge, this fallback should too.
-    #
-    # NOTE (was flagged here, now resolved): `current` is the same dict object
-    # as the matching row inside `history`, so this key is also visible to the
-    # Investor mode Value History table's 2025 row. That table's own masking
-    # bug (unconditionally badging every 2025 row "Verified" regardless of
-    # provenance) was fixed in a later round, and the resulting badge logic
-    # was further consolidated into the single is_billing_verified computation
-    # below -- both templates now read one shared value instead of each
-    # re-deriving this independently.
-    if current is not None and not current.get("total_tax") and entity_detail:
+    # This also replaces the two independently-written is_billing_verified
+    # checks (Homeowner's "Your Tax Rate & Bill" table vs. Investor's Value
+    # History table) that a July 2026 truth-table audit found could silently
+    # diverge on 8/36 field combinations -- both now read this one value.
+    for _r in history:
+        _r["total_tax_derived"]  = (_r.get("billing_confidence") == "derived")
+        _r["is_billing_verified"] = (_r.get("billing_confidence") == "verified")
+
+    # Defensive fallback ONLY for rows the write-time fix hasn't reached yet
+    # (confidence_level still NULL -- e.g. Diego's backfill/rerun of existing
+    # tax_billing rows hasn't run, or hasn't reached this parcel). Once that
+    # backfill completes for all rows, confidence_level is never NULL for a
+    # row that has entity data, so this branch stops firing on its own; kept
+    # rather than deleted outright since this sandbox has no live DB to
+    # confirm the backfill has actually reached every row yet.
+    if (current is not None and current.get("billing_confidence") is None
+            and not current.get("total_tax") and entity_detail):
         derived_tax = sum(e["amount_due"] for e in entity_detail if e["amount_due"])
         if derived_tax:
             current["total_tax"] = derived_tax
             current["total_tax_derived"] = True
 
-    # Consolidation (July 2026, per Diego): is_billing_verified used to be two
-    # independently-written checks -- Homeowner mode's "Your Tax Rate & Bill"
-    # table (`_bill_verified`, a Jinja {% set %}) and Investor mode's Value
-    # History table (its own inline elif-chain) -- that happened to agree for
-    # every row this codebase can currently produce, but weren't the same
-    # code. A full truth-table comparison found 8/36 field combinations where
-    # they'd silently diverge if a future loader ever wrote one of them (e.g.
-    # a 2025 row tagged confidence_level='verified', or 'portal_scrape' paired
-    # with 'verified' -- neither reachable today, but nothing in the code
-    # prevented it). Computed once here instead, same pattern as
-    # total_tax_derived just above: a single source of truth both templates
-    # read, not two chains to keep in sync by hand.
-    #
-    # Must run AFTER the total_tax_derived fallback above, since the formula
-    # depends on it for the 2025 case (below) -- computing this any earlier
-    # would see total_tax_derived as always-unset for the 2025 row.
-    #
-    # Union of what both prior checks correctly handled (confirmed equivalent
-    # for every currently-reachable case via the truth-table investigation):
-    #   - billing_confidence == 'verified'  (covers 2021's PIR bulk data, and
-    #     any future loader that explicitly tags a row verified)
-    #   - tax_year == 2025 and billing_source != 'portal_scrape' and not
-    #     total_tax_derived  (covers 2025's real current-year billing, which
-    #     load_tax_current.py never explicitly tags with a confidence_level)
-    for _r in history:
-        _r["is_billing_verified"] = bool(
-            _r.get("billing_confidence") == "verified"
-            or (
-                _r["tax_year"] == 2025
-                and _r.get("billing_source") != "portal_scrape"
-                and not _r.get("total_tax_derived")
-            )
-        )
+    # Bill-Change Waterfall (per Diego's outside-review brief, top priority
+    # item): 2024 -> 2025 is the most recent pair where BOTH years have
+    # genuinely verified billing (is_billing_verified, just computed above)
+    # and per-entity data on file. Returns None (card simply doesn't render)
+    # when either year isn't verified, entity data is missing, or assessed
+    # values aren't available — never fabricates a decomposition on partial
+    # data. See build_bill_waterfall()'s docstring for the full math
+    # derivation and exactness proof.
+    bill_waterfall = build_bill_waterfall(
+        history, entity_detail, entity_detail_prev,
+        cur_year=2025, prior_year=2024
+    )
 
     # Historical combined tax rate for this parcel's entities (for trend projection)
     rate_history = query("""
@@ -1774,8 +1916,451 @@ def property_detail(geo_id):
         narrative=narrative,
         annual_trends=annual_trends,
         hs_potential_savings=hs_potential_savings,
+        bill_waterfall=bill_waterfall,
     )
 
+
+@app.route("/parcel/<geo_id>/export.pdf")
+def export_due_diligence_pdf(geo_id):
+    """
+    "Tax Due Diligence" PDF export (July 2026, per Diego's outside-review
+    brief, item 3). The review flagged this as the platform's actual
+    monetization wedge — free to view the page, a citable, exportable
+    one-page(ish) PDF as the premium feature. Diego hasn't built
+    accounts/paywall infrastructure yet, so per the brief's explicit scope
+    this route is freely available — gating it is a separate, later task.
+
+    PDF LIBRARY CHOICE (investigated, not assumed, before committing):
+    checked what's actually installed in this sandbox rather than assuming.
+    wkhtmltopdf (the binary `pdfkit` wraps) is NOT installed and there's no
+    root/sudo here to install it (same constraint that already blocked a
+    local Postgres install earlier this session — see the
+    PEER_SET_DISTRIBUTION_CHECK.sql round). weasyprint is not installed
+    either (`pip3 show weasyprint` → not found). reportlab IS installed
+    (4.5.1, confirmed via `import reportlab`) and needs no external binary
+    at all — pure Python — so it's the only one of the four that's
+    guaranteed to run wherever this app itself runs. Built directly with
+    reportlab's platypus layout API (Table/Paragraph/SimpleDocTemplate)
+    rather than an HTML-to-PDF converter, since there's no HTML renderer
+    available here regardless. NOT yet in requirements.txt — flagged below,
+    add before deploying this route.
+
+    CONTENTS (per Diego's brief — "citable, defensible enough to attach to
+    an underwriting memo" framing): key verified figures WITH their real
+    confidence tier preserved as text (a color badge doesn't survive being
+    printed/described), the 2025 entity-level tax breakdown, a condensed
+    multi-year value/tax history with a per-row confidence column, the
+    Bill-Change Waterfall summary (build_bill_waterfall(), same exact
+    function/numbers as the property page's new waterfall card — not a
+    second, independently computed version), and real source citations.
+
+    JUDGMENT CALL (flagged, not a silent shortcut): this route queries its
+    own minimal data set rather than reusing property_detail()'s full
+    pipeline. That function has been the subject of many careful,
+    precisely-ordered fixes this session (see its own inline docstrings —
+    several steps explicitly document "must run AFTER X"). Refactoring it to
+    share state with this new route would be real risk to re-verify blind,
+    with no live DB in this sandbox to test the refactor against. A
+    shared-state refactor is possible later, with Diego's live verification,
+    if he'd rather eliminate this duplication than keep two call sites.
+    """
+    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    if not parcel:
+        return jsonify({"ok": False, "error": f"Parcel \"{geo_id}\" not found"}), 404
+
+    history = query("""
+        SELECT pty.tax_year, pty.market_value, pty.assessed_value, pty.taxable_value,
+               pty.hs_cap_loss, pty.exemption_codes, pty.data_source,
+               tb.total_tax, tb.total_due, tb.is_delinquent,
+               tb.data_source      AS billing_source,
+               tb.confidence_level AS billing_confidence
+        FROM   parcel_tax_year pty
+        LEFT JOIN tax_billing tb ON tb.geo_id = pty.geo_id AND tb.tax_year = pty.tax_year
+        WHERE  pty.geo_id = %s
+        ORDER  BY pty.tax_year
+    """, (geo_id,))
+
+    # Entity detail WITH prior-year (2024) rate, needed both for the key-figures
+    # table and to feed build_bill_waterfall() below — same shape
+    # property_detail()'s own entity_detail query uses.
+    entity_detail = query("""
+        SELECT tbe.entity_code, ctr.entity_name, ctr.rate,
+               ctr_prev.rate AS rate_prev, tbe.amount_due
+        FROM   tax_billing_entity tbe
+        LEFT JOIN county_tax_rate ctr      ON ctr.entity_code      = tbe.entity_code
+                                           AND ctr.tax_year         = 2025
+        LEFT JOIN county_tax_rate ctr_prev ON ctr_prev.entity_code = tbe.entity_code
+                                           AND ctr_prev.tax_year    = 2024
+        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2025
+        ORDER  BY tbe.amount_due DESC NULLS LAST
+    """, (geo_id,))
+
+    entity_detail_prev = query("""
+        SELECT tbe.entity_code, tbe.amount_due
+        FROM   tax_billing_entity tbe
+        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2024
+    """, (geo_id,))
+
+    delinquent = query("SELECT * FROM tax_delinquent WHERE geo_id = %s", (geo_id,), one=True)
+
+    current = next((r for r in history if r["tax_year"] == 2025), None)
+    # 2026 Preliminary row (July 2026, per Diego's PDF feedback round): the
+    # `history` query above already pulls every parcel_tax_year row with no
+    # year filter, so a 2026 row is already present here whenever this parcel
+    # has preliminary data loaded (load_2026_preliminary.py) -- no extra query
+    # needed, same as how the live page's `current_2026` is derived.
+    current_2026 = next((r for r in history if r["tax_year"] == 2026), None)
+
+    # Confidence read directly from tax_billing.confidence_level -- same
+    # source-level fields property_detail() now reads (app.py, July 2026 fix)
+    # instead of each route re-deriving the verified/derived split from
+    # total_tax truthiness. Keeping this identical to property_detail()'s
+    # block (not calling a shared helper) is a deliberate, flagged judgment
+    # call -- see this route's own docstring on why it stays self-contained.
+    for _r in history:
+        _r["total_tax_derived"]  = (_r.get("billing_confidence") == "derived")
+        _r["is_billing_verified"] = (_r.get("billing_confidence") == "verified")
+
+    # Same defensive fallback as property_detail(), for rows the write-time
+    # fix/backfill hasn't reached yet.
+    if (current is not None and current.get("billing_confidence") is None
+            and not current.get("total_tax") and entity_detail):
+        derived_tax = sum(e["amount_due"] for e in entity_detail if e["amount_due"])
+        if derived_tax:
+            current["total_tax"] = derived_tax
+            current["total_tax_derived"] = True
+
+    market_value     = current.get("market_value")   if current else None
+    assessed_value   = current.get("assessed_value")  if current else None
+    taxable_value    = current.get("taxable_value")   if current else None
+    total_tax        = current.get("total_tax")       if current else None
+    eff_rate = (float(total_tax) / float(market_value) * 100) if (total_tax and market_value) else None
+    assessment_ratio = (float(assessed_value) / float(market_value) * 100) if (assessed_value and market_value) else None
+
+    # Same tiering Card 2 of the Investor KPI row uses (app.py render call
+    # for property.html — "Total Tax" card): Verified / Partial (two
+    # distinct reasons) / Not Available. Written out as plain text here
+    # since a PDF has no badge color to lean on.
+    if total_tax and (current.get("billing_source") == "portal_scrape"):
+        tax_confidence = "Partial — amount paid per payment receipt, not necessarily the full levy"
+    elif total_tax and current.get("total_tax_derived"):
+        tax_confidence = "Partial — reconstructed by summing entity-level billing records"
+    elif total_tax:
+        tax_confidence = "Verified"
+    else:
+        tax_confidence = "Not Available"
+
+    # Appraisal-domain confidence for Market/Assessed/Taxable Value (bug fix,
+    # per Diego's live-review pass): these three figures all come from the
+    # SAME parcel_tax_year row, so they share ONE confidence tier driven by
+    # that row's data_source — NOT the hardcoded "Verified"/blank this route
+    # previously used. Mirrors templates/property.html's own "Property-level
+    # confidence badge" block verbatim (search that file for that heading):
+    #   data_source == 'certified'   -> Verified   ("Appraisal: 2025 Certified")
+    #   data_source == 'preliminary' -> Preliminary ("Appraisal: 2026 Preliminary")
+    #   anything else (ajr/cert_2021/legacy NULL)  -> Partial ("Appraisal: Unknown")
+    # Same 3-tier mapping _row_confidence() (app.py, used by /api/search_filter)
+    # already codifies for exactly this reason — reused here by name so this
+    # route can never drift from that single source of truth.
+    if current:
+        appraisal_tier = _row_confidence(current.get("data_source"))
+    else:
+        appraisal_tier = None
+    # .get() with a default, not a direct dict index (per Diego's live-review
+    # pass): read _row_confidence()'s actual body to confirm what it can
+    # return today — three unconditional if/if/return branches ("verified" /
+    # "preliminary" / "partial"), no other exit path, never raises — so this
+    # dict IS exhaustive as of right now. But that function's OWN docstring
+    # frames "only 3 of 5 tiers reachable" as true in ITS ORIGINAL calling
+    # context (/api/search_filter's INNER JOIN), not as a permanent contract
+    # for every future caller — this route is a second, different caller it
+    # was never written with in mind. A future 4th/5th branch added there
+    # (e.g. an "estimated" tier) would silently KeyError here with a plain
+    # index; .get(..., "Not Available") degrades instead of crashing.
+    appraisal_confidence = {
+        "verified": "Verified",
+        "preliminary": "Preliminary",
+        "partial": "Partial — appraisal certification status isn't tracked for this record",
+    }.get(appraisal_tier, "Not Available")
+
+    # Same tiering for the 2026 Preliminary column (Current & Preliminary
+    # Values table below) -- mirrors templates/property.html's own column
+    # header badges ("2026 Preliminary" only appears when current_2026
+    # exists) rather than inventing new confidence logic for this PDF.
+    appraisal_tier_2026 = _row_confidence(current_2026.get("data_source")) if current_2026 else None
+
+    # Effective Tax Rate = total_tax ÷ market_value, so its confidence is
+    # only as strong as the WEAKER of the two inputs it actually divides —
+    # never just inherits Total Tax's own badge unmodified.
+    if eff_rate is None:
+        eff_rate_confidence = "Not Available"
+    elif appraisal_tier == "verified" and tax_confidence == "Verified":
+        eff_rate_confidence = "Verified"
+    elif appraisal_tier != "verified":
+        eff_rate_confidence = f"Partial — appraisal is {appraisal_tier or 'not available'}, not certified"
+    else:
+        eff_rate_confidence = "Partial — depends on Total Tax's confidence above"
+
+    bill_waterfall = build_bill_waterfall(
+        history, entity_detail, entity_detail_prev, cur_year=2025, prior_year=2024
+    )
+
+    # ── Build the PDF ───────────────────────────────────────────────────────
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import inch
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    )
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=letter,
+        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+        leftMargin=0.65 * inch, rightMargin=0.65 * inch,
+        title=f"Parcelytics Tax Due Diligence Report — {geo_id}",
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("TitleX", parent=styles["Title"], fontSize=16, spaceAfter=2)
+    h2    = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=11, spaceBefore=14, spaceAfter=4)
+    small = ParagraphStyle("Small", parent=styles["Normal"], fontSize=8, textColor=rl_colors.HexColor("#666666"))
+    body  = styles["Normal"]
+    # Rendering-bug fix (found while re-testing the confidence-label fix
+    # below): the longer confidence strings ("Partial — reconstructed by
+    # summing entity-level billing records") are plain strings, not
+    # flowables — reportlab's Table does NOT wrap plain strings, so a string
+    # wider than its column silently overflows LEFT into the neighboring
+    # column's already-rendered text (confirmed visually via a rendered PNG:
+    # the Total Tax row's "$21,000" and its confidence note were literally
+    # overlapping, illegible). note_style + note() wrap any longer free-text
+    # cell in a real Paragraph, which reportlab wraps properly within the
+    # cell's own width — no more overlap regardless of string length.
+    note_style = ParagraphStyle("Note", parent=styles["Normal"], fontSize=8, leading=10, alignment=0)  # 0 = left
+
+    def note(text):
+        return Paragraph(text, note_style)
+
+    def styled_table(rows, col_widths, header=True, left_align_cols=()):
+        t = Table(rows, colWidths=col_widths)
+        style = [
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, rl_colors.HexColor("#dddddd")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ]
+        for col in left_align_cols:
+            style.append(("ALIGN", (col, 0), (col, -1), "LEFT"))
+        if header:
+            style += [
+                ("BACKGROUND", (0, 0), (-1, 0), rl_colors.HexColor("#f2f2f2")),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ]
+        t.setStyle(TableStyle(style))
+        return t
+
+    story = []
+    story.append(Paragraph("Parcelytics — Tax Due Diligence Report", title_style))
+    addr = parcel.get("situs_address") or "Address not on file"
+    story.append(Paragraph(f"{addr} &nbsp;·&nbsp; Geo ID {geo_id}", body))
+    story.append(Paragraph(
+        f"Generated {datetime.now().strftime('%B %d, %Y')} — for informational purposes; "
+        "verify official figures with TCAD / the Travis County Tax Office before relying "
+        "on this for a transaction.", small
+    ))
+    story.append(Spacer(1, 8))
+    story.append(HRFlowable(width="100%", color=rl_colors.HexColor("#dddddd")))
+
+    # "Current & Preliminary Values" (July 2026, per Diego's PDF feedback
+    # round): mirrors templates/property.html's own table of the same name
+    # verbatim -- same three rows this route already had data for
+    # (Market/Assessed/Taxable Value), now shown 2026 Preliminary alongside
+    # 2025 Certified side by side instead of 2025-only, same column
+    # labels/order the live page uses ("" | 2026 Preliminary | 2025 Certified
+    # | Change). Land/Improvement Value (also on the live table) are left out
+    # here -- this route doesn't query those columns and they're not part of
+    # what makes this PDF a tax-focused due-diligence doc; reusing the live
+    # page's STRUCTURE/labeling convention, not necessarily every one of its
+    # rows, matches the brief ("reuse that same structure/labeling
+    # convention rather than inventing new layout logic").
+    story.append(Paragraph("Current &amp; Preliminary Values", h2))
+    market_value_2026   = current_2026.get("market_value")   if current_2026 else None
+    assessed_value_2026 = current_2026.get("assessed_value") if current_2026 else None
+    taxable_value_2026  = current_2026.get("taxable_value")  if current_2026 else None
+
+    def _pct_change(v2025, v2026):
+        if not v2025 or v2026 is None:
+            return "—"
+        pct = (float(v2026) - float(v2025)) / float(v2025) * 100
+        return f"{'+' if pct >= 0 else ''}{pct:.1f}%"
+
+    col_2026_label = "2026 Preliminary" if current_2026 else "2026 (not yet available)"
+    col_2025_label = "2025 Certified" if appraisal_tier == "verified" else "2025"
+    cv_rows = [["Metric", col_2026_label, col_2025_label, "Change"]]
+    cv_rows.append([
+        "Market Value",
+        f"${market_value_2026:,.0f}" if market_value_2026 else "—",
+        f"${market_value:,.0f}" if market_value else "—",
+        _pct_change(market_value, market_value_2026),
+    ])
+    cv_rows.append([
+        "Assessed Value",
+        f"${assessed_value_2026:,.0f}" if assessed_value_2026 else "—",
+        f"${assessed_value:,.0f}" if assessed_value else "—",
+        _pct_change(assessed_value, assessed_value_2026),
+    ])
+    cv_rows.append([
+        "Taxable Value",
+        f"${taxable_value_2026:,.0f}" if taxable_value_2026 else "—",
+        f"${taxable_value:,.0f}" if taxable_value else "—",
+        _pct_change(taxable_value, taxable_value_2026),
+    ])
+    story.append(styled_table(cv_rows, [150, 130, 130, 90]))
+    # Confidence for these three rows is per-COLUMN (all three share one
+    # data_source per year), same as the live page's column-header badges --
+    # not a fourth per-row column, so the caveat is one line beneath instead.
+    conf_2026_note = {
+        "verified": "Verified", "preliminary": "Preliminary — subject to change until certification",
+    }.get(appraisal_tier_2026, "Not yet available" if not current_2026 else "Partial — certification status not tracked")
+    story.append(Paragraph(
+        f"<i>2026 column: {conf_2026_note}. 2025 column: {appraisal_confidence}.</i>", small
+    ))
+
+    story.append(Paragraph("2025 Billing &amp; Tax Rate", h2))
+    key_rows = [["Metric", "Value", "Confidence / Note"]]
+    key_rows.append(["Effective Tax Rate", f"{eff_rate:.4f}%" if eff_rate is not None else "—", note(eff_rate_confidence)])
+    key_rows.append(["Total Tax", f"${float(total_tax):,.0f}" if total_tax else "—", note(tax_confidence)])
+    if assessment_ratio is not None and abs(assessment_ratio - 100) >= 0.5:
+        key_rows.append([
+            "Assessment Ratio", f"{assessment_ratio:.1f}%",
+            note("Below typical ~100%" if assessment_ratio < 100 else "Above typical ~100% — data anomaly"),
+        ])
+    if delinquent and delinquent.get("total_due"):
+        key_rows.append([
+            "Delinquent Taxes", f"${float(delinquent['total_due']):,.0f}",
+            note(f"Since {delinquent.get('first_delinquent_yr') or '—'}"),
+        ])
+    # Column 2 (Confidence / Note) now holds Paragraph flowables (see note()
+    # above) instead of plain strings, so long confidence text wraps within
+    # its own cell instead of overflowing into the Value column — confirmed
+    # visually via a rendered PNG that this previously overlapped/garbled
+    # the "Total Tax" row specifically (any confidence string longer than
+    # ~30 characters, e.g. the "reconstructed by summing..." case).
+    story.append(styled_table(key_rows, [150, 110, 240], left_align_cols=[2]))
+
+    if entity_detail and any(e.get("amount_due") for e in entity_detail):
+        story.append(Paragraph("2025 Entity-Level Tax Breakdown", h2))
+        ent_rows = [["Taxing Entity", "Rate", "Amount Due"]]
+        for e in entity_detail:
+            if not e.get("amount_due"):
+                continue
+            ent_rows.append([
+                note(e.get("entity_name") or e["entity_code"]),  # same overflow risk for long entity names
+                f"{float(e['rate']):.4f}%" if e.get("rate") is not None else "—",
+                f"${float(e['amount_due']):,.2f}",
+            ])
+        story.append(styled_table(ent_rows, [230, 90, 120], left_align_cols=[0]))
+
+    story.append(Paragraph("Value &amp; Tax History", h2))
+    # Collapsed back to a single "Confidence" column (July 2026, per Diego's
+    # live-review pass on the two-column version): Diego found two separate
+    # columns is more than he needs day-to-day. Rather than just picking one
+    # domain and dropping the other, this combines them with the same
+    # weakest-link logic eff_rate_confidence (above) already uses for
+    # Effective Tax Rate -- take the LOWER tier of appraisal (value) vs.
+    # billing, and when it's not fully Verified, name what's actually
+    # holding it back, so the real distinction that justified having two
+    # columns stays visible in the text instead of just disappearing.
+    def combine_confidence(value_tier, billing_tier):
+        if value_tier is None and billing_tier is None:
+            return "N/A"
+        if value_tier == "verified" and billing_tier == "verified":
+            return "Verified"
+        reasons = []
+        if value_tier != "verified":
+            reasons.append("appraisal is " + {
+                "preliminary": "preliminary", "partial": "not certified",
+            }.get(value_tier, "not available"))
+        if billing_tier != "verified":
+            reasons.append("billing not yet verified" if billing_tier == "partial" else "billing not available")
+        return "Partial — " + " and ".join(reasons)
+
+    hist_rows = [["Year", "Market Value", "Assessed Value", "Total Tax", "Confidence"]]
+    for r in sorted(history, key=lambda r: r["tax_year"]):
+        value_conf_tier = _row_confidence(r.get("data_source")) if r.get("market_value") else None
+
+        if r.get("billing_confidence") == "verified" or r.get("is_billing_verified"):
+            billing_tier = "verified"
+        elif r.get("total_tax"):
+            billing_tier = "partial"
+        else:
+            billing_tier = None
+
+        combined_conf = combine_confidence(value_conf_tier, billing_tier)
+        hist_rows.append([
+            str(r["tax_year"]),
+            f"${r['market_value']:,.0f}" if r.get("market_value") else "—",
+            f"${r['assessed_value']:,.0f}" if r.get("assessed_value") else "—",
+            f"${float(r['total_tax']):,.0f}" if r.get("total_tax") else "—",
+            note(combined_conf),
+        ])
+    # Confidence column widened (was two ~65-70pt columns, now one) since the
+    # combined text can run longer than either original column's contents --
+    # wrapped via note() so a long reason string never overflows into the
+    # next column (same fix already applied to the Key Figures table).
+    story.append(styled_table(hist_rows, [40, 110, 110, 85, 160], left_align_cols=[4]))
+
+    if bill_waterfall:
+        story.append(Paragraph(
+            # Plain ASCII arrow ("to", not "→") -- reportlab's base
+            # Helvetica font (WinAnsiEncoding) doesn't cleanly map the
+            # Unicode arrow glyph; confirmed via a rendered test PDF where
+            # "→" came out as a garbled "fi" instead of an arrow.
+            f"Why This Bill Changed ({bill_waterfall['prior_year']} to {bill_waterfall['cur_year']})", h2
+        ))
+        def fmt_effect(v):
+            return f"{'+' if v >= 0 else ''}${v:,.0f}"
+        wf_rows = [["Effect", "Amount"]]
+        wf_rows.append([f"{bill_waterfall['prior_year']} Total", f"${bill_waterfall['start_total']:,.0f}"])
+        wf_rows.append(["Value Change", fmt_effect(bill_waterfall["value_effect"])])
+        wf_rows.append(["Rate Change", fmt_effect(bill_waterfall["rate_effect"])])
+        wf_rows.append(["Exemption Change", fmt_effect(bill_waterfall["exemption_effect"])])
+        if abs(bill_waterfall["other_effect"]) >= 1:
+            wf_rows.append(["Other / Unmatched", fmt_effect(bill_waterfall["other_effect"])])
+        wf_rows.append([f"{bill_waterfall['cur_year']} Total", f"${bill_waterfall['end_total']:,.0f}"])
+        story.append(styled_table(wf_rows, [220, 130]))
+
+    story.append(Spacer(1, 12))
+    story.append(HRFlowable(width="100%", color=rl_colors.HexColor("#dddddd")))
+    story.append(Paragraph("Sources", h2))
+    for s in [
+        "Market / assessed / taxable values: Travis Central Appraisal District (TCAD) Certified Appraisal Roll.",
+        "Entity tax rates: Travis County Rates History (1990–2025), as adopted by each taxing entity.",
+        "Current-year billing: Travis County Tax Office current-year billing data (TaxCurOpenData).",
+        "Prior-year billing (2021–2024): Travis County Tax Office PIR bulk billing export, cross-verified "
+        "against known sanity-check accounts.",
+        "Delinquency status: Travis County Tax Office delinquent-account data (TaxDelqOpenData), where applicable.",
+    ]:
+        # Plain hyphen, not "•" -- same base-font glyph-mapping issue as the
+        # arrow above (confirmed via test PDF: "•" came out as "(cid:127)"
+        # in extracted text, not a real bullet character).
+        story.append(Paragraph("- " + s, small))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        "Generated by Parcelytics. This report reflects the most recent verified county data "
+        "available in the system at the time of generation and is not an official TCAD or "
+        "Travis County Tax Office document.", small
+    ))
+
+    doc.build(story)
+    buf.seek(0)
+    filename = f"parcelytics_due_diligence_{geo_id}.pdf"
+    return Response(
+        buf.read(), mimetype="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 # Display order for the Rate Trends entity selector's category groups
