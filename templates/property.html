@@ -482,53 +482,18 @@
   </div>
 </div>
 
-{# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief) ────
-   The single highest-priority item the outside review found missing: a
-   plain-language breakdown of WHY the bill changed, not just that it did.
-   bill_waterfall is a single top-level variable computed once in
-   property_detail() (app.py, build_bill_waterfall()) — shared by both modes,
-   not a macro, so there's no branch-scoping concern. Renders nothing at all
-   when the 2024→2025 pair isn't both genuinely verified (see that function's
-   docstring) — never shows a guessed decomposition.
-   Homeowner framing: plain labels, no per-entity drill-down (see Investor
-   branch below for that). Burden-coloring (red = added to bill, green =
-   reduced it) is used here DELIBERATELY, even though raw value-change
-   figures elsewhere on this page are neutral-colored (see the "Coherence
-   fix" comments above) — this card is explicitly about bill impact, not
-   raw asset value, so the red/green convention is unambiguous here. #}
-{% if bill_waterfall %}
-<div class="card mb-4">
-  <div class="card-header">Why {{ "Your" if is_residential else "This Property's" }} Tax Bill Changed
-    <span class="text-muted" style="font-size:12px; font-weight:400;">({{ bill_waterfall.prior_year }} → {{ bill_waterfall.cur_year }})</span>
-  </div>
-  <div class="card-body">
-    <canvas id="billWaterfallChart" height="130"></canvas>
-    <div class="mt-3" style="font-size:13.5px; line-height:1.7;">
-      {% if bill_waterfall.value_effect >= 1 %}
-        <div><span class="text-danger fw-semibold">▲ Value change added ${{ "{:,.0f}".format(bill_waterfall.value_effect) }}</span> — {{ "your home's" if is_residential else "this property's" }} taxable value went up.</div>
-      {% elif bill_waterfall.value_effect <= -1 %}
-        <div><span class="text-success fw-semibold">▼ Value change saved ${{ "{:,.0f}".format(-bill_waterfall.value_effect) }}</span> — {{ "your home's" if is_residential else "this property's" }} taxable value went down.</div>
-      {% endif %}
-      {% if bill_waterfall.rate_effect >= 1 %}
-        <div><span class="text-danger fw-semibold">▲ Tax rates added ${{ "{:,.0f}".format(bill_waterfall.rate_effect) }}</span> — tax rates went up overall.</div>
-      {% elif bill_waterfall.rate_effect <= -1 %}
-        <div><span class="text-success fw-semibold">▼ Tax rates saved ${{ "{:,.0f}".format(-bill_waterfall.rate_effect) }}</span> — tax rates went down overall.</div>
-      {% endif %}
-      {% if bill_waterfall.exemption_effect >= 1 %}
-        <div><span class="text-danger fw-semibold">▲ Exemption changes added ${{ "{:,.0f}".format(bill_waterfall.exemption_effect) }}</span> — {{ "you lost" if is_residential else "this parcel lost" }} some exemption value.</div>
-      {% elif bill_waterfall.exemption_effect <= -1 %}
-        <div><span class="text-success fw-semibold">▼ Exemption changes saved ${{ "{:,.0f}".format(-bill_waterfall.exemption_effect) }}</span> — {{ "you gained" if is_residential else "this parcel gained" }} exemption value.</div>
-      {% endif %}
-    </div>
-    {% if bill_waterfall.incomplete %}
-    <div class="text-muted mt-2" style="font-size:11px;">
-      <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
-      One or more taxing entities were missing rate or billing data for one of these two years and were left out of this breakdown.
-    </div>
-    {% endif %}
-  </div>
-</div>
-{% endif %}
+{# ── Bill-Change Waterfall: MOVED (July 2026, per Diego's "Property Page
+   Polish Round" item 6) — Homeowner mode has no literal "Property Details"
+   card (that's Investor-mode-only markup), so this was relocated to the
+   closest structural analog: below the first two-column foundational-info
+   row (Helpful Links + Your Exemptions + neighborhood comparison, with the
+   Satellite View map on the right — the Homeowner-mode counterpart to
+   Investor mode's Property Info/Current Values/News/Improvement Detail
+   row), instead of sitting directly under the KPI cards. Same reasoning as
+   the Investor-mode move: lead with foundational context before the
+   "why did my bill change" narrative. See below the neighborhood-comparison
+   row's closing `{# /row #}` for the relocated block — content/logic
+   unchanged, position only. #}
 
 {# ── Left: links + exemptions + neighborhood · Right: satellite ──────── #}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
@@ -699,6 +664,57 @@
   </div>
 </div>
 </div>{# /row #}
+
+{# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief;
+   relocated July 2026 per "Property Page Polish Round" item 6 — see the
+   comment left at its original position, right after the KPI cards, for
+   the reasoning behind this new location).
+   The single highest-priority item the outside review found missing: a
+   plain-language breakdown of WHY the bill changed, not just that it did.
+   bill_waterfall is a single top-level variable computed once in
+   property_detail() (app.py, build_bill_waterfall()) — shared by both modes,
+   not a macro, so there's no branch-scoping concern. Renders nothing at all
+   when the 2024→2025 pair isn't both genuinely verified (see that function's
+   docstring) — never shows a guessed decomposition.
+   Homeowner framing: plain labels, no per-entity drill-down (see Investor
+   branch below for that). Burden-coloring (red = added to bill, green =
+   reduced it) is used here DELIBERATELY, even though raw value-change
+   figures elsewhere on this page are neutral-colored (see the "Coherence
+   fix" comments above) — this card is explicitly about bill impact, not
+   raw asset value, so the red/green convention is unambiguous here. #}
+{% if bill_waterfall %}
+<div class="card mb-4">
+  <div class="card-header">Why {{ "Your" if is_residential else "This Property's" }} Tax Bill Changed
+    <span class="text-muted" style="font-size:12px; font-weight:400;">({{ bill_waterfall.prior_year }} → {{ bill_waterfall.cur_year }})</span>
+  </div>
+  <div class="card-body">
+    <canvas id="billWaterfallChart" height="130"></canvas>
+    <div class="mt-3" style="font-size:13.5px; line-height:1.7;">
+      {% if bill_waterfall.value_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Value change added ${{ "{:,.0f}".format(bill_waterfall.value_effect) }}</span> — {{ "your home's" if is_residential else "this property's" }} taxable value went up.</div>
+      {% elif bill_waterfall.value_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Value change saved ${{ "{:,.0f}".format(-bill_waterfall.value_effect) }}</span> — {{ "your home's" if is_residential else "this property's" }} taxable value went down.</div>
+      {% endif %}
+      {% if bill_waterfall.rate_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Tax rates added ${{ "{:,.0f}".format(bill_waterfall.rate_effect) }}</span> — tax rates went up overall.</div>
+      {% elif bill_waterfall.rate_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Tax rates saved ${{ "{:,.0f}".format(-bill_waterfall.rate_effect) }}</span> — tax rates went down overall.</div>
+      {% endif %}
+      {% if bill_waterfall.exemption_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Exemption changes added ${{ "{:,.0f}".format(bill_waterfall.exemption_effect) }}</span> — {{ "you lost" if is_residential else "this parcel lost" }} some exemption value.</div>
+      {% elif bill_waterfall.exemption_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Exemption changes saved ${{ "{:,.0f}".format(-bill_waterfall.exemption_effect) }}</span> — {{ "you gained" if is_residential else "this parcel gained" }} exemption value.</div>
+      {% endif %}
+    </div>
+    {% if bill_waterfall.incomplete %}
+    <div class="text-muted mt-2" style="font-size:11px;">
+      <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
+      One or more taxing entities were missing rate or billing data for one of these two years and were left out of this breakdown.
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
 
 {# ── Section 4 — Your value over time ────────────────────────────────── #}
 <div class="card mb-4"><div class="card-header">{% if is_residential %}Your Home's Value Over Time{% else %}This Property's Value Over Time{% endif %}</div>
@@ -1252,79 +1268,15 @@
 </div>
 {% endif %}
 
-{# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief) ────
-   Same bill_waterfall top-level variable as the Homeowner branch (computed
-   once in property_detail(), app.py — see build_bill_waterfall()'s docstring
-   for the full math derivation/exactness proof). Investor framing: same
-   chart + effect summary, plus a per-entity rate-effect drill-down table
-   (which specific taxing entities drove the rate line), per Diego's brief.
-   Burden-coloring (red = added to bill, green = reduced it) is deliberately
-   used here even though raw value-change figures elsewhere in Investor mode
-   are neutral-colored (see the "Coherence fix" comments on the KPI cards
-   above) — this card is specifically about bill impact, not raw asset value. #}
-{% if bill_waterfall %}
-<div class="card mb-4">
-  <div class="card-header">Why This Property's Tax Bill Changed
-    <span class="text-muted" style="font-size:12px; font-weight:400;">({{ bill_waterfall.prior_year }} → {{ bill_waterfall.cur_year }})</span>
-  </div>
-  <div class="card-body">
-    <canvas id="billWaterfallChart" height="130"></canvas>
-    <div class="mt-3" style="font-size:13.5px; line-height:1.7;">
-      {% if bill_waterfall.value_effect >= 1 %}
-        <div><span class="text-danger fw-semibold">▲ Value change added ${{ "{:,.0f}".format(bill_waterfall.value_effect) }}</span> — taxable value went up.</div>
-      {% elif bill_waterfall.value_effect <= -1 %}
-        <div><span class="text-success fw-semibold">▼ Value change saved ${{ "{:,.0f}".format(-bill_waterfall.value_effect) }}</span> — taxable value went down.</div>
-      {% endif %}
-      {% if bill_waterfall.rate_effect >= 1 %}
-        <div><span class="text-danger fw-semibold">▲ Tax rates added ${{ "{:,.0f}".format(bill_waterfall.rate_effect) }}</span> — tax rates went up overall.</div>
-      {% elif bill_waterfall.rate_effect <= -1 %}
-        <div><span class="text-success fw-semibold">▼ Tax rates saved ${{ "{:,.0f}".format(-bill_waterfall.rate_effect) }}</span> — tax rates went down overall.</div>
-      {% endif %}
-      {% if bill_waterfall.exemption_effect >= 1 %}
-        <div><span class="text-danger fw-semibold">▲ Exemption changes added ${{ "{:,.0f}".format(bill_waterfall.exemption_effect) }}</span> — this parcel lost some exemption value.</div>
-      {% elif bill_waterfall.exemption_effect <= -1 %}
-        <div><span class="text-success fw-semibold">▼ Exemption changes saved ${{ "{:,.0f}".format(-bill_waterfall.exemption_effect) }}</span> — this parcel gained exemption value.</div>
-      {% endif %}
-    </div>
-    {% if bill_waterfall.incomplete %}
-    <div class="text-muted mt-2" style="font-size:11px;">
-      <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
-      One or more taxing entities were missing rate or billing data for one of these two years and were left out of this breakdown.
-    </div>
-    {% endif %}
-    {% if bill_waterfall.entity_rate_effects %}
-    <hr>
-    <div class="small text-muted mb-2" style="font-weight:600; text-transform:uppercase; letter-spacing:.03em; font-size:11px;">Rate effect by entity</div>
-    <div class="table-responsive">
-      <table class="table table-sm mb-0" style="font-size:12.5px;">
-        <thead class="table-light small text-muted text-uppercase">
-          <tr>
-            <th>Entity</th>
-            <th class="text-end">{{ bill_waterfall.prior_year }} Rate</th>
-            <th class="text-end">{{ bill_waterfall.cur_year }} Rate</th>
-            <th class="text-end">Rate Effect</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for e in bill_waterfall.entity_rate_effects %}
-          <tr>
-            <td>{{ e.entity_name }}</td>
-            <td class="text-end">{{ "{:.4f}%".format(e.rate_prior) }}</td>
-            <td class="text-end">{{ "{:.4f}%".format(e.rate_cur) }}</td>
-            <td class="text-end {{ 'text-danger' if e.rate_effect > 0 else 'text-success' if e.rate_effect < 0 else '' }}">
-              {{ "{:+,.0f}".format(e.rate_effect) }}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
-  </div>
-</div>
-{% endif %}
-
-
+{# ── Bill-Change Waterfall MOVED (July 2026, Property Page Polish Round item
+   6, per Diego's live review of 0100030105/0100030804): this card used to
+   render right here -- immediately after the KPI cards, before the section
+   nav bar / Overview even begins. Diego's feedback was that it sat too high
+   relative to Property Details (Improvement Detail, in the two-column
+   Overview row below). Now rendered further down, right after that
+   two-column row closes (after Improvement Detail, before the Post-
+   Acquisition Tax Estimator) -- see that location for the actual card
+   markup, unchanged in content/logic, only moved. #}
 
 {# ── Scroll-anchor section nav (Task 4) ───────────────────────────────────── #}
 <div id="sectionNavBar" class="section-nav-bar mb-2">
@@ -2068,8 +2020,17 @@
                 <td>{{ c.desc or "—" }}</td>
                 <td class="text-end">{{ "{:,.0f}".format(c.sqft) if c.sqft else "—" }} SF</td>
                 <td class="text-center">
-                  {% if c.excluded %}<span style="color:var(--down);" title="Excluded — site improvement, attribute, or unconfirmed sketch">✗</span>
-                  {% else %}<span style="color:var(--up);" title="Included in gross building area">✓</span>{% endif %}
+                  {# Color removed (July 2026, Property Page Polish Round item 1,
+                     per Diego's live review of 0100030105/0100030804): this used
+                     the site's --up/--down tax-burden color pair (red/green) on
+                     an inclusion/exclusion mark that has nothing to do with tax
+                     burden direction -- excluded (✗) rendered GREEN (--down) and
+                     included (✓) rendered RED (--up), backwards from what anyone
+                     would expect from red/green on a checkmark. Plain neutral
+                     marks now; the title tooltip still explains what each one
+                     means. #}
+                  {% if c.excluded %}<span title="Excluded — site improvement, attribute, or unconfirmed sketch">✗</span>
+                  {% else %}<span title="Included in gross building area">✓</span>{% endif %}
                 </td>
               </tr>
               {% endfor %}
@@ -2095,6 +2056,85 @@
 
 </div>{# /col-lg-8 — insight report #}
 </div>{# /row — top two-column section #}
+
+{# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief;
+   MOVED July 2026, Property Page Polish Round item 6, per Diego's live
+   review of 0100030105/0100030804 — was immediately after the KPI cards,
+   above the section nav bar / Overview / Property Details entirely; now
+   sits here, right after Property Details (the two-column Overview row,
+   ending with Improvement Detail) and before the Post-Acquisition Tax
+   Estimator. Content/logic below is completely unchanged from the original
+   location — only the position moved.)
+   Same bill_waterfall top-level variable as the Homeowner branch (computed
+   once in property_detail(), app.py — see build_bill_waterfall()'s docstring
+   for the full math derivation/exactness proof). Investor framing: same
+   chart + effect summary, plus a per-entity rate-effect drill-down table
+   (which specific taxing entities drove the rate line), per Diego's brief.
+   Burden-coloring (red = added to bill, green = reduced it) is deliberately
+   used here even though raw value-change figures elsewhere in Investor mode
+   are neutral-colored (see the "Coherence fix" comments on the KPI cards
+   above) — this card is specifically about bill impact, not raw asset value. #}
+{% if bill_waterfall %}
+<div class="card mb-4">
+  <div class="card-header">Why This Property's Tax Bill Changed
+    <span class="text-muted" style="font-size:12px; font-weight:400;">({{ bill_waterfall.prior_year }} → {{ bill_waterfall.cur_year }})</span>
+  </div>
+  <div class="card-body">
+    <canvas id="billWaterfallChart" height="130"></canvas>
+    <div class="mt-3" style="font-size:13.5px; line-height:1.7;">
+      {% if bill_waterfall.value_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Value change added ${{ "{:,.0f}".format(bill_waterfall.value_effect) }}</span> — taxable value went up.</div>
+      {% elif bill_waterfall.value_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Value change saved ${{ "{:,.0f}".format(-bill_waterfall.value_effect) }}</span> — taxable value went down.</div>
+      {% endif %}
+      {% if bill_waterfall.rate_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Tax rates added ${{ "{:,.0f}".format(bill_waterfall.rate_effect) }}</span> — tax rates went up overall.</div>
+      {% elif bill_waterfall.rate_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Tax rates saved ${{ "{:,.0f}".format(-bill_waterfall.rate_effect) }}</span> — tax rates went down overall.</div>
+      {% endif %}
+      {% if bill_waterfall.exemption_effect >= 1 %}
+        <div><span class="text-danger fw-semibold">▲ Exemption changes added ${{ "{:,.0f}".format(bill_waterfall.exemption_effect) }}</span> — this parcel lost some exemption value.</div>
+      {% elif bill_waterfall.exemption_effect <= -1 %}
+        <div><span class="text-success fw-semibold">▼ Exemption changes saved ${{ "{:,.0f}".format(-bill_waterfall.exemption_effect) }}</span> — this parcel gained exemption value.</div>
+      {% endif %}
+    </div>
+    {% if bill_waterfall.incomplete %}
+    <div class="text-muted mt-2" style="font-size:11px;">
+      <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
+      One or more taxing entities were missing rate or billing data for one of these two years and were left out of this breakdown.
+    </div>
+    {% endif %}
+    {% if bill_waterfall.entity_rate_effects %}
+    <hr>
+    <div class="small text-muted mb-2" style="font-weight:600; text-transform:uppercase; letter-spacing:.03em; font-size:11px;">Rate effect by entity</div>
+    <div class="table-responsive">
+      <table class="table table-sm mb-0" style="font-size:12.5px;">
+        <thead class="table-light small text-muted text-uppercase">
+          <tr>
+            <th>Entity</th>
+            <th class="text-end">{{ bill_waterfall.prior_year }} Rate</th>
+            <th class="text-end">{{ bill_waterfall.cur_year }} Rate</th>
+            <th class="text-end">Rate Effect</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in bill_waterfall.entity_rate_effects %}
+          <tr>
+            <td>{{ e.entity_name }}</td>
+            <td class="text-end">{{ "{:.4f}%".format(e.rate_prior) }}</td>
+            <td class="text-end">{{ "{:.4f}%".format(e.rate_cur) }}</td>
+            <td class="text-end {{ 'text-danger' if e.rate_effect > 0 else 'text-success' if e.rate_effect < 0 else '' }}">
+              {{ "{:+,.0f}".format(e.rate_effect) }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
 
 {# ── Post-Acquisition Tax Estimator (Task 1) ─────────────────────────── #}
 {# Buyer-type field fix (July 2026, per Diego): removed the Buyer Type toggle
@@ -2310,6 +2350,36 @@
             </tr>
             {% endfor %}
           </tbody>
+          {# Total row (July 2026, Property Page Polish Round item 3, per
+             Diego's live review): the ranked bar chart above already shows
+             the same grand total ($88,655-style figure) -- this table itself
+             had no total row. Reuses the exact "Combined Rate" tfoot pattern
+             from the Rate Environment table above (tr.combined-rate-row,
+             fw-semibold, same partial-sum "n of n" disclosure convention
+             when not every entity has a rate on file -- e.g. PID/WCID codes,
+             which can have real amount_due with no county_tax_rate match at
+             all, per ENTITY_CODE_AUDIT.md) rather than inventing a new
+             pattern. Amount Due sums to the same total shown in the bar
+             chart above; Share sums to exactly 100%. #}
+          <tfoot>
+            {% set _n_ent_amt = _ent_with_amounts | length %}
+            {% set _tot2 = namespace(rate=0, rate_n=0) %}
+            {% for e in _ent_with_amounts %}
+              {% if e.rate %}{% set _tot2.rate = _tot2.rate + e.rate %}{% set _tot2.rate_n = _tot2.rate_n + 1 %}{% endif %}
+            {% endfor %}
+            {% set _rate_partial = (_tot2.rate_n > 0 and _tot2.rate_n < _n_ent_amt) %}
+            <tr class="combined-rate-row">
+              <td class="fw-semibold">Total</td>
+              <td class="text-end fw-semibold" style="font-variant-numeric:tabular-nums;">
+                {% if _tot2.rate_n > 0 %}
+                  {{ "{:.4f}%".format(_tot2.rate) }}
+                  {% if _rate_partial %}<span class="badge-partial d-block" style="font-size:10px; margin-top:2px;" title="Not every entity below has a matching rate on file">{{ _tot2.rate_n }} of {{ _n_ent_amt }}</span>{% endif %}
+                {% else %}—{% endif %}
+              </td>
+              <td class="text-end fw-semibold" style="font-variant-numeric:tabular-nums;">${{ "{:,.2f}".format(_total_due) }}</td>
+              <td class="text-end fw-semibold">100.0%</td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>
@@ -2553,14 +2623,13 @@
       <span class="badge-estimated">Estimated</span> 2026 Total Tax = 2026 preliminary taxable value × 2025 blended entity rates.
       Actual 2026 tax set after certification and entity budget adoption.
       {% endif %}
-      {# Coherence fix (July 2026, per Fable review finding 6): this legend used to
-         cover the whole Change% column, but that column mixes raw asset-value
-         rows (Market/Assessed/Land/Improvement Value) with true tax-burden rows
-         (Taxable Value, Total Tax). Only the burden rows still carry red/green;
-         the value rows above are now neutral, so the legend is scoped to match. #}
-      Change% for Taxable Value and Total Tax: <span class="text-danger fw-semibold">red</span> = higher burden,
-      <span class="text-success fw-semibold">green</span> = lower.
-      Market/Assessed/Land/Improvement Value changes are shown neutrally — a value change alone isn't inherently good or bad news.
+      {# Red/green Change% legend sentence removed (July 2026, Property Page
+         Polish Round item 4, per Diego's live review) -- the prior coherence
+         fix comment explaining its scope no longer applies to anything once
+         the sentence itself is gone, so it's removed along with it rather
+         than left as orphaned commentary. Everything else in this footer
+         (2026 preliminary export note, no-billing note, Estimated Total Tax
+         note) is unchanged. #}
     </div>
   </div>
   {% endif %}
@@ -3082,7 +3151,24 @@
   {% if projections %}
   <div class="card mb-4 projection-card">
     <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-      <span>5-Year Tax Projection — Scenario Bands</span>
+      <span>5-Year Tax Projection — Scenario Bands
+        {# Formula hover (July 2026, Property Page Polish Round item 5, per
+           Diego): pulled directly from build_projections() (app.py) --
+           _make_rows()'s literal per-year computation and the CAGR/rate-
+           trend inputs feeding it -- not a restatement of the prose
+           methodology text in the footnote below. No hover-icon convention
+           existed anywhere else on this page (checked first) -- reused the
+           page's own existing title-attribute + cursor:help pattern (same
+           technique already used for the Homeowner "reconstructed total"
+           tooltips elsewhere in this file) rather than introducing a new
+           tooltip system. Kept the full formula in the footnote too (below),
+           since a hover-only tooltip has no mobile/no-hover fallback and
+           this page's dominant convention is visible footnote prose, not
+           hover-only disclosure -- this icon is a quick-reference add-on to
+           that footnote, not a replacement for it. #}
+        <span title="Market Value(i) = Base Market × (1 + CAGR)^i.  Assessed Value(i) = min(Base Assessed × 1.10^i, Market Value(i)) if a homestead cap applies, else = Market Value(i).  Rate(i) = max(0, Current Rate + Avg Rate Change × band multiplier × i).  Est. Tax(i) = Assessed Value(i) × Rate(i) ÷ 100.  i = years ahead (1–5). See footnote below for CAGR/multiplier values per band."
+              style="cursor:help; font-size:12px; color:var(--text-3); font-weight:400;">ⓘ</span>
+      </span>
       <span class="estimates-badge">Estimates Only</span>
     </div>
     <div class="card-body p-0">
@@ -3170,6 +3256,16 @@
       <strong>Base</strong>: historical CAGR + rate trend.
       <strong>High</strong>: CAGR +2 pp, rates trend ×1.5.
       Actual values set by TCAD appraisal and taxing budgets each year.
+      {# Literal formula (July 2026, item 5) -- see the ⓘ next to the card
+         title above for the same text as a hover tooltip; kept here too as
+         the primary, always-visible copy. #}
+      <br><strong>Formula</strong> (per year <em>i</em> = 1–5 years ahead of the baseline year above):
+      Market Value = Base Market × (1 + CAGR)<sup>i</sup>.
+      Assessed Value = min(Base Assessed × 1.10<sup>i</sup>, Market Value) if this parcel carries a homestead cap, else = Market Value.
+      Rate = max(0%, Current Combined Rate + Avg. Annual Rate Change × band multiplier × i).
+      Est. Tax = Assessed Value × Rate ÷ 100.
+      Band multiplier: Low = 0 (flat rates), Base = 1.0, High = 1.5.
+      CAGR: Base = observed value CAGR over the baseline window; Low = max(−5%, Base − 2 pp); High = Base + 2 pp.
     </div>
   </div>
   {% endif %}

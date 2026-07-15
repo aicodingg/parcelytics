@@ -3680,12 +3680,24 @@ def api_estimate_acq(geo_id):
     """
     Post-acquisition tax estimator API (Task 1).
     Query params:
-      price  int   purchase price (required, no commas)
-      buyer  str   'non_owner_occupant' (default) | 'owner_occupant'
+      price          int    purchase price (required, no commas)
+      buyer          str    'non_owner_occupant' (default) | 'owner_occupant'
+      rate_mode      str    'certified' (default) | 'projected'
+      market_growth  float  optional override for the annual appreciation
+                             assumption, as a PERCENT (e.g. "3.5" = 3.5%/yr) --
+                             added July 2026 for the property page's Custom
+                             assumptions panel (Diego's "Property Page Polish
+                             Round" item 2). When omitted, falls back to the
+                             existing per-parcel CAGR computed below (unchanged
+                             default behaviour -- this param is additive only).
+                             Only the market growth rate is overridable; the
+                             statutory exemption/cap constants below are not
+                             accepted as params on purpose (see item 2 notes).
     """
     price_raw    = request.args.get("price", "").strip().replace(",", "").replace("$", "")
     buyer_status = request.args.get("buyer", "non_owner_occupant").strip()
     rate_mode    = request.args.get("rate_mode", "certified").strip()
+    market_growth_raw = request.args.get("market_growth", "").strip()
 
     if buyer_status not in ("non_owner_occupant", "owner_occupant"):
         buyer_status = "non_owner_occupant"
@@ -3754,6 +3766,18 @@ def api_estimate_acq(geo_id):
         if span > 0:
             cagr = (pts[-1][1] / pts[0][1]) ** (1.0 / span) - 1.0
             market_growth = max(-0.05, min(0.12, cagr))   # allow decline; mirror main projection
+
+    # Custom-assumptions override (July 2026, Task Brief item 2): only the
+    # market growth rate is user-editable -- see docstring above. Silently
+    # ignored (falls back to the computed default) if it isn't a parseable
+    # number, rather than erroring the whole estimate over a bad override.
+    # estimate_post_acquisition() clamps to [-5%, 12%] internally regardless
+    # (tax_logic/texas.py), so no separate clamp is needed here.
+    if market_growth_raw:
+        try:
+            market_growth = float(market_growth_raw) / 100.0
+        except ValueError:
+            pass
 
     result = _tx_estimate(
         dict(parcel),

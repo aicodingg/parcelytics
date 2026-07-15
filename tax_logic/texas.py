@@ -648,4 +648,13 @@ def estimate_post_acquisition(
         "is_residential":            is_res,
         "school_hs_exemption":       SCHOOL_HS_EXEMPTION,
         "circuit_breaker_threshold": CIRCUIT_BREAKER_THRESHOLD_2026,
+        # Exposed for the property page's Custom-assumptions panel (July 2026,
+        # per Diego's "Property Page Polish Round" item 2) -- these two growth
+        # caps were already real constants driving the multi-year projection
+        # loop above (HOMESTEAD_CAP_PCT / CIRCUIT_BREAKER_CAP_PCT), just never
+        # returned to the caller before. Statutory, not tunable -- returned so
+        # the UI can show them as read-only, sourced-from-server figures
+        # rather than hardcoding a second copy of these numbers client-side.
+        "homestead_cap_pct":         HOMESTEAD_CAP_PCT,
+        "circuit_breaker_cap_pct":   CIRCUIT_BREAKER_CAP_PCT,
     }
