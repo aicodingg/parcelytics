@@ -114,8 +114,14 @@ END $$;
 -- Refreshed by compute_metrics.py after each data load.
 --
 -- Confidence levels (per Part 2 Data Integrity Standard):
---   coverage_level = 'full'        → 2025: market + assessed + real billing data (Verified)
---   coverage_level = 'value_only'  → 2021–2024: market + assessed only; tax fields are NOT AVAILABLE
+--   coverage_level = 'full'        → real, VERIFIED billing on file for that year
+--                                     (tax_billing.confidence_level = 'verified')
+--   coverage_level = 'value_only'  → market + assessed only; that year's billing is
+--                                     missing, derived/reconstructed, or a partial receipt
+--
+-- Real fix (July 2026): coverage_level used to be a pure tax_year = 2025 check --
+-- see loaders/compute_metrics.py's module docstring for the full history. Now
+-- driven by tax_billing.confidence_level directly, for any year.
 --
 -- Fields that are NULL on a 'value_only' row are NOT AVAILABLE, never zero.
 -- has_tax_data mirrors coverage_level as a boolean for easy querying.

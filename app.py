@@ -618,8 +618,29 @@ def compute_annual_trends(history, metrics_by_year, projections):
     ))
 
     # ── Tax Amount ────────────────────────────────────────────────────────────
+    # Real fix (July 2026, Property Page Small Bugs Batch item 1, per Diego --
+    # "same underlying blindness as the two prior fixes, just expressed as a
+    # value pick rather than a colored badge"): twelve_month used to be picked
+    # by hardcoding `yr == 2025`, regardless of whether that year's total_tax
+    # was a genuinely verified figure, a derived/reconstructed sum, or a
+    # portal-scrape partial receipt -- the same confidence-blindness the
+    # Value & Tax History table's badge and the Growth & Assessment Metrics
+    # coverage badge already had fixed this round (both now read
+    # r.is_billing_verified instead of assuming 2025 == Verified). This row
+    # has no separate badge cell to correct the way those two did, so the
+    # equivalent fix is: (a) pick "current" from whichever year actually HAS
+    # the most recent billing data, not an assumption it's always 2025 (same
+    # "use the real year, don't hardcode it" convention build_projections()'s
+    # cagr_endpoint already established elsewhere in this file), and (b) flag
+    # via the existing `note` field -- the same mechanism the Effective Tax
+    # Rate row above already uses -- whenever that figure isn't genuinely
+    # verified, instead of silently presenting it as equally certain. Matches
+    # the other two fixes' spirit exactly: correct the confidence claim,
+    # don't hide the underlying number.
     tax_pts = [(r["tax_year"], float(r["total_tax"])) for r in hist if r.get("total_tax")]
-    curr_tax = next((t for yr, t in tax_pts if yr == 2025), None)
+    curr_year, curr_tax = tax_pts[-1] if tax_pts else (None, None)
+    curr_row = next((r for r in hist if r["tax_year"] == curr_year), None) if curr_year else None
+    curr_verified = bool(curr_row and curr_row.get("is_billing_verified"))
     avg_tax  = round(sum(t for _, t in tax_pts) / len(tax_pts)) if tax_pts else None
     peak_t   = max(tax_pts, key=lambda x: x[1]) if tax_pts else None
     trough_t = min(tax_pts, key=lambda x: x[1]) if tax_pts else None
@@ -627,6 +648,13 @@ def compute_annual_trends(history, metrics_by_year, projections):
 
     def _fmt_usd(v):
         return f"${v:,.0f}" if v is not None else "—"
+
+    if not tax_pts:
+        tax_note = "Billing data available for 2025 only"
+    elif not curr_verified:
+        tax_note = f"{curr_year} total is a derived or partial figure, not independently confirmed"
+    else:
+        tax_note = ""
 
     rows.append(dict(
         label="Tax Amount",
@@ -637,7 +665,7 @@ def compute_annual_trends(history, metrics_by_year, projections):
         peak_when=str(peak_t[0]) if peak_t else "—",
         trough=_fmt_usd(trough_t[1]) if trough_t else "—",
         trough_when=str(trough_t[0]) if trough_t else "—",
-        note="Billing data available for 2025 only" if not tax_pts else "",
+        note=tax_note,
     ))
 
     return rows
@@ -2321,7 +2349,15 @@ def export_due_diligence_pdf(geo_id):
             f"Why This Bill Changed ({bill_waterfall['prior_year']} to {bill_waterfall['cur_year']})", h2
         ))
         def fmt_effect(v):
-            return f"{'+' if v >= 0 else ''}${v:,.0f}"
+            # Bug fix (July 2026, Property Page Small Bugs Batch item 5,
+            # found during last round's PDF work): the sign was applied
+            # OUTSIDE the ${:,.0f} format, so a negative value rendered as
+            # "$-1,500" (sign inside the dollar amount) instead of the
+            # conventional "-$1,500" (sign in front of the currency symbol).
+            # Positive case was already correct ("+$1,500"); only the
+            # negative branch needed the sign moved in front of "$".
+            sign = "+" if v >= 0 else "-"
+            return f"{sign}${abs(v):,.0f}"
         wf_rows = [["Effect", "Amount"]]
         wf_rows.append([f"{bill_waterfall['prior_year']} Total", f"${bill_waterfall['start_total']:,.0f}"])
         wf_rows.append(["Value Change", fmt_effect(bill_waterfall["value_effect"])])

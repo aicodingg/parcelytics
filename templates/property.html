@@ -734,7 +734,7 @@
         {% set _assessed = (current.assessed_value | float) if (current and current.assessed_value) else none %}
         <div class="table-responsive">
         <table class="table table-sm mb-0" style="font-size:13px;">
-          <thead class="text-muted" style="font-size:11px; text-transform:uppercase;">
+          <thead class="table-light small text-muted text-uppercase">
             <tr>
               <th>Taxing Entity</th>
               <th class="text-end">Taxable Value</th>
@@ -814,7 +814,7 @@
 <div class="card mb-4"><div class="card-header">Your Tax Rate &amp; Bill — Last 5 Years</div>
   <div class="card-body p-0">
     <table class="table table-sm mb-0" style="font-size:13px;">
-      <thead class="text-muted" style="font-size:11px; text-transform:uppercase;">
+      <thead class="table-light small text-muted text-uppercase">
         <tr><th class="ps-3">Year</th><th class="text-end">Combined Tax Rate</th><th class="text-end pe-3">Taxes Paid</th></tr>
       </thead>
       <tbody>
@@ -1297,7 +1297,7 @@
     <div class="small text-muted mb-2" style="font-weight:600; text-transform:uppercase; letter-spacing:.03em; font-size:11px;">Rate effect by entity</div>
     <div class="table-responsive">
       <table class="table table-sm mb-0" style="font-size:12.5px;">
-        <thead class="text-muted small">
+        <thead class="table-light small text-muted text-uppercase">
           <tr>
             <th>Entity</th>
             <th class="text-end">{{ bill_waterfall.prior_year }} Rate</th>
@@ -2053,7 +2053,7 @@
         <summary style="cursor:pointer; list-style:none; font-size:11px; color:var(--text-3); font-weight:600; margin-top:8px;">{{ imp_det|length }} components · <span class="imp-det-toggle-show">show ▾</span><span class="imp-det-toggle-hide">hide ▴</span></summary>
         <div class="table-responsive mt-2">
           <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
-            <thead class="table-light text-muted text-uppercase" style="font-size:10px;">
+            <thead class="table-light small text-muted text-uppercase">
               <tr>
                 <th>Code</th>
                 <th>Description</th>
@@ -2284,7 +2284,7 @@
     <div class="card-body p-0">
       <div class="table-responsive">
         <table class="table mb-0">
-          <thead>
+          <thead class="table-light small text-muted text-uppercase">
             <tr>
               <th>Entity</th>
               <th class="text-end">Tax Rate</th>
@@ -2842,35 +2842,40 @@
                 {% endif %}
               </td>
 
-              {# Coverage / confidence badge (Fable review finding 4, wave 2):
-                 compute_metrics.py sets coverage_level = 'full' for EVERY 2025
-                 row unconditionally (`CASE WHEN pty.tax_year = 2025 THEN 'full'
-                 ELSE 'value_only' END` -- a pure year check, confirmed by reading
-                 the source), even though its own doc comment claims 'full' means
-                 "market + assessed + real billing (Verified)". It doesn't check
-                 whether that year's billing is a confirmed total_tax, a
-                 derived/reconstructed sum, or a portal-scrape partial receipt --
-                 so this badge said "Verified" for a parcel's 2025 row even when
-                 the same page's own tax table, a few cards away, correctly
-                 marked that same year's tax "(partial)". Cross-checked against
-                 r.is_billing_verified (the single source of truth already used
-                 everywhere else on this page) for the 2025 row specifically,
-                 rather than trusting coverage_level alone there -- 2021-2024
-                 rows are unaffected (coverage_level's 'value_only' for those
-                 years is accurate, no billing claim to cross-check). Fixing
-                 compute_metrics.py's CASE expression itself (so parcel_metrics
-                 is correct at the data layer, not just patched here) needs a
-                 live rerun this sandbox can't perform or verify -- flagged
-                 separately, not silently left as the only fix. #}
+              {# Coverage / confidence badge (Fable review finding 4, wave 2;
+                 REAL FIX landed July 2026 -- Property Page Small Bugs Batch
+                 item 3, same round as the fmt_effect/entity-code items).
+
+                 History: compute_metrics.py used to set coverage_level = 'full'
+                 for EVERY 2025 row unconditionally (a pure `tax_year = 2025`
+                 check), even though its own doc comment claims 'full' means
+                 "market + assessed + real billing (Verified)" -- it never
+                 checked whether that year's billing was a confirmed total_tax,
+                 a derived/reconstructed sum, or a portal-scrape partial
+                 receipt. This template patched around it by cross-checking
+                 r.is_billing_verified for the 2025 row specifically, ahead of
+                 trusting coverage_level.
+
+                 Real fix: compute_metrics.py's coverage_level (and
+                 load_pir_billing.py's update_coverage_level(), which had the
+                 identical gap on the "billing loaded after the fact" path) are
+                 now both driven directly by tax_billing.confidence_level =
+                 'verified' -- correct for any year, not special-cased to 2025.
+                 See loaders/compute_metrics.py's module docstring for the full
+                 writeup. m.coverage_level is therefore now trustworthy on its
+                 own for every year, so the year-2025 special case and the
+                 r.is_billing_verified cross-check it required have been
+                 removed -- one plain check handles every row.
+
+                 Requires a live rerun of compute_metrics.py (rebuilds
+                 parcel_metrics from the now-fixed CASE expression) before this
+                 simplified check reflects reality -- until that rerun happens,
+                 existing parcel_metrics rows still carry the OLD unconditional
+                 coverage_level values on the live DB. Flagged explicitly, not
+                 silently assumed done. #}
               <td class="text-center">
                 {% if m %}
-                  {% if r.tax_year == 2025 %}
-                    {% if r.is_billing_verified %}
-                      <span class="badge-verified">Verified</span>
-                    {% else %}
-                      <span class="badge-partial">Partial</span>
-                    {% endif %}
-                  {% elif m.coverage_level == 'full' %}
+                  {% if m.coverage_level == 'full' %}
                     <span class="badge-verified">Verified</span>
                   {% else %}
                     <span class="badge-partial">Partial</span>
@@ -2919,7 +2924,7 @@
     <div class="card-body p-0">
       <div class="table-responsive">
         <table class="table table-sm table-hover mb-0 annual-trends-table">
-          <thead class="table-light">
+          <thead class="table-light small text-muted text-uppercase">
             <tr>
               <th style="min-width:140px;"></th>
               <th class="text-end">12 Month</th>
@@ -3369,7 +3374,7 @@
       <div class="card-body p-0">
         <div class="table-responsive">
           <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
-            <thead class="table-light text-muted text-uppercase" style="font-size:10px;">
+            <thead class="table-light small text-muted text-uppercase">
               <tr>
                 <th>Address</th>
                 <th>Parcel ID</th>
@@ -4534,7 +4539,7 @@ if (rCtx) {
         </div>
         <div class="table-responsive">
           <table class="table table-sm mb-0 small">
-            <thead class="table-light text-muted text-uppercase" style="font-size:10.5px;">
+            <thead class="table-light small text-muted text-uppercase">
               <tr><th>Metric</th><th class="text-end">P25</th><th class="text-end">Median</th><th class="text-end">P75</th><th class="text-end">This Parcel</th></tr>
             </thead>
             <tbody>
@@ -4732,7 +4737,7 @@ if (rCtx) {
         </div>
         <div class="table-responsive">
           <table class="table table-sm mb-0 small" style="font-variant-numeric:tabular-nums;">
-            <thead class="table-light text-muted text-uppercase" style="font-size:10.5px;">
+            <thead class="table-light small text-muted text-uppercase">
               <tr>
                 <th rowspan="2" style="vertical-align:bottom;">Metric</th>
                 <th colspan="4" class="text-center" style="border-left:1px solid var(--border,#e5e7eb);">Main Area</th>

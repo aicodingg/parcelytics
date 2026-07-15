@@ -177,6 +177,21 @@ def update_coverage_level(conn, years):
     After billing data is loaded for a set of years, update parcel_metrics
     coverage_level from 'value_only' to 'full' for rows that now have billing.
     Also compute yoy_tax_amount_pct and effective_tax_rate for those years.
+
+    Real fix (July 2026, per Diego's "Property Page Small Bugs Batch" item 3,
+    same round as compute_metrics.py's coverage_level fix): this used to flip
+    coverage_level to 'full' whenever ANY tax_billing row existed for that
+    (geo_id, tax_year) -- not checking confidence_level at all, same
+    year-blind gap as compute_parcel_metrics()'s old `tax_year = 2025` check,
+    just triggered by "a row exists" instead of "the year is 2025". Left
+    unfixed, this function would have silently re-introduced the exact bug
+    compute_metrics.py's fix just closed the next time any PIR loader ran (all
+    four call this after their own upsert -- see load_pir_billing_2021_full.py
+    and pir_xlsx_common.run_cli()). Now gated on tb.confidence_level =
+    'verified', matching compute_metrics.py's own condition exactly, so a
+    derived/reconstructed or portal-scrape-partial row loaded for 2021-2024
+    correctly stays 'value_only' instead of being upgraded to 'full' just for
+    existing.
     """
     if not years:
         return
@@ -185,7 +200,8 @@ def update_coverage_level(conn, years):
     year_list = ", ".join(str(y) for y in years)
 
     with conn.cursor() as cur:
-        # Flip coverage_level and has_tax_data where billing now exists
+        # Flip coverage_level and has_tax_data where billing now exists AND
+        # is genuinely verified (not just present) -- see docstring above.
         cur.execute(f"""
             UPDATE parcel_metrics pm
             SET coverage_level = 'full',
@@ -201,10 +217,11 @@ def update_coverage_level(conn, years):
             WHERE pm.geo_id = tb.geo_id
               AND pm.tax_year = tb.tax_year
               AND pm.tax_year IN ({year_list})
+              AND tb.confidence_level = 'verified'
         """)
         updated = cur.rowcount
     conn.commit()
-    print(f"    coverage_level → 'full' for {updated:,} rows")
+    print(f"    coverage_level → 'full' for {updated:,} rows (verified billing only)")
 
     # Compute yoy_tax_amount_pct for the newly-billed years
     # YoY = (this_year_tax - prior_year_tax) / prior_year_tax * 100

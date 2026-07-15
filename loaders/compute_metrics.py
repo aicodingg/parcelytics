@@ -10,9 +10,32 @@ Usage:
 
 Data Integrity Standard (Part 2 — binding for all phases):
   - NULL in a parcel_metrics field = "Not Available" — never a zero or blank
-  - coverage_level = 'full'       → 2025 row: market + assessed + real billing (Verified)
-  - coverage_level = 'value_only' → 2021–2024: market + assessed only; tax fields Not Available
+  - coverage_level = 'full'       → real, VERIFIED billing on file for that year
+                                     (tax_billing.confidence_level = 'verified')
+  - coverage_level = 'value_only' → market + assessed only; that year's billing
+                                     is missing, derived/reconstructed, or a
+                                     portal-scrape partial receipt
   - has_tax_data = FALSE          → never show tax metrics for that row in UI
+
+  Real fix (July 2026, per Diego's brief — "Property Page Small Bugs Batch"
+  item 3): coverage_level used to be a pure `tax_year = 2025` check, unaware
+  of billing confidence -- unconditionally 'full' for a 2025 row even when
+  that row's total_tax was a derived/reconstructed sum or a portal-scrape
+  partial receipt, not a genuinely confirmed figure. This was masked at the
+  template layer (templates/property.html's Growth & Assessment Metrics
+  coverage badge cross-checked r.is_billing_verified for the 2025 row only,
+  ahead of trusting coverage_level) rather than fixed at the source. Now that
+  tax_billing.data_source/confidence_level are reliably populated at write
+  time (this session's earlier fix) for EVERY year that has billing (2025's
+  current-year loader, and 2021-2024's PIR loaders), coverage_level is
+  computed directly from confidence_level = 'verified' below -- correct for
+  any year, not special-cased to 2025 -- and the template-layer patch has
+  been removed accordingly (see property.html's Growth & Assessment Metrics
+  card). See update_coverage_level() in load_pir_billing.py for the matching
+  fix on the "billing loaded after the fact" path -- it had the identical
+  gap (flipped coverage_level to 'full' whenever ANY tax_billing row existed
+  for that year, not just a verified one) and needed the same fix, or it
+  would have silently re-introduced this bug the next time a PIR loader ran.
 """
 import os
 import sys
@@ -248,8 +271,21 @@ def compute_parcel_metrics(conn):
                 pty.geo_id,
                 pty.tax_year,
 
-                CASE WHEN pty.tax_year = 2025 THEN 'full' ELSE 'value_only' END,
-                (pty.tax_year = 2025),
+                -- coverage_level: real fix (see module docstring) -- driven by
+                -- tb.confidence_level (already LEFT JOINed below), not tax_year.
+                -- 'full' only when this year's billing is genuinely verified;
+                -- everything else (no billing row, derived/reconstructed sum,
+                -- portal-scrape partial receipt) is 'value_only', for any year.
+                CASE WHEN tb.confidence_level = 'verified' THEN 'full' ELSE 'value_only' END,
+                -- COALESCE required: has_tax_data is NOT NULL in schema, but
+                -- `tb.confidence_level = 'verified'` evaluates to SQL NULL (not
+                -- FALSE) whenever tb.confidence_level itself is NULL -- e.g. no
+                -- matching tax_billing row at all via the LEFT JOIN below, or a
+                -- billing row with no usable total (confidence_level IS NULL).
+                -- Bare boolean would have raised a NOT NULL constraint violation
+                -- on the very first such row -- caught in the isolated dry-run
+                -- test before this was ever run for real (see verification notes).
+                COALESCE(tb.confidence_level = 'verified', FALSE),
 
                 -- YoY market value pct
                 CASE
