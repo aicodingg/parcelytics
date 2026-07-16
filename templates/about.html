@@ -38,9 +38,20 @@
 </section>
 
 {# ══ WHAT IT COVERS ════════════════════════════════════════════════════════ #}
+{# Copy trim (July 2026, per Diego's Copy review — Site-wide): "Everything
+   you need to underwrite a Travis County parcel" overstates it — this
+   platform's own Data-Integrity-Note comments document real, named gaps in
+   exactly the underwriting-relevant data TCAD provides: the Homesite/
+   Non-Homesite land-value split (property.html, Current Values card, ~line
+   1586), and Improvement Features/Number of Units/quality class/wall-roof-
+   foundation attributes per improvement (property.html, Improvement Detail
+   card, ~line 2159) — none of that is ingested today. "Everything you
+   need" isn't accurate against the platform's own documented scope.
+   Trimmed to describe what's actually covered — the tax side — rather
+   than claim completeness the product itself says it doesn't have. #}
 <section class="fd-section">
   <div class="fd-kicker">What Parcelytics covers</div>
-  <h2 class="fd-h2">Everything you need to underwrite a Travis County parcel.</h2>
+  <h2 class="fd-h2">The tax side of underwriting, end to end.</h2>
   <div class="row g-4 mt-2">
     {% set features = [
       ('Property tax intelligence','Full certified appraisal history for every Travis County parcel — market, assessed, and taxable value, land/improvement breakdown, exemptions, and ownership. Sourced from TCAD certified rolls, 2021–2026.'),

@@ -84,7 +84,7 @@
             </div>
             <div class="kpi-row" style="grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
               <div class="kpi-card" style="padding:11px 13px;"><div class="kpi-label">Market Value</div><div class="kpi-value" style="font-size:1.15rem;">$4,336,640</div></div>
-              <div class="kpi-card" style="padding:11px 13px;"><div class="kpi-label">Eff. Tax Rate</div><div class="kpi-value" style="font-size:1.15rem;">2.0465%</div></div>
+              <div class="kpi-card" style="padding:11px 13px;"><div class="kpi-label">Eff. Tax Rate</div><div class="kpi-value" style="font-size:1.15rem;">2.0500%</div></div>
             </div>
             <div class="entity-bar-row" style="margin-bottom:7px;"><span class="entity-bar-code">AISD</span><div class="entity-bar-track"><div class="entity-bar-fill" style="width:42%;"></div></div><span class="entity-bar-amt">$37,021</span></div>
             <div class="entity-bar-row" style="margin-bottom:7px;"><span class="entity-bar-code">CITY</span><div class="entity-bar-track"><div class="entity-bar-fill" style="width:23%;"></div></div><span class="entity-bar-amt">$20,061</span></div>
@@ -194,7 +194,7 @@
            style="width:100%; height:auto; display:block;"></svg>
       <div id="roadmapMapFallback" class="text-muted small p-3" style="display:none;">
         Map preview unavailable offline. Live today: Travis County, TX. Roadmap (not yet live): New York City,
-        Los Angeles, Houston, Chicago, and Dallas metro counties.
+        Los Angeles, Chicago, Dallas, and Houston metro counties.
       </div>
     </div>
     <div class="card-footer" style="font-size:11.5px;">
@@ -203,6 +203,18 @@
     </div>
   </div>
 
+  {# Market order fix (July 2026, per Fable review "Markets framing (a)"):
+     was NYC/LA/Houston/Chicago/Dallas -- Houston sat ahead of Chicago and
+     Dallas, contradicting the section's own "targets the five largest
+     U.S. commercial real estate markets" claim. By Census 2025 metro-area
+     population (the standard, verifiable size proxy, and the metric this
+     copy is implicitly making a claim about): NYC ~19-20M > LA ~13M >
+     Chicago 9,434,123 > Dallas-Fort Worth 8,477,157 > Houston (5th). Dallas
+     has in fact overtaken Houston as the 4th-largest U.S. metro; reordered
+     to NYC/LA/Chicago/Dallas/Houston so the visual order matches the size
+     claim. Applied consistently to this card grid and the two text-only
+     mentions of the same five markets below (fallback map caption, CTA
+     footer line). #}
   <div class="row g-3">
     <div class="col-6 col-md">
       <div class="audience-card" style="padding:14px 16px;">
@@ -218,12 +230,6 @@
     </div>
     <div class="col-6 col-md">
       <div class="audience-card" style="padding:14px 16px;">
-        <div style="font-size:13px; font-weight:700;">Houston</div>
-        <div class="text-muted" style="font-size:12px;">Harris County</div>
-      </div>
-    </div>
-    <div class="col-6 col-md">
-      <div class="audience-card" style="padding:14px 16px;">
         <div style="font-size:13px; font-weight:700;">Chicago</div>
         <div class="text-muted" style="font-size:12px;">Cook County</div>
       </div>
@@ -232,6 +238,12 @@
       <div class="audience-card" style="padding:14px 16px;">
         <div style="font-size:13px; font-weight:700;">Dallas</div>
         <div class="text-muted" style="font-size:12px;">Dallas County</div>
+      </div>
+    </div>
+    <div class="col-6 col-md">
+      <div class="audience-card" style="padding:14px 16px;">
+        <div style="font-size:13px; font-weight:700;">Houston</div>
+        <div class="text-muted" style="font-size:12px;">Harris County</div>
       </div>
     </div>
   </div>
@@ -275,7 +287,7 @@
     <a class="btn-cta" href="mailto:parcelytics@gmail.com?subject=Parcelytics%20access%20request">Request access →</a>
   </div>
   <p class="text-center text-muted small mt-4">
-    Live today in Travis County, TX — expanding next to New York City, Los Angeles, Houston, Chicago, and Dallas.
+    Live today in Travis County, TX — expanding next to New York City, Los Angeles, Chicago, Dallas, and Houston.
     Questions? <a href="mailto:parcelytics@gmail.com">parcelytics@gmail.com</a>
   </p>
 </section>
@@ -343,15 +355,18 @@
   // the plain-language names shown if the map itself fails to load):
   //   New York, NY  -> New York County (Manhattan), FIPS 36061
   //   Los Angeles, CA -> Los Angeles County, FIPS 06037
-  //   Houston, TX   -> Harris County, FIPS 48201
   //   Chicago, IL   -> Cook County, FIPS 17031
   //   Dallas, TX    -> Dallas County, FIPS 48113
+  //   Houston, TX   -> Harris County, FIPS 48201
+  // (order matches the card grid above -- 2025 Census metro population,
+  // largest to smallest -- though as a FIPS-keyed object it has no effect
+  // on the rendered map itself.)
   const ROADMAP = {
     "36061": "New York City, NY — roadmap, not yet live",
     "06037": "Los Angeles, CA — roadmap, not yet live",
-    "48201": "Houston, TX — roadmap, not yet live",
     "17031": "Chicago, IL — roadmap, not yet live",
     "48113": "Dallas, TX — roadmap, not yet live",
+    "48201": "Houston, TX — roadmap, not yet live",
   };
   const svg = d3.select("#roadmapMap");
   d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json")

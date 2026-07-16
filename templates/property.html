@@ -196,7 +196,13 @@
 </div>
 
 <div class="mb-4 mt-2">
-  <h2 class="fw-bold mb-1">{{ parcel.situs_address or "Your home" }}</h2>
+  {# Possessive-voice fix (July 2026, per Diego's Copy review — Homeowner
+     mode, item 1): address-missing fallback was hardcoded "Your home" with
+     no is_residential check (Investor mode's own equivalent header, line
+     1142 below, already uses the neutral "Address unknown" — this is the
+     one place Homeowner mode's fallback didn't match that register on a
+     non-residential parcel). #}
+  <h2 class="fw-bold mb-1">{{ parcel.situs_address or ("Your home" if is_residential else "This property") }}</h2>
   <div class="text-muted">Travis County, TX · Parcel {{ parcel.geo_id }}</div>
 </div>
 
@@ -223,7 +229,13 @@
    is byte-for-byte the same three-branch logic that existed before this
    redesign (savings / fully-exempt-no-rate / no-exemption), parameterized by
    mv/tv/rate/year instead of hardcoded to 2025. #}
-{% macro homestead_savings_card(is_residential, bench_label, has_hs, mv, tv, rate, year, ceiling_check_tax, excodes_year) %}
+{# hs_potential (July 2026, per Fable review P0-4): optional 10th param, only
+   ever passed at the 2026 call site below -- the "what would filing save you"
+   hypothetical (hs_potential_savings / estimate_homestead_savings()) needs a
+   preliminary-year value to compute its cap term against, so it's deliberately
+   not offered on the 2025 — Verified card, which describes a real, already-
+   settled year with no "what if" framing to attach it to. #}
+{% macro homestead_savings_card(is_residential, bench_label, has_hs, mv, tv, rate, year, ceiling_check_tax, excodes_year, hs_potential=none) %}
   {% if not is_residential %}
   <div style="font-size:18px; font-weight:700;">Not applicable</div>
   <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
@@ -317,6 +329,46 @@
   <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
     A homestead exemption now appears on the {{ excodes_year }} preliminary roll — it should reduce your {{ excodes_year }} taxes, though it wasn't reflected in {{ year }}'s certified figures shown here.
   </div>
+  {# Populate-instead-of-blank fix (July 2026, per Fable review P0-4): this
+     branch used to be the unconditional fallback for every has_hs=False
+     parcel, even ones where a real preliminary value exists to model a
+     "what if you filed" estimate against (hs_potential, threaded in from
+     hs_potential_savings — see property_detail()). Now shown only when that
+     estimate genuinely isn't available (non-residential already exits above;
+     no rate/billing data is the remaining real case); everyone else gets the
+     itemized estimate below instead of a bare "no exemption" message. #}
+  {% elif not has_hs and hs_potential %}
+  {# not has_hs guard: hs_potential_savings (app.py) is gated on residential
+     classification only, not on exemption status -- it doesn't know or care
+     whether an exemption already exists (see its docstring). Every branch
+     above this one already requires has_hs to be True, so reaching here with
+     has_hs also True would only happen via one of the pre-existing has_hs
+     edge cases those branches don't cover (e.g. tv is None) -- explicitly
+     excluding that here rather than risk showing "you could save by filing"
+     copy to a parcel that may already have one on file. #}
+  <div class="kpi-value" style="color:#2e7d32;">
+    ${{ "{:,.0f}".format(hs_potential.total_savings_incl_cap if hs_potential.cap_savings_estimated else hs_potential.estimated_annual_savings) }}
+  </div>
+  <div class="text-muted" style="font-size:12.5px; line-height:1.6;">
+    {% if hs_potential.cap_savings_estimated %}
+    {# Density fix (July 2026, per Diego, live look at 0121230106): the P0-4
+       cap-term paragraph originally spelled out the §23.23(c) timing rule
+       inline as a full sentence, which -- stacked on this card's other
+       copy -- made the card too dense. Split into two short lines (one per
+       distinct claim/timing) with the legal detail moved to a hover ⓘ,
+       same pattern as the 5-Year Projection formula disclosure above. #}
+    <div>This year: <strong>~${{ "{:,.0f}".format(hs_potential.estimated_annual_savings) }}/yr</strong> (exemptions)</div>
+    <div>Starting next year: <strong>+~${{ "{:,.0f}".format(hs_potential.cap_savings_estimated) }}/yr</strong> (value-growth cap)
+      <span title="Tax Code §23.23(c): the 10% cap on taxable-value growth doesn't protect your first (filing) year -- it takes effect the following January, so this part of the estimate starts a year later than the exemption savings above." style="cursor:help; font-size:11px; color:var(--text-3);">ⓘ</span>
+    </div>
+    {% else %}
+    If this is your primary residence, filing a homestead exemption could save you an estimated <strong>${{ "{:,.0f}".format(hs_potential.estimated_annual_savings) }}</strong> a year.
+    {% endif %}
+    <span class="badge-estimated" style="font-size:9px; display:inline-block; margin-top:3px;">Estimated</span>
+  </div>
+  <div class="text-muted" style="font-size:11px; line-height:1.45; margin-top:6px;">
+    <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">Apply at traviscad.org ↗</a>
+  </div>
   {% else %}
   <div style="font-size:18px; font-weight:700;">No homestead exemption on record</div>
   <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
@@ -384,7 +436,20 @@
          instead of treating every case as an equally-certain fact. Unchanged
          by the Two-Year Card Redesign — same logic, just moved into the new
          "2025 — Verified" section. #}
-      <div class="text-muted" style="font-size:13px; font-weight:600;">What you paid in taxes</div>
+      {# Possessive-voice fix (July 2026, per Diego's Copy review — Homeowner
+         mode, item 1): this card and its four provenance sub-lines below
+         were hardcoded second-person ("what you paid" / "You paid this" /
+         "your 2025 tax" / "your 2025 tax bill") with no is_residential
+         check, unlike the sibling KPI cards immediately around it (line
+         408's "What your home was worth"/"What this property was worth",
+         line 469's homestead-savings title) which already flip correctly.
+         On a non-residential/LLC-owned parcel viewed in Homeowner mode this
+         produced exactly the wobble Diego flagged: third-person copy right
+         next to second-person copy on the same page. Flipped to match the
+         is_residential pattern already established elsewhere on this page,
+         one pass across this card and the "Where Your Tax Dollars Went" /
+         "Your Tax Rate & Bill" cards below (same bug, same fix). #}
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What you paid in taxes{% else %}What this property paid in taxes{% endif %}</div>
       {# Coherence fix (July 2026, per Fable review finding, wave 2): the sub-line
          below already correctly distinguishes portal-scrape/derived (Partial) tax25
          from a confirmed billed figure (Verified) -- with a "Partial" badge -- but
@@ -407,13 +472,13 @@
           Estimated by adding up 2025 entity-level billing records — some taxing entities may be missing from this total.
           <span class="badge-partial" style="font-size:9px;">Partial</span>
         {% elif tax25 %}
-          You paid this in property taxes in 2025.
+          {% if is_residential %}You paid this in property taxes in 2025.{% else %}This was paid in property taxes in 2025.{% endif %}
           <span class="badge-verified" style="font-size:9px;">Verified</span>
         {% elif current and current.computed_total_tax %}
-          Your estimated 2025 tax, based on certified value × certified rates — not a confirmed billed amount.
+          {% if is_residential %}Your estimated 2025 tax{% else %}This property's estimated 2025 tax{% endif %}, based on certified value × certified rates — not a confirmed billed amount.
           <span class="badge-estimated" style="font-size:9px;">Estimated</span>
         {% else %}
-          We don't have your 2025 tax bill on record yet.
+          {% if is_residential %}We don't have your 2025 tax bill on record yet.{% else %}We don't have this property's 2025 tax bill on record yet.{% endif %}
         {% endif %}
       </div>
     </div></div>
@@ -461,7 +526,7 @@
       </div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if estimated_tax_2026 %}
-          2026 taxable value × your entities' 2025 rates — 2026 rates aren't adopted until August/September, so this uses last year's rates as the best available assumption.
+          2026 taxable value × {% if is_residential %}your{% else %}this property's{% endif %} entities' 2025 rates — 2026 rates aren't adopted until August/September, so this uses last year's rates as the best available assumption.
           <span class="badge-estimated" style="font-size:9px;">Estimated</span>
         {% else %}
           We don't have enough billing data to project a 2026 tax estimate yet.
@@ -472,10 +537,16 @@
   <div class="col-md-4">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Estimated 2026 homestead savings{% else %}Homestead Exemption{% endif %}</div>
-      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv26, tv26, assumed_rate_2026, 2026, estimated_tax_2026, excodes_year) }}
+      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv26, tv26, assumed_rate_2026, 2026, estimated_tax_2026, excodes_year, hs_potential_savings) }}
       {% if is_residential and (has_hs or bench_label == 'Residential' or not bench_label) %}
+      {# Tightened (July 2026, per Diego, item 19b + the P0-4 crowding fix
+         above): was a full explanatory sentence about why this card's badge
+         differs from the value card's Preliminary badge -- moved that
+         reasoning to a hover ⓘ, same as the cap-term lines above, so this
+         line doesn't compound the same card's density. #}
       <div class="text-muted" style="font-size:10.5px; line-height:1.4; margin-top:4px;">
-        <span class="badge-estimated" style="font-size:9px;">Estimated</span> uses the same last-known (2025) rate assumption as the tax estimate above — not TCAD's Preliminary badge, since that describes the appraisal value, not this rate assumption.
+        <span class="badge-estimated" style="font-size:9px;">Estimated</span> uses last year's (2025) rate assumption
+        <span title="This describes the RATE assumption only. The 2026 value it's applied to already carries its own, separate Preliminary badge above, from TCAD's real 2026 roll -- the two badges describe different things, not a contradiction." style="cursor:help; font-size:11px; color:var(--text-3);">ⓘ</span>.
       </div>
       {% endif %}
     </div></div>
@@ -492,8 +563,23 @@
    row), instead of sitting directly under the KPI cards. Same reasoning as
    the Investor-mode move: lead with foundational context before the
    "why did my bill change" narrative. See below the neighborhood-comparison
-   row's closing `{# /row #}` for the relocated block — content/logic
-   unchanged, position only. #}
+   row's closing div (marked "row" in a trailing HTML comment) for the
+   relocated block -- content/logic unchanged, position only.
+   BUG FIX (July 2026, per Fable review P0-1): an earlier version of this
+   comment spelled out the OTHER comment's own closing delimiter inline as
+   an example, which closed THIS comment early instead of describing it --
+   Jinja comments have no nesting or escaping, so any occurrence of the
+   two-character close sequence anywhere in the comment body ends it
+   immediately, even quoted or inside backticks. That premature close
+   leaked the rest of this sentence as literal visible text on every
+   homeowner-mode page load, right above Helpful Links. Fixed by describing
+   the delimiter in prose instead of spelling it out literally -- this
+   comment intentionally contains neither Jinja delimiter character
+   sequence anywhere in its body, including in this explanation. See
+   verify_property_html_render.py for the two regression guards this
+   incident produced: rendered output must never contain a raw template
+   delimiter as visible text, and a known-good parcel's page must contain
+   the waterfall's container id. #}
 
 {# ── Left: links + exemptions + neighborhood · Right: satellite ──────── #}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
@@ -545,10 +631,17 @@
 </div>
 
 {# ── Section 2 — Your Exemptions ─────────────────────────────────────── #}
-<div class="card mb-3"><div class="card-header">Your Exemptions</div>
+{# Possessive-voice fix (July 2026, per Diego's Copy review — Homeowner mode,
+   item 1): title and lead sentence were hardcoded second-person with no
+   is_residential check. Real case this bit: an LLC-owned commercial parcel
+   can genuinely carry non-homestead exemption codes (Freeport, Pollution
+   Control, etc. — see _exmap above), so this card isn't even homestead-
+   specific, unlike the "No exemptions" branch below (line 649) which was
+   already correctly gated. #}
+<div class="card mb-3"><div class="card-header">{% if is_residential %}Your Exemptions{% else %}Exemptions{% endif %}</div>
   <div class="card-body">
     {% if excodes_list %}
-    <p class="mb-2">You have <strong>{{ excodes_list | length }}</strong> exemption{{ "s" if excodes_list|length != 1 }} applied to this property{% if excodes_year == 2026 %} <span class="text-muted" style="font-size:12px;">(as of the 2026 preliminary roll)</span>{% endif %}:</p>
+    <p class="mb-2">{% if is_residential %}You have{% else %}This property has{% endif %} <strong>{{ excodes_list | length }}</strong> exemption{{ "s" if excodes_list|length != 1 }} applied{% if is_residential %} to this property{% endif %}{% if excodes_year == 2026 %} <span class="text-muted" style="font-size:12px;">(as of the 2026 preliminary roll)</span>{% endif %}:</p>
     <table class="table table-sm mb-0" style="max-width:420px;">
       <tbody>
         {% for code in excodes_list %}
@@ -590,12 +683,27 @@
         <span class="badge-estimated" style="font-size:10px;">Estimated</span>
         <span style="font-size:12.5px; font-weight:600;">Potential Homestead Savings</span>
       </div>
-      <p class="mb-0" style="font-size:13px;">
-        If this is your primary residence and you filed for a homestead exemption, you could save an estimated
-        <strong>~${{ "{:,.0f}".format(hs_potential_savings.estimated_annual_savings) }}/year</strong>
-        — based on the school district's ${{ "{:,.0f}".format(hs_potential_savings.school_hs_exemption) }} mandatory exemption{% if _lo %}, plus the confirmed 20% local-option exemption ($5,000 minimum) offered by {{ _lo | join(', ') }}{% endif %}, applied to your current assessed value at your entities' 2025 certified rates.
-        Other entities on your bill may offer their own optional exemptions Parcelytics hasn't confirmed against an official source and doesn't model yet, so actual savings could be higher still.
-        This is a modeled estimate, not a verified figure, and is separate from any real, billed exemption shown elsewhere on this page.
+      {# Density fix (July 2026, per Diego, live look at 0121230106 -- "same
+         crowding problem" as the KPI-row card above): split into short,
+         labeled lines instead of two stacked full-sentence paragraphs, and
+         moved the §23.23(c) timing explanation to a hover ⓘ, same pattern
+         used there. The exemption-methodology detail (school $ figure,
+         which entities carry the confirmed local-option exemption, the
+         "other entities not modeled" and "not a verified figure" caveats)
+         is substantive, not filler, so it's kept -- just condensed and
+         moved to a single small-print line instead of two long sentences. #}
+      <p class="mb-1" style="font-size:13px;">
+        This year: <strong>~${{ "{:,.0f}".format(hs_potential_savings.estimated_annual_savings) }}/yr</strong> from filing —
+        based on the school district's ${{ "{:,.0f}".format(hs_potential_savings.school_hs_exemption) }} mandatory exemption{% if _lo %}, plus the confirmed 20% local-option exemption ($5,000 min) from {{ _lo | join(', ') }}{% endif %}, at your current assessed value and 2025 rates.
+      </p>
+      {% if hs_potential_savings.cap_savings_estimated %}
+      <p class="mb-1" style="font-size:13px;">
+        Starting next year: <strong>+~${{ "{:,.0f}".format(hs_potential_savings.cap_savings_estimated) }}/yr</strong> more, from the 10% value-growth cap
+        <span title="Tax Code §23.23(c): the cap doesn't protect your first (filing) year -- it takes effect the following January, so this part starts a year later than the exemption savings above." style="cursor:help; font-size:11px; color:var(--text-3);">ⓘ</span>.
+      </p>
+      {% endif %}
+      <p class="mb-0 text-muted" style="font-size:11px; line-height:1.4;">
+        Other entities may offer unmodeled optional exemptions. Modeled estimate, not a verified figure — separate from any real exemption shown elsewhere on this page.
       </p>
     </div>
     {% endif %}
@@ -619,7 +727,19 @@
 {% elif _ratio < 0.9 %}{% set _cmp = "lower than" %}{% set _taxcmp = "lower than" %}
 {% else %}{% set _cmp = "about the same as" %}{% set _taxcmp = "about the same as" %}{% endif %}
 {% set _peer_group = "the typical home" if is_residential else ("the typical " ~ bench_label ~ " property") %}
-<div class="card mb-3"><div class="card-header">{% if is_residential %}How You Compare to Your Neighborhood{% else %}How You Compare to {{ bench_label }} Peers{% endif %}</div>
+{# Relabel fix (July 2026, per Fable review P1-11): "How You Compare to Your
+   Neighborhood" named a comparison this card doesn't actually make --
+   benchmark_by_year (app.py) comes from `county_benchmark WHERE
+   property_type_label = bench_label`, a COUNTYWIDE population by broad
+   property type, with no neighborhood_cd filter anywhere in that query. The
+   card's own body text already says so correctly ("in Travis County",
+   "county median") -- only the Homeowner-mode title claimed a
+   neighborhood-scoped comparison that was never actually happening, the same
+   title-vs-body contradiction already fixed elsewhere on this page (Submarket
+   Position, Peer Set). The non-residential branch already got this right
+   ("{{ bench_label }} Peers", no neighborhood claim) -- this brings the
+   residential title in line with the same honesty standard. #}
+<div class="card mb-3"><div class="card-header">{% if is_residential %}How You Compare Countywide{% else %}How You Compare to {{ bench_label }} Peers{% endif %}</div>
   <div class="card-body">
     <p class="mb-2">{% if is_residential %}Your home's{% else %}This property's{% endif %} value is <strong>{{ _cmp }}</strong> {{ _peer_group }} in Travis County
       (county median: <strong>${{ "{:,.0f}".format(_med) }}</strong>).</p>
@@ -706,6 +826,17 @@
         <div><span class="text-success fw-semibold">▼ Exemption changes saved ${{ "{:,.0f}".format(-bill_waterfall.exemption_effect) }}</span> — {{ "you gained" if is_residential else "this parcel gained" }} exemption value.</div>
       {% endif %}
     </div>
+    {# Reset-signature callout (July 2026, per Fable review P0-5): flags the
+       specific case where a big exemption-change swing dominates the
+       decomposition — the pattern a homestead-cap or exemption reset
+       produces (see build_bill_waterfall()'s reset_signature comment,
+       app.py). This is a plain-language nudge toward the likely CAUSE, on
+       top of the dollar breakdown above — never replaces it. #}
+    {% if bill_waterfall.reset_signature %}
+    <div class="mt-2" style="font-size:12px; line-height:1.5; padding:8px 10px; background:#FFF6E5; border-radius:6px; border:1px solid #F0DFB0;">
+      {{ bill_waterfall.reset_note }}
+    </div>
+    {% endif %}
     {% if bill_waterfall.incomplete %}
     <div class="text-muted mt-2" style="font-size:11px;">
       <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
@@ -725,8 +856,11 @@
 </div>
 
 {# ── Section 5 — Who gets your tax money ─────────────────────────────── #}
+{# Possessive-voice fix (July 2026, per Diego's Copy review — Homeowner mode,
+   item 1): card title and the "You Paid" column header below were hardcoded
+   second-person, same bug as the "What you paid in taxes" KPI card above. #}
 {% if entity_detail and entity_detail | selectattr('amount_due') | list %}
-<div class="card mb-4"><div class="card-header">Where Your 2025 Tax Dollars Went</div>
+<div class="card mb-4"><div class="card-header">{% if is_residential %}Where Your 2025 Tax Dollars Went{% else %}Where This Property's 2025 Tax Dollars Went{% endif %}</div>
   <div class="card-body">
     <div class="row align-items-center">
       <div class="col-md-5"><canvas id="hoEntityChart" height="180"></canvas></div>
@@ -755,7 +889,7 @@
               <th>Taxing Entity</th>
               <th class="text-end">Taxable Value</th>
               <th class="text-end">2025 Rate</th>
-              <th class="text-end">You Paid</th>
+              <th class="text-end">{% if is_residential %}You Paid{% else %}Paid{% endif %}</th>
               <th class="text-end">Share</th>
             </tr>
           </thead>
@@ -789,7 +923,17 @@
               </td>
               <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">{% if e.rate %}{{ "{:.4f}%".format(e.rate|float) }}{% else %}—{% endif %}</td>
               <td class="text-end" style="font-variant-numeric:tabular-nums;">${{ "{:,.0f}".format(e.amount_due|float) }}</td>
-              <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">{{ "{:.0f}%".format(e.amount_due|float / _tot * 100) }}</td>
+              {# Sub-0.5% rounding fix (July 2026, per Fable review P1-13):
+                 {:.0f}% rounds any real, nonzero, billed entity share under
+                 0.5% down to "0%" -- reading as "this entity contributed
+                 nothing" directly next to its own nonzero dollar amount in
+                 the column to the left. This table's two sibling share
+                 displays elsewhere on the page (the entity-split bar chart
+                 above, and the "2025 Tax by Entity" detail table) already
+                 use one decimal place for the exact same kind of figure --
+                 matching that existing convention here instead of a third,
+                 looser rounding rule for the same underlying number. #}
+              <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">{{ "{:.1f}%".format(e.amount_due|float / _tot * 100) }}</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -827,7 +971,15 @@
 </div>
 
 {# ── Your tax rate & bill, last 5 years ──────────────────────────────── #}
-<div class="card mb-4"><div class="card-header">Your Tax Rate &amp; Bill — Last 5 Years</div>
+{# Possessive-voice fix (July 2026, per Diego's Copy review — Homeowner mode,
+   item 1): card title was hardcoded second-person, same bug pattern as the
+   other Section-4/5 cards above (now fixed). Also the jargon-gloss item
+   (item 2): the Verified/Partial badges in this table's "Taxes Paid" column
+   below (was: bare pills, no title) get a homeowner-facing tooltip — every
+   OTHER Verified/Partial badge on this page already has one (see the
+   Confidence Cluster's badges just above, or Investor mode's Value History
+   table), this table's were the one place status/jargon-review missed. #}
+<div class="card mb-4"><div class="card-header">{% if is_residential %}Your Tax Rate &amp; Bill{% else %}Tax Rate &amp; Bill{% endif %} — Last 5 Years</div>
   <div class="card-body p-0">
     <table class="table table-sm mb-0" style="font-size:13px;">
       <thead class="table-light small text-muted text-uppercase">
@@ -866,9 +1018,9 @@
                  Reuses the exact same is_billing_verified check already driving the
                  badge, not a new condition. #}
               {% if _h.is_billing_verified %}${{ "{:,.0f}".format(_h.total_tax|float) }}
-                <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
+                <span class="badge-verified" style="font-size:9px; padding:1px 5px;" title="Verified = confirmed directly from official Travis County Tax Office billing records.">Verified</span>
               {% else %}~${{ "{:,.0f}".format(_h.total_tax|float) }}
-                <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
+                <span class="badge-partial" style="font-size:9px; padding:1px 5px;" title="Partial = built from official records that may not include every taxing entity, so this figure is a close estimate, not a confirmed total.">Partial</span>
               {% endif %}
             {% elif _h and _h.computed_total_tax %}
               {# Wired in (July 2026, per Diego): same computed_total_tax field and
@@ -905,7 +1057,7 @@
        stale once 2021 became independently verified. Capitalization matches the
        badge text ("Verified"/"Partial"/"Computed") now that these are pills, not
        lowercase parenthetical text. #}
-    Combined rate = the total of all your taxing entities' rates that year. Years marked
+    Combined rate = the total of all {% if is_residential %}your{% else %}this property's{% endif %} taxing entities' rates that year. Years marked
     “Verified” are confirmed directly from the Travis County Tax Office. Years marked
     “Partial” are reconstructed from portal payment receipts or incomplete billing records
     and may not reflect every adjustment. Where no billing record exists for a year, an
@@ -1015,10 +1167,38 @@
        rest of the page already uses -- not new logic: Appraisal status from
        current.data_source, Billing status from current.is_billing_verified
        (computed once in app.py, same value the Homeowner and Investor tables
-       already read). #}
-    {%- set _hist_prior  = history | rejectattr('tax_year', 'equalto', 2025) | list -%}
-    {%- set _hist_billed = _hist_prior | selectattr('total_tax') | list | length -%}
-    {%- set _hist_total  = _hist_prior | length -%}
+       already read).
+
+       Stale-badge fix (July 2026, per Fable review P0-2, confirmed live on
+       0100030109): the 2021-24 badge below used to count how many prior-year
+       rows had a `total_tax` value AT ALL (`_hist_prior | selectattr('total_tax')`)
+       as its proxy for "billed" -- a presence check, not a confidence check.
+       total_tax can be populated by a reconstructed/derived/portal-scrape
+       figure just as easily as a genuinely verified one (same distinction
+       `is_billing_verified` exists to capture), so this badge could -- and on
+       0100030109 did -- show "partial" from a stale/looser signal while the
+       Value & Tax History table, its own footnote, and the site footer all
+       read the real per-row `is_billing_verified` field and correctly said
+       Verified. One source of truth now: this badge counts
+       `is_billing_verified` rows, the exact same field the rest of the page
+       already reads at lines 883, 1045 (the 2025 badge just above), 2777,
+       and 2950 -- not a second, looser proxy.
+
+       SECOND bug found while building this fix's render test (not something
+       Fable's report named directly, but the more likely actual cause of
+       what was observed on 0100030109): `_hist_prior` was defined as "every
+       history row that isn't 2025" -- which, now that 2026 preliminary rows
+       exist broadly, also pulls in the 2026 row. 2026 is preliminary-only
+       and by definition never has billing data, so it can never be
+       is_billing_verified -- meaning this badge could never reach "✓" for
+       ANY parcel with a 2026 preliminary row on file (i.e. most parcels at
+       this point), permanently capping it at "partial" regardless of
+       whether every real 2021-2024 year was fully verified. The badge's own
+       label hardcodes "2021–24" as its range, so the underlying set is now
+       scoped to match that label exactly, instead of "not 2025." #}
+    {%- set _hist_prior    = history | selectattr('tax_year', 'lt', 2025) | list -%}
+    {%- set _hist_verified = _hist_prior | selectattr('is_billing_verified') | list | length -%}
+    {%- set _hist_total    = _hist_prior | length -%}
     {% if current %}
       {% if current.data_source == "certified" %}
         <span class="badge-verified ms-2" title="TCAD's 2025 appraisal roll is certified — final, not subject to change.">Appraisal: 2025 Certified</span>
@@ -1030,19 +1210,19 @@
       {% if current.total_tax and current.is_billing_verified %}
         <span class="badge-verified ms-1" title="2025 tax billing confirmed directly from Travis County Tax Office records.">Billing: 2025 Verified</span>
       {% elif current.total_tax %}
-        <span class="badge-partial ms-1" title="This 2025 total is a reconstructed or partial figure — see the Your Tax Rate &amp; Bill table below for why.">Billing: 2025 Partial</span>
+        <span class="badge-partial ms-1" title="This 2025 total is a reconstructed or partial figure — see the {% if is_residential %}Your Tax Rate &amp; Bill{% else %}Tax Rate &amp; Bill{% endif %} table below for why.">Billing: 2025 Partial</span>
       {% elif current.computed_total_tax %}
         <span class="badge-estimated ms-1" style="font-size:9px; padding:1px 5px;" title="Modeled from taxable value × combined rate — no billing record on file for 2025.">Billing: 2025 Computed</span>
       {% else %}
         <span class="badge-estimated ms-1" style="font-style:italic; color:var(--text-3);" title="No 2025 billing record on file.">Billing: Not Available</span>
       {% endif %}
       {% if _hist_total > 0 %}
-        {% if _hist_billed == _hist_total %}
-          <span class="badge-verified ms-1" style="font-size:9px; padding:1px 5px;">2021–24 billing ✓</span>
-        {% elif _hist_billed > 0 %}
-          <span class="badge-partial ms-1" style="font-size:9px; padding:1px 5px;">2021–24 billing partial</span>
+        {% if _hist_verified == _hist_total %}
+          <span class="badge-verified ms-1" style="font-size:9px; padding:1px 5px;" title="Every 2021–2024 row on file for this parcel is genuinely verified billing (Travis County Tax Office export), not a reconstructed or partial figure.">2021–24 billing ✓</span>
+        {% elif _hist_verified > 0 %}
+          <span class="badge-partial ms-1" style="font-size:9px; padding:1px 5px;" title="{{ _hist_verified }} of {{ _hist_total }} available 2021–2024 years are genuinely verified billing — see the Value & Tax History table below for which.">2021–24 billing partial</span>
         {% else %}
-          <span class="badge-partial ms-1" style="font-size:9px; padding:1px 5px;">2021–24 billing unavailable</span>
+          <span class="badge-partial ms-1" style="font-size:9px; padding:1px 5px;" title="No 2021–2024 rows for this parcel have genuinely verified billing on file.">2021–24 billing unavailable</span>
         {% endif %}
       {% endif %}
     {% else %}
@@ -1170,19 +1350,29 @@
          whenever kpi.effective_tax_rate was merely present, regardless of whether
          it came from a real tax_billing.total_tax or was reconstructed by summing
          tax_billing_entity.amount_due -- the same provenance gap already fixed on
-         the Value History table and Homeowner-mode cards. effective_tax_rate_derived
-         is set in app.py from the new parcel_metrics.effective_tax_rate_derived
-         column (compute_metrics.py); only badge "Verified" when it is explicitly
-         False. `is False` (not `is not true`/truthiness) so that True *and* None
-         (rows not yet covered by a compute_metrics.py rerun) both fall through to
-         Partial -- fail-safe rather than fail-open. #}
-      {% if kpi.effective_tax_rate is defined and kpi.effective_tax_rate_derived is sameas false %}
+         the Value History table and Homeowner-mode cards.
+
+         Weakest-link fix (July 2026, per Fable review P0-3 -- "confidence
+         doesn't propagate through derived figures," confirmed live: this
+         badge showed Verified while Total Tax itself was labeled Partial a
+         few cards away). effective_tax_rate_derived alone was too narrow a
+         signal -- it only flags entity-sum reconstruction, not a portal-
+         scrape total_tax, and never checked the Market Value denominator's
+         own certification status at all. Now reads
+         kpi.effective_tax_rate_tier, computed in app.py by combining BOTH
+         real inputs' confidence via the shared combine_confidence_tiers()
+         (same function export_due_diligence_pdf() uses) -- Verified only
+         when Market Value is certified AND Total Tax is genuinely verified;
+         Partial otherwise, with kpi.effective_tax_rate_note naming exactly
+         which input fell short instead of a single generic reconstruction
+         message. #}
+      {% if kpi.effective_tax_rate is defined and kpi.effective_tax_rate_tier == 'verified' %}
         2025 Tax ÷ 2025 Market Value
         <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
       {% elif kpi.effective_tax_rate is defined %}
         2025 Tax ÷ 2025 Market Value
         <span class="badge-partial" style="font-size:9px; padding:1px 5px;"
-              title="Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total; no confirmed total_tax figure exists to cross-check against">Partial</span>
+              title="{{ kpi.effective_tax_rate_note or 'Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total; no confirmed total_tax figure exists to cross-check against' }}">Partial</span>
       {% elif kpi.rate_approx is defined %}
         2025 Combined Rate
         <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Est.</span>
@@ -1790,14 +1980,37 @@
           {% if sub %}<div style="font-size:10.5px; color:var(--text-3);">{{ sub }}</div>{% endif %}
         </div>
         {%- endmacro %}
-        {{ stat('Building (Main)', ("{:,.0f} SF".format(_liv)) if _liv else '—') }}
+        {# Sublabel consistency fix (July 2026, per Diego's Copy review —
+           Investor mode, item 2): some tiles' sub-lines genuinely explained
+           the number above (Gross Building's "enclosed area", Value/Bldg
+           SF's "all-in (incl. land)", Est. Annual Tax's "2025 taxable ×
+           rate"); others were blank or, worse, just a bare "2025" with no
+           explanatory content at all (Eff. Tax Rate). Filled in the three
+           genuinely inconsistent ones below, matching the register already
+           established by the tiles that already did this well -- not
+           inventing a new pattern, applying the existing one everywhere:
+           Building (Main) now says "living area" (this page's own defined
+           term for it, see the Property Details card's Main Area footnote)
+           so it reads as a deliberate contrast with Gross Building's
+           "enclosed area" instead of looking unfinished next to it; Land
+           $/SF now says "land value only", the mirror of Value/Bldg SF's
+           "all-in (incl. land)" so the two $/SF tiles' different
+           denominators are stated, not left to be inferred; Eff. Tax Rate's
+           bare year is replaced with what the number actually is
+           (total_tax ÷ market_value, confirmed in
+           validate_coverage_sql.py's effective_tax_rate SQL — the real tax
+           burden as a share of value, distinct from the nominal Combined
+           Tax Rate shown elsewhere on this page). Land, Land Value Share,
+           and Year Built were already adequately self-explanatory as-is
+           and are left unchanged. #}
+        {{ stat('Building (Main)', ("{:,.0f} SF".format(_liv)) if _liv else '—', 'living area' if _liv else '') }}
         {{ stat('Gross Building', (("{:,.0f} SF".format(_gba)) if _gba else '—'), 'enclosed area' if _gba else '') }}
         {{ stat('Land', ("{:,.0f} SF".format(_land)) if _land else '—', ("{:.3f} ac".format(_land/43560.0)) if _land else '') }}
         {{ stat('Value / Bldg SF', ("${:,.0f}".format(_bldg_psf)) if _bldg_psf else '—', 'all-in (incl. land)') }}
-        {{ stat('Land $/SF', ("${:,.0f}".format(_land_psf)) if _land_psf else '—') }}
+        {{ stat('Land $/SF', ("${:,.0f}".format(_land_psf)) if _land_psf else '—', 'land value only' if _land_psf else '') }}
         {{ stat('Land Value Share', ("{:.0f}%".format(_land_share)) if _land_share is not none else '—') }}
         {{ stat('Year Built', (parcel.year_built|string) if parcel.year_built else '—', ("~{} yrs old".format(_age)) if _age else '') }}
-        {{ stat('Eff. Tax Rate', ("{:.3f}%".format(_etr)) if _etr is not none else '—', '2025') }}
+        {{ stat('Eff. Tax Rate', ("{:.3f}%".format(_etr)) if _etr is not none else '—', 'total tax ÷ market value' if _etr is not none else '') }}
         {# Assessment Ratio conditional callout (July 2026, per Diego's
            outside-review brief): assessed/market is ~100% for the vast
            majority of Travis County parcels (no homestead cap in effect),
@@ -2098,6 +2311,15 @@
         <div><span class="text-success fw-semibold">▼ Exemption changes saved ${{ "{:,.0f}".format(-bill_waterfall.exemption_effect) }}</span> — this parcel gained exemption value.</div>
       {% endif %}
     </div>
+    {# Reset-signature callout (July 2026, per Fable review P0-5) — same
+       bill_waterfall.reset_signature/reset_note as the Homeowner branch
+       above; see build_bill_waterfall()'s comment (app.py) for the
+       detection logic and the 0121230106 fixture that motivated it. #}
+    {% if bill_waterfall.reset_signature %}
+    <div class="mt-2" style="font-size:12px; line-height:1.5; padding:8px 10px; background:#FFF6E5; border-radius:6px; border:1px solid #F0DFB0;">
+      {{ bill_waterfall.reset_note }}
+    </div>
+    {% endif %}
     {% if bill_waterfall.incomplete %}
     <div class="text-muted mt-2" style="font-size:11px;">
       <span class="badge-partial" style="font-size:9px; padding:1px 5px;">Partial</span>
@@ -2145,20 +2367,29 @@
    own call for why the toggle stays meaningful there. #}
 {{ post_acq_estimator_card(entity_detail, current, parcel, false) }}
 
-{# ── Overview narrative — collapsed (Task 4) ─────────────────────────────── #}
-{% if narrative %}
-<details class="overview-narrative-collapse mb-4" id="sectionOverview">
-  <summary class="overview-collapse-summary">
-    <span class="section-hdr d-inline-block mb-0" style="margin-bottom:0 !important;">Overview</span>
-    <span class="text-muted ms-2" style="font-size:12px; font-weight:400;">(click to expand narrative)</span>
-  </summary>
-  <div class="overview-narrative pt-3">
-    {% for para in narrative %}
-    <p>{{ para }}</p>
-    {% endfor %}
-  </div>
-</details>
-{% endif %}
+{# ── Overview narrative — REMOVED (July 2026, per Diego's Copy review —
+   Investor mode, item 1): this collapsed <details> duplicated the Investor
+   Insight Report above at lower quality -- generate_property_narrative()
+   (app.py) covers the same three topics (value trajectory, assessment
+   ratio/tax burden, risk flags) as the Insight Report's Appreciation/Tax
+   Burden/risk paragraphs, but as flat concatenated sentences with none of
+   the Insight Report's later-added depth (uneven-vs-steady growth
+   detection, peer-growth comparison, conditional strong/moderate/flat
+   framing) -- confirmed by reading both functions/blocks side by side, not
+   assumed from the section names alone. Diego offered two options: cut it,
+   or repurpose it as the PDF export's plain-language abstract. Repurposing
+   safely isn't a same-session change: export_due_diligence_pdf() (app.py)
+   deliberately queries its OWN minimal dataset rather than sharing
+   property_detail()'s full pipeline (see that route's own docstring judgment
+   call), and generate_property_narrative() needs metrics_by_year/
+   benchmark_by_year/projections, none of which the PDF route currently
+   fetches -- wiring it in means either new queries in that route or trimming
+   the function's own dependencies, both real scope changes to a route whose
+   own docstring already flags "no live DB here to verify a refactor against"
+   as the reason it stayed decoupled. Cut here (the concrete complaint,
+   verifiable safe with this session's tools); generate_property_narrative()
+   is left defined in app.py, unused for now, as the natural building block
+   for that PDF-abstract option — flagged for Diego rather than built blind. #}
 
 {# ── Full-width section: all tables + metrics ──────────────────────────────── #}
 <div class="row mt-2">
@@ -2653,8 +2884,18 @@
       {% if _has_2026 %}Value History (2021–2026){% else %}Value History (2021–2025){% endif %}
     </div>
     <div class="card-body p-0">
+      {# Mobile card-stacking (July 2026, per Fable review P2-21): this table's
+         rows are literally one-per-tax-year (data-year already on <tr>), which
+         is exactly the "card-per-year" shape table-stack's design (see
+         style.css RESPONSIVE section) was built for -- each year becomes a
+         labelled card below 576px instead of a 9-column table forcing
+         horizontal scroll. data-label added to every <td> below so
+         table-stack's ::before rule has a row label to show; table-responsive
+         is kept as the outer wrapper so desktop/tablet behavior (horizontal
+         scroll above 576px, before table-stack's flex layout takes over) is
+         unchanged. #}
       <div class="table-responsive">
-        <table class="table table-hover mb-0">
+        <table class="table table-hover mb-0 table-stack">
           <thead class="table-light small text-muted text-uppercase">
             <tr>
               <th>Year</th>
@@ -2673,17 +2914,17 @@
             {% set _av_anomaly = r.assessed_value and r.market_value and r.assessed_value > r.market_value %}
             {% set _cap_r = (r.market_value - r.assessed_value) if (r.market_value and r.assessed_value and r.market_value > r.assessed_value) else 0 %}
             <tr data-year="{{ r.tax_year }}">
-              <td>
+              <td data-label="Year">
                 {{ r.tax_year }}
                 {% if r.data_source == 'preliminary' %}
                   <span class="badge-preliminary ms-1" style="font-size:9px; padding:1px 5px; vertical-align:middle;">Pre</span>
                 {% endif %}
               </td>
-              <td class="text-end">${{ "{:,.0f}".format(r.market_value) if r.market_value else "—" }}</td>
-              <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.land_value)) if r.land_value else "—" }}</td>
-              <td class="text-end" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.imprv_value)) if r.imprv_value else "—" }}</td>
-              <td class="text-end" style="border-left:2px solid var(--border-strong, #cbd0dc);">{% if _cap_r > 0 %}−${{ "{:,.0f}".format(_cap_r) }}{% else %}—{% endif %}</td>
-              <td class="text-end">
+              <td class="text-end" data-label="Market Value">${{ "{:,.0f}".format(r.market_value) if r.market_value else "—" }}</td>
+              <td class="text-end" data-label="Land Value" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.land_value)) if r.land_value else "—" }}</td>
+              <td class="text-end" data-label="Imprv Value" style="font-variant-numeric:tabular-nums;">{{ ("$" + "{:,.0f}".format(r.imprv_value)) if r.imprv_value else "—" }}</td>
+              <td class="text-end" data-label="Value Limitation Adj (−)" style="border-left:2px solid var(--border-strong, #cbd0dc);">{% if _cap_r > 0 %}−${{ "{:,.0f}".format(_cap_r) }}{% else %}—{% endif %}</td>
+              <td class="text-end" data-label="Net Appraised (Assessed)">
                 {% if r.assessed_value %}
                   ${{ "{:,.0f}".format(r.assessed_value) }}
                   {% if _av_anomaly %}
@@ -2692,8 +2933,8 @@
                   {% endif %}
                 {% else %}—{% endif %}
               </td>
-              <td class="text-end">${{ "{:,.0f}".format(r.taxable_value) if r.taxable_value else "—" }}</td>
-              <td class="text-end" {% if r.tax_year in [2021,2022,2023,2024] %}id="btax-{{ r.tax_year }}"{% endif %}>
+              <td class="text-end" data-label="Taxable Value">${{ "{:,.0f}".format(r.taxable_value) if r.taxable_value else "—" }}</td>
+              <td class="text-end" data-label="Total Tax" {% if r.tax_year in [2021,2022,2023,2024] %}id="btax-{{ r.tax_year }}"{% endif %}>
                 {# Whole-dollar formatting (July 2026, per Diego): all four branches below
                    used ".2f" (cents) — the only cents-formatted figures in this table;
                    every other column (Market/Land/Imprv/Assessed/Taxable Value) already
@@ -2738,7 +2979,7 @@
                   <span class="na-cell" id="bna-{{ r.tax_year }}">Not available yet</span>
                 {% endif %}
               </td>
-              <td {% if r.tax_year in [2021,2022,2023,2024] %}id="bsrc-{{ r.tax_year }}"{% endif %}>
+              <td data-label="Source" {% if r.tax_year in [2021,2022,2023,2024] %}id="bsrc-{{ r.tax_year }}"{% endif %}>
                 {# Badge history (July 2026, per Diego), condensed -- see app.py for the
                    full writeup: this badge used to check `r.tax_year == 2025` FIRST
                    and unconditionally award "Verified", masking derived/portal-scrape/
@@ -2792,7 +3033,21 @@
       2021–2024 values — Texas Comptroller Annual Jurisdiction Roll (AJR).
       2021–2024 tax — sourced directly from Travis County Tax Office billing records (Verified); this is a comprehensive countywide billing load, not a rate-based estimate or portal receipt. See the "2021–24 billing" badge above for this specific parcel's coverage.
       {% if _has_2026 %}2026 — TCAD Preliminary Export, June 9, 2026 (Preliminary — subject to change until July 25, 2026 certification).{% endif %}
-      Billing detail is only available for 2025.
+      {# Ambiguity fix (July 2026, per Fable review P0-2): "Billing detail is
+         only available for 2025" sat directly under a sentence saying
+         2021-2024 billing is Verified -- reading as a flat contradiction.
+         Checked before rewording (not guessed): tax_billing_entity genuinely
+         HAS per-entity 2021-2024 rows in the database (confirmed in app.py,
+         property_detail()'s entity_detail_prev query comment -- real data
+         from this session's PIR loader work), so "entity-level billing
+         detail available 2025 only" would overclaim in the wrong direction
+         if read as a data-availability statement. What's actually true and
+         intended: the 2021-2024 TOTALS are Verified (stated just above);
+         this PAGE's per-entity breakdown table is a 2025-only display
+         feature, not a reflection of what data exists. Worded as a display
+         statement ("shown ... for 2025"), not a data-availability claim, to
+         stay accurate either way. #}
+      The totals above are what's Verified for 2021–2024. This page's per-entity billing breakdown (the "2025 Tax by Entity" table) is shown for 2025 only.
       <span class="badge-data-anomaly" title="AV > MV flag" style="margin-left:6px;">!</span> = assessed value exceeds market value in source data — known AJR data quality issue.
       "Value Limitation Adj" is the same homestead-cap deduction shown in the Current Values panel, computed per
       year as Market − Assessed. TCAD's own page also shows "Special Use Land Market" and "Special Use Exclusion" —
@@ -2854,7 +3109,17 @@
                       <span class="badge-partial ms-1" style="font-size:10px; padding: 1px 5px;" title="Large value jump (>{{ '{:.0f}'.format(m.risk_large_value_jump_pct) }}%)">!</span>
                     {% endif %}
                   </span>
-                {% elif r.tax_year == history|sort(attribute='tax_year')|first|attr('tax_year') %}
+                {# Bonus fix (July 2026, found via verify_property_html_render.py
+                   while building P0-1's regression harness, per Fable review):
+                   the |attr('tax_year') filter does a strict getattr() only --
+                   it does NOT fall back to dict-item access the way the `.`
+                   operator does, and history rows are plain dicts, so this
+                   silently evaluated to Undefined and the comparison below was
+                   always False. Not a crash (default Undefined renders '' and
+                   compares unequal, so the "base year" label was just falling
+                   through to the "—" case at line 2875 on every parcel) but a
+                   real, if minor, dead branch. Fixed to plain dict access. #}
+                {% elif r.tax_year == (history|sort(attribute='tax_year')|first)['tax_year'] %}
                   <span class="text-muted small">base year</span>
                 {% else %}
                   <span class="text-muted small">—</span>
@@ -3252,8 +3517,16 @@
     <div class="card-footer text-muted small">
       <strong>These are illustrative scenarios, not statistical confidence ranges.</strong>
       ¹ {{ proj_baseline or "Based on 2021–2025 certified trend" }}.
+      {# Window disclosure fix (July 2026, per Fable review P1-10): "rate
+         trend" named WHAT feeds the Base/High bands' rate assumption but not
+         WHAT WINDOW it's computed over -- unlike the value CAGR just above,
+         whose window is stated via proj_baseline. avg_rate_change (app.py,
+         build_projections()) is computed from rate_history, which is always
+         queried BETWEEN 2021 AND 2025 (a fixed 5-year window, confirmed in
+         that query) -- not tunable per parcel, so this can be stated as a
+         constant rather than a template variable. #}
       <strong>Low</strong>: CAGR −2 pp, rates flat.
-      <strong>Base</strong>: historical CAGR + rate trend.
+      <strong>Base</strong>: historical CAGR + rate trend (avg YoY change, 2021–2025).
       <strong>High</strong>: CAGR +2 pp, rates trend ×1.5.
       Actual values set by TCAD appraisal and taxing budgets each year.
       {# Literal formula (July 2026, item 5) -- see the ⓘ next to the card
@@ -3373,8 +3646,16 @@
     </div>
     {# Benchmark table — 2025 selected-year row gets JS-updated; full history rows are static #}
     <div class="card-body p-0">
+      {# Mobile card-stacking (July 2026, per Fable review P2-21) -- same
+         reasoning as the Value History table above: rows are one-per-year
+         (data-year already on <tr>), so table-stack applies cleanly.
+         data-label added to every <td>; JS live-update hooks (bench-p25/
+         bench-med/bench-p75/bench-pos/bench-yoy classes, used by the
+         Use Code filter's re-render) are untouched since they select by
+         class, not position, so they keep working identically whether the
+         table is rendered as a table (desktop) or stacked cards (mobile). #}
       <div class="table-responsive">
-        <table class="table table-sm table-hover mb-0" id="benchTable">
+        <table class="table table-sm table-hover mb-0 table-stack" id="benchTable">
           <thead class="table-light small text-muted text-uppercase">
             <tr>
               <th>Year</th>
@@ -3392,18 +3673,18 @@
             {% set b = benchmark_by_year.get(r.tax_year) %}
             <tr data-year="{{ r.tax_year }}"
                 data-mv="{{ r.market_value or 0 }}">
-              <td>{{ r.tax_year }}</td>
-              <td class="text-end">{{ "$" + "{:,.0f}".format(r.market_value) if r.market_value else "—" }}</td>
+              <td data-label="Year">{{ r.tax_year }}</td>
+              <td class="text-end" data-label="This Property">{{ "$" + "{:,.0f}".format(r.market_value) if r.market_value else "—" }}</td>
               {% if b %}
-              <td class="text-end text-muted small bench-p25">${{ "{:,.0f}".format(b.p25_market_value) if b.p25_market_value else "—" }}</td>
-              <td class="text-end text-muted small bench-med">${{ "{:,.0f}".format(b.median_market_value) if b.median_market_value else "—" }}</td>
-              <td class="text-end text-muted small bench-p75">${{ "{:,.0f}".format(b.p75_market_value) if b.p75_market_value else "—" }}</td>
+              <td class="text-end text-muted small bench-p25" data-label="Bottom 25%">${{ "{:,.0f}".format(b.p25_market_value) if b.p25_market_value else "—" }}</td>
+              <td class="text-end text-muted small bench-med" data-label="Median">${{ "{:,.0f}".format(b.median_market_value) if b.median_market_value else "—" }}</td>
+              <td class="text-end text-muted small bench-p75" data-label="Top 25%">${{ "{:,.0f}".format(b.p75_market_value) if b.p75_market_value else "—" }}</td>
               {# Coherence fix (July 2026, per Fable review finding 6): both cells
                  below position/change a RAW market value, not tax burden --
                  var(--up)/var(--down) and text-danger/text-success swapped for a
                  neutral slate/blue scale, matching the JS-side posBand()/fmtVsMed()
                  treatment used when this table's 2025 row is live-refreshed. #}
-              <td class="text-center small bench-pos">
+              <td class="text-center small bench-pos" data-label="Position">
                 {% if r.market_value and b.median_market_value %}
                   {% set _mv = r.market_value %}{% set _p25v = b.p25_market_value %}
                   {% set _medv = b.median_market_value %}{% set _p75v = b.p75_market_value %}
@@ -3413,7 +3694,7 @@
                   {% else %}<span style="color:var(--accent);">↓ Bottom 25%</span>{% endif %}
                 {% else %}—{% endif %}
               </td>
-              <td class="text-end small text-muted bench-yoy">
+              <td class="text-end small text-muted bench-yoy" data-label="Group YoY">
                 {% if b.median_yoy_value_change_pct is not none %}
                   <span style="color:var(--text-2);">
                     {{ "{:+.1f}%".format(b.median_yoy_value_change_pct) }}
@@ -3537,7 +3818,7 @@
     <div class="section-hdr">Peer Set Position</div>
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
-        <span>Neighbourhood Peer Comparison <span id="peerBandNote" class="text-muted" style="font-size:11.5px; font-weight:400;"></span></span>
+        <span>Neighborhood Peer Comparison <span id="peerBandNote" class="text-muted" style="font-size:11.5px; font-weight:400;"></span></span>
         <span class="estimates-badge">2025 Certified</span>
       </div>
       <div class="card-body" id="peerBenchBody">
@@ -4376,6 +4657,21 @@ if (rCtx) {
   }
 
   // ── Populate code options for a given prop type ──────────────────
+  // No-match honesty fix (July 2026, per Fable review P1-6): this always
+  // tried to pre-select the parcel's own classi_cd, but had no signal at
+  // all for the case where that code isn't in `codes` -- either because it
+  // has fewer than 10 comparable parcels countywide (the API's own HAVING
+  // threshold, /api/benchmark/meta) or the parcel has no classi_cd on file.
+  // In that case the card silently falls back to the broad Property-Type
+  // population with NOTHING telling the user why -- directly contradicting
+  // the Overview tab's "Submarket Position" paragraph, which tells the user
+  // this card "narrows to this property's actual use code." Same pattern
+  // already fixed for the Peer Set section (see the comment above that IIFE):
+  // an honest labeled state instead of a silent gap. codeUnavailableReason is
+  // read by the caveat text below (benchBroadCaveat) so the two states -- "no
+  // narrower comparison exists for this parcel" vs. "you haven't picked one
+  // yet" -- read differently instead of the same generic sentence either way.
+  let codeUnavailableReason = null;
   function populateCodeOptions(propType) {
     if (!metaData || !propType) return;
     const codes = (metaData.use_codes_by_type || {})[propType] || [];
@@ -4383,10 +4679,21 @@ if (rCtx) {
       value: item.code,
       label: `${item.code} — ${item.desc} (${item.n.toLocaleString()})`,
     })));
+    codeUnavailableReason = null;
     // Pre-select parcel's own classi_cd if it exists in the list
     if (parcelClassiCd) {
       const match = codes.find(c => c.code === parcelClassiCd);
-      if (match) taCode.select(match.code, `${match.code} — ${match.desc} (${match.n.toLocaleString()})`);
+      if (match) {
+        taCode.select(match.code, `${match.code} — ${match.desc} (${match.n.toLocaleString()})`);
+      } else {
+        codeUnavailableReason = 'fewer than 10 comparable parcels countywide for this parcel\'s use code';
+      }
+    } else {
+      codeUnavailableReason = 'this parcel has no use code on file';
+    }
+    const codeInputEl = document.getElementById('benchCodeInput');
+    if (codeInputEl) {
+      codeInputEl.placeholder = codeUnavailableReason ? '— Use Code (n/a for this parcel) —' : '— Use Code —';
     }
   }
 
@@ -4515,8 +4822,21 @@ if (rCtx) {
     // showing the broad bench_label population. The moment a narrower Use
     // Code filter successfully narrows the result (label !== defaultBenchLabel),
     // the caveat itself would be wrong, so hide it.
+    // No-match honesty fix (July 2026, per Fable review P1-6): when narrowing
+    // was attempted and genuinely isn't possible (codeUnavailableReason set
+    // by populateCodeOptions()), swap in a sentence that says so specifically
+    // instead of "Use the Use Code filter above to narrow" -- which reads as
+    // an instruction to do something the app already tried and couldn't do.
     const caveatEl = document.getElementById('benchBroadCaveat');
-    if (caveatEl) caveatEl.style.display = (label === defaultBenchLabel) ? 'block' : 'none';
+    if (caveatEl) {
+      const showing = (label === defaultBenchLabel);
+      caveatEl.style.display = showing ? 'block' : 'none';
+      if (showing) {
+        caveatEl.textContent = codeUnavailableReason
+          ? `${label} here is the broad TCAD category. A use-code-specific comparison isn't available for this parcel (${codeUnavailableReason}).`
+          : `${label} here is the broad TCAD category — every ${label.toLowerCase()} property countywide, any size or use — not a use-code-specific peer group. Use the Use Code filter above to narrow to this property's actual type.`;
+      }
+    }
   }
 
   // ── Main fetch + render ──────────────────────────────────────────
@@ -4569,6 +4889,30 @@ if (rCtx) {
 {% endif %}
 
 <script>
+// ── Ordinal suffix helper (July 2026, per Fable review P1-8) ────────────────
+// A real, if minor, formatting bug found in two places on this page (the MV
+// percentile-rank chip below and the $/SF percentile-rank chip further down):
+// both always appended "th" to a computed rank -- "1th pct", "2th pct",
+// "21th pct", "3th pct" -- instead of the real English ordinal ("1st",
+// "2nd", "21st", "3rd"). Declared once, at true top-level (not inside either
+// feature's own IIFE), specifically so both call sites share one
+// implementation instead of drifting into two near-identical copies -- a
+// later <script> block can still see this because <script> tags on a page
+// share one global scope, function declarations included, and this file's
+// own script blocks already execute in page order.
+function ordinalSuffix(n) {
+  if (n == null || !isFinite(n)) return '';
+  n = Math.round(n);
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return n + 'th';
+  switch (n % 10) {
+    case 1: return n + 'st';
+    case 2: return n + 'nd';
+    case 3: return n + 'rd';
+    default: return n + 'th';
+  }
+}
+
 // ── Scenario Band Toggle (Task 3) ── projBandToggle-task3-js ────────────────
 (function() {
   const toggle  = document.getElementById('projBandToggle');
@@ -4619,7 +4963,7 @@ if (rCtx) {
           </div>
           <div class="estimator-chip">
             <div class="estimator-chip-label">~This Parcel MV Rank</div>
-            <div class="estimator-chip-val" style="color:${clr}">${d.this_mv_pct_rank != null ? d.this_mv_pct_rank + "th pct" : "—"}</div>
+            <div class="estimator-chip-val" style="color:${clr}">${d.this_mv_pct_rank != null ? ordinalSuffix(d.this_mv_pct_rank) + " pct" : "—"}</div>
           </div>
           <div class="estimator-chip">
             <div class="estimator-chip-label">Peer Median MV</div>
@@ -4668,7 +5012,7 @@ if (rCtx) {
           </table>
         </div>
         <p class="text-muted mt-2 mb-0" style="font-size:10.5px;">
-          Peer selection: same neighbourhood + property type, ±50% of 2025 market value.
+          Peer selection: same neighborhood + property type, ±50% of 2025 market value.
           For improved SF-normalised comparison see the Per-SF section above (available when living-area sqft is on record).
           ${d.peer_tax_sample_size != null && d.peer_tax_total_count != null && d.peer_tax_sample_size < d.peer_tax_total_count
             ? ` Total Tax is based on ${d.peer_tax_sample_size} of ${d.peer_tax_total_count} peers — the rest have no 2025 billing data on record.`
@@ -4800,7 +5144,10 @@ if (rCtx) {
   function _rank(r) {
     if (r == null) return '—';
     const clr = (r >= 75 || r <= 25) ? 'var(--accent)' : 'var(--text)';
-    return `<span style="color:${clr}; font-weight:600;">${r}th pct</span>`;
+    // Ordinal-suffix bug fix (July 2026, per Fable review P1-8): was
+    // always "${r}th pct" -- see ordinalSuffix() near the top of this
+    // file's scripts for the shared fix (also used by the MV-rank chip).
+    return `<span style="color:${clr}; font-weight:600;">${ordinalSuffix(r)} pct</span>`;
   }
 
   fetch(`/api/peer_benchmark_sf/${encodeURIComponent(GEO_ID)}`)

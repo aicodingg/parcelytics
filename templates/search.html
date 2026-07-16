@@ -20,19 +20,30 @@
         <span>Coverage Map</span>
         <span class="text-muted" style="font-size:11.5px;">United States · county outlines</span>
       </div>
+      {# Legend/map fix (July 2026, per Fable review "Markets framing (b)"):
+         this used to color all of Texas as an undifferentiated "coming
+         soon" tier and everything else as flat "other states" -- a Texas-
+         first expansion story. The homepage's roadmap section (added the
+         same review round, see index.html's own ROADMAP comment) instead
+         names five specific target markets -- New York City, Los Angeles,
+         Chicago, Dallas, and Houston -- most of which aren't in Texas, so
+         the two pages were telling contradictory expansion stories. Ported
+         index.html's ROADMAP FIPS map + legend wording here verbatim so
+         both pages show the same five markets the same way. #}
       <div class="card-body">
         <svg id="usMap" viewBox="0 0 975 610" preserveAspectRatio="xMidYMid meet"
              style="width:100%; height:auto; display:block;"></svg>
         <div id="usMapFallback" class="text-muted small" style="display:none;">
-          Map preview unavailable offline. Coverage: Travis County, TX.
+          Map preview unavailable offline. Live today: Travis County, TX. Roadmap (not yet live): New York City,
+          Los Angeles, Chicago, Dallas, and Houston metro counties.
         </div>
         <div class="d-flex flex-wrap gap-3 mt-2" style="font-size:11.5px; color:var(--text-2);">
-          <span><span style="display:inline-block;width:11px;height:11px;background:#94B0DA;border:1px solid #7d97c2;vertical-align:-1px;border-radius:2px;"></span> Travis County — active</span>
-          <span><span style="display:inline-block;width:11px;height:11px;background:#DCEDFF;border:1px solid #c3d8f0;vertical-align:-1px;border-radius:2px;"></span> Texas — coming soon</span>
-          <span><span style="display:inline-block;width:11px;height:11px;background:#f1f2f4;border:1px solid #d9dde1;vertical-align:-1px;border-radius:2px;"></span> Other states</span>
+          <span><span style="display:inline-block;width:11px;height:11px;background:#94B0DA;border:1px solid #7d97c2;vertical-align:-1px;border-radius:2px;"></span> Travis County, TX — live today</span>
+          <span><span style="display:inline-block;width:11px;height:11px;background:#DCEDFF;border:1px dashed #94B0DA;vertical-align:-1px;border-radius:2px;"></span> Roadmap markets — not yet live</span>
         </div>
         <p class="text-muted mt-2 mb-0" style="font-size:12px;">
-          Currently covering <strong>Travis County, TX</strong> — additional counties coming soon.
+          Currently covering <strong>Travis County, TX</strong> — expanding next to the five largest U.S. commercial
+          real estate markets (see the roadmap on the <a href="/#request">homepage</a>).
         </p>
       </div>
     </div>
@@ -270,9 +281,25 @@
 
       {# ── Results ──────────────────────────────────────────────────────────── #}
       <div id="fltResultsWrap" style="display:none;">
-        <div class="card-header d-flex justify-content-between align-items-center">
+        <div class="card-header d-flex justify-content-between align-items-center gap-2">
           <span>Results</span>
-          <span class="text-muted" id="fltResultsCount" style="font-size:11.5px;"></span>
+          <div class="d-flex align-items-center gap-2">
+            <span class="text-muted" id="fltResultsCount" style="font-size:11.5px;"></span>
+            {# CSV export (July 2026, per Fable review P1-14) — same client-side
+               csvEscape/Blob/download pattern already used on Rate Trends
+               (templates/rates.html), reused rather than reinvented. Exports
+               every matching parcel across ALL pages, not just the page
+               currently on screen — the "Homes Without Homestead Exemption"
+               quick filter exists specifically so this list can be pulled
+               for outreach, and a lead list capped at one page (50 rows) of
+               however many hundred/thousand actually matched wouldn't serve
+               that. Capped at fltCsvExportMax total rows (see JS) as a
+               sane ceiling against an accidentally broad filter, with an
+               honest note in the file itself if the cap was hit. #}
+            <button type="button" id="fltExportCsvBtn" class="btn btn-sm btn-outline-secondary" style="font-size:11.5px;" disabled>
+              Export CSV
+            </button>
+          </div>
         </div>
         <div class="card-body p-0">
           <div class="table-responsive">
@@ -328,6 +355,17 @@
     return;
   }
   const TRAVIS = "48453", TX = "48", W = 975, H = 610;
+  // Roadmap targets (July 2026, per Fable review "Markets framing (b)") —
+  // kept identical to index.html's own ROADMAP object (core county per
+  // metro; see that file's comment for the FIPS-to-metro mapping) so both
+  // pages' maps and legends tell the same expansion story.
+  const ROADMAP = {
+    "36061": "New York City, NY — roadmap, not yet live",
+    "06037": "Los Angeles, CA — roadmap, not yet live",
+    "17031": "Chicago, IL — roadmap, not yet live",
+    "48113": "Dallas, TX — roadmap, not yet live",
+    "48201": "Houston, TX — roadmap, not yet live",
+  };
   const svg = d3.select("#usMap");
   d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json")
     .then(us => {
@@ -343,14 +381,20 @@
         .attr("d", path)
         .attr("fill", d => {
           const id = String(d.id);
-          if (id === TRAVIS) return "#94B0DA";        // Travis — active
-          if (id.slice(0, 2) === TX) return "#cdddf0"; // Texas — coming soon
-          return "#e6e9ed";                            // other states
+          if (id === TRAVIS) return "#94B0DA";          // Travis — live today
+          if (id in ROADMAP) return "#DCEDFF";           // roadmap target — distinct, lighter fill
+          if (id.slice(0, 2) === TX) return "#eef2f7";
+          return "#e6e9ed";                              // everything else
         })
         .attr("stroke", "#ffffff")
         .attr("stroke-width", 0.3)
         .append("title")
-        .text(d => String(d.id) === TRAVIS ? "Travis County, TX — active coverage" : "");
+        .text(d => {
+          const id = String(d.id);
+          if (id === TRAVIS) return "Travis County, TX — live today";
+          if (id in ROADMAP) return ROADMAP[id];
+          return "";
+        });
 
       // State boundaries on top for legibility
       svg.append("path")
@@ -370,6 +414,18 @@
           .attr("font-size", "14").attr("font-weight", "600").attr("fill", "#505A5B")
           .text("Travis County, TX");
       }
+
+      // Roadmap markers — hollow, dashed ring, explicitly NOT the "live" style
+      // (same visual language as index.html's roadmap map)
+      Object.keys(ROADMAP).forEach(id => {
+        const f = counties.features.find(d => String(d.id) === id);
+        if (!f) return;
+        const rc = path.centroid(f);
+        if (isNaN(rc[0])) return;
+        svg.append("circle").attr("cx", rc[0]).attr("cy", rc[1]).attr("r", 6)
+          .attr("fill", "#fff").attr("stroke", "#94B0DA").attr("stroke-width", 1.5)
+          .attr("stroke-dasharray", "2,1.5");
+      });
     })
     .catch(() => {
       document.getElementById("usMap").style.display = "none";
@@ -606,6 +662,7 @@
   const pageInfo   = document.getElementById("fltPageInfo");
   const prevBtn    = document.getElementById("fltPrevBtn");
   const nextBtn    = document.getElementById("fltNextBtn");
+  const exportCsvBtn = document.getElementById("fltExportCsvBtn");
 
   let currentPage = 1;
 
@@ -696,6 +753,7 @@
         }
         resultsWrap.style.display = "";
         resultsCount.textContent = body.total.toLocaleString() + " matching parcel" + (body.total === 1 ? "" : "s");
+        exportCsvBtn.disabled = !body.total;
         resultsBody.innerHTML = (body.results || []).map(r => `
           <tr>
             <td><a href="/parcel/${encodeURIComponent(r.geo_id)}">${r.situs_address || "(address unknown)"}</a></td>
@@ -722,6 +780,84 @@
   applyBtn.addEventListener("click", () => runSearch(1));
   prevBtn.addEventListener("click", () => { if (currentPage > 1) runSearch(currentPage - 1); });
   nextBtn.addEventListener("click", () => runSearch(currentPage + 1));
+
+  // ── CSV export (July 2026, per Fable review P1-14) ────────────────────────
+  // Same csvEscape convention as templates/rates.html's exportCsv() — kept as
+  // its own small copy rather than a shared <script> include, since the two
+  // pages don't otherwise share a JS file and this is the only line that
+  // would move.
+  function csvEscape(v) {
+    const s = String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  const FLT_CSV_EXPORT_MAX_ROWS = 5000; // sane ceiling against an accidentally broad filter
+
+  function exportResultsCsv() {
+    if (exportCsvBtn.disabled) return;
+    exportCsvBtn.disabled = true;
+    const prevLabel = exportCsvBtn.textContent;
+    exportCsvBtn.textContent = "Exporting…";
+
+    const header = ["Address", "Parcel ID", "Property Type", "Market Value", "Tax Year", "Confidence"];
+    const rows = [header];
+    let capped = false;
+
+    // Walks every page of the CURRENT filter/search (same buildParams() the
+    // on-screen table already uses, so the export always matches exactly
+    // what's on screen — not a separate, potentially-diverging query), not
+    // just the page currently displayed. Sequential (not parallel) fetches,
+    // simplest correct way to respect SEARCH_FILTER_PAGE_SIZE pagination
+    // without guessing at page boundaries client-side.
+    function fetchPage(page) {
+      return fetch("/api/search_filter?" + buildParams(page).toString())
+        .then(r => r.json())
+        .then(body => {
+          if (!body.ok) throw new Error(body.error || "export failed");
+          (body.results || []).forEach(r => {
+            if (rows.length - 1 >= FLT_CSV_EXPORT_MAX_ROWS) { capped = true; return; }
+            rows.push([
+              r.situs_address || "",
+              r.geo_id,
+              r.prop_type || "",
+              r.market_value != null ? Math.round(r.market_value) : "",
+              r.tax_year,
+              r.confidence || "",
+            ]);
+          });
+          const hasMore = body.total_pages && page < body.total_pages
+                          && rows.length - 1 < FLT_CSV_EXPORT_MAX_ROWS;
+          return hasMore ? fetchPage(page + 1) : null;
+        });
+    }
+
+    fetchPage(1)
+      .then(() => {
+        if (capped) {
+          rows.push([`Export capped at ${FLT_CSV_EXPORT_MAX_ROWS.toLocaleString()} rows — narrow the filters to get the full match set.`, "", "", "", "", ""]);
+        }
+        const csv = rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `parcelytics_search_results_${new Date().toISOString().slice(0, 10)}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      })
+      .catch(() => {
+        errorBox.textContent = "Something went wrong exporting these results. Please try again.";
+        errorBox.style.display = "";
+      })
+      .finally(() => {
+        exportCsvBtn.disabled = false;
+        exportCsvBtn.textContent = prevLabel;
+      });
+  }
+
+  exportCsvBtn.addEventListener("click", exportResultsCsv);
 
   function clearAllFilterFields() {
     neighborhoodTA.clear(); propTypeTA.clear(); useCodeTA.clear();

@@ -91,6 +91,26 @@
   --accent-ring:   rgba(66, 99, 235, 0.30);
   --accent-dark:   #3550C8;   /* legacy alias used by some templates */
   --accent-light:  #EEF1FE;   /* legacy alias — now a faint tint, not a field */
+  /* Dark-surface companions (July 2026, per Diego — Homepage hero: "keep it
+     dark, make it deliberate"): the hero/trust-panel dark sections
+     (Home + About only) used these exact values already, just as bare
+     hex/rgba literals scattered across the FRONT DOOR block below instead
+     of declared tokens — coincidentally correct, not traceably so.
+     --accent-rgb is the R,G,B triplet of --accent itself (66,99,235 =
+     #4263EB), needed because rgba() can't take alpha on a hex custom
+     property directly. --accent-on-dark is --accent lightened for
+     legibility against --ink (used identically in both the hero h1's
+     ".accent" span and the trust panel's kicker — already the same value
+     in both places pre-fix, just not declared once). --success-on-dark is
+     the dark-surface variant of --verified-text/--down (both #067647) —
+     that value reads muddy against --ink, so the hero/trust-panel's
+     "live/verified" dots used a brighter mint green instead; also already
+     identical in both of its two call sites pre-fix. Declaring all three
+     here makes that reuse explicit instead of incidental, per the brief. */
+  --accent-rgb:         66, 99, 235;
+  --accent-on-dark:     #93A7FF;
+  --success-on-dark:    #32D583;
+  --success-on-dark-rgb: 50, 213, 131;
 
   /* ── Functional signal set — DATA MEANING ONLY, never decoration ────────── */
   /* In tax context: ↑ value/tax = risk (red), ↓ = relief (green) */
@@ -903,6 +923,28 @@ tfoot .combined-rate-row td:first-child { padding-top: 11px; }
 .search-input-wrap { display: flex; gap: var(--s-2); align-items: stretch; }
 .search-input {
   flex: 1;
+  /* Mobile hero overflow fix (July 2026, per Fable review P2-20): a plain
+     <input> in a flex row defaults to min-width:auto, which resolves to
+     the input's intrinsic content size (UA-dependent, roughly a 20-char
+     text box) rather than 0 -- so flex:1 could shrink the search button's
+     sibling (search-btn, flex-shrink:0, ~120px+) but couldn't shrink this
+     input below its intrinsic width. At the 390px hero viewport Fable
+     flagged, hero padding + the button leave less room than that intrinsic
+     width, so the input pushed the row (and with it, .hero-search) wider
+     than the viewport -- invisible as page scroll only because body already
+     has overflow-x:hidden as a blanket guard (see that rule's own comment),
+     but the search bar itself was genuinely clipped/cut off on the right,
+     not just theoretically overflowing. min-width:0 is the standard fix for
+     a flex-child form control refusing to shrink; verified against the
+     search-input-wrap flex row (this input + .search-btn, flex-shrink:0)
+     with pen-and-paper box math: 390px viewport − 2×var(--s-5) hero
+     padding (48px) − .search-btn's ~130px (26px×2 padding + "Search" text)
+     − var(--s-2) gap (8px) ≈ 184px left for the input, which is exactly
+     the kind of narrow remainder this rule now lets it accept instead of
+     forcing overflow. This class is also reused undamaged on the
+     styleguide page's own search-input-wrap demo (explicit inline
+     max-width:480px there, well clear of any mobile-narrow scenario). */
+  min-width: 0;
   height: 52px;
   font-size: var(--fs-md);
   font-family: var(--font-sans);
@@ -1276,11 +1318,22 @@ footer:not(.site-footer) {
    ════════════════════════════════════════════════════════════════════════════ */
 .hero {
   background: var(--ink);
+  /* Hand-off fix (July 2026, per Diego — Homepage hero: "make it
+     deliberate"): the third gradient layer below REPLACES the previous
+     `border-bottom: 1px solid rgba(255,255,255,0.07)` hard rule. That
+     border ended the hero on a razor edge -- functionally fine, but read
+     as an incidental stopping point, not a designed one. This layer starts
+     fully transparent (inert) for the hero's top 80%, then over the final
+     20% eases toward a faint lift using --ink-2 (this system's own
+     "slightly lifted ink" token, already used elsewhere for layered dark
+     surfaces) -- a soft internal glow that begins inside the hero's own
+     bottom edge, so the eye is released into the section below rather than
+     cut off at a line. */
   background-image:
-    radial-gradient(900px 400px at 78% -10%, rgba(66,99,235,0.22), transparent 60%),
-    radial-gradient(700px 500px at 8% 8%, rgba(66,99,235,0.10), transparent 55%);
+    radial-gradient(900px 400px at 78% -10%, rgba(var(--accent-rgb), 0.22), transparent 60%),
+    radial-gradient(700px 500px at 8% 8%, rgba(var(--accent-rgb), 0.10), transparent 55%),
+    linear-gradient(to bottom, transparent 0%, transparent 80%, var(--ink-2) 100%);
   color: #fff;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
   /* break out of the .container that wraps it */
   margin: calc(-1 * var(--s-5)) calc(50% - 50vw) 0;
   width: 100vw;
@@ -1297,7 +1350,7 @@ footer:not(.site-footer) {
   padding: 6px 13px; border-radius: var(--r-pill);
   margin-bottom: var(--s-5);
 }
-.hero-eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: #32D583; box-shadow: 0 0 0 3px rgba(50,213,131,0.22); }
+.hero-eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success-on-dark); box-shadow: 0 0 0 3px rgba(var(--success-on-dark-rgb), 0.22); }
 .hero h1 {
   color: #fff;
   font-size: clamp(2.1rem, 5vw, 3.5rem);
@@ -1307,7 +1360,7 @@ footer:not(.site-footer) {
   margin-bottom: var(--s-4);
   max-width: 16ch;
 }
-.hero h1 .accent { color: #93A7FF; }
+.hero h1 .accent { color: var(--accent-on-dark); }
 .hero-sub {
   font-size: clamp(1rem, 1.6vw, 1.2rem);
   line-height: 1.6;
@@ -1396,15 +1449,17 @@ footer:not(.site-footer) {
 .audience-card h3 { font-size: var(--fs-md); font-weight: var(--fw-bold); color: var(--ink); margin-bottom: 8px; }
 .audience-card p { font-size: var(--fs-sm); line-height: 1.6; color: var(--text-2); margin: 0; }
 
-/* Trust / provenance panel (dark) */
+/* Trust / provenance panel (dark) — same dark-surface token set as .hero
+   (Home + About only; see the --accent-rgb/--accent-on-dark/--success-on-dark
+   comment in :root). */
 .fd-trust-panel {
   background: var(--ink);
-  background-image: radial-gradient(700px 320px at 85% 0%, rgba(66,99,235,0.18), transparent 60%);
+  background-image: radial-gradient(700px 320px at 85% 0%, rgba(var(--accent-rgb), 0.18), transparent 60%);
   color: #fff;
   border-radius: var(--r-lg);
   padding: var(--s-7);
 }
-.fd-trust-panel .fd-kicker { color: #93A7FF; }
+.fd-trust-panel .fd-kicker { color: var(--accent-on-dark); }
 .fd-trust-panel h2 { color: #fff; }
 .provenance-row {
   display: flex; align-items: center; gap: 12px;
@@ -1414,7 +1469,7 @@ footer:not(.site-footer) {
 .provenance-row:last-child { border-bottom: none; }
 .provenance-check {
   width: 22px; height: 22px; border-radius: 50%;
-  background: rgba(50,213,131,0.16); color: #32D583;
+  background: rgba(var(--success-on-dark-rgb), 0.16); color: var(--success-on-dark);
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 12px; font-weight: var(--fw-black); flex-shrink: 0;
 }
@@ -1484,11 +1539,35 @@ footer:not(.site-footer) {
 }
 
 @media (max-width: 576px) {
-  body { font-size: 13.5px; }
+  /* Mobile readability fix (July 2026, per Fable review P2-22): this used
+     to shrink the base font BELOW the already-small 14px desktop size
+     (13.5px) -- backwards from what mobile needs (a LARGER base, since
+     small text is harder to read on a phone, not easier). Bumped to 16px,
+     the top of Diego's requested 15-16px range and also the exact
+     threshold iOS Safari uses to decide whether to auto-zoom a page on
+     input focus (see the form-control rule below, same reasoning). */
+  body { font-size: 16px; }
   .property-header h2, .page-title { font-size: var(--fs-lg); }
   .kpi-value { font-size: 1.4rem; }
   .footer-grid { grid-template-columns: 1fr; }
   .footer-bottom { flex-direction: column; }
+
+  /* iOS zoom-on-focus fix (July 2026, per Fable review P2-22): Mobile
+     Safari auto-zooms the page whenever a focused form input's computed
+     font-size is under 16px -- true regardless of the site's own type
+     scale. .form-control/.form-select's own font-size (var(--fs-sm) =
+     13px) already violated this site-wide, before counting the dozens of
+     inline style="font-size:12px" overrides on individual .form-control-sm
+     inputs across property.html/search.html/snapshot.html/rates.html. A
+     single !important rule here, scoped to mobile only, is deliberately
+     used instead of hunting down and editing every inline override
+     individually -- this is exactly the kind of blanket, cross-cutting
+     concern !important exists for, and this file already uses the same
+     technique for mobile-only font overrides a few rules up. Desktop
+     sizing (the deliberately compact form-control-sm inputs used
+     throughout the filter panels) is completely unaffected. */
+  input.form-control, select.form-select, textarea.form-control,
+  .form-control, .form-select { font-size: 16px !important; }
 
   /* ── Data-table reflow: stack rows as labelled cards instead of x-scroll ──
      Opt-in via .table-stack on the <table>; each <td> exposes a data-label.   */
@@ -1518,4 +1597,28 @@ footer:not(.site-footer) {
     flex-shrink: 0;
   }
   table.table-stack td:empty { display: none; }
+
+  /* ── Sticky first column (July 2026, per Fable review P2-21) ──────────────
+     For wide tables kept in genuine table form on mobile (not stacked --
+     .table-stack above is the stacking alternative, used for the Value
+     History and Peer Benchmark tables where each row is naturally "one
+     year"). Annual Trends' rows are property-type categories with 7 dense
+     numeric columns each; the row label ("Overall", "Residential", etc, via
+     .trend-row-label) is what a reader needs anchored while scrolling
+     through 12 Month/Hist Avg/Forecast/Peak/When/Trough/When -- stacking it
+     into a card would just recreate the same 7-line-per-category scroll
+     problem in a different shape. table-responsive (already wrapping this
+     table) still supplies the horizontal scroll; this only freezes column 1
+     within that scroll. Solid backgrounds (matching this table's own
+     body/head fills, --surface / --surface-2) are required on the sticky
+     cells so scrolled-under columns don't show through. */
+  table.annual-trends-table th:first-child,
+  table.annual-trends-table td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    box-shadow: 1px 0 0 var(--border);
+  }
+  table.annual-trends-table td:first-child { background: var(--surface); }
+  table.annual-trends-table th:first-child { background: var(--surface-2); }
 }

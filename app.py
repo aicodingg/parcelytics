@@ -241,6 +241,29 @@ def build_bill_waterfall(history, entity_detail, entity_detail_prev,
     real_delta    = end_total - start_total
     other_effect  = real_delta - modeled_delta  # reconciliation gap, shown only if material
 
+    # "Exemptions or a cap likely reset" signature (July 2026, per Fable
+    # review P0-5, companion to the 0121230106 fixture -- see that parcel's
+    # verification notes). taxable_i above is BACKED OUT from real amount_due/
+    # rate, so exemption_effect_i is, by construction, "whatever part of the
+    # taxable-value change ISN'T explained by the parcel-wide assessed-value
+    # change alone" -- exactly what a homestead cap reset (buyer loses the
+    # seller's 10%/yr cap, assessed jumps toward market in one year) or an
+    # exemption reset (HS dropped/regained) produces: taxable moves by far
+    # more than assessed did, on a rate that barely moved. Confirmed against
+    # 0121230106 (1 Hedge Ln): $15,887 -> $33,372 (+110%), taxable roughly
+    # doubling on a barely-moved rate -- exactly a large |exemption_effect|
+    # dominating a small |value_effect|, the pattern this flags.
+    # Threshold: exemption_effect must be BOTH the dominant of the two effects
+    # (bigger in magnitude than the pure value effect) AND economically
+    # material ($250+) -- avoids flagging rounding-level noise on parcels
+    # whose bill barely moved at all.
+    reset_signature = abs(total_exemption) > max(abs(total_value), 250)
+    reset_note = (
+        "Exemptions or a cap likely reset (commonly after a sale) — most of "
+        f"the change in {cur_year} taxable value isn't explained by the "
+        "assessed-value change alone."
+    ) if reset_signature else None
+
     return {
         "prior_year": prior_year,
         "cur_year": cur_year,
@@ -252,6 +275,8 @@ def build_bill_waterfall(history, entity_detail, entity_detail_prev,
         "other_effect": round(other_effect, 2),
         "real_delta": round(real_delta, 2),
         "incomplete": incomplete,
+        "reset_signature": reset_signature,
+        "reset_note": reset_note,
         "entity_rate_effects": sorted(
             rows, key=lambda r: abs(r["rate_effect"]), reverse=True
         ),
@@ -552,13 +577,33 @@ def compute_annual_trends(history, metrics_by_year, projections):
 
     recent_yoy = yoy_list[-1][1] if yoy_list else None
     hist_avg_g = round(sum(v for _, v in yoy_list) / len(yoy_list), 1) if yoy_list else None
+    # Forecast Avg fix (July 2026, per Fable review P1-9 -- "Forecast Avg YoY
+    # mixing"): this used to average p["value_change"] across the 5 projected
+    # years, but that field (build_projections()'s _make_rows()) is the
+    # CUMULATIVE % change from the projection's base year to each row's own
+    # year -- not a year-over-year rate. Averaging 5 cumulative figures from a
+    # constant-CAGR model (e.g. +6.0%, +12.4%, +19.1%, +26.2%, +33.8% for a 6%
+    # CAGR) produces ~19.5%, nearly 3x the real annual growth rate the model
+    # actually assumes -- sitting directly next to Hist. Avg in the same row,
+    # which IS a genuine annual average, so the two read as comparable numbers
+    # in the same unit when they weren't. Fixed the same way hist_avg_g just
+    # above computes it: chain the projection's own base market value with
+    # each row's market value and average the YEAR-OVER-YEAR deltas between
+    # consecutive years, not the cumulative-from-base figures. For this
+    # model's constant single-CAGR compounding, every step's YoY is identical
+    # (== the CAGR the projection was built with), so this now agrees with
+    # the "Scenario Band" panel's own cagr_base % elsewhere on this page,
+    # which the old figure never did.
     proj_avg_g = None
     if projections:
         base_mv = hist[-1]["market_value"] if hist else None
         if base_mv:
-            proj_avg_g = round(
-                sum(p["value_change"] for p in projections) / len(projections), 1
-            )
+            _chain = [base_mv] + [p["market"] for p in projections if p.get("market")]
+            _proj_yoy = [
+                (_chain[i] - _chain[i - 1]) / _chain[i - 1] * 100
+                for i in range(1, len(_chain)) if _chain[i - 1]
+            ]
+            proj_avg_g = round(sum(_proj_yoy) / len(_proj_yoy), 1) if _proj_yoy else None
 
     def _fmt_pct(v):
         return f"{'+' if v >= 0 else ''}{v:.1f}%" if v is not None else "—"
@@ -637,7 +682,9 @@ def compute_annual_trends(history, metrics_by_year, projections):
     # verified, instead of silently presenting it as equally certain. Matches
     # the other two fixes' spirit exactly: correct the confidence claim,
     # don't hide the underlying number.
-    tax_pts = [(r["tax_year"], float(r["total_tax"])) for r in hist if r.get("total_tax")]
+    tax_pts_full = [(r["tax_year"], float(r["total_tax"]), bool(r.get("is_billing_verified")))
+                    for r in hist if r.get("total_tax")]
+    tax_pts  = [(y, t) for y, t, _ in tax_pts_full]
     curr_year, curr_tax = tax_pts[-1] if tax_pts else (None, None)
     curr_row = next((r for r in hist if r["tax_year"] == curr_year), None) if curr_year else None
     curr_verified = bool(curr_row and curr_row.get("is_billing_verified"))
@@ -649,10 +696,23 @@ def compute_annual_trends(history, metrics_by_year, projections):
     def _fmt_usd(v):
         return f"${v:,.0f}" if v is not None else "—"
 
+    # Hist.-Avg confidence-blend fix (July 2026, per Fable review P0-3 --
+    # "any Hist. Avg cell that blends Verified and Partial years"). The
+    # note below used to only ever describe the CURRENT year's confidence,
+    # so a parcel with a clean, verified 2025 total_tax showed no note at
+    # all even when avg_tax (the Hist. Avg cell right next to twelve_month)
+    # silently averaged in one or more partial/derived years alongside it --
+    # the average inherited a confidence it hadn't actually earned. Now
+    # checks ALL years feeding avg_tax, not just the latest one.
+    _n_partial = sum(1 for _, _, v in tax_pts_full if not v)
     if not tax_pts:
         tax_note = "Billing data available for 2025 only"
     elif not curr_verified:
         tax_note = f"{curr_year} total is a derived or partial figure, not independently confirmed"
+    elif _n_partial:
+        tax_note = (f"Hist. Avg blends {_n_partial} partial/derived year"
+                     f"{'s' if _n_partial != 1 else ''} with verified years "
+                     "— see Value & Tax History above for which")
     else:
         tax_note = ""
 
@@ -1870,6 +1930,27 @@ def property_detail(geo_id):
         # explicitly False -- True *and* None (not yet recomputed) both fall through
         # to the Partial treatment, fail-safe rather than fail-open.
         kpi["effective_tax_rate_derived"] = _m25.get("effective_tax_rate_derived")
+        # Real weakest-link confidence (July 2026, per Fable review P0-3 --
+        # "confidence doesn't propagate through derived figures"). The
+        # effective_tax_rate_derived flag above is a NARROW signal (was this
+        # specifically reconstructed by summing tax_billing_entity amounts)
+        # -- it says nothing about a portal-scrape-sourced total_tax that
+        # wasn't "derived" in that narrow sense but still isn't genuinely
+        # verified, and says nothing at all about whether the market_value
+        # denominator was even certified. A quotient can't be more certain
+        # than either of its real inputs, so this badge now combines BOTH,
+        # via the same shared combine_confidence_tiers() export_due_diligence_pdf()
+        # uses: Total Tax's real confidence (current.is_billing_verified,
+        # the same field the "Billing: 2025 ..." badge above already reads)
+        # and Market Value's confidence (current.data_source via the same
+        # _row_confidence() the PDF export and /api/search_filter already
+        # use, reused here rather than a third hand-rolled tier mapping).
+        _mkt_tier = _row_confidence(current.get("data_source")) if current else "not_available"
+        _tax_tier = bool(current and current.get("is_billing_verified"))
+        kpi["effective_tax_rate_tier"], kpi["effective_tax_rate_note"] = combine_confidence_tiers([
+            ("Market Value", _mkt_tier),
+            ("Total Tax", _tax_tier),
+        ])
     elif insights and insights.get("total_rate_2025"):
         # Fallback: if no billing data, show the combined rate as an approximation
         kpi["rate_approx"] = round(float(insights["total_rate_2025"]), 4)
@@ -1878,9 +1959,14 @@ def property_detail(geo_id):
     if est_etr_2026 is not None:
         kpi["effective_tax_rate_2026_est"] = est_etr_2026
 
-    # ── Narrative + annual trends ──────────────────────────────────────────────
-    narrative     = generate_property_narrative(parcel, history, metrics_by_year,
-                                                benchmark_by_year, insights, projections)
+    # ── Annual trends ────────────────────────────────────────────────────────
+    # generate_property_narrative() (defined above) is intentionally no
+    # longer called here (July 2026, per Diego's Copy review — Investor
+    # mode, item 1): the on-page "Overview" collapsible it fed duplicated
+    # the Investor Insight Report at lower quality -- see property.html's
+    # own comment at the removed <details> block for the full writeup and
+    # the flagged "repurpose as PDF abstract" follow-up. Function kept
+    # in place, just unused, as the building block for that follow-up.
     annual_trends = compute_annual_trends(history, metrics_by_year, projections)
 
     # Estimated homestead savings for parcels without one (Part 2c). Computed
@@ -1900,8 +1986,18 @@ def property_detail(geo_id):
     # bench_label the way this template now does.
     hs_potential_savings = None
     if not bench_label or bench_label == "Residential":
+        # 10% cap term (July 2026, per Fable review P0-4): pass the 2026
+        # preliminary assessed/market values through when available so
+        # estimate_homestead_savings() can compute the cap-savings term
+        # alongside the exemption-only figure it already produced. current_2026
+        # is computed above (Two-Year Card Redesign); combined entity rate is
+        # NOT threaded in here -- the function recomputes it from the same
+        # entity_detail list it already walks, so it can never drift from
+        # assumed_rate_2026 while avoiding a second rate parameter.
         hs_potential_savings = _tx_hs_savings(
-            entity_detail, current.get("assessed_value") if current else None
+            entity_detail, current.get("assessed_value") if current else None,
+            preliminary_assessed=current_2026.get("assessed_value") if current_2026 else None,
+            preliminary_market=current_2026.get("market_value") if current_2026 else None,
         )
 
     # Improvement Detail (per-parcel IMP_DET components) for the collapsible table.
@@ -1941,7 +2037,6 @@ def property_detail(geo_id):
         estimated_tax_2026=estimated_tax_2026,
         assumed_rate_2026=assumed_rate_2026,
         kpi=kpi,
-        narrative=narrative,
         annual_trends=annual_trends,
         hs_potential_savings=hs_potential_savings,
         bill_waterfall=bill_waterfall,
@@ -2071,12 +2166,16 @@ def export_due_diligence_pdf(geo_id):
     # since a PDF has no badge color to lean on.
     if total_tax and (current.get("billing_source") == "portal_scrape"):
         tax_confidence = "Partial — amount paid per payment receipt, not necessarily the full levy"
+        tax_tier = "partial"
     elif total_tax and current.get("total_tax_derived"):
         tax_confidence = "Partial — reconstructed by summing entity-level billing records"
+        tax_tier = "partial"
     elif total_tax:
         tax_confidence = "Verified"
+        tax_tier = "verified"
     else:
         tax_confidence = "Not Available"
+        tax_tier = "not_available"
 
     # Appraisal-domain confidence for Market/Assessed/Taxable Value (bug fix,
     # per Diego's live-review pass): these three figures all come from the
@@ -2119,15 +2218,19 @@ def export_due_diligence_pdf(geo_id):
 
     # Effective Tax Rate = total_tax ÷ market_value, so its confidence is
     # only as strong as the WEAKER of the two inputs it actually divides —
-    # never just inherits Total Tax's own badge unmodified.
+    # never just inherits Total Tax's own badge unmodified. Now calls the
+    # shared combine_confidence_tiers() (July 2026, per Fable review P0-3)
+    # instead of its own hand-rolled version -- see that function's
+    # docstring for why. Wording changes slightly (names every weak input,
+    # not just the first one checked) but the underlying Verified/Partial/
+    # Not Available determination is unchanged.
     if eff_rate is None:
         eff_rate_confidence = "Not Available"
-    elif appraisal_tier == "verified" and tax_confidence == "Verified":
-        eff_rate_confidence = "Verified"
-    elif appraisal_tier != "verified":
-        eff_rate_confidence = f"Partial — appraisal is {appraisal_tier or 'not available'}, not certified"
     else:
-        eff_rate_confidence = "Partial — depends on Total Tax's confidence above"
+        _, eff_rate_confidence = combine_confidence_tiers([
+            ("Market Value", appraisal_tier),
+            ("Total Tax", tax_tier),
+        ])
 
     bill_waterfall = build_bill_waterfall(
         history, entity_detail, entity_detail_prev, cur_year=2025, prior_year=2024
@@ -2301,19 +2404,20 @@ def export_due_diligence_pdf(geo_id):
     # billing, and when it's not fully Verified, name what's actually
     # holding it back, so the real distinction that justified having two
     # columns stays visible in the text instead of just disappearing.
+    # Now a thin wrapper around the shared combine_confidence_tiers() (July
+    # 2026, per Fable review P0-3) instead of its own hand-rolled copy of
+    # the same weakest-link idea -- see that function's docstring. Only
+    # behavioral difference from the prior version: when BOTH appraisal and
+    # billing are non-Verified, the note now names both reasons (the shared
+    # function always lists every weak input), where this used to as well
+    # ("appraisal is X and billing Y") -- same substance, slightly
+    # different wording.
     def combine_confidence(value_tier, billing_tier):
-        if value_tier is None and billing_tier is None:
-            return "N/A"
-        if value_tier == "verified" and billing_tier == "verified":
-            return "Verified"
-        reasons = []
-        if value_tier != "verified":
-            reasons.append("appraisal is " + {
-                "preliminary": "preliminary", "partial": "not certified",
-            }.get(value_tier, "not available"))
-        if billing_tier != "verified":
-            reasons.append("billing not yet verified" if billing_tier == "partial" else "billing not available")
-        return "Partial — " + " and ".join(reasons)
+        tier, note_text = combine_confidence_tiers([
+            ("Appraisal", value_tier),
+            ("Billing", billing_tier),
+        ])
+        return "N/A" if tier == "not_available" else note_text
 
     hist_rows = [["Year", "Market Value", "Assessed Value", "Total Tax", "Confidence"]]
     for r in sorted(history, key=lambda r: r["tax_year"]):
@@ -3447,6 +3551,80 @@ SEARCH_FILTER_PAGE_SIZE = 50
 _HS_TOKEN_RE = r'(^|[,;])\s*HS\s*($|[,;])'
 
 
+def combine_confidence_tiers(inputs):
+    """
+    Weakest-link confidence combiner for any DERIVED figure (a quotient, a
+    year-over-year change, a multi-year average, a $/SF ratio, ...): the
+    result can never be more certain than its least-certain input.
+
+    inputs: a list of (label, tier) pairs, where tier is one of
+    "verified" / "preliminary" / "partial" / "estimated" / "not_available"
+    (case-insensitive), or a bare bool (True -> verified, False -> partial
+    -- convenient for passing an is_billing_verified-style flag directly),
+    or None/""/missing (treated as not_available).
+
+    Returns (tier, note): `tier` is the single weakest tier among the
+    inputs (so a caller can badge-color consistently with the rest of the
+    site's Verified/Preliminary/Partial/Estimated palette); `note` is a
+    short human-readable explanation naming which input(s) fell short of
+    Verified, or "Verified" / "Not Available" for the two clean-sweep
+    cases.
+
+    Promoted (July 2026, per Fable review P0-3 -- "confidence doesn't
+    propagate through derived figures") from TWO independently hand-rolled
+    instances of this exact idea that already existed in
+    export_due_diligence_pdf(): the inline eff_rate_confidence computation
+    (Effective Tax Rate = Total Tax ÷ Market Value, weakest of the two) and
+    the inline combine_confidence() helper (Value & Tax History's single
+    Confidence column, weakest of appraisal vs. billing). Both did the same
+    "weakest tier wins, name what's holding it back" thing with slightly
+    different code -- this is the one shared version. export_due_diligence_pdf()
+    now calls this instead of its own two copies (verified byte-identical
+    output for the same inputs -- see verify_confidence_helpers.py), and
+    property_detail() now calls it too for the page-layer gap Fable found:
+    the Effective Tax Rate KPI card was badging "Verified" whenever the
+    narrower effective_tax_rate_derived flag (specifically: was this
+    reconstructed by summing entity amounts) was False -- which says
+    nothing about whether the underlying total_tax was itself a portal-
+    scrape/otherwise-Partial figure, and says nothing at all about whether
+    the market_value denominator was even certified. A quotient can't be
+    more certain than either of its actual inputs.
+    """
+    TIER_RANK = {"verified": 3, "preliminary": 2, "partial": 1,
+                 "estimated": 1, "not_available": 0}
+
+    def _norm(tier):
+        if tier is True:
+            return "verified"
+        if tier is False:
+            return "partial"
+        if not tier:
+            return "not_available"
+        return str(tier).lower()
+
+    ranked = [(TIER_RANK.get(_norm(t), 0), label, _norm(t)) for label, t in inputs]
+    if not ranked:
+        return "not_available", "Not Available"
+
+    ranked.sort(key=lambda x: x[0])
+    weakest_tier = ranked[0][2]
+
+    if weakest_tier == "not_available":
+        return "not_available", "Not Available"
+    if all(r[2] == "verified" for r in ranked):
+        return "verified", "Verified"
+
+    reason_word = {
+        "preliminary": "preliminary",
+        "partial": "not fully verified",
+        "estimated": "estimated, not from a real record",
+        "not_available": "not available",
+    }
+    reasons = [f"{label} is {reason_word.get(tier, 'not verified')}"
+               for _, label, tier in ranked if tier != "verified"]
+    return weakest_tier, "Partial — " + "; ".join(reasons)
+
+
 def _row_confidence(data_source):
     """Confidence tier for a single parcel_tax_year row, given its data_source.
 
@@ -3622,7 +3800,30 @@ def api_search_filter():
         if homestead == "has":
             where.append("(pty.exemption_codes IS NOT NULL AND pty.exemption_codes ~ %(hs_re)s)")
         else:
-            where.append("(pty.exemption_codes IS NULL OR pty.exemption_codes !~ %(hs_re)s)")
+            # Lead-gen filter quality fix (July 2026, per Fable review P1-14):
+            # this used to check ONLY the requested tax_year's exemption_codes
+            # (pty, joined above at =%(tax_year)s -- 2025 certified by
+            # default). A parcel that has ALREADY filed a homestead, visible
+            # only on the 2026 preliminary roll (not yet reflected in 2025
+            # certified figures), still passed this check and showed up as a
+            # "no homestead" lead -- the same "use the latest available
+            # year's exemption data" gap already fixed on the property page
+            # (see property.html's excodes_year logic). This "Homes Without
+            # Homestead Exemption" quick filter exists specifically to
+            # surface real outreach leads, so a parcel that's already filed
+            # isn't a cosmetic near-miss here, it's a wrong lead. Now also
+            # excludes any parcel whose 2026 preliminary row shows HS,
+            # regardless of which tax_year the rest of the search is
+            # otherwise scoped to.
+            where.append("""(
+                (pty.exemption_codes IS NULL OR pty.exemption_codes !~ %(hs_re)s)
+                AND NOT EXISTS (
+                    SELECT 1 FROM parcel_tax_year pty26
+                    WHERE pty26.geo_id = pty.geo_id AND pty26.tax_year = 2026
+                      AND pty26.exemption_codes IS NOT NULL
+                      AND pty26.exemption_codes ~ %(hs_re)s
+                )
+            )""")
 
     if verified_only:
         # Direct mapping onto parcel_tax_year.data_source = 'certified' (the
@@ -3987,12 +4188,12 @@ def api_peer_benchmark_local(geo_id):
             ORDER  BY pty.market_value
         """, {"nb": neighborhood, "sc1": state_cd1, "geo_id": geo_id})
         n = len(peers)
-        band_note = "Size band relaxed (neighbourhood + type only — fewer than 3 ±50% MV peers)"
+        band_note = "Size band relaxed (neighborhood + type only — fewer than 3 ±50% MV peers)"
     else:
-        band_note = f"Neighbourhood {neighborhood}, {state_cd1}-type, MV within ±50% of this parcel"
+        band_note = f"Neighborhood {neighborhood}, {state_cd1}-type, MV within ±50% of this parcel"
 
     if n == 0:
-        return jsonify({"ok": False, "error": "No peers found in this neighbourhood + property type"})
+        return jsonify({"ok": False, "error": "No peers found in this neighborhood + property type"})
 
     mvs   = sorted([float(r["market_value"]) for r in peers if r.get("market_value")])
     avs   = sorted([float(r["assessed_value"]) for r in peers if r.get("assessed_value")])
@@ -4105,7 +4306,7 @@ def api_peer_benchmark_sf(geo_id):
     state_cd1    = (parcel.get("state_cd1") or "").strip()[:1]
 
     if not neighborhood:
-        return jsonify({"ok": False, "error": "No neighbourhood code for this parcel"})
+        return jsonify({"ok": False, "error": "No neighborhood code for this parcel"})
 
     this_market_psf   = round(this_mv / sqft, 2) if this_mv   else None
     this_assessed_psf = round(this_av / sqft, 2) if this_av   else None
@@ -4165,12 +4366,12 @@ def api_peer_benchmark_sf(geo_id):
         if n >= 5:
             if band is not None:
                 band_note = (
-                    f"Neighbourhood {neighborhood}, {state_cd1}-type, "
+                    f"Neighborhood {neighborhood}, {state_cd1}-type, "
                     f"SF within ±{int(band * 100)}% of {sqft:,.0f} SF"
                 )
             else:
                 band_note = (
-                    f"Neighbourhood {neighborhood}, {state_cd1}-type, "
+                    f"Neighborhood {neighborhood}, {state_cd1}-type, "
                     f"all SF sizes (size band relaxed — fewer than 5 peers in ±60% band)"
                 )
             break
@@ -4179,7 +4380,7 @@ def api_peer_benchmark_sf(geo_id):
     if n < 3:
         return jsonify({
             "ok": False,
-            "error": "Fewer than 3 SF peers in this neighbourhood + property type",
+            "error": "Fewer than 3 SF peers in this neighborhood + property type",
         })
 
     market_psf_vals   = sorted(float(r["market_psf"])   for r in peers if r.get("market_psf"))
