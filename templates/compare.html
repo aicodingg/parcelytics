@@ -50,7 +50,7 @@
         {% for p in parcels %}<td class="text-center small">{{ p.prop_type }}</td>{% endfor %}
       </tr>
       <tr>
-        <td class="small text-muted">Neighbourhood</td>
+        <td class="small text-muted">Neighborhood</td>
         {% for p in parcels %}<td class="text-center small" style="font-family:var(--font-mono); font-size:11px;">{{ p.parcel.neighborhood_cd or "—" }}</td>{% endfor %}
       </tr>
 
@@ -68,11 +68,19 @@
           {{ "$" + "{:,.0f}".format(p.current.assessed_value) if p.current and p.current.assessed_value else "—" }}
         </td>{% endfor %}
       </tr>
+      {# Issue 3 fix ("Homestead-Cap Data Integrity" Cowork brief, July
+         2026): p.current.cap_loss_estimate (computed in compare_parcels(),
+         app.py -- market minus assessed value when 'HS' is on the 2025
+         exemption codes) replaces the old current.hs_cap_loss > 0 gate,
+         which was structurally always False (hs_cap_loss is never
+         populated for 2025). This route doesn't load 2021-2024 history, so
+         the estimate is always the market-minus-assessed approximation
+         here, never a real AJR figure -- always tilde-prefixed. #}
       <tr>
-        <td class="small text-muted">Cap Loss (HS)</td>
+        <td class="small text-muted">Cap Loss (HS, Est.)</td>
         {% for p in parcels %}<td class="text-center" style="font-family:var(--font-mono); font-size:12px; color:var(--text-2);">
-          {% if p.current and p.current.hs_cap_loss and p.current.hs_cap_loss > 0 %}
-            ${{ "{:,.0f}".format(p.current.hs_cap_loss) }}
+          {% if p.current and p.current.cap_loss_estimate %}
+            <span title="Estimated as market value minus assessed value for the 2025 certified row; no 2021-2024 AJR-recorded cap-loss figure is available in this comparison view.">~${{ "{:,.0f}".format(p.current.cap_loss_estimate) }}</span>
           {% else %}—{% endif %}
         </td>{% endfor %}
       </tr>
@@ -140,7 +148,7 @@
 
 <p class="text-muted small mt-2">
   All 2026 values are Preliminary (not certified). Effective tax rate = Total Tax ÷ Market Value.
-  Cap loss reflects 2025 hs_cap_loss from TCAD Certified Export.
+  Cap loss (Est.) is market value minus assessed value for parcels with a homestead exemption on file — not a TCAD-reported figure for 2025.
   Click any parcel heading to view its full detail page.
 </p>
 

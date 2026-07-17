@@ -84,6 +84,42 @@ COMMERCIAL_CODES = (
 #
 # Flagged as open judgment calls in the Issue A/B report — see
 # task_staging/other_property_type/.
+#
+# "L" (L1/L2) REMOVED from this dict (county_benchmark contamination
+# investigation, see KNOWN_LIMITATIONS.md's "state_cd1='L' — Personal
+# Property, not Commercial real estate" section for the full writeup).
+# L1/L2 is the Texas Comptroller's own Personal Property classification
+# (equipment, inventory, business personal property) — not Real Property —
+# per the Comptroller's PTAD state class code scheme, independent of how
+# any given row got loaded. Mapping it to "Commercial" here was wrong on
+# the merits, not just because of the AJR loader's synthetic-geo_id bug.
+#
+# Verified against the real data before removing it, not assumed: of the
+# 42,293 state_cd1='L' geo_ids found across all 4 AJR years (2021-2024),
+# 42,082 (99.5%) already carry the synthetic "AJR"-prefixed geo_id and were
+# already excluded from county_benchmark by the existing
+# "geo_id NOT LIKE 'AJR%'" filter. Of the remaining 211 with a real,
+# resolvable 10-digit geo_id, 196 are confirmed personal-property accounts
+# (prop_type_cd='P' in the 2025 Certified Export's PROP.TXT, all with a
+# real, nonzero 2025 market_value and none carrying a classi_cd override —
+# none appear in IMP_INFO.TXT at all, so none can hit MULTI_FAMILY_CODES/
+# COMMERCIAL_CODES above and end up back in Commercial that way); the other
+# 15 don't match any PROP.TXT record at all (likely closed/superseded
+# accounts). Zero of the 211 are real property (prop_type_cd='R'). There is
+# no meaningful "legitimate commercial real estate coded L" population this
+# removal puts at risk.
+#
+# "L" now falls through to the same treatment as "J"/"O"/"G": unmapped ->
+# None -> excluded from every benchmark category, rather than forced into
+# Commercial. Since this dict (via property_type_label()) and
+# label_case_sql()'s SQL CASE below are the single source of truth used by
+# county_benchmark, /api/benchmark, property_detail()'s bench_label /
+# peer-set logic, and the legacy /snapshot?view=commercial route, this one
+# change propagates everywhere the canonical taxonomy is used. It does NOT
+# touch app.py's separate _snapshot_taxonomy_sql() (the newer 8-tab-plus-
+# Other Market Snapshot taxonomy) — that taxonomy's own state_cd1 fallback
+# never included F/L in the first place, so unclassified L-prefix parcels
+# already land in its "Other" tab, not any real-estate sector tab.
 _STATE_PREFIX_LABEL = {
     "A": "Residential",
     "B": "Multi-Family",
@@ -91,7 +127,6 @@ _STATE_PREFIX_LABEL = {
     "D": "Agricultural",
     "E": "Agricultural",
     "F": "Commercial",
-    "L": "Commercial",
     "M": "Residential",
 }
 
@@ -134,16 +169,19 @@ def label_case_sql(classi_col="p.classi_cd", state_col="p.state_cd1"):
             WHEN LEFT(UPPER({state_col}), 1) = 'B'          THEN 'Multi-Family'
             WHEN LEFT(UPPER({state_col}), 1) = 'C'          THEN 'Land/Vacant'
             WHEN LEFT(UPPER({state_col}), 1) IN ('D', 'E')  THEN 'Agricultural'
-            WHEN LEFT(UPPER({state_col}), 1) IN ('F', 'L')  THEN 'Commercial'
+            WHEN LEFT(UPPER({state_col}), 1) = 'F'          THEN 'Commercial'
             WHEN LEFT(UPPER({state_col}), 1) = 'M'          THEN 'Residential'
-            -- 'O' ("Other real property"), 'G' (minerals/oil & gas), and
-            -- 'J' (industrial/utility real property) are intentionally NOT
-            -- mapped here. See the _STATE_PREFIX_LABEL comment above: no
-            -- single category is well-supported for any of the three (each
-            -- is its own distinct Comptroller top-level category, not a
-            -- sub-type of the five benchmark ones), so they fall through to
-            -- NULL / the literal "Other" label rather than being forced
-            -- into one of the five benchmark categories.
+            -- 'O' ("Other real property"), 'G' (minerals/oil & gas), 'J'
+            -- (industrial/utility real property), and 'L' (Personal
+            -- Property — removed from here, see the _STATE_PREFIX_LABEL
+            -- comment above for the full county_benchmark-contamination
+            -- writeup) are intentionally NOT mapped here. 'O'/'G'/'J' are
+            -- each a distinct Comptroller top-level category, not a
+            -- sub-type of the five benchmark ones; 'L' is the Comptroller's
+            -- own Personal Property code, not Real Property, so it isn't a
+            -- real-estate sub-type at all. All four fall through to NULL /
+            -- the literal "Other" label rather than being forced into one
+            -- of the five real-estate benchmark categories.
             ELSE NULL
         END"""
 

@@ -150,12 +150,244 @@
 {% endif %}
 {% endmacro %}
 
+{# ── Tax Calendar / annual-cycle strip — shared macro (July 2026 Cowork
+   brief, item 1) ────────────────────────────────────────────────────────
+   Defined here, outside both mode branches (same pattern as
+   post_acq_estimator_card() just above -- and, critically, MUST be defined
+   before line 153's mode split, not after it: Jinja executes top-level
+   {% set %}/{% macro %} statements in document order even when they sit
+   outside {% block %} tags, so a macro defined further down inside the
+   Homeowner branch is still undefined at a Homeowner call site that comes
+   earlier in that same branch -- confirmed by the render harness catching
+   exactly this when the macro was first drafted further down the file),
+   so both modes render the identical strip rather than two hand-copied
+   versions. Data comes from build_tax_calendar() (app.py) — real, sourced
+   milestone dates (see that function's own docstring for the full sourcing
+   writeup: the statutory calendar already cited in templates/info.html,
+   plus this parcel's own real 2026-preliminary and delinquent-balance
+   signals where they exist). Placed near the top of the page in both
+   modes: right after the property header in Homeowner mode, and — in
+   Investor mode — as the id="sectionOverview" anchor target immediately
+   after the section-nav bar (restoring that anchor, which the July 2026
+   Investor-narrative removal had left pointing at nothing). #}
+{% macro tax_calendar_strip(tax_calendar) %}
+{% if tax_calendar and tax_calendar.milestones %}
+<div class="card mb-4 tax-calendar-card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>{{ tax_calendar.cycle_year }} Property Tax Calendar</span>
+    <span class="text-muted" style="font-size:11px; font-weight:400;">Today: {{ tax_calendar.today.strftime('%B %-d, %Y') }}</span>
+  </div>
+  <div class="card-body">
+    <div class="tax-calendar-track">
+      {% for m in tax_calendar.milestones %}
+      {# build_tax_calendar() (app.py) only sets the "current"/"days_to_next"
+         keys on the one matching milestone, and "parcel_note" only where a
+         real per-parcel signal exists -- so these three are genuinely
+         absent (not present-but-None) on most milestones. StrictUndefined
+         raises on a bare `m.current` truthiness check when the key is
+         missing entirely, hence the explicit `is defined` guard on each
+         (same convention this template already uses elsewhere, e.g.
+         `kpi.yoy_pct is defined`). #}
+      {% set _is_current = m.current is defined and m.current %}
+      <div class="tax-calendar-node {% if _is_current %}current{% elif m.passed %}passed{% else %}upcoming{% endif %}"
+           title="{{ m.desc }}">
+        <div class="tax-calendar-dot"></div>
+        <div class="tax-calendar-label">
+          {{ m.label }}{% if _is_current %}<span class="tax-calendar-here">You are here</span>{% endif %}
+        </div>
+        <div class="tax-calendar-date">{{ m.date.strftime('%b %-d') }}</div>
+        {% if _is_current and m.days_to_next is defined %}
+        <div class="tax-calendar-countdown">{{ m.days_to_next }} day{{ 's' if m.days_to_next != 1 else '' }} to next</div>
+        {% endif %}
+        {% if m.parcel_note is defined and m.parcel_note %}
+        <div class="tax-calendar-note">{{ m.parcel_note }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="card-footer text-muted small">
+    Statutory Travis County annual property-tax calendar — Tax Code §23.01 (valuation), §41.44 (protest deadline);
+    see TCAD's <a href="https://traviscad.org/propertytaxsystem/" target="_blank" rel="noopener noreferrer">Property Tax System ↗</a>
+    and the Travis County Tax Office's <a href="https://tax-office.traviscountytx.gov/properties/taxes/truth-in-taxation-summary" target="_blank" rel="noopener noreferrer">Truth in Taxation Summary ↗</a>
+    for full citations (also on the <a href="/info">Info</a> page). "Notices Mailed" and "Protest Deadline" show the
+    general statutory window — this parcel's own notice-mailed date isn't in Parcelytics' dataset, so it isn't shown as if it were.
+  </div>
+</div>
+{% endif %}
+{% endmacro %}
+
+{# ── Documents & Sources audit-trail panel — shared macro (July 2026 Cowork
+   brief, item 3) ────────────────────────────────────────────────────────
+   Structural template reused, not redesigned: About page's existing
+   "Two government sources. Zero aggregators." table (templates/about.html,
+   Source / What it provides / Coverage columns, same badge-verified /
+   badge-preliminary / badge-partial classes). This is the per-parcel
+   version of that same table -- doc_sources (app.py, build_document_sources())
+   only lists sources genuinely used for THIS geo_id, so the row count and
+   coverage years vary parcel to parcel rather than repeating the same
+   static list every time. Defined here (before the mode split, same
+   reasoning as tax_calendar_strip() above), called from both modes near
+   the bottom of the page (an audit trail reads naturally as a closing
+   section, not a top-of-page element competing with the Tax Calendar/KPI
+   cards for attention) -- see each call site's own comment. #}
+{% macro document_sources_panel(doc_sources) %}
+{% if doc_sources %}
+<div class="card mb-4">
+  <div class="card-header">Documents &amp; Sources</div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-stack mb-0">
+        <thead class="table-light small text-muted text-uppercase">
+          <tr>
+            <th style="width:30%">Source</th>
+            <th style="width:38%">What it provides</th>
+            <th style="width:20%">Coverage for this parcel</th>
+            <th style="width:12%">Confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in doc_sources %}
+          <tr>
+            <td data-label="Source" class="fw-semibold">
+              {% if s.link %}<a href="{{ s.link }}" target="_blank" rel="noopener noreferrer" title="{{ s.link_label }}">{{ s.name }} ↗</a>{% else %}{{ s.name }}{% endif %}
+            </td>
+            <td data-label="What it provides">{{ s.provides }}</td>
+            <td data-label="Coverage for this parcel">{{ s.coverage }}</td>
+            <td data-label="Confidence">
+              {% if s.badge == 'verified' %}<span class="badge-verified">{{ s.badge_label }}</span>
+              {% elif s.badge == 'partial' %}<span class="badge-partial">{{ s.badge_label }}</span>
+              {% elif s.badge == 'preliminary' %}<span class="badge-preliminary">{{ s.badge_label }}</span>
+              {% elif s.badge == 'estimated' %}<span class="badge-estimated">{{ s.badge_label }}</span>
+              {% else %}<span class="text-muted" style="font-size:11px;">—</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card-footer text-muted small">
+    Every row above is a real source that fed this specific parcel's page — not a static list. Sources that don't apply to this parcel (e.g. no delinquency on file) are simply omitted rather than shown empty. See the <a href="/about">About page</a> for the site-wide summary of these same sources.
+  </div>
+</div>
+{% endif %}
+{% endmacro %}
+
+{# ── Value vs. Taxable Value chart — shared macro (July 2026 Cowork brief,
+   item 2; extended to Homeowner mode later the same round, per Diego) ─────
+   Visualization-only -- market_value and taxable_value are already tracked
+   per year on `history`; nothing new queried. Rendered ONLY when a real,
+   meaningful gap exists between the two lines for THIS parcel (a homestead
+   cap or exemption actually suppressing taxable below market) -- showing
+   it on parcels where the two lines are identical would just be a chart of
+   nothing, per the brief's own instruction.
+
+   Threshold: reused, not invented. This page already has exactly one
+   established "meaningful gap" threshold pattern -- the Assessment Ratio
+   conditional callout in Investor mode's Investment Snapshot (`(_ratio -
+   100) | abs >= 0.5`, i.e. 0.5 percentage points on a ~100-based ratio)
+   and the identical per-row check in the Value History Growth table. Same
+   0.5-point-on-a-percent-scale threshold applied here to (market -
+   taxable) / market * 100. Not abs()'d: the homestead-cap/exemption effect
+   this chart exists to show always runs taxable <= market, never the
+   reverse -- a row where taxable > market is the separate AV>MV
+   data-anomaly case already flagged elsewhere on this page (Value
+   History's "!" badge), not a "meaningful gap" this chart should be
+   triggered by.
+
+   Originally Investor-only (the brief's Value History table -- what this
+   chart visualizes -- only exists in Investor mode). Diego asked for the
+   identical chart/threshold in Homeowner mode too, same round, with only
+   the framing changed. Converted to a shared macro here -- same pattern as
+   tax_calendar_strip()/document_sources_panel() above, and for the same
+   reason: this must be defined before line 277's mode split, not inside
+   either branch, or a call site in the OTHER branch (or one earlier in the
+   same branch) hits Jinja's document-order execution issue already found
+   and fixed for those two macros.
+
+   `is_residential` isn't in scope here (it's a Homeowner-branch-only
+   `{% set %}`, never computed in Investor mode), so it's passed in
+   explicitly rather than read as a closure -- same explicit-parameter
+   style as homestead_savings_card()/post_acq_estimator_card() above.
+   `homeowner=false` (the default, used by Investor mode's call site) keeps
+   the original dense, data-first framing; `homeowner=true` swaps in the
+   plain-language, personal-money framing that matches how
+   homestead_savings_card() already explains this exact concept elsewhere
+   on this page ("Your homestead exemption saved you an estimated $X" --
+   same register: concrete dollar amount, "you/your", no jargon). The
+   underlying threshold/data logic and the canvas id are identical in both
+   modes -- see the single shared JS chart-builder (moved to the
+   unconditional scripts area, scripts block) that both call sites' canvas
+   feeds, so nothing about the chart itself is duplicated, only this
+   surrounding copy. #}
+{% macro value_taxable_gap_chart(history, homeowner=false, is_residential=true) %}
+  {% set ns_vgap = namespace(has_gap=false, max_gap=0) %}
+  {% for r in history %}
+    {# Issue 1 fix ("Homestead-Cap Data Integrity" Cowork brief): the 2026
+       row's taxable figure is est_taxable_2026 when present (same
+       central-assembly-point value the chart's own JS builder and every
+       other 2026 consumer on this page reads) -- otherwise this gap-vs-
+       market check could miss a real (derived-estimate) gap on a parcel
+       whose raw 2026 preliminary taxable_value == market_value simply
+       because TCAD hasn't applied the cap to the preliminary file yet, and
+       fail to render the chart at all for exactly the parcels it exists to
+       explain. #}
+    {% set _r_tv = r.est_taxable_2026 if (r.est_taxable_2026 is defined and r.est_taxable_2026 is not none) else r.taxable_value %}
+    {% if r.market_value and _r_tv and r.market_value > 0 %}
+      {% set _vgap_pct = ((r.market_value - _r_tv) / r.market_value * 100) %}
+      {% if _vgap_pct >= 0.5 %}
+        {% set ns_vgap.has_gap = true %}
+        {% if _vgap_pct > ns_vgap.max_gap %}{% set ns_vgap.max_gap = _vgap_pct %}{% endif %}
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+  {% if history and ns_vgap.has_gap %}
+  <div class="card mb-4">
+    <div class="card-header">
+      {% if homeowner %}
+        {% if is_residential %}Your Home's Value vs. What You're Taxed On{% else %}This Property's Value vs. What It's Taxed On{% endif %}
+      {% else %}
+        Market Value vs. Taxable Value
+      {% endif %}
+      <span class="text-muted" style="font-size:11px; font-weight:400;"
+            title="Shown because at least one year has a market-vs-taxable gap of 0.5 percentage points or more -- the same threshold this page uses for Assessment Ratio. Largest gap on file: {{ '%.1f'|format(ns_vgap.max_gap) }}%.">
+        gap up to {{ "{:.1f}%".format(ns_vgap.max_gap) }}
+      </span>
+    </div>
+    <div class="card-body">
+      {% if homeowner %}
+      <p class="text-muted mb-3" style="font-size:13px;">
+        The top line is {% if is_residential %}your home's{% else %}this property's{% endif %} certified market value. The bottom line is {% if is_residential %}your{% else %}its{% endif %} taxable value — the number {% if is_residential %}your{% else %}its{% endif %} tax bill is actually calculated from. The gap between them is real money: it's what {% if is_residential %}your homestead exemption and value-growth cap are{% else %}an exemption or value-limitation adjustment is{% endif %} protecting {% if is_residential %}you{% else %}this property{% endif %} from being taxed on.
+      </p>
+      {% endif %}
+      <canvas id="valueTaxableGapChart" height="120"></canvas>
+    </div>
+    <div class="card-footer text-muted small">
+      {% if homeowner %}
+        {% if is_residential %}
+        This gap is why your tax bill is lower than a straight percentage of your home's market value would suggest — your homestead exemption and the 10% annual cap on taxable-value growth are doing real work here. Same figures as the certified values on record for this parcel.
+        {% else %}
+        This gap reflects a value-limitation adjustment reducing what's actually taxed below the certified market value — not a data error. Same figures as the certified values on record for this parcel.
+        {% endif %}
+      {% else %}
+      The gap between these two lines is a homestead cap or exemption reducing what's actually taxed below the certified market value -- not a data error. Same market_value / taxable_value figures as the Value History table above.
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+{% endmacro %}
+
 {% if mode == 'homeowner' %}
 {# ═══════════════ HOMEOWNER MODE — plain-language view ═══════════════ #}
 {% set mv25 = current.market_value if current else none %}
 {% set mv26 = current_2026.market_value if current_2026 else none %}
 {% set tv25 = current.taxable_value if current else none %}
-{% set tv26 = current_2026.taxable_value if current_2026 else none %}
+{# Issue 1 fix ("Homestead-Cap Data Integrity" Cowork brief): est_taxable_2026
+   instead of the raw taxable_value field -- see the Current & Preliminary
+   Values table's own comment above for the full derivation writeup. #}
+{% set tv26 = current_2026.est_taxable_2026 if (current_2026 and current_2026.est_taxable_2026 is defined) else none %}
+{% set tv26_is_approx = (current_2026.is_approx_2026 is defined and current_2026.is_approx_2026) if current_2026 else false %}
 {% set tax25 = current.total_tax if current else none %}
 {% set rate = insights.total_rate_2025 if insights else none %}
 {# Use the latest year's exemptions (2026 preliminary if available) so newly
@@ -205,6 +437,8 @@
   <h2 class="fw-bold mb-1">{{ parcel.situs_address or ("Your home" if is_residential else "This property") }}</h2>
   <div class="text-muted">Travis County, TX · Parcel {{ parcel.geo_id }}</div>
 </div>
+
+{{ tax_calendar_strip(tax_calendar) }}
 
 {% if not is_residential %}
 {# Explanatory banner — chosen over disabling the Homeowner/Investor toggle
@@ -409,7 +643,7 @@
   <span class="badge-verified" style="font-size:9px;">Appraisal Certified</span>
 </div>
 <div class="row g-3 mb-4">
-  <div class="col-md-4">
+  <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home was worth{% else %}What this property was worth{% endif %}</div>
       <div class="kpi-value">{% if mv25 %}${{ "{:,.0f}".format(mv25) }}{% else %}—{% endif %}</div>
@@ -419,7 +653,29 @@
       </div>
     </div></div>
   </div>
-  <div class="col-md-4">
+  {# Taxable Value card — added per Diego's Cowork brief (county_benchmark /
+     Est. 2026 Total Tax investigation round). tv25 is the exact same
+     current.taxable_value field already set above (line 375) and already
+     passed into homestead_savings_card() below -- not a new computation,
+     just a card surfacing a figure that already existed with no card of its
+     own. Same badge convention as the Value card immediately to its left
+     (unconditional Verified when present -- both fields come from the same
+     certified PROP_ENT.TXT row, same confidence). #}
+  <div class="col-md-3">
+    <div class="card h-100"><div class="card-body">
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home is taxed on{% else %}What this property is taxed on{% endif %}</div>
+      <div class="kpi-value">{% if tv25 %}${{ "{:,.0f}".format(tv25) }}{% else %}—{% endif %}</div>
+      <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+        {% if tv25 %}
+          {% if is_residential %}Your home's{% else %}This property's{% endif %} 2025 taxable value{% if mv25 and mv25 > tv25 %} — {{ "{:.0f}".format((mv25 - tv25) / mv25 * 100) }}% below market value{% if has_hs %} thanks to the homestead cap and exemptions{% endif %}{% endif %}.
+          <span class="badge-verified" style="font-size:9px;">Verified</span>
+        {% else %}
+          {% if is_residential %}We don't have your 2025 taxable value on record yet.{% else %}We don't have this property's 2025 taxable value on record yet.{% endif %}
+        {% endif %}
+      </div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       {# Estimate-as-fact fix (July 2026): this used to say "You paid this in
          property taxes in 2025" for tax25 unconditionally, whenever ANY
@@ -462,8 +718,21 @@
         {% if tax25 and (current.billing_source == 'portal_scrape' or current.total_tax_derived) %}~${{ "{:,.0f}".format(tax25) }}
         {% elif tax25 %}${{ "{:,.0f}".format(tax25) }}
         {% elif current and current.computed_total_tax %}~${{ "{:,.0f}".format(current.computed_total_tax) }}
-        {% else %}<span style="font-size:18px; font-weight:700;">Not available yet</span>{% endif %}
+        {% else %}<span style="font-size:18px; font-weight:700;">Not available from the county</span>{% endif %}
       </div>
+      {# Issue 5 fix ("Homestead-Cap Data Integrity" Cowork brief, July 2026):
+         the fully-missing branch used to read "Not available yet" — "yet"
+         implies this is a temporary loading gap that will resolve on its
+         own, which overclaims for the confirmed subset of parcels genuinely
+         absent from Travis County's own current-year billing extract (see
+         KNOWN_LIMITATIONS.md, "2025 tax_billing: parcels with NO billing
+         row at all"). Reworded vague-honest ("Not available from the
+         county", matching the headline above) rather than naming a specific
+         row count here, which would go stale the next time that source file
+         reloads. "Why?" links to the new public Methodology section
+         (templates/about.html#methodology-billing-gap) on both the fully-
+         missing branch and the computed-estimate branch, since both stem
+         from the same underlying county-side gap. #}
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if tax25 and current.billing_source == 'portal_scrape' %}
           Based on a payment receipt from the county tax portal — reflects what was paid, which may not match the full amount billed.
@@ -475,15 +744,17 @@
           {% if is_residential %}You paid this in property taxes in 2025.{% else %}This was paid in property taxes in 2025.{% endif %}
           <span class="badge-verified" style="font-size:9px;">Verified</span>
         {% elif current and current.computed_total_tax %}
-          {% if is_residential %}Your estimated 2025 tax{% else %}This property's estimated 2025 tax{% endif %}, based on certified value × certified rates — not a confirmed billed amount.
+          Not in the county's billing file — {% if is_residential %}your estimated 2025 tax{% else %}this property's estimated 2025 tax{% endif %}, based on certified value × certified rates.
           <span class="badge-estimated" style="font-size:9px;">Estimated</span>
+          <a href="/about#methodology-billing-gap" class="text-muted" style="font-size:10.5px; text-decoration:underline;" title="Why isn't this parcel in the county's billing file?">Why?</a>
         {% else %}
-          {% if is_residential %}We don't have your 2025 tax bill on record yet.{% else %}We don't have this property's 2025 tax bill on record yet.{% endif %}
+          {% if is_residential %}Your 2025 tax bill isn't in the county's billing file.{% else %}This property's 2025 tax bill isn't in the county's billing file.{% endif %}
+          <a href="/about#methodology-billing-gap" class="text-muted" style="font-size:10.5px; text-decoration:underline;" title="Why isn't this parcel in the county's billing file?">Why?</a>
         {% endif %}
       </div>
     </div></div>
   </div>
-  <div class="col-md-4">
+  <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Your homestead savings (2025){% else %}Homestead Exemption{% endif %}</div>
       {{ homestead_savings_card(is_residential, bench_label, has_hs, mv25, tv25, rate, 2025, tax25, excodes_year) }}
@@ -497,7 +768,7 @@
   <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
 </div>
 <div class="row g-3 mb-4">
-  <div class="col-md-4">
+  <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home is worth (2026 preliminary){% else %}What this property is worth (2026 preliminary){% endif %}</div>
       <div class="kpi-value">{% if mv26 %}${{ "{:,.0f}".format(mv26) }}{% else %}—{% endif %}</div>
@@ -511,7 +782,41 @@
       </div>
     </div></div>
   </div>
-  <div class="col-md-4">
+  {# Taxable Value (2026 preliminary) card — added per Diego's Cowork brief,
+     alongside the 2025 card above. tv26 is current_2026.est_taxable_2026
+     (the "Estimated 2026 taxes" card is computed from this exact same
+     field) -- one source of truth for both.
+     CORRECTION (Issue 1, "Homestead-Cap Data Integrity" Cowork brief, July
+     2026): the ORIGINAL version of this comment claimed TCAD's 2026
+     preliminary taxable value "already reflects TCAD's own 10%/yr
+     homestead-cap-limited growth... not something this app derives" -- this
+     was wrong, confirmed live: 84.4% of all 2026 preliminary rows (and 78%
+     of the subset that DO carry an active HS exemption flag) show
+     assessed_value == market_value, meaning TCAD's preliminary export very
+     often has NOT applied the cap yet. tv26 is now est_taxable_2026 --
+     TCAD's real figure when TCAD's own row shows a real cap
+     (assessed < market), Parcelytics's own capped-value estimate otherwise
+     -- badged accordingly below (tv26_is_approx). #}
+  <div class="col-md-3">
+    <div class="card h-100"><div class="card-body">
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home will be taxed on (2026 preliminary){% else %}What this property will be taxed on (2026 preliminary){% endif %}</div>
+      <div class="kpi-value">{% if tv26 %}{% if tv26_is_approx %}~{% endif %}${{ "{:,.0f}".format(tv26) }}{% else %}—{% endif %}</div>
+      <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+        {% if tv26 %}
+        {% if tv26_is_approx %}
+        Parcelytics's estimate of the homestead-capped 2026 taxable value — TCAD's own preliminary export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification){% if mv26 and mv26 > tv26 %}, {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below preliminary market value{% endif %}.
+        <span class="badge-estimated" style="font-size:9px;">Estimated</span>
+        {% else %}
+        TCAD's 2026 preliminary taxable value{% if mv26 and mv26 > tv26 %} — {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below market value{% if has_hs %} thanks to the homestead cap and exemptions{% endif %}{% endif %}. A real appraisal figure, not yet certified.
+        <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
+        {% endif %}
+        {% else %}
+        2026 preliminary taxable value not yet available for this parcel.
+        {% endif %}
+      </div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       {# Labeled "Estimated," not "Preliminary": Preliminary describes the 2026
          appraisal value itself (a real TCAD figure, just not yet certified).
@@ -534,7 +839,7 @@
       </div>
     </div></div>
   </div>
-  <div class="col-md-4">
+  <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Estimated 2026 homestead savings{% else %}Homestead Exemption{% endif %}</div>
       {{ homestead_savings_card(is_residential, bench_label, has_hs, mv26, tv26, assumed_rate_2026, 2026, estimated_tax_2026, excodes_year, hs_potential_savings) }}
@@ -855,6 +1160,8 @@
   </div>
 </div>
 
+{{ value_taxable_gap_chart(history, true, is_residential) }}
+
 {# ── Section 5 — Who gets your tax money ─────────────────────────────── #}
 {# Possessive-voice fix (July 2026, per Diego's Copy review — Homeowner mode,
    item 1): card title and the "You Paid" column header below were hardcoded
@@ -1067,6 +1374,39 @@
 </div>
 {% endif %}
 
+{# ── Delinquency (July 2026, per Diego's "Delinquency Data Freshness" Cowork
+   brief) — NEW in Homeowner mode. Investigated before building: Homeowner
+   mode had NO delinquency surface at all before this (confirmed via a full
+   sweep of this branch, lines 371-1290 -- Investor mode's own "Delinquency"
+   card, a few lines above this file's mode split, was the only place this
+   ever showed). Diego's brief assumed a panel already existed in both modes
+   to add a date to; it didn't in Homeowner mode, so this is a new card, not
+   just a date added to an existing one -- flagged to Diego mid-brief, who
+   confirmed building it. Ported from Investor mode's card (same delinquent
+   dict, same fields: total_due, first_delinquent_yr, cause_number) into
+   Homeowner's plain-language/possessive voice, same pattern already used
+   for the Value-vs-Taxable chart port earlier this session (reuse the
+   logic, change only the framing). Same as-of-date copy convention as
+   Investor mode's card (see that card's own comment for the sourcing
+   writeup on delinquent_export_date / TAX_DELQ_EXPORT_DATE). #}
+{% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
+<div class="card mb-4 delinquency-card">
+  <div class="card-header">{% if is_residential %}Unpaid Taxes on Your Home{% else %}Unpaid Taxes on This Property{% endif %}</div>
+  <div class="card-body p-3">
+    <p class="mb-2">
+      {% if is_residential %}Your home has{% else %}This property has{% endif %}
+      <strong style="color: var(--up);">${{ "{:,.2f}".format(delinquent.total_due) }}</strong>
+      in unpaid property taxes on record{% if delinquent.first_delinquent_yr %}, dating back to {{ delinquent.first_delinquent_yr }}{% endif %}.
+      {% if delinquent.cause_number %}This account is in active collections (Cause # {{ delinquent.cause_number }}).{% endif %}
+      Delinquent taxes become a lien on the property and transfer to the buyer at closing unless negotiated otherwise.
+    </p>
+    <p class="mb-0 text-muted" style="font-size:11.5px;">
+      As of {{ delinquent_export_date.strftime('%B %-d, %Y') }} — Travis County Tax Office snapshot. This balance may have grown since then due to ongoing statutory penalty and interest (Tax Code §33.01); verify the exact current amount with the <a href="https://tax-office.traviscountytx.gov/properties/taxes/delinquent/penalties-interest" target="_blank" rel="noopener noreferrer">Travis County Tax Office ↗</a> before relying on it.
+    </p>
+  </div>
+</div>
+{% endif %}
+
 {# ── Post-Acquisition Tax Estimator (July 2026, per Diego — new in Homeowner
    mode) ───────────────────────────────────────────────────────────────────
    Previously Investor-only. Reuses the exact same card/logic via the shared
@@ -1089,6 +1429,8 @@
     Headlines via Google News. Links open the original source in a new tab.
   </div>
 </div>
+
+{{ document_sources_panel(doc_sources) }}
 
 {% else %}
 {# ── Back link ───────────────────────────────────────────────────────── #}
@@ -1199,9 +1541,27 @@
     {%- set _hist_prior    = history | selectattr('tax_year', 'lt', 2025) | list -%}
     {%- set _hist_verified = _hist_prior | selectattr('is_billing_verified') | list | length -%}
     {%- set _hist_total    = _hist_prior | length -%}
+    {# Confidence-tier fix (July 2026, per Diego's "Fix AJR/Historical-Year
+       Confidence Tiering" brief) -- Jinja mirror of app.py's
+       CERTIFIED_TIER_DATA_SOURCES / _row_confidence(). Deliberately kept as
+       a second, independent copy here rather than consolidated into one
+       (Jinja can't call a Python module function) -- see _row_confidence()'s
+       own docstring for the same note in reverse. Both must change together;
+       if this list or the AV>MV check below ever drifts from app.py's copy,
+       that's a bug to fix, not an acceptable divergence.
+       `current` is always the 2025 row at this point in the template, so in
+       practice current.data_source should only ever legitimately be
+       'certified' -- but the same certified-tier-eligible set and AV>MV
+       demotion are applied here anyway for consistency with the shared
+       rule, not as a special 2025-only case. #}
+    {%- set _certified_tier_sources = ["certified", "cert_2021", "cert_2022", "cert_2023", "cert_2024",
+                                        "ajr_2021", "ajr_2022", "ajr_2023", "ajr_2024"] -%}
     {% if current %}
-      {% if current.data_source == "certified" %}
+      {% set _cur_av_anomaly = current.assessed_value and current.market_value and current.assessed_value > current.market_value %}
+      {% if current.data_source in _certified_tier_sources and not _cur_av_anomaly %}
         <span class="badge-verified ms-2" title="TCAD's 2025 appraisal roll is certified — final, not subject to change.">Appraisal: 2025 Certified</span>
+      {% elif current.data_source in _certified_tier_sources and _cur_av_anomaly %}
+        <span class="badge-partial ms-2" title="Assessed value exceeds market value in this year's source data — see the data-anomaly icon in the Value History table below for detail.">Appraisal: Partial</span>
       {% elif current.data_source == "preliminary" %}
         <span class="badge-preliminary ms-2" title="This reflects the 2026 preliminary appraisal roll, subject to change until certification.">Appraisal: 2026 Preliminary</span>
       {% else %}
@@ -1264,9 +1624,13 @@
 {% set inv_mv25 = current.market_value if current else none %}
 {% set inv_mv26 = current_2026.market_value if current_2026 else none %}
 {% set inv_av25 = current.assessed_value if current else none %}
-{% set inv_av26 = current_2026.assessed_value if current_2026 else none %}
+{# Issue 1 fix: est_assessed_2026/est_taxable_2026 instead of the raw
+   fields -- see the Current & Preliminary Values table's comment for the
+   full derivation writeup. #}
+{% set inv_av26 = current_2026.est_assessed_2026 if (current_2026 and current_2026.est_assessed_2026 is defined) else none %}
 {% set inv_tv25 = current.taxable_value if current else none %}
-{% set inv_tv26 = current_2026.taxable_value if current_2026 else none %}
+{% set inv_tv26 = current_2026.est_taxable_2026 if (current_2026 and current_2026.est_taxable_2026 is defined) else none %}
+{% set inv_tv26_is_approx = (current_2026.is_approx_2026 is defined and current_2026.is_approx_2026) if current_2026 else false %}
 {# Total Tax swap (July 2026, per Diego): inv_tax25 is the exact same
    current.total_tax field Homeowner mode's "What you paid in taxes" card
    and the Value History/Current & Preliminary Values tables already use —
@@ -1280,7 +1644,7 @@
   <span style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3);">2025</span>
   <span class="badge-verified" style="font-size:9px;">Certified</span>
 </div>
-<div class="kpi-row-3">
+<div class="kpi-row">
 
   {# Card 1: Market Value (2025 certified) #}
   <div class="kpi-card">
@@ -1295,7 +1659,32 @@
     </div>
   </div>
 
-  {# Card 2: Total Tax (2025) — swapped in for Assessed/Taxable Value (July
+  {# Card 2: Taxable Value (2025 certified) — added per Diego's Cowork brief
+     (county_benchmark / Est. 2026 Total Tax investigation round). Same
+     underlying field (current.taxable_value / inv_tv25, already set above)
+     the "Est. 2026 Total Tax" estimate is built from for 2026 — this card
+     doesn't compute anything new, just surfaces a figure that already
+     existed but had no card of its own since the July 2026 restructure
+     dropped the old combined Assessed/Taxable card. Same badge convention
+     as its Market Value sibling (unconditional Verified when present — both
+     fields come from the same certified PROP_ENT.TXT row, same confidence,
+     no separate anomaly check either card applies). #}
+  <div class="kpi-card">
+    <div class="kpi-label" title="What the tax rate is actually applied to — assessed value after exemptions (e.g. the homestead exemption), not the market value above">Taxable Value</div>
+    <div class="kpi-value">
+      {% if inv_tv25 %}${{ "{:,.0f}".format(inv_tv25) }}{% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      {% if inv_tv25 %}
+        2025 <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Verified</span>
+        {% if inv_mv25 and inv_mv25 > inv_tv25 %}
+          <span title="Homestead cap and/or exemptions are keeping taxable value below market value">({{ "{:.0f}".format((inv_mv25 - inv_tv25) / inv_mv25 * 100) }}% below market)</span>
+        {% endif %}
+      {% else %}—{% endif %}
+    </div>
+  </div>
+
+  {# Card 3: Total Tax (2025) — swapped in for Assessed/Taxable Value (July
      2026, per Diego): matches Homeowner mode's middle-card structure and
      badge tiers exactly (Verified / Partial / Estimated-via-computed), reusing
      current.total_tax / current.billing_source / current.total_tax_derived /
@@ -1326,7 +1715,7 @@
     </div>
   </div>
 
-  {# Card 3: Effective Tax Rate (2025) — year-specific, same-year basis.
+  {# Card 4: Effective Tax Rate (2025) — year-specific, same-year basis.
      Badge logic below is UNCHANGED from the prior single-row Card 4 — moved
      here verbatim, not reimplemented. #}
   <div class="kpi-card">
@@ -1388,7 +1777,7 @@
   <span style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3);">2026</span>
   <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
 </div>
-<div class="kpi-row-3">
+<div class="kpi-row">
 
   {# Card 1: Market Value (2026 preliminary) — folds the prior standalone
      "YoY Value Change" card into this card's subtext instead, per Diego's
@@ -1412,7 +1801,40 @@
     </div>
   </div>
 
-  {# Card 2: Estimated 2026 Total Tax — swapped in for Assessed/Taxable Value
+  {# Card 2: Taxable Value (2026 preliminary) — added per Diego's Cowork
+     brief, alongside the 2025 card above. inv_tv26 is current_2026's
+     est_taxable_2026 ("Est. 2026 Total Tax", Card 3 below, is computed from
+     this exact same field -- one source of truth for both, per the brief).
+     CORRECTION (Issue 1, "Homestead-Cap Data Integrity" Cowork brief, July
+     2026): this comment previously claimed TCAD's 2026 preliminary taxable
+     value "already reflects TCAD's own 10%/yr homestead-cap-limited
+     growth... not something this app derives" -- confirmed live this was
+     wrong for the large majority of homestead-exempt parcels (84.4% of all
+     2026 preliminary rows show assessed_value == market_value; TCAD hasn't
+     applied the cap to the preliminary snapshot). inv_tv26 is now
+     derive_2026_baseline()'s output -- TCAD's real figure when TCAD's own
+     row shows a real cap, this app's own capped-value estimate otherwise,
+     badged accordingly. #}
+  <div class="kpi-card">
+    <div class="kpi-label" title="What the tax rate will be applied to — TCAD's 2026 preliminary assessed value after exemptions, not the market value above">Taxable Value</div>
+    <div class="kpi-value">
+      {% if inv_tv26 %}{% if inv_tv26_is_approx %}~{% endif %}${{ "{:,.0f}".format(inv_tv26) }}{% else %}—{% endif %}
+    </div>
+    <div class="kpi-sub">
+      {% if inv_tv26 %}
+        {% if inv_tv26_is_approx %}
+          2026 <span class="badge-estimated" style="font-size:9px; padding:1px 5px;" title="TCAD's preliminary export doesn't yet reflect the homestead cap for this parcel (Tax Code §23.23 applies it at certification) — this is Parcelytics's estimate of the capped value.">Estimated</span>
+        {% else %}
+          2026 <span class="badge-preliminary" style="font-size:9px; padding:1px 5px;">Preliminary</span>
+        {% endif %}
+        {% if inv_mv26 and inv_mv26 > inv_tv26 %}
+          <span title="Homestead cap and/or exemptions are keeping taxable value below market value">({{ "{:.0f}".format((inv_mv26 - inv_tv26) / inv_mv26 * 100) }}% below market)</span>
+        {% endif %}
+      {% else %}—{% endif %}
+    </div>
+  </div>
+
+  {# Card 3: Estimated 2026 Total Tax — swapped in for Assessed/Taxable Value
      (July 2026, per Diego): reuses estimated_tax_2026 verbatim, the exact
      same top-level variable Homeowner mode's "Estimated 2026 taxes" card
      already uses (property_detail(), 2026 taxable value × 2025 blended
@@ -1431,7 +1853,7 @@
     </div>
   </div>
 
-  {# Card 3: Estimated 2026 Effective Tax Rate — was a secondary line nested
+  {# Card 4: Estimated 2026 Effective Tax Rate — was a secondary line nested
      inside the 2025 ETR card; now its own card in the 2026 row, per Diego's
      brief. Reuses kpi.effective_tax_rate_2026_est exactly as before — not a
      new computation. #}
@@ -1474,6 +1896,17 @@
   <a class="section-nav-link" href="#sectionHistory">History</a>
   <a class="section-nav-link" href="#sectionProjection">Projection</a>
   <a class="section-nav-link" href="#sectionPosition">Position</a>
+</div>
+
+{# id="sectionOverview" moved onto this wrapper (July 2026 Cowork brief item 1):
+   this anchor previously lived on the collapsible Overview-narrative <details>
+   block that sat right here, which the Copy-review brief (Investor mode, item 1)
+   cut. That left the "Overview" link above pointing at a dead anchor -- fixed by
+   giving the Tax Calendar strip (which also satisfies this brief's own "near the
+   top of the Overview tab" placement ask) the id instead, rather than leaving it
+   broken or re-adding an empty anchor div with no content. #}
+<div id="sectionOverview">
+  {{ tax_calendar_strip(tax_calendar) }}
 </div>
 
 <div class="row g-4">
@@ -1691,6 +2124,23 @@
           {% endif %}
         </tbody>
       </table>
+      {# As-of date (July 2026, per Diego's "Delinquency Data Freshness" Cowork
+         brief): TaxDelqOpenData is a periodic Travis County Tax Office export,
+         not a live feed -- Total Due above was accurate as of the date below,
+         but Texas Tax Code Sec. 33.01 keeps accruing penalty and interest on
+         an unpaid balance every month after that, so the real amount owed
+         today can be (and, confirmed against 0100030804 against the live
+         county site, IS) higher than what's shown. Matches the same
+         "[value] from [Month Day, Year] [source]" date-stamp convention this
+         page already uses for the TCAD Preliminary export (see the Value
+         History card footer, "2026 from June 9, 2026 TCAD preliminary
+         export...") rather than inventing new copy. delinquent_export_date
+         is TAX_DELQ_EXPORT_DATE (app.py) -- see that constant's own comment
+         for how it was sourced (the loaded CSV's own file-modified date;
+         no export-date field exists inside the file or its loader). #}
+      <div class="text-muted" style="font-size:11.5px; margin-top:8px; padding-top:8px; border-top:1px solid var(--border, #e5e7eb);">
+        As of {{ delinquent_export_date.strftime('%B %-d, %Y') }} — Travis County Tax Office snapshot. This balance may have grown since then due to ongoing statutory penalty and interest (Tax Code §33.01); verify the exact current amount with the <a href="https://tax-office.traviscountytx.gov/properties/taxes/delinquent/penalties-interest" target="_blank" rel="noopener noreferrer">Travis County Tax Office ↗</a> before relying on it.
+      </div>
     </div>
   </div>
   {% endif %}
@@ -1876,11 +2326,36 @@
       {% endif %}
 
       {# Homestead cap — historical AJR context, NOT a primary warning.
-         Primary risk signal is Phase 2 risk_homestead_cap_expiry (Risk Indicators card). #}
+         Primary risk signal is Phase 2 cap_step_up_exposure (Risk Indicators
+         card) -- renamed from risk_homestead_cap_expiry (Issue 2,
+         "Homestead-Cap Data Integrity" Cowork brief, July 2026): a plain
+         assessed<market flag is the DEFAULT state for any appreciating
+         homestead, not a genuine risk signal on its own -- cap_step_up_
+         exposure additionally requires a materially-sized relative AND
+         dollar gap (see compute_metrics.py's own comment for the tuned
+         thresholds), so it's meaningfully more selective than the old flag.
+         hs_history_is_approx (July 2026, "Fix Remaining Homestead-Cap Gaps" Cowork
+         brief, item 1): True when this note's figures come from the 'HS' exemption-code
+         signal + a market-minus-assessed approximation (parcel's earliest history starts
+         2025+, no 2021-2024 AJR hs_cap_loss on file) rather than a real AJR-recorded loss
+         amount -- the copy below must not claim "AJR data" for that case. #}
       {% if insights.hs_history_year is defined %}
-      <p class="mb-2 {% if not (m25 and m25.risk_homestead_cap_expiry) %}text-muted{% endif %}">
+      <p class="mb-2 {% if not (m25 and m25.cap_step_up_exposure) %}text-muted{% endif %}">
         <strong>Homestead Cap History:</strong>
-        {% if m25 and m25.risk_homestead_cap_expiry %}
+        {% if insights.hs_history_is_approx %}
+          {# No 2021-2024 AJR hs_cap_loss on file for this parcel -- derived from the
+             {{ insights.hs_history_year }} certified/preliminary exemption code and
+             market-vs-assessed gap instead. By construction this case reflects a
+             currently-active exemption (the most recent year on file), so it's framed
+             as active, not "since reset" -- unlike the AJR-history branches below. #}
+          This property's {{ insights.hs_history_year }}
+          {{ "certified" if insights.hs_history_year == 2025 else "preliminary" }}
+          assessed value is ${{ "{:,.0f}".format(insights.hs_history_loss) }}
+          (~{{ insights.hs_history_pct }}%) below market value, consistent with an active
+          homestead cap — a homestead exemption is on file for this year, but no 2021–2024
+          AJR-recorded cap-loss figure exists for this parcel to confirm the exact historical
+          amount, so this is an estimate from the certified/preliminary values themselves.
+        {% elif m25 and m25.cap_step_up_exposure %}
           {# Primary Phase 2 flag is set — add AJR history as reinforcing context only #}
           Cap activity also recorded in AJR data as recently as {{ insights.hs_history_year }}
           (${{ "{:,.0f}".format(insights.hs_history_loss) }},
@@ -1894,8 +2369,12 @@
           <span class="badge-verified ms-1">Verified clear — 2025 Certified</span>
         {% endif %}
         <small class="d-block mt-1" style="font-size:.75rem;">
+          {% if insights.hs_history_is_approx %}
+          Estimated from {{ insights.hs_history_year }} certified/preliminary values (Partial confidence) — AJR 2021–2024 has no record for this parcel.
+          {% else %}
           Historical data from AJR 2021–2024 (Partial confidence).
           Current status confirmed by 2025 TCAD Certified Export.
+          {% endif %}
         </small>
       </p>
       {% endif %}
@@ -2449,9 +2928,30 @@
               </td>
               <td class="text-end">${{ "{:,.2f}".format(e.amount_due) if e.amount_due else "—" }}</td>
               <td class="text-end">${{ "{:,.2f}".format(e.amount_paid) if e.amount_paid else "—" }}</td>
-              <td class="text-end {% if (e.amount_due or 0) - (e.amount_paid or 0) > 0.01 %}text-danger{% endif %}">
-                {% set bal = (e.amount_due or 0) - (e.amount_paid or 0) %}
-                {% if bal > 0.01 %}<strong>${{ "{:,.2f}".format(bal) }}</strong>{% else %}Paid{% endif %}
+              {# Balance-column integrity fix (July 2026, "Homestead-Cap Data
+                 Integrity: Full Fix Set" Cowork brief, Issue 5): this cell
+                 used to compute bal = (amount_due or 0) - (amount_paid or 0)
+                 unconditionally, so an entity with NO billing data at all
+                 (amount_due=None AND amount_paid=None -- e.g. a parcel with
+                 partial per-entity billing coverage, entity_detail non-empty
+                 but this specific entity's tax_billing_entity row is
+                 missing) collapsed to bal=0 and rendered the literal word
+                 "Paid" -- a false, invented factual claim about delinquency
+                 status, not a real "$0 owed" fact. Confirmed via direct
+                 template render (StrictUndefined harness): amount_due=None,
+                 amount_paid=None -> old code rendered "Paid"; correct
+                 behavior is the same "no data" dash every other cell in this
+                 row already uses when a figure is unavailable. A genuine
+                 $0/fully-paid balance (amount_due and amount_paid both
+                 present and equal) is unaffected and still renders "Paid"
+                 correctly -- only the no-data case changes. #}
+              <td class="text-end {% if e.amount_due is not none or e.amount_paid is not none %}{% if (e.amount_due or 0) - (e.amount_paid or 0) > 0.01 %}text-danger{% endif %}{% endif %}">
+                {% if e.amount_due is none and e.amount_paid is none %}
+                  <span class="na-cell">—</span>
+                {% else %}
+                  {% set bal = (e.amount_due or 0) - (e.amount_paid or 0) %}
+                  {% if bal > 0.01 %}<strong>${{ "{:,.2f}".format(bal) }}</strong>{% else %}Paid{% endif %}
+                {% endif %}
               </td>
             </tr>
             {% endfor %}
@@ -2689,10 +3189,24 @@
               </td>
             </tr>
             {# Assessed Value #}
+            {# Issue 1 fix ("Homestead-Cap Data Integrity: Full Fix Set" Cowork
+               brief, July 2026): 2026 column reads est_assessed_2026 (the
+               derive_2026_baseline() output attached to current_2026 in
+               property_detail()), not the raw assessed_value field --
+               same central-assembly-point correction as the KPI cards and
+               6-Year Projection. "~" prefix + tooltip disclosure note only
+               when basis_2026 == 'derived_cap_estimate' (TCAD's own file
+               doesn't yet reflect the cap) -- tcad_capped and uncapped_no_cap
+               show a plain, non-tilde figure since those ARE TCAD's real
+               numbers, just read through the same field name. #}
             <tr>
               <th class="text-muted fw-normal small ps-3">Assessed Value</th>
               <td class="text-end">
-                {% if current_2026 and current_2026.assessed_value %}${{ "{:,.0f}".format(current_2026.assessed_value) }}
+                {% if current_2026 and current_2026.est_assessed_2026 %}
+                  {% if current_2026.basis_2026 == 'derived_cap_estimate' %}
+                    <span title="{% if current_2026.assessed_value is not none %}TCAD's preliminary export shows ${{ '{:,.0f}'.format(current_2026.assessed_value) }} before the 10% homestead cap; the cap applies at certification (Tax Code §23.23). Shown here as an estimate of the capped value.{% else %}Estimate of the homestead-capped value; TCAD's preliminary export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification).{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current_2026.est_assessed_2026) }}</span>
+                  {% else %}${{ "{:,.0f}".format(current_2026.est_assessed_2026) }}
+                  {% endif %}
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
               <td class="text-end">
@@ -2700,8 +3214,8 @@
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
               <td class="text-end">
-                {% if current_2026 and current_2026.assessed_value and current and current.assessed_value %}
-                  {% set _c = (current_2026.assessed_value - current.assessed_value) / current.assessed_value * 100 %}
+                {% if current_2026 and current_2026.est_assessed_2026 and current and current.assessed_value %}
+                  {% set _c = (current_2026.est_assessed_2026 - current.assessed_value) / current.assessed_value * 100 %}
                   {# Coherence fix (July 2026, per Fable review finding 6): raw asset
                      value change, not tax burden -- neutral color. #}
                   <span class="fw-semibold" style="color:var(--accent);">{{ "{:+.1f}%".format(_c) }}</span>
@@ -2749,10 +3263,20 @@
               </td>
             </tr>
             {# Taxable Value #}
+            {# Issue 1 fix: 2026 column reads est_taxable_2026, same treatment
+               as Assessed Value above. Real scope, confirmed live: in the
+               cohort where the cap actually binds (4,266 parcels), 97.9%
+               (4,178) also had taxable_value tracking the uncapped market
+               figure -- this row was affected for the large majority of
+               that cohort before this fix, same as the KPI cards. #}
             <tr>
               <th class="text-muted fw-normal small ps-3">Taxable Value</th>
               <td class="text-end">
-                {% if current_2026 and current_2026.taxable_value %}${{ "{:,.0f}".format(current_2026.taxable_value) }}
+                {% if current_2026 and current_2026.est_taxable_2026 %}
+                  {% if current_2026.basis_2026 == 'derived_cap_estimate' %}
+                    <span title="{% if current_2026.taxable_value is not none %}TCAD's preliminary export shows ${{ '{:,.0f}'.format(current_2026.taxable_value) }} before the 10% homestead cap; the cap applies at certification (Tax Code §23.23). Shown here as an estimate of the capped value.{% else %}Estimate of the homestead-capped value; TCAD's preliminary export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification).{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current_2026.est_taxable_2026) }}</span>
+                  {% else %}${{ "{:,.0f}".format(current_2026.est_taxable_2026) }}
+                  {% endif %}
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
               <td class="text-end">
@@ -2760,8 +3284,8 @@
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
               <td class="text-end">
-                {% if current_2026 and current_2026.taxable_value and current and current.taxable_value %}
-                  {% set _c = (current_2026.taxable_value - current.taxable_value) / current.taxable_value * 100 %}
+                {% if current_2026 and current_2026.est_taxable_2026 and current and current.taxable_value %}
+                  {% set _c = (current_2026.est_taxable_2026 - current.taxable_value) / current.taxable_value * 100 %}
                   <span class="fw-semibold {% if _c > 0 %}text-danger{% elif _c < 0 %}text-success{% endif %}">{{ "{:+.1f}%".format(_c) }}</span>
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
@@ -2775,12 +3299,58 @@
               <td></td>
             </tr>
             {% endif %}
-            {# HS Cap Loss — 2025 only #}
-            {% if current and current.hs_cap_loss and current.hs_cap_loss > 0 %}
+            {# HS Cap Loss / Protection (Issue 3, "Homestead-Cap Data
+               Integrity: Full Fix Set" Cowork brief -- closes the same
+               structural gap the OTHER three hs_cap_loss consumers had: the
+               2025 column used to gate on current.hs_cap_loss > 0, which is
+               structurally NULL for the whole 2025 tax year (never
+               populated by load_certified_2025.py), so this row NEVER fired
+               for any parcel regardless of whether a real cap was active --
+               a fourth instance of the exact bug the build_projections()/
+               build_insights()/cap_was_active fixes already closed.
+               Reuses the already-shipped insights.hs_history_loss /
+               hs_history_is_approx / hs_history_year fields (build_insights(),
+               app.py) verbatim for the 2025 column -- same real hs_cap_loss
+               when a 2021-2024 AJR figure exists, same market-minus-assessed
+               approximation (tilde-prefixed, "estimated from certified
+               values" register) otherwise -- rather than reimplementing a
+               third version of this logic. 2026 column follows Issue 1's
+               basis_2026 flag: tcad_capped/derived_cap_estimate show the
+               market-minus-est_assessed_2026 wedge (real or "~estimated cap
+               protection" respectively); uncapped_no_cap shows nothing for
+               that year (no cap to report). #}
+            {# hs_history_* is only ever set on `insights` as a group, never
+               present-but-None (build_insights(), app.py) -- gated on
+               `is defined` throughout, same convention this page already
+               established for that field (see property.html's other
+               hs_history_* card). #}
+            {% set has_hs_hist = insights and insights.hs_history_loss is defined %}
+            {% set hs_hist_is_approx = has_hs_hist and insights.hs_history_is_approx %}
+            {% set _hs26_wedge = none %}
+            {% if current_2026 and current_2026.basis_2026 is defined and current_2026.basis_2026 in ('tcad_capped', 'derived_cap_estimate') and current_2026.market_value and current_2026.est_assessed_2026 is defined and current_2026.est_assessed_2026 is not none %}
+              {% set _hs26_wedge = current_2026.market_value - current_2026.est_assessed_2026 %}
+            {% endif %}
+            {% if has_hs_hist or (_hs26_wedge and _hs26_wedge > 0) %}
             <tr>
-              <th class="text-muted fw-normal small ps-3">HS Cap Loss (2025)</th>
-              <td></td>
-              <td class="text-end" style="color:var(--down);">-${{ "{:,.0f}".format(current.hs_cap_loss) }}</td>
+              <th class="text-muted fw-normal small ps-3">
+                HS Cap {% if hs_hist_is_approx or (current_2026 and current_2026.basis_2026 is defined and current_2026.basis_2026 == 'derived_cap_estimate') %}Protection{% else %}Loss{% endif %}
+              </th>
+              <td class="text-end" style="color:var(--down);">
+                {% if _hs26_wedge and _hs26_wedge > 0 %}
+                  {% if current_2026.basis_2026 == 'derived_cap_estimate' %}
+                    <span title="TCAD's preliminary export doesn't yet reflect the homestead cap for this parcel; shown here as an estimate of the capped value's protection versus market (Tax Code §23.23)." style="cursor:help;">~-${{ "{:,.0f}".format(_hs26_wedge) }}</span>
+                  {% else %}-${{ "{:,.0f}".format(_hs26_wedge) }}
+                  {% endif %}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end" style="color:var(--down);">
+                {% if has_hs_hist %}
+                  {% if hs_hist_is_approx %}
+                    <span title="This property's {{ insights.hs_history_year }} certified/preliminary assessed value is below market value, consistent with an active homestead cap; no 2021-2024 AJR-recorded cap-loss figure exists for this parcel, so this is an estimate from the certified/preliminary values themselves." style="cursor:help;">~-${{ "{:,.0f}".format(insights.hs_history_loss) }}</span>
+                  {% else %}-${{ "{:,.0f}".format(insights.hs_history_loss) }} <span class="text-muted" style="font-size:10px;">({{ insights.hs_history_year }})</span>
+                  {% endif %}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
               <td></td>
             </tr>
             {% endif %}
@@ -2813,7 +3383,7 @@
                 {% if estimated_tax_2026 %}
                   <div><span class="primary-value" title="2026 taxable value × your entities' 2025 rates — 2026 rates aren't adopted until August/September, so this uses last year's rates as the best available assumption" style="cursor:help;">~${{ "{:,.0f}".format(estimated_tax_2026) }}</span></div>
                   <div class="mt-1"><span class="badge-estimated" style="font-size:9px;">Estimated</span></div>
-                {% elif current_2026 and current_2026.taxable_value %}
+                {% elif current_2026 and current_2026.est_taxable_2026 %}
                   <span class="na-cell" title="Blended 2025 entity rates not available for this parcel">Not available</span>
                 {% else %}
                   <span class="na-cell" title="Taxable value not available for 2026">Pending certification</span>
@@ -2928,8 +3498,14 @@
                 {% if r.assessed_value %}
                   ${{ "{:,.0f}".format(r.assessed_value) }}
                   {% if _av_anomaly %}
+                    {# Tooltip updated (July 2026 confidence-tiering fix): this icon is no
+                       longer just a decorative note -- this exact check (_av_anomaly) is
+                       now the real per-record signal that demotes this year's appraisal
+                       confidence to Partial (see _row_confidence(), app.py, and this
+                       template's own Property-level confidence badge block above). Wording
+                       now says so, instead of implying the anomaly is informational only. #}
                     <span class="badge-data-anomaly"
-                          title="Assessed value exceeds market value in this year's source data (AJR). This is a known data quality issue in some AJR records — verify against TCAD's official records before relying on this figure.">!</span>
+                          title="Assessed value exceeds market value in this year's source data. This is why this year's appraisal confidence shows Partial rather than Verified — verify against TCAD's official records before relying on this figure.">!</span>
                   {% endif %}
                 {% else %}—{% endif %}
               </td>
@@ -2971,12 +3547,22 @@
                 {% elif r.data_source == 'preliminary' %}
                   <span class="na-cell">Not yet — post-cert</span>
                 {% elif r.computed_total_tax %}
-                  <span title="Computed: taxable value × combined entity rate — billing data not available for this year"
+                  {# Issue 5 fix ("Homestead-Cap Data Integrity" Cowork brief, July
+                     2026): this used to hide the "billing data not available"
+                     disclosure inside a hover-only tooltip, with only "~$X" visible
+                     in the cell itself — easy to misread as a normal billed figure at
+                     a glance. Now visible inline as "not in county billing file · ~$X
+                     estimated", plus a "Why?" link to the new Methodology section
+                     (templates/about.html#methodology-billing-gap); tooltip kept for
+                     the fuller explanation on hover. #}
+                  <span title="Computed: taxable value × combined entity rate — this year's row is not in Travis County's billing file"
                         style="font-style:italic; color:var(--text-muted); cursor:help;">
-                    ~${{ "{:,.0f}".format(r.computed_total_tax) }}
+                    not in county billing file · ~${{ "{:,.0f}".format(r.computed_total_tax) }} estimated
                   </span>
+                  <a href="/about#methodology-billing-gap" class="text-muted" style="font-size:10px; text-decoration:underline;" title="Why isn't this year in the county's billing file?">Why?</a>
                 {% else %}
-                  <span class="na-cell" id="bna-{{ r.tax_year }}">Not available yet</span>
+                  <span class="na-cell" id="bna-{{ r.tax_year }}">not in county billing file</span>
+                  <a href="/about#methodology-billing-gap" class="text-muted" style="font-size:10px; text-decoration:underline;" title="Why isn't this year in the county's billing file?">Why?</a>
                 {% endif %}
               </td>
               <td data-label="Source" {% if r.tax_year in [2021,2022,2023,2024] %}id="bsrc-{{ r.tax_year }}"{% endif %}>
@@ -3071,6 +3657,8 @@
     </div>
   </div>
   {% endif %}
+
+  {{ value_taxable_gap_chart(history) }}
 
   {# ── Phase 2: Growth & Assessment Metrics ───────────────────────── #}
   {# Only rendered when parcel_metrics rows exist (compute_metrics.py has been run) #}
@@ -3337,24 +3925,63 @@
         </div>
       {% endif %}
 
-      {# Homestead cap expiry — PRIMARY signal (2025 Certified, Verified confidence) #}
-      {% if m25 and m25.risk_homestead_cap_expiry %}
+      {# Cap Step-Up Exposure -- renamed + retuned from "Homestead Cap Expiry
+         Risk" / risk_homestead_cap_expiry (Issue 2, "Homestead-Cap Data
+         Integrity: Full Fix Set" Cowork brief, July 2026). The OLD title
+         said "Expiry Risk" but the copy always described step-up-on-sale
+         exposure (a buyer losing the cap at purchase) -- genuinely the
+         wrong name for what this card actually explains, exactly the
+         confusion Diego flagged. cap_step_up_exposure additionally requires
+         a materially-sized relative (>=22%, tuned to the real top-quartile
+         percentile) AND dollar (>=$500 estimated) gap, not just any
+         assessed<market row -- see compute_metrics.py's own comment for
+         the full tuning writeup. #}
+      {% if m25 and m25.cap_step_up_exposure %}
         {% set has_risk = true %}
         <div class="risk-block warn">
           <div class="risk-icon">!</div>
           <div>
             <div class="risk-title">
-              Homestead Cap Expiry Risk
+              Cap Step-Up Exposure
               <span class="badge-verified ms-1">Verified</span>
             </div>
             <p class="risk-desc">
-              This parcel carries an active homestead cap per 2025 Certified data — assessed
-              value is below market value. A buyer loses this benefit at purchase and the
-              assessed value resets to full market, increasing the annual tax bill. Factor
-              this into acquisition underwriting.
+              This parcel carries a real, materially-sized homestead cap per 2025 Certified
+              data — assessed value is meaningfully below market value. A buyer loses this
+              benefit at purchase and the assessed value resets to full market, increasing
+              the annual tax bill. Factor this into acquisition underwriting.
               {% if insights and insights.hs_history_year is defined %}
                 Cap activity consistent with AJR records back to {{ insights.hs_history_year }}.
               {% endif %}
+            </p>
+          </div>
+        </div>
+      {% endif %}
+
+      {# Cap Expiry Signal -- the NEW, genuinely distinct signal (Issue 2):
+         protection actually ENDING, not just "cap is working." HS was
+         active on the 2025 certified roll but is absent from the 2026
+         preliminary exemption flags. Copy is deliberately tentative --
+         2026 preliminary's exemption_codes field is only 52.8% populated
+         (vs. 55.1% on 2025 certified, per data_coverage.py), so this can
+         also just mean the preliminary file hasn't caught up yet, not a
+         real loss. Re-derive against certified-vs-certified once 2026
+         certifies (per Diego's brief). #}
+      {% if m25 and m25.cap_expiry_signal %}
+        {% set has_risk = true %}
+        <div class="risk-block warn">
+          <div class="risk-icon">?</div>
+          <div>
+            <div class="risk-title">
+              Possible Homestead Exemption Change
+              <span class="badge-estimated ms-1">Tentative</span>
+            </div>
+            <p class="risk-desc">
+              This parcel had an active homestead exemption on the 2025 certified roll, but
+              the county's 2026 preliminary file no longer shows one. This sometimes reflects
+              file incompleteness in the preliminary export rather than a real change — it
+              will be confirmed once TCAD's 2026 roll certifies. Worth a direct check with the
+              owner or TCAD before treating this as a confirmed exemption loss.
             </p>
           </div>
         </div>
@@ -3720,7 +4347,17 @@
          billing confidence elsewhere, invites misreading -- this entire card is
          appraisal/value data only (no billing content), so it's labeled
          explicitly as such. #}
-      AJR data for 2021–2024 (Appraisal: Partial confidence); 2025 from Certified Export (Appraisal: Certified).
+      {# Confidence-tier fix (July 2026, per Diego's "Fix AJR/Historical-Year
+         Confidence Tiering" brief): this line used to assert AJR 2021-2024
+         data is uniformly "Partial confidence" -- a blanket claim that
+         predates, and now contradicts, the real per-record tiering
+         _row_confidence() computes (96.35% of 2021-2024 parcel-years have
+         no AV>MV anomaly and are genuinely Verified; see this brief's own
+         investigation phase for the count). Found during this round's call-
+         site sweep -- Diego didn't name this line directly, but it's the
+         same class of independent hardcoded copy the brief asked to find.
+         Reworded to state the real rule instead of a fixed outcome. #}
+      2021–2024 values from the Texas Comptroller Annual Jurisdiction Roll (AJR) — TCAD's own certified data (Appraisal: Verified, unless a specific year's assessed value exceeds market value, in which case that year shows Partial; see the Value &amp; Tax History table above for any flagged years). 2025 from Certified Export (Appraisal: Certified).
     </div>
   </div>
   {% endif %}
@@ -3830,11 +4467,121 @@
 
 </div>{# /col-12 full-width tables #}
 </div>{# /row full-width #}
+
+{{ document_sources_panel(doc_sources) }}
+
 {% endif %}{# /mode == investor #}
 
 {% endblock %}
 
 {% block scripts %}
+{# ── Value vs. Taxable Value chart — shared/unconditional (July 2026 Cowork
+   brief, item 2; extended to Homeowner mode later the same round, per
+   Diego, to reuse the exact same chart/threshold logic rather than
+   rebuilding it). Card/canvas only exist in the DOM when
+   value_taxable_gap_chart() (property.html, shared macro defined above
+   `{% block content %}`) found a real gap for this parcel -- in EITHER
+   mode. This script doesn't know or care which mode rendered the page;
+   same runtime-null-check pattern already used for the Satellite View
+   script just below. Placed in the shared/unconditional area (not inside
+   either mode's own `{% if %}` scripts branch) for the same reason
+   tax_calendar_strip()/document_sources_panel() had to move to the shared
+   markup area: a script written inside one mode's branch isn't available
+   when the OTHER mode's page renders, and this chart can now appear on
+   either. Declares its own local `_gapHistory` from `history` rather than
+   reusing the page-wide `historyData` name Investor mode's other charts
+   declare further down in their own `{% if %}` branch -- avoids any
+   collision between this unconditional declaration and that branch's own,
+   since both would otherwise land in the same top-level script scope on
+   an Investor-mode page load. #}
+<script>
+(function () {
+  const gapCanvas = document.getElementById('valueTaxableGapChart');
+  if (!gapCanvas) return;
+  const _gapHistory = {{ history | tojson }};
+  const gapSorted = _gapHistory.slice().sort((a, b) => a.tax_year - b.tax_year)
+    .filter(r => r.market_value != null || r.taxable_value != null);
+  const gapYears  = gapSorted.map(r => r.tax_year);
+  const gapMv     = gapSorted.map(r => r.market_value != null ? r.market_value : null);
+  const gapTv     = gapSorted.map(r => r.taxable_value != null ? r.taxable_value : null);
+
+  new Chart(gapCanvas, {
+    type: 'line',
+    data: {
+      labels: gapYears,
+      datasets: [
+        {
+          label: 'Market Value',
+          data: gapMv,
+          borderColor: '#2E6DA4',
+          backgroundColor: 'rgba(46,109,164,0.08)',
+          borderWidth: 1.75,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          tension: 0.2,
+          spanGaps: true,
+          fill: '+1',
+        },
+        {
+          label: 'Taxable Value',
+          data: gapTv,
+          borderColor: '#067647',
+          backgroundColor: 'transparent',
+          borderDash: [5, 3],
+          borderWidth: 1.75,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          tension: 0.2,
+          spanGaps: true,
+          fill: false,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 10, padding: 14, font: { size: 11, family: "'Inter', sans-serif" } } },
+        tooltip: {
+          backgroundColor: '#fff', borderColor: 'rgba(0,0,0,0.1)', borderWidth: 1,
+          titleColor: '#111116', bodyColor: '#505A5B', padding: 10,
+          callbacks: {
+            label: item => {
+              const v = item.parsed.y;
+              if (v == null) return `${item.dataset.label}: —`;
+              return `${item.dataset.label}: $${v >= 1e6 ? (v/1e6).toFixed(2)+'M' : Math.round(v).toLocaleString()}`;
+            },
+            afterBody: items => {
+              const yr = items[0]?.label;
+              const row = gapSorted.find(r => String(r.tax_year) === String(yr));
+              if (!row || !row.market_value || !row.taxable_value) return [];
+              const gapPct = (row.market_value - row.taxable_value) / row.market_value * 100;
+              if (gapPct < 0.5) return [];
+              return [`Gap: ${gapPct.toFixed(1)}% below market`];
+            }
+          }
+        }
+      },
+      scales: {
+        y: {
+          position: 'left',
+          border: { display: false },
+          grid: { color: 'rgba(0,0,0,0.04)' },
+          ticks: { font: { size: 11 }, color: '#8F91A2',
+            callback: v => '$' + (v >= 1e6 ? (v/1e6).toFixed(1)+'M' : (v/1e3).toFixed(0)+'K')
+          }
+        },
+        x: {
+          border: { display: false },
+          grid: { display: false },
+          ticks: { font: { size: 11 }, color: '#8F91A2', maxRotation: 0 }
+        }
+      }
+    }
+  });
+})();
+</script>
+
 {# ── Satellite view — geocode the address, render Esri World Imagery ──────────
    Moved OUT of the `{% if mode == 'homeowner' %}` guard below (July 2026, per
    Diego) so it also runs for Investor mode, which now has the identical
@@ -4310,8 +5057,14 @@ const historyData = {{ history | tojson }};
 // Value trend: include all years but keep chart labels clean
 const years  = historyData.map(r => r.tax_year).sort();
 const market = years.map(y => { const r = historyData.find(h => h.tax_year===y); return r && r.market_value ? r.market_value : null; });
-const assessed = years.map(y => { const r = historyData.find(h => h.tax_year===y); return r && r.assessed_value ? r.assessed_value : null; });
-const taxable  = years.map(y => { const r = historyData.find(h => h.tax_year===y); return r && r.taxable_value  ? r.taxable_value  : null; });
+// Issue 1 fix ("Homestead-Cap Data Integrity" Cowork brief): the 2026 row
+// prefers est_assessed_2026/est_taxable_2026 (derive_2026_baseline()'s
+// output, attached server-side in property_detail() -- present on the 2026
+// row only) over the raw assessed_value/taxable_value fields, same
+// central-assembly-point correction as every other consumer on this page.
+// Other years are untouched (those fields aren't set on non-2026 rows).
+const assessed = years.map(y => { const r = historyData.find(h => h.tax_year===y); if (!r) return null; const v = (r.est_assessed_2026 != null) ? r.est_assessed_2026 : r.assessed_value; return v || null; });
+const taxable  = years.map(y => { const r = historyData.find(h => h.tax_year===y); if (!r) return null; const v = (r.est_taxable_2026  != null) ? r.est_taxable_2026  : r.taxable_value;  return v || null; });
 
 // Shared chart style (matches rates.html design system)
 const CHART_OPTS = {

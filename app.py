@@ -8,7 +8,7 @@ import json
 import re
 import time
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, date
 from flask import Flask, render_template, request, redirect, url_for, jsonify, Response
 import psycopg2
 import psycopg2.extras
@@ -18,11 +18,53 @@ import config
 
 from tax_logic.texas import estimate_post_acquisition as _tx_estimate
 from tax_logic.texas import estimate_homestead_savings as _tx_hs_savings
+from tax_logic.texas import derive_2026_baseline as _derive_2026_baseline
 from tax_logic.classify import property_type_label, label_case_sql, label_sort_case_sql
 from loaders.scrape_billing_history import fetch_html, parse_receipts, upsert_billing_rows, HTTP_OK
 
 _BILLING_TARGET_YEARS  = {2021, 2022, 2023, 2024}
 _BILLING_SENTINEL_YEAR = 9999   # stored when portal returns no target-year data
+
+# TaxDelqOpenData.csv snapshot date (July 2026, per Diego's "Delinquency Data
+# Freshness" Cowork brief). TaxDelqOpenData is a periodic export from the
+# Travis County Tax Office, not a live feed -- a delinquent balance shown on
+# this site can be (and, per Texas Tax Code Sec. 33.01, IS: 6% penalty + 1%
+# interest starting in February, +1% interest every month thereafter,
+# uncapped, plus a one-time collection penalty if referred to a delinquent
+# tax attorney) already stale by some amount the moment it's loaded, since
+# real accrual continues daily on the county's side between exports.
+#
+# Unlike AJR/Certified/Preliminary exports (whose date is embedded in their
+# source folder name, e.g. PRELIM_2026_DIR's "..._06092026"), the raw
+# TaxDelqOpenData.csv file/filename carries NO internal date field or
+# dated-folder convention -- confirmed by inspecting the file's own header
+# row (Account #, Last Tax Roll Year, ..., Total Due, ... -- no as-of/export-
+# date column) and by grepping the loader (loaders/load_tax_current.py,
+# load_delinquent()) and schema.sql's tax_delinquent table, neither of which
+# stores or tracks a load/export date at all. The best REAL, non-guessed
+# signal available is the file's own last-modified timestamp -- confirmed
+# via `stat TaxDelqOpenData.csv` against the actual file currently loaded
+# (same file whose row for 0100030804 was checked and matches exactly what
+# Parcelytics shows: $91,429.42, first delinquent 2014): Modify time
+# 2026-06-20 18:33:51 (local). Same-day sibling TaxCurOpenData.csv (18:14)
+# supports this being one coherent snapshot pull, not an incidental touch.
+#
+# Hardcoded as a literal, following the exact same established convention
+# PRELIM_2026_DIR's "June 9, 2026" already uses elsewhere in this file and
+# in templates/property.html (line ~3104) -- this project has no
+# infrastructure that stores an export date dynamically per load; it's a
+# manually-confirmed value refreshed by hand whenever the loader is next run
+# against a newer file. A single named constant here (rather than the
+# Preliminary date's pattern of repeating the literal string at each call
+# site) so the property page's two modes can't drift from each other or
+# from a future PDF/other surface.
+#
+# Diego should confirm this against Travis County Tax Office's own stated
+# "last updated" date for the file on their open-data portal if pinpoint
+# precision matters -- file mtime in this environment reflects when the
+# file was placed on disk here, which is a strong proxy but not guaranteed
+# byte-identical to the county's own publish timestamp.
+TAX_DELQ_EXPORT_DATE = date(2026, 6, 20)
 
 
 # ── Investor insight generator ────────────────────────────────────────────────
@@ -67,11 +109,45 @@ def build_insights(parcel, history, entity_detail, delinquent):
         )
     if hs_row and latest["market_value"]:
         # Renamed to hs_history_* — this is AJR-based historical context only.
-        # The primary "is the cap active right now?" signal is parcel_metrics.risk_homestead_cap_expiry
+        # The primary "is the cap active right now?" signal is parcel_metrics.cap_step_up_exposure
+        # (renamed from risk_homestead_cap_expiry -- Issue 2, "Homestead-Cap Data
+        # Integrity" Cowork brief, July 2026 -- see compute_metrics.py's own comment)
         # (2025 Certified data). These keys feed the calm historical note in the Insight Report.
-        out["hs_history_loss"] = hs_row["hs_cap_loss"]
-        out["hs_history_year"] = hs_row["tax_year"]
-        out["hs_history_pct"]  = round(hs_row["hs_cap_loss"] / latest["market_value"] * 100, 1)
+        out["hs_history_loss"]     = hs_row["hs_cap_loss"]
+        out["hs_history_year"]     = hs_row["tax_year"]
+        out["hs_history_pct"]      = round(hs_row["hs_cap_loss"] / latest["market_value"] * 100, 1)
+        out["hs_history_is_approx"] = False
+    elif is_residential_sfr:
+        # Same OR-fix as build_projections()'s has_hs_cap (Cowork brief, "Fix
+        # 6-Year Projection's Missing Homestead Cap for 2025+ Parcels"),
+        # reused verbatim rather than reimplemented: hs_cap_loss is only ever
+        # populated by the 2021-2024 AJR loader, never by 2025/2026 loaders,
+        # so a parcel whose earliest history starts in 2025+ can never
+        # satisfy hs_row above even with a real, active homestead exemption
+        # on file right now. exemption_codes containing 'HS' is the
+        # complementary signal for exactly that case.
+        #
+        # Unlike build_projections() (a pure boolean gate), this function
+        # also needs a dollar figure + year to populate the historical note
+        # -- hs_cap_loss itself has no fallback source, so the loss is
+        # approximated as market_value - assessed_value for the latest year
+        # carrying the 'HS' code. Same approximation Diego approved for
+        # tax_logic/texas.py's cap_was_active fix (the same underlying
+        # quantity the Value-vs-Taxable chart / homestead savings cap term
+        # already compute elsewhere) -- applied here for consistency across
+        # all three fixes rather than leaving this one silently still blank.
+        # hs_history_is_approx=True marks it so the template can describe it
+        # honestly as certified-year-derived, not AJR data.
+        _hs_latest = next(
+            (r for r in reversed(hist) if "HS" in (r.get("exemption_codes") or "").split(",")),
+            None
+        )
+        if _hs_latest and _hs_latest.get("market_value") and _hs_latest.get("assessed_value") is not None:
+            _approx_loss = max(0, _hs_latest["market_value"] - _hs_latest["assessed_value"])
+            out["hs_history_loss"]      = _approx_loss
+            out["hs_history_year"]      = _hs_latest["tax_year"]
+            out["hs_history_pct"]       = round(_approx_loss / _hs_latest["market_value"] * 100, 1)
+            out["hs_history_is_approx"] = True
 
     # Tax rates
     rate_2025 = sum(e["rate"] for e in entity_detail if e["rate"])
@@ -382,19 +458,75 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5, state
         avg_rate_change = 0
         current_rate = sum(float(e["rate"]) for e in entity_detail if e["rate"])
 
-    # Homestead cap: check any year with hs_cap_loss (2025 Certified doesn't carry this field)
+    # Homestead cap detection — two complementary signals, OR'd together, not
+    # one replacing the other:
+    #
+    #   1. hs_cap_loss > 0 in any year -- populated ONLY by the 2021-2024 AJR
+    #      loader (load_ajr.py). Real, direct evidence the cap was actively
+    #      suppressing assessed value below market in a specific past year.
+    #      KNOWN_LIMITATIONS.md: "hs_cap_loss (2025): Not available -- The
+    #      Certified Export format... does not carry a cap-loss field."
+    #
+    #   2. exemption_codes contains 'HS' in any year -- populated by the
+    #      2025 Certified (load_certified_2025.py) and 2026 Preliminary
+    #      (load_2026_preliminary.py) loaders' EXEMPTION_FIELDS scan, NEVER
+    #      by load_ajr.py (AJR's PTY_SQL insert has no exemption_codes
+    #      column at all). This is a real Comptroller exemption-code flag,
+    #      not inferred -- if 'HS' is present, a homestead exemption (and
+    #      therefore the 10%/yr appraisal cap under Tax Code §23.23) is
+    #      active for that year, regardless of whether hs_cap_loss happens
+    #      to be a positive number for that specific row.
+    #
+    # These two fields are POPULATED BY DISJOINT LOADERS covering different
+    # year ranges (signal 1: 2021-2024 only; signal 2: 2025-2026 only) --
+    # never both real for the same row, so this is genuinely an OR of two
+    # non-overlapping coverage windows, not two independent confirmations of
+    # the same thing. A parcel whose earliest available history starts in
+    # 2025 or later (no 2021-2024 AJR row on file at all) previously fell
+    # through signal 1 with NO way to ever satisfy it, silently losing cap
+    # protection in this function's projections even though it has an
+    # active, real homestead exemption on record right now (signal 2).
+    # Confirmed via raw-file/loader inspection: 1,361 parcels (2.9% of the
+    # ~46,300 homestead-exempt parcels with a real 2025 market/taxable gap
+    # >5%, median gap 59.5%) hit exactly this case -- see the county
+    # Cowork brief "Fix 6-Year Projection's Missing Homestead Cap for 2025+
+    # Parcels" for the full investigation and population query.
     hs_row = next(
         (r for r in reversed(hist) if r.get("hs_cap_loss") and r["hs_cap_loss"] > 0),
         None
     )
-    has_hs_cap = hs_row is not None
+    has_hs_exemption_code = any(
+        "HS" in (r.get("exemption_codes") or "").split(",")
+        for r in hist
+    )
+    has_hs_cap = (hs_row is not None) or has_hs_exemption_code
 
     # Project from the most recent REAL figure available -- reuses
     # cagr_endpoint (the 2026 preliminary when non-anomalous, else 2025
     # certified) instead of hardcoding tax_year == 2025. See the coherence-fix
     # note in this function's docstring for why.
+    #
+    # Issue 1 fix ("Homestead-Cap Data Integrity: Full Fix Set" Cowork brief):
+    # this used to read base_row["assessed_value"] raw. THIS was the actual
+    # bug behind the live "Assessed = Market in every projected row" report
+    # on 0100050414 -- NOT has_hs_cap (which was already True for that
+    # parcel via real 2021 AJR data). When cagr_endpoint is the 2026 row and
+    # TCAD's preliminary export hasn't applied the cap yet (assessed_value ==
+    # market_value, the earlier "coherence fix"'s own trigger condition for
+    # picking 2026 in the first place), base_assessed == base_market at the
+    # start, and since it then compounds at 10%/yr while market compounds at
+    # this parcel's real (often <10%/yr) CAGR, min(base_assessed*1.10**i, pmv)
+    # picks pmv every single year -- reproduced exactly against the live
+    # 0100050414 data. Now reads current_2026's derive_2026_baseline() output
+    # (est_assessed_2026, attached to the SAME row dict via the shared
+    # `history` list in property_detail()) when base_row is the 2026 row --
+    # the 2025 certified row's real assessed_value is unaffected by this bug
+    # and is used as-is.
     base_row      = cagr_endpoint
-    base_assessed = float(base_row["assessed_value"] or base_row["market_value"] or 0)
+    if base_row["tax_year"] == 2026 and base_row.get("est_assessed_2026") is not None:
+        base_assessed = float(base_row["est_assessed_2026"])
+    else:
+        base_assessed = float(base_row["assessed_value"] or base_row["market_value"] or 0)
     base_market   = float(base_row["market_value"])
     base_year     = base_row["tax_year"]
 
@@ -441,6 +573,317 @@ def build_projections(history, rate_history, entity_detail, years_ahead=5, state
     }
 
     return rows, baseline_label, bands
+
+
+# ── Tax calendar / annual cycle position ───────────────────────────────────────
+def build_tax_calendar(today, current_2026, delinquent):
+    """
+    Where a parcel sits in the annual Travis County property tax cycle right
+    now (July 2026, per Diego's Cowork brief -- "Tax calendar/timeline
+    section", item 1).
+
+    MILESTONE SOURCING (investigated before building, not invented): every
+    date/window below is the same statutory Texas/Travis County annual
+    calendar already researched and cited in templates/info.html's "Travis
+    County — who does what" card (sources: TCAD's "Property Tax System"
+    page and the Travis County Tax Office's Truth-in-Taxation Summary, both
+    linked in that card's own footer). Nothing here is a new date -- this
+    function only computes where "today" (the real server clock) falls
+    against a calendar that already exists and is already sourced
+    elsewhere on this site.
+
+    What is deliberately NOT here, because it doesn't exist in this
+    platform's data: a per-parcel Notice-of-Appraised-Value mail date or a
+    per-parcel protest deadline. Checked before assuming otherwise: neither
+    TCAD's Certified Export nor the Preliminary Export (the two source
+    files this platform loads -- see KNOWN_LIMITATIONS.md) carries a
+    notice-mailed-date field, and no loader in this repo captures one (grep
+    across loaders/*.py and this file's own query columns turned up
+    nothing). So "Notices Mailed" (mid-April) and "Protest Deadline"
+    (May 15) are shown as the general STATUTORY calendar -- true for
+    essentially every Travis County parcel under Tax Code §41.44 and the
+    Comptroller's truth-in-taxation calendar -- not a claim about when
+    *this* parcel's own notice was mailed, which this platform doesn't
+    have and isn't invented here.
+
+    "Roll Certified" (July 25) is the one milestone with a real, dated,
+    year-specific source already in this codebase -- see
+    KNOWN_LIMITATIONS.md's "Certification date" section, which this
+    function's date literally matches (both hardcode July 25 of the
+    current year; if that ever needs to move to a config value instead of
+    two independent hardcodes, that's a fair follow-up, flagged here
+    rather than silently left inconsistent).
+
+    Per-parcel REAL signals folded in on top of the generic calendar (not
+    calendar assumptions):
+      - current_2026.data_source: if this parcel's own 2026 row is still
+        'preliminary' as of today, a note is attached to the Roll
+        Certified milestone -- this is real, per-parcel
+        parcel_tax_year.data_source, not a calendar guess.
+      - delinquent.total_due: if this parcel carries a real, nonzero
+        delinquent balance on file (tax_delinquent table, sourced from
+        TaxDelqOpenData), a note is attached to the Payment Due milestone.
+
+    KNOWN SIMPLIFICATION (flagged, not silently glossed over): milestones
+    are built for the cycle_year = today.year, running Jan 1 (cycle_year)
+    through Jan 31 (cycle_year + 1). In the first ~31 days of January this
+    slightly under-represents the PRIOR cycle's still-relevant Jan 31
+    payment deadline (that prior cycle's own Payment Due milestone, built
+    a year earlier, already covers it as its own terminal stage -- but
+    this function doesn't cross-reference two cycles at once). Not an
+    issue for verification against today's actual date; noted for anyone
+    extending this later.
+    """
+    milestones = [
+        {"key": "valuation",      "date": date(today.year, 1, 1),
+         "label": "Valuation Date",
+         "desc": "TCAD sets property values as of this date (Tax Code §23.01)."},
+        {"key": "notices",        "date": date(today.year, 4, 15),
+         "label": "Notices Mailed",
+         "desc": "Notices of Appraised Value go out (mid-April, statutory window)."},
+        {"key": "protest",        "date": date(today.year, 5, 15),
+         "label": "Protest Deadline",
+         "desc": "May 15, or 30 days after your notice was mailed, whichever is later (Tax Code §41.44)."},
+        {"key": "certification",  "date": date(today.year, 7, 25),
+         "label": "Roll Certified",
+         "desc": "TCAD certifies the appraisal roll."},
+        {"key": "rate_adoption",  "date": date(today.year, 9, 1),
+         "label": "Rates Adopted",
+         "desc": "Taxing entities adopt their tax rates (August–September)."},
+        {"key": "bills_mailed",   "date": date(today.year, 10, 1),
+         "label": "Bills Mailed",
+         "desc": "Tax bills begin mailing in October."},
+        {"key": "payment_due",    "date": date(today.year + 1, 1, 31),
+         "label": "Payment Due",
+         "desc": "Taxes are due; unpaid balances become delinquent February 1."},
+    ]
+
+    if current_2026 and current_2026.get("data_source") == "preliminary":
+        for m in milestones:
+            if m["key"] == "certification":
+                m["parcel_note"] = "This parcel's 2026 values are still Preliminary as of today."
+
+    if delinquent and delinquent.get("total_due") and float(delinquent["total_due"]) > 0:
+        for m in milestones:
+            if m["key"] == "payment_due":
+                m["parcel_note"] = (
+                    f"This parcel has a real delinquent balance on file: "
+                    f"${float(delinquent['total_due']):,.0f}."
+                )
+
+    for m in milestones:
+        m["passed"] = today >= m["date"]
+
+    current_index = None
+    for i, m in enumerate(milestones):
+        nxt_date = milestones[i + 1]["date"] if i + 1 < len(milestones) else None
+        if m["passed"] and (nxt_date is None or today < nxt_date):
+            current_index = i
+    if current_index is not None:
+        milestones[current_index]["current"] = True
+        if current_index + 1 < len(milestones):
+            milestones[current_index]["days_to_next"] = (
+                milestones[current_index + 1]["date"] - today
+            ).days
+
+    return {
+        "today": today,
+        "cycle_year": today.year,
+        "milestones": milestones,
+        "current_index": current_index,
+    }
+
+
+# ── Documents & Sources audit-trail panel ───────────────────────────────────
+def build_document_sources(parcel, history, current, entity_detail, delinquent):
+    """
+    Per-parcel list of the real data sources that actually fed the current
+    page for THIS parcel (July 2026 Cowork brief, item 3 -- "Documents &
+    Sources audit-trail panel").
+
+    Structural template reused, not redesigned: About page's existing
+    Source / What it provides / Coverage table (templates/about.html,
+    "Two government sources. Zero aggregators."). That table is site-wide
+    and static -- same three rows on every parcel. This function produces
+    the per-parcel-accurate version: only sources genuinely used for this
+    specific geo_id, with the specific years/coverage this parcel actually
+    has data for (not a blanket range).
+
+    Deliberately MORE granular than the About page in one respect: About
+    collapses 2021-2025 values under one "TCAD" row (Verified 2021-2025 /
+    Preliminary 2026) for a simple marketing summary. This function keeps
+    TCAD's own Certified Export separate from the Texas Comptroller AJR
+    values that actually back 2021-2024 -- both facts are already
+    established site-wide (Value History table footer, property.html
+    ~line 3032-3035: "2025 -- TCAD Certified Appraisal Export" vs
+    "2021-2024 values -- Texas Comptroller Annual Jurisdiction Roll
+    (AJR)") -- an audit-trail panel's whole purpose is exactness, so it
+    should not flatten that distinction the way the About page's
+    marketing summary does.
+
+    Per-source inclusion logic (investigated per real per-parcel fields,
+    not a static list -- confirmed against 0100030105, 0100030109,
+    0426190857, 0100030804; see brief for what was found on each):
+      - TCAD Certified Appraisal Roll: included only if this parcel has a
+        2025 row with data_source != 'preliminary' (i.e. a real certified
+        value on file for 2025).
+      - Texas Comptroller AJR: included only if this parcel has at least
+        one 2021-2024 row at all (some parcels' history can be short).
+      - TCAD Preliminary Export: included only if a 2026 row exists,
+        dated June 9, 2026 -- the same literal date already used in the
+        Value History footer (not re-derived, reused).
+      - Travis County Rates History: included only if entity_detail (this
+        parcel's real 2025 taxing-entity list) is non-empty -- a parcel
+        with no taxing entities on file has nothing to show here.
+      - TaxCurOpenData (current-year billing): included only if
+        entity_detail is non-empty OR current.total_tax is set -- i.e.
+        this parcel actually has 2025 billing data, not just appraisal
+        data.
+      - PIR bulk billing export (2021-2024 billing): included only if at
+        least one 2021-2024 row has is_billing_verified True for THIS
+        parcel -- coverage lists the actual verified years found, not a
+        blanket "2021-2024" if some years are missing for this parcel.
+      - TaxDelqOpenData: included only if `delinquent` is not None --
+        this is the brief's own named example of a source that "can
+        vary, not every parcel has delinquency data."
+      - Satellite imagery (Esri World Imagery via U.S. Census geocoder):
+        included only if this parcel has cached coordinates or a situs
+        address to geocode from (api_geocode's own two lookup paths,
+        app.py). Whether the lookup actually resolves is decided
+        client-side (JS fetch to /api/geocode) and can still fail for a
+        parcel listed here (sparse/rural addresses) -- worded honestly
+        below rather than promising imagery that may not render.
+    """
+    sources = []
+
+    hist_2021_24 = [r for r in history if r.get("tax_year") in (2021, 2022, 2023, 2024)]
+    row_2025 = next((r for r in history if r.get("tax_year") == 2025), None)
+    row_2026 = next((r for r in history if r.get("tax_year") == 2026), None)
+
+    if row_2025 and row_2025.get("data_source") != "preliminary":
+        sources.append({
+            "name": "TCAD Certified Appraisal Roll",
+            "provides": "Market, assessed, and taxable value; land/improvement split; exemptions",
+            "coverage": "2025",
+            "badge": "verified", "badge_label": "Certified",
+            "link": "https://traviscad.org/propertytaxsystem/",
+            "link_label": "TCAD — Property Tax System",
+        })
+
+    if hist_2021_24:
+        # Confidence fixed (July 2026, per Diego's "Fix AJR/Historical-Year
+        # Confidence Tiering" brief): this row used to hardcode
+        # badge="partial" unconditionally -- an independent copy of the
+        # same blanket "AJR isn't literally certified" rule found and fixed
+        # in _row_confidence() (app.py). Now computes the REAL per-year
+        # tier for each 2021-2024 row this parcel actually has, via that
+        # same shared function (not a second hand-written comparison), and
+        # combines them with combine_confidence_tiers() (the same
+        # weakest-link combiner used everywhere else on this page) so a
+        # parcel with a genuine AV>MV anomaly in one year still shows that
+        # honestly, while a parcel with no anomaly in any year — the large
+        # majority, per the brief's own investigation — now correctly shows
+        # Verified here instead of a blanket Partial.
+        yrs = sorted(r["tax_year"] for r in hist_2021_24)
+        _yr_tiers = [
+            (str(r["tax_year"]), _row_confidence(r.get("data_source"), r.get("assessed_value"), r.get("market_value")))
+            for r in hist_2021_24
+        ]
+        _ajr_tier, _ajr_note = combine_confidence_tiers(_yr_tiers)
+        _flagged_years = [yr for yr, tier in _yr_tiers if tier == "partial"]
+        _coverage = f"{yrs[0]}–{yrs[-1]}" if len(yrs) > 1 else str(yrs[0])
+        if _flagged_years:
+            _coverage += f" ({', '.join(_flagged_years)} flagged: assessed exceeds market)"
+        sources.append({
+            "name": "Texas Comptroller Annual Jurisdiction Roll (AJR)",
+            "provides": "Prior-year market and taxable value",
+            "coverage": _coverage,
+            "badge": _ajr_tier if _ajr_tier in ("verified", "preliminary") else "partial",
+            "badge_label": "Verified" if _ajr_tier == "verified" else "Partial",
+            "link": None, "link_label": None,
+        })
+
+    if row_2026:
+        sources.append({
+            "name": "TCAD Preliminary Export",
+            "provides": "First-look 2026 appraisal value, subject to change at certification",
+            "coverage": "2026 (exported June 9, 2026; certifies July 25, 2026)",
+            "badge": "preliminary", "badge_label": "Preliminary",
+            "link": "https://traviscad.org/propertytaxsystem/",
+            "link_label": "TCAD — Property Tax System",
+        })
+
+    if entity_detail:
+        sources.append({
+            "name": "Travis County Rates History",
+            "provides": "Adopted tax rate for each of this parcel's taxing entities",
+            "coverage": "1990–2025",
+            "badge": "verified", "badge_label": "Verified",
+            "link": "https://tax-office.traviscountytx.gov/properties/taxes/truth-in-taxation-summary",
+            "link_label": "Travis County Tax Office — Truth in Taxation Summary",
+        })
+
+    if entity_detail or (current and current.get("total_tax")):
+        cur_verified = bool(current and current.get("is_billing_verified"))
+        sources.append({
+            "name": "TaxCurOpenData",
+            "provides": "Current-year (2025) tax billing, by taxing entity",
+            "coverage": "2025",
+            "badge": "verified" if cur_verified else "partial",
+            "badge_label": "Verified" if cur_verified else "Partial",
+            "link": None, "link_label": None,
+        })
+
+    pir_years = sorted(
+        r["tax_year"] for r in hist_2021_24 if r.get("is_billing_verified")
+    )
+    if pir_years:
+        sources.append({
+            "name": "PIR bulk billing export",
+            "provides": "Prior-year tax billing, Travis County Tax Office",
+            "coverage": ", ".join(str(y) for y in pir_years),
+            "badge": "verified", "badge_label": "Verified",
+            "link": None, "link_label": None,
+        })
+
+    if delinquent is not None:
+        # "Current" fixed (July 2026, per Diego's "Delinquency Data
+        # Freshness" Cowork brief): this claimed the balance was live/
+        # up-to-the-minute, which is exactly what Diego's live-site
+        # comparison (0100030804: county shows $91,988.16 right now vs.
+        # $91,429.42 here, a $558.74 gap) disproved -- TaxDelqOpenData is a
+        # periodic export, and Texas Tax Code Sec. 33.01's ongoing monthly
+        # penalty/interest means "Current" was actively misleading, not just
+        # imprecise. Now states the real export date (TAX_DELQ_EXPORT_DATE)
+        # and the same growth caveat the property page's own Delinquency
+        # panel now shows, instead of implying live accuracy.
+        sources.append({
+            "name": "TaxDelqOpenData",
+            "provides": "Delinquent-account status and balance due",
+            "coverage": f"As of {TAX_DELQ_EXPORT_DATE.strftime('%B %-d, %Y')} — balance grows monthly (Tax Code §33.01)",
+            "badge": "verified", "badge_label": "Verified",
+            "link": "https://tax-office.traviscountytx.gov/properties/taxes/delinquent/penalties-interest",
+            "link_label": "Travis County Tax Office — Delinquent Property Tax Penalties and Interest",
+        })
+
+    if parcel.get("latitude") is not None and parcel.get("longitude") is not None:
+        sources.append({
+            "name": "Satellite imagery (Esri World Imagery)",
+            "provides": "Aerial view of the parcel",
+            "coverage": "Coordinates cached from a prior lookup",
+            "badge": None, "badge_label": None,
+            "link": None, "link_label": None,
+        })
+    elif parcel.get("situs_address"):
+        sources.append({
+            "name": "Satellite imagery (Esri World Imagery)",
+            "provides": "Aerial view of the parcel",
+            "coverage": "Located by geocoding this parcel's address — may not resolve for every address",
+            "badge": None, "badge_label": None,
+            "link": None, "link_label": None,
+        })
+
+    return sources
 
 
 # ── CoStar-style property narrative generator ────────────────────────────────
@@ -524,7 +967,7 @@ def generate_property_narrative(parcel, history, metrics_by_year, benchmark_by_y
     # ── Para 3: risk flags or forward outlook ──────────────────────────────────
     p3 = []
     if m25:
-        if m25.get("risk_homestead_cap_expiry"):
+        if m25.get("cap_step_up_exposure"):
             p3.append(
                 "An active homestead cap is in place — assessed value is below market. "
                 "A buyer loses this benefit at purchase and the assessed value resets to full market."
@@ -1827,6 +2270,41 @@ def property_detail(geo_id):
         if sum(1 for p in pts if p is not None) >= 2:
             chart_entity_data[code] = pts
 
+    # ── Central 2026 baseline derivation (Issue 1, "Homestead-Cap Data
+    # Integrity: Full Fix Set" Cowork brief, July 2026) ────────────────────
+    # SINGLE assembly point for the 2026 row's derived assessed/taxable
+    # figures -- every downstream consumer (build_projections()'s CAGR-
+    # endpoint base below, estimated_tax_2026, the Taxable Value 2026 KPI
+    # card, the Current & Preliminary Values table's 2026 column) must read
+    # est_assessed_2026/est_taxable_2026/basis_2026 from current_2026 (this
+    # same dict object also lives inside `history`, so any code iterating
+    # history picks these up too) instead of independently re-deriving or
+    # trusting current_2026["assessed_value"]/["taxable_value"] raw. Full
+    # rule/derivation writeup lives in tax_logic/texas.py's
+    # derive_2026_baseline() docstring, not duplicated here. Attaches
+    # NEW keys only -- never overwrites the raw assessed_value/taxable_value
+    # fields, so any code that genuinely needs TCAD's raw preliminary figure
+    # (as opposed to the display/computation figure) still can.
+    # MUST run before build_projections() -- that function's own
+    # cagr_endpoint/base_assessed logic is the fix's original trigger case
+    # and reads current_2026's derived fields via the shared `history` list.
+    current_2026 = next((r for r in history if r["tax_year"] == 2026), None)
+    if current_2026:
+        _baseline_2026 = _derive_2026_baseline(current, current_2026)
+        # Always set all four keys when current_2026 exists, even when
+        # _baseline_2026 is None (only happens if current_2026 lacks a
+        # market_value -- shouldn't occur for a real row but guarded anyway)
+        # -- templates test `current_2026 and current_2026.est_assessed_2026`
+        # etc., and Jinja's `and` only short-circuits on the FIRST falsy
+        # operand, so a truthy current_2026 missing these keys entirely
+        # (rather than having them present-but-None) raises UndefinedError
+        # under this app's StrictUndefined templates, not a graceful "—".
+        current_2026.update(_baseline_2026 or {
+            "est_assessed_2026": None, "est_taxable_2026": None,
+            "basis_2026": None, "is_approx_2026": False,
+            "confidence_2026": None,
+        })
+
     insights    = build_insights(parcel, history, entity_detail, delinquent)
     projections, proj_baseline, proj_bands = build_projections(
         history, rate_history, entity_detail,
@@ -1856,16 +2334,35 @@ def property_detail(geo_id):
     except Exception:
         pass  # Phase 2 tables not yet populated — skip metrics sections
 
-    # 2026 preliminary row (for the preliminary callout card)
-    current_2026 = next((r for r in history if r["tax_year"] == 2026), None)
+    # Tax calendar (July 2026, per Diego's Cowork brief item 1) — uses the
+    # real server clock, not a static illustration; see build_tax_calendar()'s
+    # own docstring for the full sourcing writeup.
+    tax_calendar = build_tax_calendar(datetime.now().date(), current_2026, delinquent)
+
+    # Documents & Sources audit-trail panel (July 2026 Cowork brief, item 3)
+    # — per-parcel real source list; see build_document_sources()'s own
+    # docstring for the full per-source inclusion logic.
+    doc_sources = build_document_sources(parcel, history, current, entity_detail, delinquent)
 
     # Estimated 2026 total tax: taxable_value_2026 × blended 2025 entity rates
     # Uses this parcel's specific entity mix (not county-wide avg) for accuracy.
     # Only computed when taxable_value is available for 2026 — never falls back to MV.
+    #
+    # Issue 1 fix: reads est_taxable_2026 (the derive_2026_baseline() output
+    # attached to current_2026 above), NOT the raw taxable_value field. Real
+    # scope, confirmed live: in the cohort where the cap actually binds
+    # (equality + market grown past 110% of 2025's real assessed value --
+    # 4,266 parcels), 97.9% (4,178) also had taxable_value tracking the
+    # uncapped market figure, meaning this KPI was overstating tax for the
+    # large majority of that cohort before this fix. est_taxable_2026 is
+    # always populated (same value as taxable_value, just under a different
+    # key) whenever current_2026 exists, via derive_2026_baseline()'s
+    # uncapped_no_cap/tcad_capped branches -- so this is a pure key rename in
+    # the common case, and the actual correction only in the cap-binds case.
     estimated_tax_2026 = None
     assumed_rate_2026 = None
-    if current_2026 and current_2026.get("taxable_value") and entity_detail:
-        tv26 = current_2026["taxable_value"]
+    if current_2026 and current_2026.get("est_taxable_2026") and entity_detail:
+        tv26 = current_2026["est_taxable_2026"]
         blended_rate_2025 = sum(
             float(e["rate"]) for e in entity_detail if e.get("rate") is not None
         )
@@ -1912,8 +2409,8 @@ def property_detail(geo_id):
     if current and current.get("assessed_value") and current.get("market_value"):
         kpi["assessment_ratio"]      = round(current["assessed_value"] / current["market_value"] * 100, 1)
         kpi["assessment_ratio_year"] = 2025
-    elif current_2026 and current_2026.get("assessed_value") and current_2026.get("market_value"):
-        kpi["assessment_ratio"]      = round(current_2026["assessed_value"] / current_2026["market_value"] * 100, 1)
+    elif current_2026 and current_2026.get("est_assessed_2026") and current_2026.get("market_value"):
+        kpi["assessment_ratio"]      = round(current_2026["est_assessed_2026"] / current_2026["market_value"] * 100, 1)
         kpi["assessment_ratio_year"] = 2026
 
     _m25 = metrics_by_year.get(2025)
@@ -1945,7 +2442,10 @@ def property_detail(geo_id):
         # and Market Value's confidence (current.data_source via the same
         # _row_confidence() the PDF export and /api/search_filter already
         # use, reused here rather than a third hand-rolled tier mapping).
-        _mkt_tier = _row_confidence(current.get("data_source")) if current else "not_available"
+        # AV>MV anomaly check (July 2026 fix): pass assessed/market values
+        # through so a certified-tier row that fails the per-record anomaly
+        # check still demotes to Partial here, not just data_source alone.
+        _mkt_tier = _row_confidence(current.get("data_source"), current.get("assessed_value"), current.get("market_value")) if current else "not_available"
         _tax_tier = bool(current and current.get("is_billing_verified"))
         kpi["effective_tax_rate_tier"], kpi["effective_tax_rate_note"] = combine_confidence_tiers([
             ("Market Value", _mkt_tier),
@@ -2016,8 +2516,17 @@ def property_detail(geo_id):
         rate_history=rate_history,
         current=current,
         current_2026=current_2026,
+        tax_calendar=tax_calendar,
+        doc_sources=doc_sources,
         entity_detail=entity_detail,
         delinquent=delinquent,
+        # As-of date for the Delinquency panel (July 2026, per Diego's
+        # "Delinquency Data Freshness" Cowork brief) -- see
+        # TAX_DELQ_EXPORT_DATE's own comment (top of this file) for how this
+        # was sourced. Passed through even when `delinquent` is None; the
+        # template only renders it inside the same `{% if delinquent... %}`
+        # guard the rest of the panel already uses.
+        delinquent_export_date=TAX_DELQ_EXPORT_DATE,
         insights=insights,
         projections=projections,
         proj_bands=proj_bands,
@@ -2182,15 +2691,27 @@ def export_due_diligence_pdf(geo_id):
     # SAME parcel_tax_year row, so they share ONE confidence tier driven by
     # that row's data_source — NOT the hardcoded "Verified"/blank this route
     # previously used. Mirrors templates/property.html's own "Property-level
-    # confidence badge" block verbatim (search that file for that heading):
-    #   data_source == 'certified'   -> Verified   ("Appraisal: 2025 Certified")
-    #   data_source == 'preliminary' -> Preliminary ("Appraisal: 2026 Preliminary")
-    #   anything else (ajr/cert_2021/legacy NULL)  -> Partial ("Appraisal: Unknown")
-    # Same 3-tier mapping _row_confidence() (app.py, used by /api/search_filter)
+    # confidence badge" block verbatim (search that file for that heading).
+    # Tiering (July 2026, per Diego's "Fix AJR/Historical-Year Confidence
+    # Tiering" brief -- see CERTIFIED_TIER_DATA_SOURCES/_row_confidence()'s
+    # own docstrings for the full rationale):
+    #   data_source is a certified export of ANY vintage (2025's own
+    #   'certified', or a 2021-2024 cert_202x/ajr_202x historical export --
+    #   all the same certifying chief appraiser's data under Tax Code
+    #   Sec.26.01(b)) AND assessed_value <= market_value for this record
+    #                                             -> Verified
+    #   same, but assessed_value > market_value for THIS record
+    #                                             -> Partial (real per-record
+    #                                                anomaly, not a blanket
+    #                                                source-level penalty)
+    #   data_source == 'preliminary'              -> Preliminary
+    #   anything else (legacy NULL, unrecognized) -> Partial (unchanged
+    #                                                safe default)
+    # Same tiering _row_confidence() (app.py, used by /api/search_filter)
     # already codifies for exactly this reason — reused here by name so this
     # route can never drift from that single source of truth.
     if current:
-        appraisal_tier = _row_confidence(current.get("data_source"))
+        appraisal_tier = _row_confidence(current.get("data_source"), current.get("assessed_value"), current.get("market_value"))
     else:
         appraisal_tier = None
     # .get() with a default, not a direct dict index (per Diego's live-review
@@ -2204,16 +2725,28 @@ def export_due_diligence_pdf(geo_id):
     # was never written with in mind. A future 4th/5th branch added there
     # (e.g. an "estimated" tier) would silently KeyError here with a plain
     # index; .get(..., "Not Available") degrades instead of crashing.
+    #
+    # "Partial" wording updated (July 2026 fix): the old text ("appraisal
+    # certification status isn't tracked for this record") described the
+    # PRE-fix blanket rule -- a row could only be Partial because its
+    # data_source wasn't literally 'certified', regardless of the record
+    # itself. Now that the tier is driven by the actual per-record AV>MV
+    # anomaly (or a genuinely unrecognized data_source), the wording says so
+    # instead of implying an untracked/unknown status that no longer
+    # accurately describes why a row lands here.
     appraisal_confidence = {
         "verified": "Verified",
         "preliminary": "Preliminary",
-        "partial": "Partial — appraisal certification status isn't tracked for this record",
+        "partial": "Partial — assessed value exceeds market value in this year's source data, or this record's certification status is unrecognized",
     }.get(appraisal_tier, "Not Available")
 
     # Same tiering for the 2026 Preliminary column (Current & Preliminary
     # Values table below) -- mirrors templates/property.html's own column
     # header badges ("2026 Preliminary" only appears when current_2026
-    # exists) rather than inventing new confidence logic for this PDF.
+    # exists) rather than inventing new confidence logic for this PDF. Not
+    # passing assessed/market values here: 'preliminary' isn't in
+    # CERTIFIED_TIER_DATA_SOURCES, so the anomaly check never runs for this
+    # branch regardless -- nothing to demote it from.
     appraisal_tier_2026 = _row_confidence(current_2026.get("data_source")) if current_2026 else None
 
     # Effective Tax Rate = total_tax ÷ market_value, so its confidence is
@@ -2318,8 +2851,16 @@ def export_due_diligence_pdf(geo_id):
     # convention rather than inventing new layout logic").
     story.append(Paragraph("Current &amp; Preliminary Values", h2))
     market_value_2026   = current_2026.get("market_value")   if current_2026 else None
-    assessed_value_2026 = current_2026.get("assessed_value") if current_2026 else None
-    taxable_value_2026  = current_2026.get("taxable_value")  if current_2026 else None
+    # Issue 1 fix: est_assessed_2026/est_taxable_2026 (derive_2026_baseline()
+    # output, attached to current_2026 in property_detail()) instead of the
+    # raw assessed_value/taxable_value fields -- same central-assembly-point
+    # correction as the live page's KPI cards and Current & Preliminary
+    # Values table. is_approx_2026_pdf drives the "~" prefix + note below,
+    # mirroring property.html's tilde/is_approx convention rather than a
+    # separate PDF-only wording.
+    assessed_value_2026 = current_2026.get("est_assessed_2026") if current_2026 else None
+    taxable_value_2026  = current_2026.get("est_taxable_2026")  if current_2026 else None
+    is_approx_2026_pdf  = bool(current_2026 and current_2026.get("is_approx_2026"))
 
     def _pct_change(v2025, v2026):
         if not v2025 or v2026 is None:
@@ -2336,15 +2877,17 @@ def export_due_diligence_pdf(geo_id):
         f"${market_value:,.0f}" if market_value else "—",
         _pct_change(market_value, market_value_2026),
     ])
+    _av26_prefix = "~" if is_approx_2026_pdf else ""
+    _tv26_prefix = "~" if is_approx_2026_pdf else ""
     cv_rows.append([
         "Assessed Value",
-        f"${assessed_value_2026:,.0f}" if assessed_value_2026 else "—",
+        f"{_av26_prefix}${assessed_value_2026:,.0f}" if assessed_value_2026 else "—",
         f"${assessed_value:,.0f}" if assessed_value else "—",
         _pct_change(assessed_value, assessed_value_2026),
     ])
     cv_rows.append([
         "Taxable Value",
-        f"${taxable_value_2026:,.0f}" if taxable_value_2026 else "—",
+        f"{_tv26_prefix}${taxable_value_2026:,.0f}" if taxable_value_2026 else "—",
         f"${taxable_value:,.0f}" if taxable_value else "—",
         _pct_change(taxable_value, taxable_value_2026),
     ])
@@ -2355,6 +2898,12 @@ def export_due_diligence_pdf(geo_id):
     conf_2026_note = {
         "verified": "Verified", "preliminary": "Preliminary — subject to change until certification",
     }.get(appraisal_tier_2026, "Not yet available" if not current_2026 else "Partial — certification status not tracked")
+    if is_approx_2026_pdf:
+        # Issue 1: Assessed/Taxable Value are a derived estimate (TCAD's own
+        # preliminary export shows the pre-cap figure), not a real TCAD
+        # number -- the "~" prefix alone isn't enough in a PDF someone may
+        # print/forward without the live page's tooltip; state it in the note.
+        conf_2026_note += ". Assessed/Taxable Value are Parcelytics estimates of the capped value (TCAD's preliminary export doesn't yet reflect the homestead cap for this parcel) — Market Value is TCAD's real figure."
     story.append(Paragraph(
         f"<i>2026 column: {conf_2026_note}. 2025 column: {appraisal_confidence}.</i>", small
     ))
@@ -2369,9 +2918,18 @@ def export_due_diligence_pdf(geo_id):
             note("Below typical ~100%" if assessment_ratio < 100 else "Above typical ~100% — data anomaly"),
         ])
     if delinquent and delinquent.get("total_due"):
+        # As-of date added (July 2026, per Diego's follow-up to the
+        # "Delinquency Data Freshness" Cowork brief): reuses
+        # TAX_DELQ_EXPORT_DATE, the same constant the property page's own
+        # Delinquency panels (both modes) already surface -- see that
+        # constant's own comment (top of this file) for how it was sourced.
+        # Without this, the PDF's own delinquent figure carried no date at
+        # all, silently contradicting the page it's exported from once that
+        # page started showing one.
         key_rows.append([
             "Delinquent Taxes", f"${float(delinquent['total_due']):,.0f}",
-            note(f"Since {delinquent.get('first_delinquent_yr') or '—'}"),
+            note(f"Since {delinquent.get('first_delinquent_yr') or '—'} — "
+                 f"as of {TAX_DELQ_EXPORT_DATE.strftime('%B %-d, %Y')}, grows monthly (Tax Code §33.01)"),
         ])
     # Column 2 (Confidence / Note) now holds Paragraph flowables (see note()
     # above) instead of plain strings, so long confidence text wraps within
@@ -2421,7 +2979,7 @@ def export_due_diligence_pdf(geo_id):
 
     hist_rows = [["Year", "Market Value", "Assessed Value", "Total Tax", "Confidence"]]
     for r in sorted(history, key=lambda r: r["tax_year"]):
-        value_conf_tier = _row_confidence(r.get("data_source")) if r.get("market_value") else None
+        value_conf_tier = _row_confidence(r.get("data_source"), r.get("assessed_value"), r.get("market_value")) if r.get("market_value") else None
 
         if r.get("billing_confidence") == "verified" or r.get("is_billing_verified"):
             billing_tier = "verified"
@@ -2481,7 +3039,8 @@ def export_due_diligence_pdf(geo_id):
         "Current-year billing: Travis County Tax Office current-year billing data (TaxCurOpenData).",
         "Prior-year billing (2021–2024): Travis County Tax Office PIR bulk billing export, cross-verified "
         "against known sanity-check accounts.",
-        "Delinquency status: Travis County Tax Office delinquent-account data (TaxDelqOpenData), where applicable.",
+        f"Delinquency status: Travis County Tax Office delinquent-account data (TaxDelqOpenData), where applicable — "
+        f"as of {TAX_DELQ_EXPORT_DATE.strftime('%B %-d, %Y')}; balance grows monthly under Tax Code §33.01.",
     ]:
         # Plain hyphen, not "•" -- same base-font glyph-mapping issue as the
         # arrow above (confirmed via test PDF: "•" came out as "(cid:127)"
@@ -3625,34 +4184,75 @@ def combine_confidence_tiers(inputs):
     return weakest_tier, "Partial — " + "; ".join(reasons)
 
 
-def _row_confidence(data_source):
-    """Confidence tier for a single parcel_tax_year row, given its data_source.
+# ── Confidence-tier data_source classification (July 2026, per Diego's
+# Cowork brief -- "Fix AJR/Historical-Year Confidence Tiering") ─────────────
+# The investigation that preceded this fix found _row_confidence() below was
+# bucketing every 2021-2024 parcel_tax_year row to "Partial" purely because
+# its data_source string wasn't the literal 'certified' -- regardless of
+# whether that specific record showed any real data-quality issue. Per Tax
+# Code Sec.26.01(b), TCAD's own chief appraiser submits this same certified
+# roll data to the Comptroller (as EARS/AJR) in addition to certifying it
+# locally -- so "not literally 'certified'" was never a real quality signal
+# on its own. Confirmed live: 89.5% of 2021-2024 rows are cert_202x, 10.5%
+# are ajr_202x; both trace back to the same TCAD-certified source. This set
+# names every data_source string entitled to certified-tier treatment --
+# the ACTUAL per-record signal is now the assessed>market anomaly check
+# inside _row_confidence() itself, not the data_source string beyond "is
+# this actually a certified export, from TCAD or its EARS submission, of
+# any vintage."
+CERTIFIED_TIER_DATA_SOURCES = frozenset({
+    "certified",
+    "cert_2021", "cert_2022", "cert_2023", "cert_2024",
+    "ajr_2021", "ajr_2022", "ajr_2023", "ajr_2024",
+})
+
+
+def _row_confidence(data_source, assessed_value=None, market_value=None):
+    """Confidence tier for a single parcel_tax_year row.
 
     Mirrors the property page's per-year confidence badge logic exactly
     (templates/property.html, "Property-level confidence badge" block,
-    ~line 572-593) — same certified/preliminary/else-Partial branching — so
-    a parcel shown here reads the same confidence it would show on its own
-    detail page. Not a shared call site (that logic is inline Jinja on the
-    property page); if that block changes, this needs a matching update.
+    ~line 1427) -- same branching -- so a parcel shown here reads the same
+    confidence it would show on its own detail page. Not a shared call site
+    (that logic is inline Jinja on the property page, which can't call a
+    Python function); if this changes, that block needs a matching update
+    -- see its own comment for why it's a deliberate, not accidental,
+    duplication.
 
-    Only 3 of the site's 5 confidence tiers are reachable from this function:
-      - "verified"    — data_source == 'certified'
-      - "preliminary" — data_source == 'preliminary' (2026 preliminary roll)
-      - "partial"     — anything else non-null (e.g. 'ajr', 'ajr_2021',
-                         'ajr_pir_2022', 'cert_2021', or legacy NULL rows —
-                         see loaders/load_cert_2021.py, load_certified_historical.py)
-    "not_available" is impossible here: this route INNER JOINs parcel_tax_year
-    on the selected tax_year, so a result can only exist if a row is present
-    (property.html's "Not Available" branch fires when NO row exists at all —
-    structurally excluded from a result set that required a join match).
-    "estimated" is also not produced by this function: on the property page,
-    Estimated tags *computed/derived* figures (projections, billing-derived
-    tax estimates) — never a stored parcel_tax_year row's own data_source.
-    Since this route surfaces stored market_value/data_source directly (not
-    a computed figure), there is no case where "estimated" legitimately
-    applies to a row here under the site's existing confidence logic.
+    Tiering (July 2026 fix -- see CERTIFIED_TIER_DATA_SOURCES above for the
+    full rationale):
+      - data_source in CERTIFIED_TIER_DATA_SOURCES (TCAD's 2025 certified
+        export, OR a certified/EARS-submitted historical export or AJR
+        record for 2021-2024 -- all ultimately the same certifying chief
+        appraiser's own data under Tax Code Sec.26.01(b)):
+          - assessed_value <= market_value, or the comparison isn't
+            possible (either side missing) -> "verified"
+          - assessed_value > market_value for THIS record -> "partial"
+            (the real, per-record anomaly check -- reuses the same
+            assessed>market comparison the page's own "!" data-anomaly
+            icon already uses; not a second, independently-invented check)
+      - data_source == 'preliminary' (2026 preliminary roll) -> "preliminary"
+        -- unaffected by the anomaly check; a preliminary row isn't
+        certified-tier-eligible in the first place, so there's nothing to
+        demote it FROM.
+      - anything else (legacy NULL, an unrecognized string) -> "partial",
+        unchanged safe default -- this fallback is NOT loosened by this fix.
+
+    assessed_value/market_value are optional (default None) so existing
+    callers that only have data_source on hand keep working -- they just
+    don't get the anomaly-check benefit until updated to pass real values.
+    Every real call site in this codebase has been updated to pass them
+    (see the July 2026 brief's own diff) -- a caller passing only
+    data_source going forward should be treated as a gap to close, not a
+    supported permanent shape.
+
+    Only 3 of the site's 5 confidence tiers are reachable from this
+    function ("not_available" and "estimated" are not -- see prior
+    docstring revision for why; unchanged by this fix).
     """
-    if data_source == "certified":
+    if data_source in CERTIFIED_TIER_DATA_SOURCES:
+        if assessed_value is not None and market_value is not None and assessed_value > market_value:
+            return "partial"
         return "verified"
     if data_source == "preliminary":
         return "preliminary"
@@ -3826,10 +4426,25 @@ def api_search_filter():
             )""")
 
     if verified_only:
-        # Direct mapping onto parcel_tax_year.data_source = 'certified' (the
-        # actual stored confidence signal for values). Does not additionally
-        # require verified BILLING data — see brief report for this scoping note.
-        where.append("pty.data_source = 'certified'")
+        # Consolidated (July 2026, per Diego's "Fix AJR/Historical-Year
+        # Confidence Tiering" brief, item 4): this used to be a raw
+        # `pty.data_source = 'certified'` string match -- an independent
+        # copy of the same confidence idea _row_confidence() codifies,
+        # found during the brief's call-site audit. Left as-is it would
+        # have gone stale the moment _row_confidence() below was widened:
+        # a caller requesting tax_year=2022 with verified_only=1 would
+        # always get zero results, even for a 2022 row that now genuinely
+        # qualifies as verified-tier (cert_2022/ajr_2022, no AV>MV anomaly)
+        # -- "verified only" silently meaning something narrower than what
+        # "Verified" now means everywhere else on the site. Rebuilt to use
+        # the same CERTIFIED_TIER_DATA_SOURCES set (data_source membership)
+        # AND the same per-record AV>MV anomaly check _row_confidence()
+        # uses, rather than a second hand-written comparison -- not a
+        # parallel copy of the tiering rule, the same rule expressed as SQL
+        # because this filter runs before rows are ever loaded into Python.
+        params["cert_sources"] = list(CERTIFIED_TIER_DATA_SOURCES)
+        where.append("pty.data_source = ANY(%(cert_sources)s)")
+        where.append("(pty.assessed_value IS NULL OR pty.market_value IS NULL OR pty.assessed_value <= pty.market_value)")
 
     where_sql = " AND ".join(where)
     offset = (page - 1) * SEARCH_FILTER_PAGE_SIZE
@@ -3839,7 +4454,7 @@ def api_search_filter():
         SELECT
             p.geo_id, p.situs_address, p.neighborhood_cd,
             ({_ptype_sql}) AS prop_type_label,
-            pty.market_value, pty.data_source, pty.tax_year,
+            pty.market_value, pty.assessed_value, pty.data_source, pty.tax_year,
             COUNT(*) OVER() AS total_count
         FROM parcel p
         JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = %(tax_year)s
@@ -3854,7 +4469,12 @@ def api_search_filter():
 
     results = []
     for r in rows:
-        confidence = _row_confidence(r["data_source"])
+        # pty.assessed_value added to the SELECT above (July 2026 fix) so
+        # this reflects the same per-record AV>MV anomaly check
+        # _row_confidence() now applies everywhere else -- previously this
+        # endpoint only had market_value on hand, so a certified-tier row
+        # could never be demoted here even when it should have been.
+        confidence = _row_confidence(r["data_source"], r.get("assessed_value"), r["market_value"])
         results.append({
             "geo_id": r["geo_id"],
             "situs_address": r["situs_address"],
@@ -5021,12 +5641,32 @@ def compare_parcels():
             "D": "Agricultural", "E": "Agricultural", "F": "Commercial",
         }
 
+        # Issue 3 fix ("Homestead-Cap Data Integrity: Full Fix Set" Cowork
+        # brief, July 2026) -- this route's "Cap Loss (HS)" row is a 5th
+        # instance of the same structural bug the property.html/build_
+        # projections()/build_insights()/cap_was_active fixes already
+        # closed: gating on current.hs_cap_loss > 0, which is structurally
+        # NULL for every 2025 row (never populated by load_certified_2025.py).
+        # This route doesn't fetch 2021-2024 history at all (only the single
+        # 2025 row), so there's no real AJR hs_cap_loss to fall back to here
+        # -- the market-minus-assessed approximation (same "~" register the
+        # other four fixes use) is the ONLY possible signal in this route's
+        # existing data shape, not a second-best option.
+        cur_dict = dict(current) if current else {}
+        cap_loss_est = None
+        if (cur_dict.get("exemption_codes")
+                and "HS" in {c.strip().upper() for c in cur_dict["exemption_codes"].replace(";", ",").split(",")}
+                and cur_dict.get("market_value") and cur_dict.get("assessed_value") is not None
+                and cur_dict["market_value"] > cur_dict["assessed_value"]):
+            cap_loss_est = cur_dict["market_value"] - cur_dict["assessed_value"]
+        cur_dict["cap_loss_estimate"] = cap_loss_est
+
         parcels.append({
             "geo_id":        geo_id,
             "address":       parcel.get("situs_address") or "Unknown",
             "prop_type":     type_map.get(sc1, sc1 or "Unknown"),
             "parcel":        dict(parcel),
-            "current":       dict(current) if current else {},
+            "current":       cur_dict,
             "current_2026":  dict(current_2026) if current_2026 else {},
             "billing":       dict(billing) if billing else {},
         })

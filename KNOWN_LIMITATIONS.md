@@ -288,7 +288,7 @@ Full prefix breakdown from `query_state_cd1_prefixes.py`:
 | Prefix | Count | % | Notes |
 |--------|------:|---:|-------|
 | A | 334,227 | 64.6% | Residential single-family |
-| L | 42,504 | 8.2% | Commercial real estate |
+| L | 42,504 | 8.2% | Personal property (equipment, inventory, business personal property) — **not** commercial real estate; see the July 2026 correction below. Excluded from benchmarks as of the classify.py fix. |
 | C | 38,719 | 7.5% | Land / vacant |
 | O | 19,986 | 3.9% | Other real property (real estate, kept in benchmarks) |
 | NULL | 17,175 | 3.3% | No state_cd1 — see note below |
@@ -306,9 +306,10 @@ Full prefix breakdown from `query_state_cd1_prefixes.py`:
 **No unrecognized prefixes were found** — all 517,614 parcels use standard Texas Comptroller codes.
 
 **Benchmark exclusion policy (as implemented in `compute_metrics.py` and `/api/benchmark`):**
-- Excluded: `X` (tax-exempt, 14K parcels) and `N` (personal property, 3 parcels).
-- Kept: all others including `M` (manufactured homes — real property) and `O` (other real property).
-- `NULL` parcels (17,175) are naturally excluded because NULL does not match any `LIKE` pattern in the TYPE_GROUPS WHERE clause.
+- Excluded via `BENCHMARK_EXCLUDE_PREFIXES`: `X` (tax-exempt, 14K parcels) and `N` (personal property, 3 parcels).
+- Also excluded, structurally — via `tax_logic/classify.py`'s `label_case_sql()` / `property_type_label()` simply not mapping these prefixes to any of the 5 benchmark categories (falls through to NULL, not on the exclude-list, but never produces a row either way): `O`, `G`, `J`, and — as of the July 2026 correction below — `L`.
+- Genuinely kept (map to a real benchmark category): `A`, `B`, `C`, `D`/`E`, `F`, and `M` (manufactured homes — real property).
+- `NULL` parcels (17,175) are naturally excluded because NULL doesn't match any `label_case_sql()` WHEN clause either.
 
 **NULL state_cd1 parcels:** The 17,175 parcels with no state_cd1 are the same population as those with no `neighborhood_cd` — both fields come from AJR and are absent for accounts not included in the aggregate EARS/AJR roll (mineral accounts, personal property accounts, and some exempt special-use accounts that have no real-property segment). These accounts do not appear in any benchmark calculation.
 
@@ -351,3 +352,21 @@ Top 5 codes by parcel count: `A7100` (3,462), `A5850` (3,272), `J3000` (2,960), 
 Only `0275010202` (Howard Ln) had a true $1 base. Excluding mv_2025 ≤ $100 brings the mean to +20.66%, which still reflects actual large commercial reappraisals. **No further exclusions are warranted** — these are legitimate TCAD valuations. The **median (+6.49%)** is the appropriate summary statistic for commercial; the mean is not meaningful given this distribution. Note: geo_id `2-001470-0` uses a non-standard format (possibly a utility or complex account) and warrants manual review if its commercial comparability is needed.
 
 **The one prominent real-property outlier in the 2026 data:** Geo_id `0275010202` (HOWARD LN TX 78728) is a regular 10-digit TCAD F2 parcel with classi_cd=61. It went from $1 MV (2025 certified) to $2,588,746 MV (2026 preliminary) — a new lot receiving its first appraisal. Confirmed: not an AJR* account; no AV>MV anomaly in 2026 (AV=$1 < MV=$2.6M); included in the 2026 Commercial benchmark. Note: the 2026 preliminary export left AV and TV at $1 (matching the 2025 certified values) — the assessed and taxable values for this lot have not been finalized in the preliminary roll. The `risk_large_value_jump` flag fires for this parcel (expected).
+
+### July 2026 correction: state_cd1='L' is Personal Property, not Commercial real estate
+
+The state_cd1 table above (and this file's original characterization of "L\* — commercial real estate") was wrong. **L1/L2 is the Texas Comptroller's own Personal Property classification** (equipment, inventory, business personal property) per the Comptroller's PTAD state class code scheme — not Real Property. `tax_logic/classify.py` previously mapped `"L"` to `"Commercial"` in `_STATE_PREFIX_LABEL`, which put personal property into a "Commercial real estate" benchmark on the merits, independent of the separate AJR\* synthetic-geo_id issue documented above.
+
+**Quantified before fixing (raw source files, not guessed):** of the 42,293 `state_cd1='L'` geo_ids found across all 4 AJR years (2021–2024):
+- 42,082 (99.5%) already carried the synthetic `AJR`-prefixed geo_id and were already excluded from `county_benchmark` by the existing `geo_id NOT LIKE 'AJR%%'` filter — no incremental impact from these.
+- 211 (0.5%) had a real, resolvable 10-digit geo_id and were **not** caught by the AJR\*-prefix exclusion. Of those 211: 196 are confirmed personal-property accounts (`prop_type_cd='P'` in the 2025 Certified Export's `PROP.TXT`), all with a real, nonzero 2025 `market_value` (range $32–$2,115,623,520, median $313,546) and none carrying a `classi_cd` improvement-override (zero of them appear in `IMP_INFO.TXT`, so none can hit `MULTI_FAMILY_CODES`/`COMMERCIAL_CODES` and land back in Commercial that way). The other 15 don't match any `PROP.TXT` record at all (likely closed/superseded accounts). **Zero of the 211 are real property** (`prop_type_cd='R'`) — there was no meaningful "legitimate commercial real estate coded L" population being protected by the old mapping.
+
+**Fix:** `"L"` removed from `tax_logic/classify.py`'s `_STATE_PREFIX_LABEL` dict and from `label_case_sql()`'s SQL CASE, given the same treatment as `J`/`O`/`G` (falls through to `None`/NULL, excluded from every benchmark category rather than forced into Commercial). This is a classification-level fix, not a loader-level patch — it structurally excludes all current and future L1/L2 rows regardless of which loader or geo_id-resolution path produced them, unlike the AJR\*-prefix filter above which only catches rows that failed geo_id resolution specifically.
+
+**Scope note:** this does not touch `app.py`'s separate `_snapshot_taxonomy_sql()` (the newer 8-tab-plus-Other Market Snapshot taxonomy) — that taxonomy's own state_cd1 fallback never included `F`/`L` in the first place, so unclassified L-prefix parcels already landed in its "Other" tab, not any real-estate sector tab.
+
+## Build Workflow
+
+See BUILD_WORKFLOW.md for the actual step-by-step process used to build and
+verify changes to this project (Claude writes a brief, Cowork implements,
+Diego verifies live, then commits).

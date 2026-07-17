@@ -132,16 +132,55 @@ TYPE_GROUPS = [
 #   N*  (3)     — personal property accounts. Negligible count; excluded for
 #                 correctness.
 #
-# KEPT in benchmarks (all confirmed real property in Travis CAD):
-#   M* (10,699) — manufactured homes (treated as real property under TX law)
-#   O* (19,986) — "Other" use-type parcels (real property with valid MV)
-#   L* (42,504) — commercial real estate (already in Commercial TYPE_GROUP)
-#   J*  (1,524) — industrial / utility real property
-#   S*    (751) — state-assessed utility real property
-#   G*      (6) — government-assessed parcels (de minimis)
+# IMPORTANT: this list is NOT the only thing that decides what lands in
+# county_benchmark. The actual row filter below is `WHERE (label_expr) = %s`,
+# where label_expr = label_case_sql() (tax_logic/classify.py) — the single
+# canonical taxonomy shared with the rest of the app. A prefix being absent
+# from BENCHMARK_EXCLUDE_PREFIXES does NOT mean it appears in the output; it
+# only means it isn't excluded by *this* list. It still has to independently
+# match one of label_case_sql()'s five real-estate WHEN clauses to produce a
+# row at all. TYPE_GROUPS below never used its own `prefixes` list to filter
+# either (that first tuple element is unused in the query — label_case_sql()
+# does the actual matching) — so "prefix in TYPE_GROUPS" was never really the
+# mechanism; don't read it as one when auditing this.
+#
+# Per query_state_cd1_prefixes.py's live count (kept vs. excluded, cross-
+# checked against label_case_sql()'s actual behavior):
+#   M* (10,699) — manufactured homes (treated as real property under TX law).
+#                 label_case_sql() maps M -> Residential. Genuinely kept.
+#   O* (19,986) — "Other" use-type parcels (real property with valid MV).
+#                 NOT mapped in label_case_sql() (falls through to NULL) —
+#                 never actually appears in any of the 5 TYPE_GROUPS output,
+#                 despite not being on BENCHMARK_EXCLUDE_PREFIXES either.
+#   J*  (1,524) — industrial / utility real property. Same as O*: NOT mapped
+#                 in label_case_sql(), falls through to NULL, never appears
+#                 in county_benchmark output. (A prior version of this
+#                 comment called J* "kept" — that conflated "not on the
+#                 exclude-list" with "appears in output"; those are not the
+#                 same thing. J* was never actually producing a benchmark
+#                 row.)
+#   S*    (751) — state-assessed utility real property. Same as O*/J*: not
+#                 mapped, never appears in output.
+#   G*      (6) — government-assessed parcels (de minimis). Same as O*/J*/S*.
+#   L* (~42,300 as of a July 2026 recount) — Personal Property (equipment,
+#                 inventory, business personal property) per the Texas
+#                 Comptroller's own state class code scheme, NOT commercial
+#                 real estate. A prior version of this comment called L*
+#                 "commercial real estate (already in Commercial TYPE_GROUP)"
+#                 — that was wrong on the merits, not just a loader-bug
+#                 symptom. As of the county_benchmark contamination
+#                 investigation (see KNOWN_LIMITATIONS.md), label_case_sql()
+#                 no longer maps 'L' to 'Commercial' at all — it now falls
+#                 through to NULL like O*/J*/S*/G*, so L* never appears in
+#                 county_benchmark output either. 99.5% of state_cd1='L' rows
+#                 already carried a synthetic "AJR"-prefixed geo_id and were
+#                 already excluded by the `geo_id NOT LIKE 'AJR%%'` filter
+#                 below; the remaining ~0.5% (real, resolvable 10-digit
+#                 geo_ids) are the ones this classify.py fix newly excludes.
 #
 # NULL state_cd1 (17,175) parcels are naturally excluded because NULL does not
-# match any LIKE pattern in the TYPE_GROUPS WHERE clause.
+# match any LIKE pattern in the exclude clause, but also can't match any
+# label_case_sql() WHEN clause, so it never appears in output either.
 BENCHMARK_EXCLUDE_PREFIXES = ["X", "N"]
 
 
@@ -428,30 +467,116 @@ def compute_parcel_metrics(conn):
         n_jump = cur.rowcount
     print(f"    risk_large_value_jump: {n_jump:,} rows flagged (>{LARGE_JUMP_THRESHOLD_PCT}%)  ({time.time()-t1:.1f}s)")
 
-    # Pass 3: homestead cap expiry risk — residential only, consistent with Phase 1 guard.
-    # Condition: the 2025 row specifically has hs_cap_loss > 0 AND assessed < market.
-    # Restricting to the 2025 row (Certified data) avoids AJR noise where hs_cap_loss
-    # is present on almost every residential parcel. The 2025 Certified value is the
-    # authoritative source; if the gap is real it will show there.
+    # Pass 3: homestead cap signals — residential only, consistent with Phase 1 guard.
+    #
+    # BUG-FIX HISTORY: the prior round (July 2026, "Fix Remaining Homestead-Cap
+    # Gaps" Cowork brief, item 2) fixed risk_homestead_cap_expiry's original
+    # "hs_cap_loss > 0" condition (structurally always False for 2025 rows --
+    # never populated by load_certified_2025.py) by OR-ing in
+    # "assessed_value < market_value". That made the flag fire correctly, but
+    # created a NEW problem: assessed < market is simply "the cap is
+    # currently working" -- the default state for any appreciating homestead,
+    # not a genuine risk signal. Confirmed live: 404,355 rows / 68,336
+    # distinct parcels flagged, each across most/all of 6 parcel_tax_year
+    # rows (the UPDATE joined on geo_id only, no tax_year scoping -- a
+    # SEPARATE bug from the hs_cap_loss issue, fanning the flag across every
+    # year's row for a matching parcel). Not a counting bug -- confirmed
+    # 100% correctly scoped to residential (state_cd1 LIKE 'A%') -- the real
+    # problem was the flag's MEANING and its year-fanout.
+    #
+    # SPLIT (Issue 2, "Homestead-Cap Data Integrity: Full Fix Set" Cowork
+    # brief, July 2026) into two honestly-named signals, each keyed to ONE
+    # row per parcel (pm.tax_year = 2025 only, no fanout):
+    #
+    #   cap_step_up_exposure -- investor-facing, informational: a real,
+    #     MATERIALLY-SIZED cap a buyer would lose at purchase. Two
+    #     conditions, both required: the relative gap excludes trivial
+    #     wedges, the dollar floor keeps it materially meaningful.
+    #     Threshold tuned against the real percentile distribution (Diego's
+    #     query: percentile_cont over (market-assessed)/market for
+    #     HS-exempt, assessed<market 2025 rows). Sandbox reconstruction
+    #     from the raw 2025 Certified PROP_ENT.TXT export (N=68,091,
+    #     matching Diego's live 68,336 closely) found p25=4.12%, p50=10.11%,
+    #     p75=22.32%, p90=40.68% -- Diego's originally-proposed 10%
+    #     threshold sits almost exactly at the MEDIAN, not the top quartile
+    #     he asked for, and would flag roughly half the protected
+    #     population. Retuned to 22% (≈p75) so the flag lands in the top
+    #     quartile as specified -- expect roughly 17,000 parcels on the
+    #     relative-gap condition alone (25% of ~68,336) before the dollar
+    #     floor further narrows it. $500 dollar floor: (market-assessed) ×
+    #     this parcel's own effective rate (tb.total_tax / taxable_value,
+    #     the real per-parcel rate already used elsewhere on this page,
+    #     e.g. the Effective Tax Rate KPI) when 2025 billing is on file;
+    #     falls back to a conservative 2% county-wide approximation
+    #     (matching the ~1.8-2.1% effective rates seen elsewhere in this
+    #     codebase's real parcel examples) when it isn't. NEEDS DIEGO'S
+    #     LIVE RUN to confirm the exact post-both-conditions count --
+    #     the relative-gap-only estimate above is sandbox-derived, not the
+    #     live number.
+    #
+    #   cap_expiry_signal -- the name's real meaning, protection actually
+    #     ENDING: HS active on the 2025 CERTIFIED roll (reliable: 55.1%
+    #     populated) but absent from the 2026 PRELIMINARY exemption flags
+    #     (only 52.8% populated -- confirmed less reliable, per
+    #     data_coverage.py). Copy must be tentative (see property.html) --
+    #     this can also just mean the preliminary file hasn't caught up yet,
+    #     not a genuine loss, until 2026 certifies.
     t1 = time.time()
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE parcel_metrics pm
-            SET risk_homestead_cap_expiry = TRUE
+            SET cap_step_up_exposure = TRUE
             FROM (
                 SELECT DISTINCT pty.geo_id
                 FROM parcel_tax_year pty
                 JOIN parcel p ON p.geo_id = pty.geo_id
+                LEFT JOIN tax_billing tb ON tb.geo_id = pty.geo_id AND tb.tax_year = 2025
                 WHERE p.state_cd1 LIKE 'A%'
                   AND pty.tax_year = 2025
-                  AND pty.hs_cap_loss > 0
+                  AND pty.exemption_codes LIKE '%HS%'
                   AND pty.market_value > 0
+                  AND pty.assessed_value IS NOT NULL
                   AND pty.assessed_value < pty.market_value
-            ) hs
-            WHERE pm.geo_id = hs.geo_id
+                  AND (pty.market_value - pty.assessed_value)::float / pty.market_value >= 0.22
+                  AND (pty.market_value - pty.assessed_value) * COALESCE(
+                        NULLIF(tb.total_tax, 0) / NULLIF(pty.taxable_value, 0),
+                        0.02
+                      ) >= 500
+            ) cse
+            WHERE pm.geo_id = cse.geo_id AND pm.tax_year = 2025
         """)
-        n_cap = cur.rowcount
-    print(f"    risk_homestead_cap_expiry: {n_cap:,} rows flagged  ({time.time()-t1:.1f}s)")
+        n_step_up = cur.rowcount
+    print(f"    cap_step_up_exposure: {n_step_up:,} rows flagged (2025 only, >=22% relative gap "
+          f"AND >=$500 estimated)  ({time.time()-t1:.1f}s)")
+
+    t1 = time.time()
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE parcel_metrics pm
+            SET cap_expiry_signal = TRUE
+            FROM (
+                SELECT DISTINCT pty25.geo_id
+                FROM parcel_tax_year pty25
+                JOIN parcel p ON p.geo_id = pty25.geo_id
+                LEFT JOIN parcel_tax_year pty26
+                       ON pty26.geo_id = pty25.geo_id AND pty26.tax_year = 2026
+                WHERE p.state_cd1 LIKE 'A%'
+                  AND pty25.tax_year = 2025
+                  AND pty25.exemption_codes LIKE '%HS%'
+                  AND (
+                        pty26.geo_id IS NULL
+                        OR pty26.exemption_codes IS NULL
+                        OR pty26.exemption_codes NOT LIKE '%HS%'
+                      )
+            ) ces
+            WHERE pm.geo_id = ces.geo_id AND pm.tax_year = 2025
+        """)
+        n_expiry = cur.rowcount
+    print(f"    cap_expiry_signal: {n_expiry:,} rows flagged (2025 only, HS on 2025 "
+          f"certified, absent from 2026 preliminary)  ({time.time()-t1:.1f}s)")
+    print("    (risk_homestead_cap_expiry column left in place for backward "
+          "compatibility but no longer written by this script -- see schema.sql's "
+          "migration comment)")
 
     # Pass 4: cumulative value growth (on 2025 row, from each parcel's earliest valid year)
     t1 = time.time()
@@ -635,7 +760,8 @@ def print_sample(conn):
                        cumulative_value_growth_pct,
                        risk_large_value_jump,
                        risk_large_value_jump_pct,
-                       risk_homestead_cap_expiry,
+                       cap_step_up_exposure,
+                       cap_expiry_signal,
                        risk_delinquent,
                        risk_data_incomplete
                 FROM parcel_metrics WHERE geo_id = %s ORDER BY tax_year
@@ -649,7 +775,8 @@ def print_sample(conn):
                       f"  eff_rate_derived={d['effective_tax_rate_derived']}"
                       f"  cum={d['cumulative_value_growth_pct']}"
                       f"  jump={d['risk_large_value_jump']}"
-                      f"  cap={d['risk_homestead_cap_expiry']}")
+                      f"  cap_step_up={d['cap_step_up_exposure']}"
+                      f"  cap_expiry={d['cap_expiry_signal']}")
 
         print("\n  County benchmark — Residential 2025:")
         cur.execute("""

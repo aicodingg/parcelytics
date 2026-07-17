@@ -111,6 +111,146 @@ def _has_homestead_exemption(exemption_codes: Optional[str]) -> bool:
     return "HS" in codes
 
 
+# ── 2026 preliminary baseline derivation (Issue 1, "Homestead-Cap Data
+# Integrity: Full Fix Set" Cowork brief, July 2026) ─────────────────────────
+#
+# Single assembly point for the 2026 row's DISPLAY/COMPUTATION values.
+# Every consumer (build_projections()'s CAGR-endpoint base_assessed, the
+# "Est. 2026 Total Tax" KPI, the Taxable Value 2026 card, property.html's
+# HS Cap Loss table row) reads est_assessed_2026/est_taxable_2026/basis_2026
+# from here instead of independently re-deriving (or, as the earlier
+# "coherence fix" did, blindly trusting) the 2026 preliminary row's raw
+# assessed_value/taxable_value.
+#
+# THE BUG THIS REPLACES: the earlier "coherence fix" treated
+# assessed_value <= market_value on the 2026 preliminary row as "safe, use
+# it" (a fair test IF assessed_value were always a real appraisal figure).
+# But TCAD's preliminary export very often reports assessed_value ==
+# market_value even for parcels with a real, currently-active homestead
+# exemption -- the cap hasn't been applied to the preliminary snapshot yet,
+# not because there's no cap. Equality is uninformative, not safe. Only
+# assessed_value < market_value is trustworthy evidence the county actually
+# applied the cap to this row.
+#
+# CORE RULE:
+#   assessed_2026 <  market_2026  -> trust TCAD; the county already capped it.
+#   assessed_2026 == market_2026  -> uninformative; derive our own estimate
+#                                     IF a homestead exemption was active on
+#                                     the 2025 CERTIFIED roll (not 2026
+#                                     preliminary -- confirmed live,
+#                                     exemption_codes is only 52.8% populated
+#                                     on 2026 rows vs. 55.1% on 2025, so 2025
+#                                     certified is the more reliable basis).
+#   assessed_2026 >  market_2026  -> shouldn't happen (anomalous export row);
+#                                     treated the same as equality (fall
+#                                     through to the derivation path) since
+#                                     it's equally uninformative/untrustworthy,
+#                                     never treated as "capped."
+#
+# DERIVATION (only used for the equality/anomalous case, when a cap applies):
+#   est_assessed_2026 = min(market_2026, 1.10 * assessed_2025_certified)
+#   est_taxable_2026  = est_assessed_2026 - (assessed_2025 - taxable_2025)
+#     i.e. subtract the SAME dollar amount of 2025's other (non-cap)
+#     exemptions -- OV65/DP/etc -- from the derived assessed figure, rather
+#     than assuming no other exemptions exist. If 2025's exemption amount
+#     isn't available (taxable_2025 missing), est_taxable_2026 falls back to
+#     est_assessed_2026 itself (conservative: doesn't invent a discount).
+#
+#   Validated against real TCAD data (Diego's live query, 54,950-parcel
+#   cohort where TCAD's OWN 2026 preliminary row already shows a real cap,
+#   assessed_2026 < market_2026): this formula reproduces TCAD's actual
+#   assessed_2026 within $1 for 90.6% of cases, within 1% for 92.5% -- a
+#   validated, trustworthy derivation, not a guess.
+#
+# BASIS FLAGS (stored, never overwrite the raw fields):
+#   'tcad_capped'          -- assessed_2026 < market_2026: use TCAD's real
+#                              preliminary numbers. Confidence: Preliminary.
+#   'derived_cap_estimate'  -- equality/anomalous + HS on 2025 + cap actually
+#                              binds (est_assessed_2026 < market_2026).
+#                              Confidence: Estimated, '~' prefix required in
+#                              copy, with the inline TCAD-disagreement note
+#                              (see property.html Issue 3 for the exact
+#                              wording) -- otherwise a parcel's own page
+#                              visibly contradicts its own linked TCAD
+#                              record, which is worse than the original bug.
+#   'uncapped_no_cap'       -- no HS on the 2025 certified roll, OR HS is
+#                              newly filed for 2026 with no 2025 HS (Tax Code
+#                              §23.23(c): the cap doesn't apply until the
+#                              exemption has been in place a full year, so a
+#                              2026-only HS filing does NOT yet cap 2026), OR
+#                              the cap is real but doesn't currently bind
+#                              (1.10 * assessed_2025 >= market_2026 -- e.g. a
+#                              market decline, or modest enough growth that
+#                              the 10%/yr ceiling sits above market anyway).
+#                              Raw TCAD values used as-is. Confidence:
+#                              Preliminary.
+def derive_2026_baseline(row_2025: Optional[dict], row_2026: Optional[dict]) -> Optional[dict]:
+    """
+    Given the 2025 certified row and 2026 preliminary row (each a dict with
+    at least market_value/assessed_value/taxable_value/exemption_codes, or
+    None if that year isn't on file), return a dict of derived fields to
+    attach to the 2026 row -- or None if there's no 2026 row to derive
+    anything for.
+
+    Returned keys:
+      est_assessed_2026, est_taxable_2026 (ints or None),
+      basis_2026 ('tcad_capped' | 'derived_cap_estimate' | 'uncapped_no_cap'),
+      is_approx_2026 (bool), confidence_2026 ('Preliminary' | 'Estimated')
+    """
+    if not row_2026 or not row_2026.get("market_value"):
+        return None
+
+    market_2026    = float(row_2026["market_value"])
+    assessed_2026  = row_2026.get("assessed_value")
+    taxable_2026   = row_2026.get("taxable_value")
+    assessed_2026  = float(assessed_2026) if assessed_2026 is not None else None
+
+    # TCAD already applied a real cap to this preliminary row -- trust it.
+    if assessed_2026 is not None and assessed_2026 < market_2026:
+        return {
+            "est_assessed_2026": row_2026["assessed_value"],
+            "est_taxable_2026":  taxable_2026 if taxable_2026 is not None else row_2026["assessed_value"],
+            "basis_2026":        "tcad_capped",
+            "is_approx_2026":    False,
+            "confidence_2026":   "Preliminary",
+        }
+
+    # Equality (or an anomalous assessed > market row) -- uninformative.
+    # Cap applies only if the 2025 CERTIFIED roll (not 2026 preliminary) had
+    # an active HS exemption -- §23.23(c) timing means a 2026-only filing
+    # doesn't cap 2026 itself.
+    assessed_2025 = row_2025.get("assessed_value") if row_2025 else None
+    taxable_2025  = row_2025.get("taxable_value")  if row_2025 else None
+    cap_applies   = bool(row_2025) and _has_homestead_exemption(row_2025.get("exemption_codes"))
+
+    if cap_applies and assessed_2025 is not None:
+        est_assessed = min(market_2026, 1.10 * float(assessed_2025))
+        if est_assessed < market_2026:
+            # Cap genuinely binds -- derive both assessed and taxable.
+            if taxable_2025 is not None:
+                exemption_amt = max(0.0, float(assessed_2025) - float(taxable_2025))
+                est_taxable = max(0.0, est_assessed - exemption_amt)
+            else:
+                est_taxable = est_assessed
+            return {
+                "est_assessed_2026": round(est_assessed),
+                "est_taxable_2026":  round(est_taxable),
+                "basis_2026":        "derived_cap_estimate",
+                "is_approx_2026":    True,
+                "confidence_2026":   "Estimated",
+            }
+
+    # No cap applies, or the cap is real but doesn't currently bind -- raw
+    # TCAD figures are correct as-is.
+    return {
+        "est_assessed_2026": row_2026.get("assessed_value"),
+        "est_taxable_2026":  taxable_2026,
+        "basis_2026":        "uncapped_no_cap",
+        "is_approx_2026":    False,
+        "confidence_2026":   "Preliminary",
+    }
+
+
 def _is_residential(parcel: dict) -> bool:
     sc1 = (parcel.get("state_cd1") or "").strip()[:1].upper()
     return sc1 == "A"
@@ -266,7 +406,12 @@ def _local_option_20pct_entity(entity_code: Optional[str], entity_name: Optional
     return name in LOCAL_OPTION_20PCT_ENTITY_NAMES
 
 
-def estimate_homestead_savings(entity_detail: List[dict], assessed_value: Optional[int]) -> Optional[dict]:
+def estimate_homestead_savings(
+    entity_detail: List[dict],
+    assessed_value: Optional[int],
+    preliminary_assessed: Optional[int] = None,
+    preliminary_market: Optional[int] = None,
+) -> Optional[dict]:
     """
     Estimate the ANNUAL tax savings a parcel would see if it filed for the
     general residence homestead exemption, for parcels that do NOT currently
@@ -317,15 +462,56 @@ def estimate_homestead_savings(entity_detail: List[dict], assessed_value: Option
     current_est_tax / with_hs_est_tax needed reconciling, not the headline
     savings number.
 
-    Returns None if there's no rate/billing data to compute from, or if the
-    computed savings isn't positive (e.g. no school/local-option entity in
-    the bill, which would make the estimate $0 and not worth displaying).
+    10% CAP TERM (July 2026, per Fable review P0-4): filing a homestead
+    exemption doesn't just remove SCHOOL_HS_EXEMPTION/local-option dollars
+    from the taxable base -- for a parcel whose value is climbing fast, it
+    ALSO caps how much the taxable value can grow year-over-year (Tax Code
+    SS23.23(a), HOMESTEAD_CAP_PCT = 10%/year). Without a homestead on file,
+    a residential parcel gets NO such protection -- its assessed value can
+    (and per TCAD's 2026 preliminary roll, sometimes does) jump straight to
+    market value in one year. That uncapped jump is exactly the scenario
+    `preliminary_assessed`/`preliminary_market` are for: when supplied
+    (the parcel's 2026 preliminary row), this adds a second savings term --
+    the tax that would be avoided on the portion of the preliminary value
+    above 110% of the CURRENT (assessed_value param) assessed value --
+    using the same combined entity rate this function already sums while
+    walking entity_detail, so no second rate figure is threaded in from the
+    caller. Uses min(preliminary_assessed, preliminary_market) as the
+    uncapped-growth figure, defensively, the same "don't let AV exceed MV"
+    guard already used elsewhere in this module.
+
+    TIMING CAVEAT -- flagged, not guessed: Tax Code SS23.23(c) is explicit
+    that the cap "takes effect ... on January 1 of the tax year FOLLOWING
+    the first tax year the owner qualifies the property for" the exemption.
+    Every parcel this function is invoked for (per the caller-responsibility
+    note above) has NO current exemption, so the very first year they could
+    file is necessarily their first qualifying year -- meaning, read
+    literally, the cap CANNOT protect that first year's value at all; the
+    protection begins the year after filing. The dollar magnitude below is
+    still computed against the 2026 preliminary jump (the clearest available
+    signal of the parcel's uncapped growth rate and the benefit this
+    exemption starts unlocking), but is captured in `cap_savings_estimated`
+    as a SEPARATE field from `estimated_annual_savings` specifically so the
+    caller can label it accurately as a future-year benefit rather than a
+    same-year one -- see property.html's rendering of this field for the
+    resulting copy, and the Overnight Brief P0-4 reply for the full
+    citation. This is a deliberate, flagged deviation from the brief's
+    literal "~$7,500 from the 10% cap this year" framing.
+
+    Returns None if there's no rate/billing data to compute from, or if
+    neither the exemption savings nor the cap savings comes out positive.
     """
     if not entity_detail or not assessed_value:
         return None
 
-    current_total = 0.0    # REAL billed total -- see reconciliation note above
-    savings_total = 0.0    # marginal reduction from adding HS / local-option exemption
+    current_total   = 0.0  # REAL billed total -- see reconciliation note above
+    savings_total   = 0.0  # marginal reduction from adding HS / local-option exemption
+    combined_rate   = 0.0  # sum of every entity's own rate -- for the cap term below;
+                            # equals property_detail()'s assumed_rate_2026 by construction
+                            # (same entity_detail, same "sum of per-entity rate" arithmetic)
+                            # but recomputed here rather than threaded in as an extra
+                            # parameter, so this function never depends on a second,
+                            # independently-computed copy of the same number.
     any_rate = False
     any_billed = False
     local_option_entities_applied = []
@@ -335,6 +521,7 @@ def estimate_homestead_savings(entity_detail: List[dict], assessed_value: Option
             continue
         any_rate = True
         rate = float(rate)
+        combined_rate += rate
         entity_code = e.get("entity_code")
         entity_name = e.get("entity_name") or entity_code
         is_school = _is_school_entity(entity_name)
@@ -377,19 +564,39 @@ def estimate_homestead_savings(entity_detail: List[dict], assessed_value: Option
         return None
 
     savings = savings_total
-    if savings <= 0:
+
+    # 10% cap term -- see docstring. Only computed when the caller supplied a
+    # 2026 preliminary row to model against; min() defensively guards against
+    # a preliminary_assessed that (data anomaly) exceeds preliminary_market,
+    # same pattern used elsewhere in this module.
+    cap_savings = 0.0
+    if preliminary_assessed and preliminary_market and combined_rate > 0:
+        uncapped_value  = min(float(preliminary_assessed), float(preliminary_market))
+        cap_protected_at = (1.0 + HOMESTEAD_CAP_PCT) * float(assessed_value)
+        cap_savings = max(0.0, uncapped_value - cap_protected_at) * combined_rate / 100
+
+    if savings <= 0 and cap_savings <= 0:
         return None
 
     with_hs_total = current_total - savings
 
-    return {
+    result = {
         "current_est_tax":          round(current_total),
         "with_hs_est_tax":          round(with_hs_total),
         "estimated_annual_savings": round(savings),
         "school_hs_exemption":      SCHOOL_HS_EXEMPTION,
         "local_option_pct":         LOCAL_OPTION_PCT,
         "local_option_entities":    local_option_entities_applied,
+        # Cap-term fields (July 2026, P0-4). Deliberately separate from
+        # estimated_annual_savings/with_hs_est_tax above rather than folded
+        # in -- see TIMING CAVEAT in the docstring: this benefit doesn't
+        # start until the tax year after filing, so it must never be
+        # presented as part of "this year's" savings total.
+        "cap_savings_estimated":    round(cap_savings) if cap_savings > 0 else 0,
+        "total_savings_incl_cap":   round(savings + cap_savings),
+        "homestead_cap_pct":        HOMESTEAD_CAP_PCT,
     }
+    return result
 
 
 # ── Public interface ──────────────────────────────────────────────────────────
@@ -443,7 +650,34 @@ def estimate_post_acquisition(
 
     is_res               = _is_residential(parcel)
     seller_has_homestead = _has_homestead_exemption(exemption_codes) and is_res
-    cap_was_active       = seller_has_homestead and hs_cap_loss > 0
+
+    # Same root-cause fix as build_projections()'s has_hs_cap and
+    # build_insights()'s hs_history_* (July 2026, "Fix Remaining
+    # Homestead-Cap Gaps" Cowork brief, item 3): hs_cap_loss is only ever
+    # populated by the 2021-2024 AJR loader, never by the 2025 Certified
+    # loader current_yr_row is sourced from here (see load_certified_2025.py
+    # -- no hs_cap_loss column in its INSERT). seller_has_homestead already
+    # correctly reads exemption_codes (2025-sourced, real) and isn't
+    # affected by this gap, but pairing it with "hs_cap_loss > 0" made
+    # cap_was_active structurally always False regardless -- the seller
+    # could have a real, active cap and this would still report none.
+    #
+    # Fixed: when hs_cap_loss is genuinely present (a real, precise
+    # AJR-recorded figure, for any future row that does carry one), use it
+    # as-is. Otherwise approximate it as market_value - assessed_value --
+    # this module's OWN docstring already defines "cap loss" as exactly
+    # "(market − assessed)" (see the file header, mechanic #1) and the
+    # Value-vs-Taxable chart / homestead savings cap term compute this same
+    # quantity elsewhere on the platform, so this isn't a new definition,
+    # just applying the existing one where the AJR-specific field is
+    # unavailable. hs_cap_loss_is_approx flags which case this is so the
+    # assumptions string below can say so honestly rather than presenting an
+    # estimate as an AJR-confirmed figure.
+    hs_cap_loss_is_approx = False
+    if hs_cap_loss <= 0 and market_value > assessed_value:
+        hs_cap_loss = market_value - assessed_value
+        hs_cap_loss_is_approx = True
+    cap_was_active = seller_has_homestead and hs_cap_loss > 0
 
     # ── Base value: max(current market, purchase price) ───────────────────────
     base_value = max(market_value, purchase_price)
@@ -596,7 +830,12 @@ def estimate_post_acquisition(
                   f"vs {certified_combined_rate:.4f}% certified. A projection, not a certified rate.")
         ),
         (
-            f"Cap reset: seller's HS cap loss ${hs_cap_loss:,.0f} does NOT transfer to buyer"
+            (
+                f"Cap reset: seller's HS cap loss ${hs_cap_loss:,.0f}"
+                + (" (estimated as market − assessed value; no AJR-recorded cap-loss figure on file for this parcel)"
+                   if hs_cap_loss_is_approx else "")
+                + " does NOT transfer to buyer"
+            )
             if cap_was_active
             else "Cap: no active homestead cap on this parcel (hs_cap_loss = $0)"
         ),
@@ -624,6 +863,7 @@ def estimate_post_acquisition(
         # Seller context
         "assessed_value":            assessed_value,
         "hs_cap_loss":               hs_cap_loss,
+        "hs_cap_loss_is_approx":     hs_cap_loss_is_approx,
         "cap_was_active":            cap_was_active,
         "seller_has_homestead":      seller_has_homestead,
         "seller_total_tax":          round(seller_total_tax, 2),
