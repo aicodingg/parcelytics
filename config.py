@@ -1,13 +1,35 @@
 import os
+import urllib.parse
 
 # ── Database ──────────────────────────────────────────────────────────────────
-DB_HOST = os.environ.get("DB_HOST", "localhost")
-DB_PORT = int(os.environ.get("DB_PORT", 5432))
-DB_NAME = os.environ.get("DB_NAME", "parcel_tax")
-DB_USER = os.environ.get("DB_USER", os.getenv("USER", "postgres"))
-DB_PASS = os.environ.get("DB_PASS", "")
+# Cowork brief "Production Deployment Readiness (Render)", July 2026.
+# Render (and most hosts) inject a single DATABASE_URL env var in the standard
+# postgresql://user:pass@host:port/dbname form. Previously this module built
+# its own DATABASE_URL string from the 5 pieces below but never read one back
+# in -- so a host-provided DATABASE_URL would have been silently ignored and
+# the app would have kept trying to connect to "localhost", failing in
+# production. Now: if DATABASE_URL is set, it's parsed into the 5 pieces
+# (host/port/dbname/user/password) that loaders/db.py's get_conn() and
+# app.py's get_db() already consume via keyword args -- so neither of those
+# needed to change at all. If DATABASE_URL is unset, behavior is byte-for-byte
+# identical to before (same env vars, same local-dev defaults).
+_database_url = os.environ.get("DATABASE_URL")
 
-DATABASE_URL = (
+if _database_url:
+    _parsed = urllib.parse.urlparse(_database_url)
+    DB_HOST = _parsed.hostname or "localhost"
+    DB_PORT = _parsed.port or 5432
+    DB_NAME = (_parsed.path or "").lstrip("/") or "parcel_tax"
+    DB_USER = _parsed.username or os.getenv("USER", "postgres")
+    DB_PASS = _parsed.password or ""
+else:
+    DB_HOST = os.environ.get("DB_HOST", "localhost")
+    DB_PORT = int(os.environ.get("DB_PORT", 5432))
+    DB_NAME = os.environ.get("DB_NAME", "parcel_tax")
+    DB_USER = os.environ.get("DB_USER", os.getenv("USER", "postgres"))
+    DB_PASS = os.environ.get("DB_PASS", "")
+
+DATABASE_URL = _database_url or (
     f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 )
 

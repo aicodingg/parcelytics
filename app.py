@@ -12,6 +12,10 @@ from datetime import datetime, date
 from flask import Flask, render_template, request, redirect, url_for, jsonify, Response
 import psycopg2
 import psycopg2.extras
+import sentry_sdk
+from sentry_sdk.integrations.flask import FlaskIntegration
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 sys.path.insert(0, os.path.dirname(__file__))
 import config
@@ -1889,8 +1893,91 @@ def _cap_subtype_rows(rows, fallback_label, top_n=SNAPSHOT_SUBTYPE_CAP):
     return keep + [rollup]
 
 
+# ── Error monitoring (Sentry) ─────────────────────────────────────────────────
+# Cowork brief "Error Monitoring (Sentry) + Rate Limiting (Flask-Limiter)",
+# July 2026. Initialized BEFORE the Flask app is created (sentry_sdk's own
+# recommended pattern -- FlaskIntegration hooks into app/request machinery
+# that must exist by the time the first request comes in, and initializing
+# earlier rather than later avoids any chance of an early error escaping
+# uncaptured). DSN comes ONLY from the SENTRY_DSN environment variable
+# (config.py's own os.environ.get(), no hardcoded fallback) -- if it isn't
+# set (e.g. local dev without it exported), initialization is skipped
+# entirely rather than erroring or silently pointing at a placeholder
+# project. traces_sample_rate is deliberately low (0.1) -- we only need
+# error capture right now, not full performance/request tracing; a future
+# brief can raise this (or add profiles_sample_rate) if that's wanted later.
+if config.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=config.SENTRY_DSN,
+        integrations=[FlaskIntegration()],
+        traces_sample_rate=0.1,
+        # send_default_pii=False (the default) -- no request body/headers/
+        # user-identifying data sent to Sentry beyond what FlaskIntegration
+        # captures for stack traces, consistent with this project's own
+        # data-handling posture elsewhere (no third-party data sharing
+        # beyond what's needed to operate the product).
+    )
+    print(f"  Sentry error monitoring: ENABLED (DSN configured via SENTRY_DSN)")
+else:
+    print(f"  Sentry error monitoring: DISABLED (SENTRY_DSN not set)")
+
+
 app = Flask(__name__)
 app.secret_key = config.FLASK_SECRET
+
+# ── Rate limiting (Flask-Limiter) ─────────────────────────────────────────────
+# Same brief as the Sentry block above. In-memory storage (Flask-Limiter's
+# default) -- fine at this scale, but NOTE: this resets on every app restart
+# (a restart effectively gives everyone a fresh quota) and does NOT
+# coordinate across multiple app instances/workers (each process keeps its
+# own independent counters, so the REAL effective limit under N gunicorn
+# workers is N times the configured number, not the configured number). If
+# this app is ever scaled to multiple processes/instances, this needs a
+# shared backend (Redis, per Flask-Limiter's own docs: storage_uri=
+# "redis://...") instead of the in-memory default used here.
+#
+# Global default (200/hour/IP) covers every route not given a tighter
+# limit below. Tighter limits applied to the routes actually confirmed
+# DB/network-heavy by reading their handlers (not guessed):
+#   - "/" and "/parcel/<geo_id>": the core parcel-search and parcel-detail
+#     paths named explicitly in the brief -- each does at least one real
+#     DB query, "/parcel/<geo_id>" several (parcel, history, entity_detail,
+#     delinquent, metrics, benchmark).
+#   - "/parcel/<geo_id>/export.pdf": everything property_detail() does,
+#     plus PDF rendering -- strictly heavier than the page itself.
+#   - "/api/address_search": a typeahead endpoint, designed to be called on
+#     near-every keystroke by legitimate users -- rate-limited per MINUTE
+#     rather than per hour so normal typing isn't throttled, while still
+#     capping abusive scripted hammering.
+#   - "/api/billing/<geo_id>": explicitly documented in its own docstring
+#     as a 5-7 SECOND external fetch to the county tax portal on first
+#     call per parcel -- the single most expensive and most externally-
+#     abusive-if-hammered endpoint in this app.
+#   - "/api/geocode/<geo_id>": also makes an external network call (US
+#     Census geocoder) on a cache miss -- same category of risk as billing,
+#     lower expected latency.
+#   - "/snapshot", "/snapshot/neighborhood/<code>", "/api/benchmark",
+#     "/api/peer_set/<geo_id>", "/api/peer_benchmark_local/<geo_id>",
+#     "/api/peer_benchmark_sf/<geo_id>", "/api/search_filter", "/compare":
+#     aggregate/multi-row/multi-parcel queries -- "/api/peer_set/<geo_id>"
+#     specifically had its own documented slowdown investigation earlier in
+#     this project (PEER_SET_DISTRIBUTION_CHECK.sql), confirming this class
+#     of endpoint is genuinely more expensive than a static page.
+#
+# Left at the global default only (read, not DB-heavy, or already fast):
+# "/search" (confirmed: renders a static coverage-map page, no query at
+# all), "/about", "/info", "/styleguide", "/api/benchmark/meta" (metadata,
+# not the aggregation itself), "/api/news", "/rates", "/api/rates",
+# "/api/parcel_entities", "/parcels".
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per hour"],
+    storage_uri="memory://",
+)
+_LIMIT_HEAVY     = "60 per hour"    # DB-heavy: multi-query pages, aggregates, PDF export
+_LIMIT_EXTERNAL  = "30 per hour"    # makes an external network call (portal scrape, geocoder)
+_LIMIT_TYPEAHEAD = "60 per minute"  # high legitimate call frequency (per-keystroke), so per-minute not per-hour
 
 
 # ── Homeowner / Investor mode ─────────────────────────────────────────────────
@@ -2001,6 +2088,7 @@ def normalize_parcel_id(raw: str) -> str:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
+@limiter.limit(_LIMIT_HEAVY)
 def index():
     q = request.args.get("q", "").strip()
     error = None
@@ -2062,6 +2150,7 @@ def search_page():
 
 
 @app.route("/parcel/<geo_id>")
+@limiter.limit(_LIMIT_HEAVY)
 def property_detail(geo_id):
     # Core parcel
     parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
@@ -2553,6 +2642,7 @@ def property_detail(geo_id):
 
 
 @app.route("/parcel/<geo_id>/export.pdf")
+@limiter.limit(_LIMIT_HEAVY)
 def export_due_diligence_pdf(geo_id):
     """
     "Tax Due Diligence" PDF export (July 2026, per Diego's outside-review
@@ -3299,6 +3389,7 @@ _SNAPSHOT_CACHE_TTL_SECONDS = 600
 
 
 @app.route("/snapshot")
+@limiter.limit(_LIMIT_HEAVY)
 def county_snapshot():
     """County Market Snapshot — 2026 preliminary vs 2025 certified.
     Supports ?view=overall|residential|multifamily|retail|industrial|office|
@@ -3732,6 +3823,7 @@ def _compute_snapshot_data(view):
 
 
 @app.route("/snapshot/neighborhood/<code>")
+@limiter.limit(_LIMIT_HEAVY)
 def snapshot_neighborhood(code):
     """
     Neighborhood drill-down for Market Snapshot's Top/Bottom Moving
@@ -3850,6 +3942,7 @@ def api_rates():
 
 
 @app.route("/api/benchmark")
+@limiter.limit(_LIMIT_HEAVY)
 def api_benchmark():
     """
     Live benchmark query for the County Benchmark filter UI.
@@ -4260,6 +4353,7 @@ def _row_confidence(data_source, assessed_value=None, market_value=None):
 
 
 @app.route("/api/search_filter")
+@limiter.limit(_LIMIT_HEAVY)
 def api_search_filter():
     """Filtered parcel search behind the Search page's optional filter panel.
     Returns paginated results; requires at least one real filter beyond
@@ -4497,6 +4591,7 @@ def api_search_filter():
 
 
 @app.route("/api/estimate_acq/<geo_id>")
+@limiter.limit(_LIMIT_HEAVY)
 def api_estimate_acq(geo_id):
     """
     Post-acquisition tax estimator API (Task 1).
@@ -4658,6 +4753,7 @@ def api_estimate_acq(geo_id):
 
 
 @app.route("/api/address_search")
+@limiter.limit(_LIMIT_TYPEAHEAD)
 def api_address_search():
     """
     Address typeahead API (Task 2).
@@ -4720,6 +4816,7 @@ def api_address_search():
 
 
 @app.route("/api/peer_benchmark_local/<geo_id>")
+@limiter.limit(_LIMIT_HEAVY)
 def api_peer_benchmark_local(geo_id):
     """
     Neighborhood + type + size-band peer benchmark (Task 3).
@@ -4882,6 +4979,7 @@ def api_peer_benchmark_local(geo_id):
 
 
 @app.route("/api/peer_benchmark_sf/<geo_id>")
+@limiter.limit(_LIMIT_HEAVY)
 def api_peer_benchmark_sf(geo_id):
     """
     Per-SF peer benchmark (Task B).
@@ -5163,6 +5261,7 @@ def api_news():
 
 
 @app.route("/api/geocode/<geo_id>")
+@limiter.limit(_LIMIT_EXTERNAL)
 def api_geocode(geo_id):
     """Return {lat, lng} for a parcel — for the satellite map.
 
@@ -5210,6 +5309,7 @@ def api_geocode(geo_id):
 
 
 @app.route("/api/peer_set/<geo_id>")
+@limiter.limit(_LIMIT_HEAVY)
 def api_peer_set(geo_id):
     """Task 7 — up to 5 comparable parcels for the Submarket Position section.
 
@@ -5363,6 +5463,7 @@ def api_peer_set(geo_id):
 
 # ── On-demand billing fetch ────────────────────────────────────────────────────
 @app.route("/api/billing/<geo_id>")
+@limiter.limit(_LIMIT_EXTERNAL)
 def api_billing(geo_id):
     """Fetch + cache 2021-2024 billing data for one parcel from the portal.
 
@@ -5598,6 +5699,7 @@ def parcel_list():
 
 
 @app.route("/compare")
+@limiter.limit(_LIMIT_HEAVY)
 def compare_parcels():
     """
     Side-by-side parcel comparison (Task 5).
@@ -5675,6 +5777,7 @@ def compare_parcels():
         return render_template("compare.html", parcels=[], error="No valid parcels found for the provided IDs.")
 
     return render_template("compare.html", parcels=parcels, error=None)
+
 
 @app.route("/info")
 def info():
