@@ -5779,6 +5779,25 @@ def compare_parcels():
     return render_template("compare.html", parcels=parcels, error=None)
 
 
+# ██ TEMPORARY -- Sentry verification route ██████████████████████████████████
+# Cowork brief "Temporary Sentry Verification Route (Round 2, for Render)",
+# July 2026. Exists ONLY to trigger a genuine unhandled exception on the LIVE
+# Render deployment so Sentry's capture can be confirmed end to end there
+# specifically (requires SENTRY_DSN set in Render's environment -- see app.py's
+# sentry_sdk.init() block near the top of this file, and config.py's
+# SENTRY_DSN). Same pattern as the local-verification round, repeated here
+# because "works from localhost" doesn't confirm "works from the deployed
+# Render environment" -- different network egress, different env vars.
+# Plan: verify Sentry receives this from Render, THEN commit this route,
+# THEN immediately follow with a removal commit right after -- do not let
+# this linger committed-but-present. Do not commit until Sentry capture from
+# Render is confirmed.
+@app.route("/sentry-test")
+def sentry_test():
+    1 / 0
+# ██ END TEMPORARY -- remove this whole route once Sentry capture from Render is confirmed ██
+
+
 @app.route("/info")
 def info():
     """Informational reference page -- topic sections (starting with Homestead
