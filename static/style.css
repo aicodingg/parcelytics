@@ -1207,6 +1207,73 @@ canvas { max-height: 440px; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
+   TAX CALENDAR STRIP (July 2026 Cowork brief, item 1) — "where a parcel sits
+   in the annual property tax cycle right now"
+   ════════════════════════════════════════════════════════════════════════════ */
+.tax-calendar-track {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-top: 4px;
+}
+.tax-calendar-node {
+  flex: 1 0 110px;
+  min-width: 110px;
+  position: relative;
+  text-align: center;
+  padding: 0 6px;
+  cursor: help;
+}
+/* Connecting line through every dot, drawn once via each node's own
+   ::before so it reads as one continuous track without an extra wrapper el */
+.tax-calendar-node::before {
+  content: "";
+  position: absolute;
+  top: 5px; left: -50%; width: 100%; height: 2px;
+  background: var(--border-strong);
+  z-index: 0;
+}
+.tax-calendar-node:first-child::before { display: none; }
+.tax-calendar-node.passed::before,
+.tax-calendar-node.current::before { background: var(--verified-text); opacity: 0.4; }
+
+.tax-calendar-dot {
+  width: 12px; height: 12px; border-radius: 50%;
+  margin: 0 auto 8px; position: relative; z-index: 1;
+  background: var(--surface-2); border: 2px solid var(--border-strong);
+}
+.tax-calendar-node.passed .tax-calendar-dot {
+  background: var(--verified-text); border-color: var(--verified-text);
+}
+.tax-calendar-node.current .tax-calendar-dot {
+  background: var(--accent); border-color: var(--accent);
+  width: 14px; height: 14px;
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.18);
+}
+
+.tax-calendar-label {
+  font-size: 11.5px; font-weight: var(--fw-semibold); color: var(--text-2);
+  line-height: 1.3; margin-bottom: 2px;
+}
+.tax-calendar-node.current .tax-calendar-label { color: var(--accent); }
+.tax-calendar-here {
+  display: block;
+  font-size: 9.5px; font-weight: var(--fw-semibold); text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--accent); margin-top: 2px;
+}
+.tax-calendar-date { font-size: 10.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.tax-calendar-countdown {
+  font-size: 10px; color: var(--accent); margin-top: 3px; font-weight: var(--fw-semibold);
+}
+.tax-calendar-note {
+  margin-top: 5px; font-size: 10px; color: var(--partial-text);
+  background: var(--partial-bg); border: 1px solid var(--partial-border);
+  border-radius: 6px; padding: 3px 6px; line-height: 1.35;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
    NARRATIVE DISCLOSURE (Task 4)
    ════════════════════════════════════════════════════════════════════════════ */
 .overview-narrative-collapse { border-radius: var(--r); }

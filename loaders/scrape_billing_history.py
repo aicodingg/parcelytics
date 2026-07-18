@@ -38,7 +38,7 @@ from datetime import datetime
 # ── path setup ────────────────────────────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
-from loaders.db import get_conn
+from loaders.db import get_conn, is_valid_tax_year
 import psycopg2.extras
 
 # ── constants ─────────────────────────────────────────────────────────────────
@@ -116,6 +116,17 @@ class _ReceiptTableParser(HTMLParser):
             return  # header row ("Tax Year") — skip
         try:
             year   = int(yr_s)
+            # Generalized year-bounds backstop (Issue 4, "Homestead-Cap Data
+            # Integrity" Cowork brief, July 2026): this loader's real
+            # DB-write path already filters to TARGET_YEARS ({2021..2024})
+            # downstream (see upsert loop below), so this specific check is
+            # defense-in-depth, not the only gate -- but this parser is the
+            # least-structured of tax_billing's 6 writers (a scraped HTML
+            # table, not a government-issued CSV/TXT export), so it's the
+            # one most worth rejecting an implausible year at the earliest
+            # possible point rather than trusting a later filter to catch it.
+            if not is_valid_tax_year(year):
+                return
             amount = float(amt_s.strip().replace(",", ""))
             self.rows.append({
                 "tax_year":       year,

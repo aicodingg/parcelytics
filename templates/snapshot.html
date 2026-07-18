@@ -669,6 +669,20 @@
   <div class="card-footer text-muted small">
     County-wide medians from <code>county_benchmark</code> table.
     Assessment ratio = median(assessed ÷ market) across all parcels in this category.
+    {# Interpretive line (July 2026, per Fable review P1-16): the row above
+       showed a bare per-year percentage with no context for what it means --
+       the property page already frames this exact ratio for a SINGLE parcel
+       ("below typical ~100%" / "above typical ~100% — check for a data
+       anomaly", see property.html's Assessment Ratio conditional callout).
+       At the county-median level the same ~100% baseline applies, but a
+       ratio noticeably below it is the EXPECTED, common case across a broad
+       population (widespread homestead-cap protection lowering assessed
+       value relative to market for the many parcels that have one) rather
+       than a signal to check for a data anomaly the way a single outlier
+       parcel would be -- worded distinctly from the single-parcel version
+       so this line doesn't imply something's wrong when it's the normal
+       county-wide pattern. #}
+    A median ratio below ~100% is expected and common at the county level — it reflects the many parcels in this category with an active homestead or other value-limiting cap, not a data issue.
     YoY Change = median parcel-level year-over-year % change.
     <span class="badge-partial" style="font-size:9.5px;">Partial</span> = AJR data.
     <span class="badge-verified" style="font-size:9.5px;">V</span> = Certified 2025 data.

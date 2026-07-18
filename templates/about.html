@@ -139,6 +139,40 @@
   </div>
 </section>
 
+{# ══ METHODOLOGY ═══════════════════════════════════════════════════════════ #}
+{# New section (July 2026, "Homestead-Cap Data Integrity" Cowork brief, Issue
+   5): user-facing home for the "Why?" links added to the Homeowner tax card
+   and the 5-year "Tax Rate & Bill" table's billing-gap disclosures
+   (templates/property.html, "What you paid in taxes" KPI card and the
+   Total Tax column of the 5-year table). Surfaces, in plain public-facing
+   language, the substance of the internal KNOWN_LIMITATIONS.md note "2025
+   tax_billing: parcels with NO billing row at all" -- deliberately without
+   repeating that note's specific row count here: a hardcoded count on a
+   public page goes stale the next time the source file is reloaded, and
+   isn't the kind of number a homeowner or investor needs in order to act on
+   the disclosure. #}
+<section class="fd-section-tight" id="methodology">
+  <div class="fd-kicker">Methodology</div>
+  <h2 class="fd-h2">What &ldquo;Not available&rdquo; means, and why it happens.</h2>
+  <p class="fd-lead">
+    Every figure on Parcelytics comes from a specific government source, tagged with its own confidence level (see the standard above). Some gaps come from the source data itself, not from anything on our end — here's the most common one.
+  </p>
+  <div class="card mt-3" id="methodology-billing-gap">
+    <div class="card-body">
+      <h3 style="font-size:15px; font-weight:700;">Why is a parcel's tax bill &ldquo;Not available from the county&rdquo;?</h3>
+      <p class="mb-2">
+        Travis County's own current-year billing extract doesn't include a row for every parcel in TCAD's appraisal roll. Some property types — personal property accounts, mobile homes, and a smaller number of ordinary single-family homes — don't appear in the county's public billing file the way most residential accounts do. This is a gap in Travis County's own published data, confirmed directly against the source file; it isn't something Parcelytics failed to load.
+      </p>
+      <p class="mb-2">
+        Where a parcel's actual bill isn't available, we don't leave the figure blank or show a stale placeholder. When we have enough certified data to produce a reasonable estimate — this year's taxable value × last known entity tax rates — we show it clearly marked <span class="badge-estimated" style="font-size:9px;">Estimated</span> and prefixed with &ldquo;~&rdquo;, an approximation, not a confirmed billed amount. Where we can't even estimate, we say so rather than guess.
+      </p>
+      <p class="mb-0 text-muted" style="font-size:12.5px;">
+        We're continuing to investigate the scope of this gap with Travis County directly. If you're a homeowner whose actual bill differs from an estimate shown here, your county tax statement is always the authoritative figure.
+      </p>
+    </div>
+  </div>
+</section>
+
 {# ══ WHO IT'S FOR ══════════════════════════════════════════════════════════ #}
 <section class="fd-section">
   <div class="fd-kicker">Who it's for</div>

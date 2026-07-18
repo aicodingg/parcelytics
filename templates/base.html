@@ -79,12 +79,24 @@
 </main>
 
 <footer class="site-footer">
+  {# Footer rewrite (July 2026, per Diego's exact copy — Fable review follow-up):
+     tagline replaced with the new brand line; "Data sources" column retitled
+     to name the single live county explicitly (this footer previously read
+     as county-agnostic even though the product is Travis-only today); first
+     Coverage line now states both the live county AND the next one queued
+     (Dallas County — confirmed by Diego, not guessed; consistent with this
+     session's earlier Markets-framing fix establishing Dallas as the
+     largest post-Travis market by population); bottom line restated to
+     name the live market explicitly. The two lines Diego said to keep
+     verbatim ("Data as of" block and "Not legal or tax advice") are
+     untouched byte-for-byte. #}
   <div class="footer-grid">
     <div>
       <div class="footer-brand-word">Parcel<b>ytics</b></div>
       <p class="footer-tagline">
-        Verified Travis County, Texas property-tax intelligence — sourced directly from
-        government records, honestly labeled. No third-party aggregators.
+        Verified property-tax intelligence, sourced directly from official government records
+        and labeled by confidence. No third-party aggregators. Live today in Travis County, TX —
+        expanding market by market, each one verified before it goes live.
       </p>
     </div>
     <div class="footer-col">
@@ -95,14 +107,14 @@
       <a href="/about">About</a>
     </div>
     <div class="footer-col">
-      <div class="footer-col-title">Data sources</div>
+      <div class="footer-col-title">Data sources — Travis County, TX</div>
       <span>Travis Central Appraisal District</span>
       <span>Travis County Tax Office</span>
       <a href="/about">Methodology &amp; coverage</a>
     </div>
     <div class="footer-col">
       <div class="footer-col-title">Coverage</div>
-      <span>508K+ parcels</span>
+      <span>Travis County, TX — 508K+ parcels · Dallas County, TX — next</span>
       <span>Rates back to 1990</span>
       <span>Certified 2021–2025 · Preliminary 2026</span>
       <a href="mailto:parcelytics@gmail.com">Contact &amp; feedback</a>
@@ -118,7 +130,7 @@
     </span>
   </div>
   <div class="footer-bottom">
-    <span>Travis County, Texas · Data: TCAD &amp; Travis County Tax Office</span>
+    <span>Data: Travis Central Appraisal District &amp; Travis County Tax Office · Live market: Travis County, TX</span>
     <span>Not legal or tax advice</span>
   </div>
 </footer>

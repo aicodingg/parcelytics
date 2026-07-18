@@ -182,6 +182,33 @@ CREATE INDEX IF NOT EXISTS idx_metrics_delinquent  ON parcel_metrics (risk_delin
 -- tax_billing.data_source in scrape_billing_history.py. Safe to re-run.
 ALTER TABLE parcel_metrics ADD COLUMN IF NOT EXISTS effective_tax_rate_derived BOOLEAN;
 
+-- Migration: split risk_homestead_cap_expiry into two honestly-named signals
+-- (Issue 2, "Homestead-Cap Data Integrity: Full Fix Set" Cowork brief, July
+-- 2026). The old flag's 404,355-row count was NOT a bug -- confirmed live
+-- it's 68,336 distinct parcels, correctly scoped to residential, each
+-- flagged across most/all of 6 parcel_tax_year rows because its UPDATE
+-- joined on geo_id only (no tax_year scoping), fanning the flag out across
+-- every year's row for a matching parcel. The real problem was the flag's
+-- MEANING: assessed < market is simply "the cap is currently working," the
+-- default state for any appreciating homestead -- not a genuine risk
+-- signal. Replaced with:
+--   cap_step_up_exposure -- investor-facing, informational: a real,
+--     materially-sized cap that a buyer would lose at purchase (both a
+--     relative and a dollar threshold, tuned against the real percentile
+--     distribution -- see compute_metrics.py's own comment for the numbers).
+--   cap_expiry_signal -- the name's real meaning, protection actually
+--     ENDING: HS active on the 2025 certified roll but absent from the 2026
+--     preliminary exemption flags.
+-- Both are keyed to ONE row per parcel (the 2025 certified row only), not
+-- fanned out across every tax_year row the way the old flag was.
+-- risk_homestead_cap_expiry itself is left in place (not dropped) for
+-- backward compatibility with anything still reading it directly, but
+-- compute_metrics.py no longer writes to it -- see that file's own comment.
+ALTER TABLE parcel_metrics ADD COLUMN IF NOT EXISTS cap_step_up_exposure BOOLEAN DEFAULT FALSE;
+ALTER TABLE parcel_metrics ADD COLUMN IF NOT EXISTS cap_expiry_signal    BOOLEAN DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS idx_metrics_cap_step_up ON parcel_metrics (cap_step_up_exposure) WHERE cap_step_up_exposure = TRUE;
+CREATE INDEX IF NOT EXISTS idx_metrics_cap_expiry_signal ON parcel_metrics (cap_expiry_signal) WHERE cap_expiry_signal = TRUE;
+
 
 -- county_benchmark: one row per property type per year, county-wide aggregates.
 -- property_type_label matches the display mapping used in the UI
