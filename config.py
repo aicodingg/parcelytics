@@ -90,6 +90,35 @@ PIR_BILLING_FILES = {
 COMPUTED_HIST_TAX_ENABLED = os.environ.get("COMPUTED_HIST_TAX", "0") == "1"
 
 # ── App ───────────────────────────────────────────────────────────────────────
-FLASK_SECRET = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
-DEBUG        = os.environ.get("FLASK_DEBUG", "1") == "1"
-PORT         = int(os.environ.get("PORT", 5000))
+DEBUG = os.environ.get("FLASK_DEBUG", "1") == "1"
+PORT  = int(os.environ.get("PORT", 5000))
+
+# FLASK_SECRET -- Cowork brief "Wire Up a Real FLASK_SECRET", July 2026.
+# No hardcoded fallback string. DEBUG (above) is used instead of Flask's own
+# app.debug here -- this module has no Flask app object (config.py is a plain
+# settings module imported before app = Flask(__name__) exists in app.py),
+# and DEBUG is already this project's actual source of truth for dev vs.
+# production mode (it's what app.py passes to app.run(debug=config.DEBUG, ...)).
+#
+# In dev (DEBUG on), a missing FLASK_SECRET is fine -- generate a random
+# per-run value so no developer has to set this just to run the app locally.
+# Sessions won't persist across restarts in that case -- acceptable for dev,
+# never acceptable in production. In production (DEBUG off), a missing
+# FLASK_SECRET is a hard failure: never silently fall back to something
+# insecure/predictable in production, so raise instead of starting.
+FLASK_SECRET = os.environ.get("FLASK_SECRET")
+if not FLASK_SECRET:
+    if DEBUG:
+        import secrets
+        FLASK_SECRET = secrets.token_hex(32)
+        print("  FLASK_SECRET: not set, using a random per-run value (dev only)")
+    else:
+        raise RuntimeError("FLASK_SECRET must be set in the environment for production")
+
+# ── Error monitoring (Sentry) ─────────────────────────────────────────────────
+# Cowork brief "Error Monitoring (Sentry) + Rate Limiting (Flask-Limiter)",
+# July 2026. No default -- deliberately None, never a hardcoded/fallback DSN.
+# app.py checks `if config.SENTRY_DSN:` before calling sentry_sdk.init() and
+# skips initialization entirely when this is unset (e.g. local dev without
+# it exported), rather than erroring or silently using a placeholder.
+SENTRY_DSN = os.environ.get("SENTRY_DSN")
