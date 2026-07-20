@@ -8,6 +8,12 @@ All notable changes to Parcelytics are tracked here, using [Semantic Versioning]
 
 Version numbers are tied to actual production deploys, not every commit.
 
+## [1.3.0] — 2026-07-20
+- Coverage Map redesigned (outside design review by Fable, amended by product decision): text-free national map with Live and Coming-soon counties colored directly — no marker glyphs — on a darkened backdrop that no longer blends into the page
+- Market card row is now the map's legend: new leading Austin/Travis "Live" card, county-shape thumbnails, Live/Coming soon status pills, bidirectional hover linking (hovering a card makes its county glow on the map)
+- County hover tooltips: every county names itself; market hover treated as one logical target
+- Known cosmetic limitation: Louisiana parishes, Alaska boroughs, and Virginia independent cities display with a generic "County" suffix
+
 ## [1.2.0] — 2026-07-20
 - Live typeahead search on all four search inputs, including the navbar bar for the first time (one shared script; three duplicate implementations removed)
 - Full-address matching: pasted addresses with commas, city, state, and zip now resolve; city/zip act as ranking signals, never hard filters (handles TCAD's own missing/misspelled city tokens)

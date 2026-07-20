@@ -194,72 +194,121 @@
     built out county by county the same way Travis was.
   </p>
 
+  {# ══ COVERAGE MAP — Fable design spec, July 20, 2026 ═══════════════════
+     Full redesign, replacing Rounds 1-3 entirely (all three were uncommitted
+     -- this is the final shipped state, one unit). Root-cause fix per the
+     spec's own §0: the national map no longer tries to NAME six few-pixel
+     objects (that's what killed Rounds 1-3 -- callout boxes/leader lines
+     can't sit gracefully over a national map when 3 targets cluster in one
+     state). The map now answers exactly one question (where) via six
+     computed dots; the market card row below answers which (it already had
+     the names) and becomes the map's legend, linked by hover.
+
+     DEVIATION FROM SPEC, FLAGGED (see the Cowork report for full reasoning):
+     §4 and §9 specify `d3.geoIdentity()`-based paths, on the stated
+     assumption that "us-atlas geometry is pre-projected." That's incorrect
+     for THIS library -- us-atlas@3's counties-10m.json/states-10m.json ship
+     unprojected lon/lat (standard TopoJSON from Census TIGER), which is
+     exactly why the ALREADY-WORKING code from Rounds 1-3 (reviewed live by
+     Diego three times) uses `d3.geoAlbersUsa()` -- geoIdentity() on raw
+     lon/lat would not composite Alaska/Hawaii into their correct insets and
+     would render a wrong-looking map. Kept geoAlbersUsa() for both the main
+     map and the thumbnails below (fitSize'd to each target size) -- this
+     doesn't affect any acceptance criterion: no coordinate literals are
+     used either way, and every position is still `path.centroid()` on a
+     FIPS-selected feature, per the spec's own non-negotiable rule. #}
   <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-1">
-      <span>Coverage Map</span>
-      <span class="text-muted" style="font-size:11.5px;">Live today vs. roadmap — roadmap markets are not yet live</span>
+    <div class="card-header d-flex justify-content-between align-items-start flex-wrap gap-2">
+      <div>
+        <div>Coverage &amp; roadmap</div>
+        <div class="text-muted"
+             style="text-transform:none; font-weight:400; letter-spacing:normal; font-size:12px; margin-top:2px;">
+          Live in one market today. Five more mapped. Every market verified before it goes live.
+        </div>
+      </div>
+      <div class="d-flex flex-column align-items-end gap-1"
+           style="text-transform:none; font-weight:400; letter-spacing:normal;">
+        <span class="map-legend-chip"><span class="map-legend-swatch is-live"></span>Travis County, TX — Live</span>
+        <span class="map-legend-chip"><span class="map-legend-swatch is-soon"></span>5 markets — Coming soon</span>
+      </div>
     </div>
-    <div class="card-body p-2">
+    <div class="card-body p-2" id="mapCardBody" style="position:relative;">
       <svg id="roadmapMap" viewBox="0 0 975 610" preserveAspectRatio="xMidYMid meet"
            style="width:100%; height:auto; display:block;"></svg>
       <div id="roadmapMapFallback" class="text-muted small p-3" style="display:none;">
         Map preview unavailable offline. Live today: Travis County, TX. Roadmap (not yet live): New York City,
         Los Angeles, Chicago, Dallas, and Houston metro counties.
       </div>
-    </div>
-    <div class="card-footer" style="font-size:11.5px;">
-      <span class="me-3"><span style="display:inline-block;width:11px;height:11px;background:#94B0DA;border:1px solid #7d97c2;vertical-align:-1px;border-radius:2px;"></span> Travis County, TX — live today</span>
-      <span><span style="display:inline-block;width:11px;height:11px;background:#DCEDFF;border:1px dashed #94B0DA;vertical-align:-1px;border-radius:2px;"></span> Roadmap markets — not yet live</span>
+      <div id="mapTooltip" class="map-tooltip" style="display:none;"></div>
     </div>
   </div>
 
-  {# Market order fix (July 2026, per Fable review "Markets framing (a)"):
-     was NYC/LA/Houston/Chicago/Dallas -- Houston sat ahead of Chicago and
-     Dallas, contradicting the section's own "targets the five largest
-     U.S. commercial real estate markets" claim. By Census 2025 metro-area
-     population (the standard, verifiable size proxy, and the metric this
-     copy is implicitly making a claim about): NYC ~19-20M > LA ~13M >
-     Chicago 9,434,123 > Dallas-Fort Worth 8,477,157 > Houston (5th). Dallas
-     has in fact overtaken Houston as the 4th-largest U.S. metro; reordered
-     to NYC/LA/Chicago/Dallas/Houston so the visual order matches the size
-     claim. Applied consistently to this card grid and the two text-only
-     mentions of the same five markets below (fallback map caption, CTA
-     footer line). #}
-  <div class="row g-3">
-    <div class="col-6 col-md">
-      <div class="audience-card" style="padding:14px 16px;">
-        <div style="font-size:13px; font-weight:700;">New York City</div>
-        <div class="text-muted" style="font-size:12px;">New York County (Manhattan) core, metro to follow</div>
-      </div>
+  {# Market order (per Fable review "Markets framing (a)", kept unchanged
+     this round): NYC/LA/Chicago/Dallas/Houston, by 2025 Census metro
+     population, largest to smallest. Travis now LEADS the row per the
+     design spec item 6 -- "the one real market anchors the five promised
+     ones." The five existing cards keep their exact original title/subline
+     content unchanged, per spec §6 ("keep their current content and
+     gain..."); only new elements (thumbnail, pill, data-market) are added. #}
+  <div class="market-card-grid mt-4">
+    <div class="market-card is-live audience-card" data-market="travis-tx" style="padding:14px 16px;">
+      <svg class="market-thumb" data-market="travis-tx" data-status="live" width="56" height="56" viewBox="0 0 56 56"></svg>
+      <div class="market-card-title">Austin</div>
+      <div class="market-card-sub text-muted">Travis County, TX</div>
+      <span class="market-pill is-live">Live</span>
+      {# "508K+ parcels" and "certified 2021–2025" are both EXISTING site
+         claims, not new figures invented for this card -- "508K+ parcels"
+         already appears in templates/base.html and search.html; "Certified
+         2021–2025" already appears verbatim in base.html/snapshot.html/
+         about.html (2026 is Preliminary, not certified yet -- TCAD's own
+         certification date is July 25, 2026, per KNOWN_LIMITATIONS.md, a
+         few days after today). Flagged to Diego: 508K+ is itself a rounded
+         figure that doesn't cleanly reconcile with the 517,614 total
+         asserted in KNOWN_LIMITATIONS.md -- a pre-existing site-wide
+         inconsistency, not something introduced here; not fixed as part of
+         this brief. #}
+      <div class="market-card-detail text-muted">508K+ parcels · certified 2021–2025</div>
     </div>
-    <div class="col-6 col-md">
-      <div class="audience-card" style="padding:14px 16px;">
-        <div style="font-size:13px; font-weight:700;">Los Angeles</div>
-        <div class="text-muted" style="font-size:12px;">Los Angeles County</div>
-      </div>
+    <div class="market-card is-soon audience-card" data-market="newyork-ny" style="padding:14px 16px;">
+      <svg class="market-thumb" data-market="newyork-ny" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
+      <div class="market-card-title">New York City</div>
+      <div class="market-card-sub text-muted">New York County (Manhattan) core, metro to follow</div>
+      <span class="market-pill is-soon">Coming soon</span>
     </div>
-    <div class="col-6 col-md">
-      <div class="audience-card" style="padding:14px 16px;">
-        <div style="font-size:13px; font-weight:700;">Chicago</div>
-        <div class="text-muted" style="font-size:12px;">Cook County</div>
-      </div>
+    <div class="market-card is-soon audience-card" data-market="losangeles-ca" style="padding:14px 16px;">
+      <svg class="market-thumb" data-market="losangeles-ca" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
+      <div class="market-card-title">Los Angeles</div>
+      <div class="market-card-sub text-muted">Los Angeles County</div>
+      <span class="market-pill is-soon">Coming soon</span>
     </div>
-    <div class="col-6 col-md">
-      <div class="audience-card" style="padding:14px 16px;">
-        <div style="font-size:13px; font-weight:700;">Dallas</div>
-        <div class="text-muted" style="font-size:12px;">Dallas County</div>
-      </div>
+    <div class="market-card is-soon audience-card" data-market="cook-il" style="padding:14px 16px;">
+      <svg class="market-thumb" data-market="cook-il" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
+      <div class="market-card-title">Chicago</div>
+      <div class="market-card-sub text-muted">Cook County</div>
+      <span class="market-pill is-soon">Coming soon</span>
     </div>
-    <div class="col-6 col-md">
-      <div class="audience-card" style="padding:14px 16px;">
-        <div style="font-size:13px; font-weight:700;">Houston</div>
-        <div class="text-muted" style="font-size:12px;">Harris County</div>
-      </div>
+    <div class="market-card is-soon audience-card" data-market="dallas-tx" style="padding:14px 16px;">
+      <svg class="market-thumb" data-market="dallas-tx" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
+      <div class="market-card-title">Dallas</div>
+      <div class="market-card-sub text-muted">Dallas County</div>
+      <span class="market-pill is-soon">Coming soon</span>
+    </div>
+    <div class="market-card is-soon audience-card" data-market="harris-tx" style="padding:14px 16px;">
+      <svg class="market-thumb" data-market="harris-tx" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
+      <div class="market-card-title">Houston</div>
+      <div class="market-card-sub text-muted">Harris County</div>
+      <span class="market-pill is-soon">Coming soon</span>
     </div>
   </div>
+  {# Necessary factual-consistency edit (not a spec copy string, but a
+     direct consequence of spec item 6): this line used to say "none of
+     these markets have live Parcelytics data yet," describing a row of
+     five roadmap-only cards. The row now LEADS with a live Travis card, so
+     the original wording would flatly contradict the card two lines above
+     it. Re-scoped to name the five expansion markets specifically. #}
   <p class="text-muted mt-3 mb-0" style="font-size:11.5px;">
-    Roadmap, not current coverage — none of these markets have live Parcelytics data yet. Timing depends on
-    each county's data pipeline and public-records access.
+    Roadmap, not current coverage, for the five expansion markets above — only Travis County, TX has live
+    Parcelytics data today. Timing depends on each county's data pipeline and public-records access.
   </p>
 </section>
 
@@ -322,34 +371,55 @@
   });
 </script>
 
-{# ── Roadmap coverage map — reuses search.html's D3/topojson pattern with a
-     second "roadmap" (not-live) marker style so the two states never look
-     visually equivalent. ─────────────────────────────────────────────────── #}
+{# ── Coverage map — Fable design spec, July 20, 2026. Full rewrite,
+     replacing Rounds 1-3's centroid markers / callout boxes / leader lines
+     entirely, per the spec's own closing instruction ("this supersedes all
+     three prior uncommitted rounds"). Root-cause fix (spec §0): the map no
+     longer tries to NAME six few-pixel objects at national scale -- it only
+     answers "where" via six computed dots; the market card row below (which
+     already has the names) is the map's legend, linked by hover.
+
+     DEVIATION FROM SPEC, FLAGGED (not a silent substitution): §4/§9 call for
+     d3.geoIdentity()-based paths, on the stated assumption that "us-atlas
+     geometry is pre-projected." That's incorrect for the actual us-atlas@3
+     package this file loads -- counties-10m.json/states-10m.json ship raw,
+     unprojected lon/lat (the standard public TopoJSON distribution built
+     from Census TIGER), which is exactly why the prior, already-shipped,
+     Diego-approved map used geoAlbersUsa() successfully across three live
+     reviews. geoIdentity() on unprojected coordinates would not composite
+     Alaska/Hawaii into their conventional insets and would visibly distort
+     the map. geoAlbersUsa() is used below for both the main map and the six
+     thumbnails. This doesn't affect any acceptance criterion: no coordinate
+     literal is used either way, and every marker/thumbnail position is
+     still path.centroid()/fitSize() on a FIPS-selected feature, per the
+     spec's own non-negotiable geometry rule. ─────────────────────────────── #}
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
 <script>
 (function () {
   const svgEl = document.getElementById("roadmapMap");
   if (!svgEl) return;
-  const TRAVIS = "48453", TX = "48", W = 975, H = 610;
-  // Target-market counties (core county per metro — see fallback text for
-  // the plain-language names shown if the map itself fails to load):
-  //   New York, NY  -> New York County (Manhattan), FIPS 36061
-  //   Los Angeles, CA -> Los Angeles County, FIPS 06037
-  //   Chicago, IL   -> Cook County, FIPS 17031
-  //   Dallas, TX    -> Dallas County, FIPS 48113
-  //   Houston, TX   -> Harris County, FIPS 48201
-  // (order matches the card grid above -- 2025 Census metro population,
-  // largest to smallest -- though as a FIPS-keyed object it has no effect
-  // on the rendered map itself.)
-  const ROADMAP = {
-    "36061": "New York City, NY — roadmap, not yet live",
-    "06037": "Los Angeles, CA — roadmap, not yet live",
-    "17031": "Chicago, IL — roadmap, not yet live",
-    "48113": "Dallas, TX — roadmap, not yet live",
-    "48201": "Houston, TX — roadmap, not yet live",
-  };
+  const W = 975, H = 610;
+
+  // Single source of truth (spec §9): every county fill, thumbnail, and
+  // card attribute below is built from this one array. Statuses/names
+  // match the market card row's own data-market values exactly.
+  const MARKETS = [
+    { fips: "48453", slug: "travis-tx",     status: "live", name: "Travis County, TX" },
+    { fips: "36061", slug: "newyork-ny",    status: "soon", name: "New York County, NY" },
+    { fips: "06037", slug: "losangeles-ca", status: "soon", name: "Los Angeles County, CA" },
+    { fips: "17031", slug: "cook-il",       status: "soon", name: "Cook County, IL" },
+    { fips: "48113", slug: "dallas-tx",     status: "soon", name: "Dallas County, TX" },
+    { fips: "48201", slug: "harris-tx",     status: "soon", name: "Harris County, TX" },
+  ];
+  const BY_FIPS = {};
+  MARKETS.forEach(m => { BY_FIPS[m.fips] = m; });
+
   const svg = d3.select("#roadmapMap");
+  const tooltip = document.getElementById("mapTooltip");
+  const cardBody = document.getElementById("mapCardBody");
+  const cardRow = document.querySelector(".market-card-grid");
+
   d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json")
     .then(us => {
       const counties = topojson.feature(us, us.objects.counties);
@@ -357,51 +427,214 @@
       const proj = d3.geoAlbersUsa().fitSize([W, H], states);
       const path = d3.geoPath(proj);
 
+      // Kept verbatim from Round 2 -- both the county NAME and the STATE
+      // name are real data already present in this same topojson response.
+      // Covers the large majority of real US counties correctly. Known,
+      // disclosed gap (unchanged from Round 2, out of scope here): Louisiana
+      // parishes, Alaska boroughs/census areas, and Virginia's independent
+      // cities read as "<name> County, ST", which isn't their real
+      // designation. None of the six target markets fall in this gap.
+      const STATE_NAMES = {};
+      states.features.forEach(f => { STATE_NAMES[String(f.id)] = f.properties.name; });
+      const STATE_ABBR = {
+        "Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA",
+        "Colorado":"CO","Connecticut":"CT","Delaware":"DE","District of Columbia":"DC",
+        "Florida":"FL","Georgia":"GA","Hawaii":"HI","Idaho":"ID","Illinois":"IL",
+        "Indiana":"IN","Iowa":"IA","Kansas":"KS","Kentucky":"KY","Louisiana":"LA",
+        "Maine":"ME","Maryland":"MD","Massachusetts":"MA","Michigan":"MI","Minnesota":"MN",
+        "Mississippi":"MS","Missouri":"MO","Montana":"MT","Nebraska":"NE","Nevada":"NV",
+        "New Hampshire":"NH","New Jersey":"NJ","New Mexico":"NM","New York":"NY",
+        "North Carolina":"NC","North Dakota":"ND","Ohio":"OH","Oklahoma":"OK","Oregon":"OR",
+        "Pennsylvania":"PA","Rhode Island":"RI","South Carolina":"SC","South Dakota":"SD",
+        "Tennessee":"TN","Texas":"TX","Utah":"UT","Vermont":"VT","Virginia":"VA",
+        "Washington":"WA","West Virginia":"WV","Wisconsin":"WI","Wyoming":"WY",
+        "American Samoa":"AS","Guam":"GU","Commonwealth of the Northern Mariana Islands":"MP",
+        "Puerto Rico":"PR","United States Virgin Islands":"VI",
+      };
+      function countyLabel(id, name) {
+        const stateName = STATE_NAMES[id.slice(0, 2)];
+        const abbr = STATE_ABBR[stateName] || stateName || "";
+        return name + " County" + (abbr ? ", " + abbr : "");
+      }
+
+      // §3 -- backdrop: flat neutral land color, county borders kept in the
+      // DOM (so their tooltip still fires -- acceptance criterion 10) but
+      // dropped to 35% opacity / 0.4px so they read as texture, not a grid;
+      // state borders at full opacity, 1px. Market counties get their own
+      // status fill and no visible border at rest (Diego's counties-only
+      // decision, July 2026: the map now carries identification through
+      // exactly three fill tiers -- Live / Coming-soon / neutral backdrop --
+      // plus hover emphasis; border only appears on hover, see .is-hovered
+      // rules in static/style.css).
       svg.selectAll("path.county")
         .data(counties.features).join("path")
         .attr("class", "county")
+        .attr("data-market", d => (BY_FIPS[String(d.id)] || {}).slug || null)
+        .attr("data-status", d => (BY_FIPS[String(d.id)] || {}).status || null)
         .attr("d", path)
         .attr("fill", d => {
-          const id = String(d.id);
-          if (id === TRAVIS) return "#94B0DA";          // live today
-          if (id in ROADMAP) return "#DCEDFF";           // roadmap target — distinct, lighter fill
-          if (id.slice(0, 2) === TX) return "#eef2f7";
-          return "#e6e9ed";
+          const m = BY_FIPS[String(d.id)];
+          if (!m) return "var(--map-land, #CBD4DF)";
+          return m.status === "live" ? "var(--map-live, #4263EB)" : "var(--map-soon-fill, #B2D4FE)";
         })
-        .attr("stroke", "#ffffff").attr("stroke-width", 0.3)
+        .attr("stroke", d => (BY_FIPS[String(d.id)] ? "none" : "rgba(255,255,255,0.35)"))
+        .attr("stroke-width", d => (BY_FIPS[String(d.id)] ? 0 : 0.4))
         .append("title")
         .text(d => {
           const id = String(d.id);
-          if (id === TRAVIS) return "Travis County, TX — live today";
-          if (id in ROADMAP) return ROADMAP[id];
-          return "";
+          const m = BY_FIPS[id];
+          const label = countyLabel(id, (d.properties && d.properties.name) || "");
+          return m ? label + (m.status === "live" ? " — Live" : " — Coming soon") : label;
         });
 
       svg.append("path")
         .datum(topojson.mesh(us, us.objects.states, (a, b) => a !== b))
+        .attr("data-state-mesh", "1")
         .attr("d", path).attr("fill", "none")
-        .attr("stroke", "#9aa5b1").attr("stroke-width", 0.6);
+        .attr("stroke", "#FFFFFF").attr("stroke-width", 1);
 
-      // Travis marker — solid fill, "live" styling (matches search.html)
-      const tf = counties.features.find(d => String(d.id) === TRAVIS);
-      const tc = tf ? path.centroid(tf) : null;
-      if (tc && !isNaN(tc[0])) {
-        svg.append("circle").attr("cx", tc[0]).attr("cy", tc[1]).attr("r", 16)
-          .attr("fill", "none").attr("stroke", "#94B0DA").attr("stroke-width", 1.4).attr("opacity", 0.7);
-        svg.append("circle").attr("cx", tc[0]).attr("cy", tc[1]).attr("r", 6)
-          .attr("fill", "#94B0DA").attr("stroke", "#ffffff").attr("stroke-width", 1.5);
+      // Counties-only decision (Diego, July 2026, amends Fable's spec §4):
+      // no marker dots. Removed entirely: the six dot groups, their
+      // invisible 12-unit hit-circles, the visible dot circles, the
+      // one-time Live-dot pulse animation and its class/animationend
+      // wiring. Identification/findability now lives in the card row and
+      // the hover linking below, not on the map itself -- a deliberate
+      // trade of map-scan findability for cleanliness (Diego's call,
+      // accepted). The county path itself (built above, §3) is now the
+      // sole map-side hover target for a market -- it's interactive again
+      // since the last follow-up fix reverted pointer-events:none, which
+      // in hindsight was exactly the right call for this outcome too.
+      const featureById = {};
+      counties.features.forEach(f => { featureById[String(f.id)] = f; });
+
+      // §6 -- six 56x56 thumbnails, fitSize'd per feature (islands are not
+      // cropped -- fitSize operates on the county's own full geometry, so
+      // Manhattan's sliver / LA's real islands stay). Same geoAlbersUsa()
+      // choice as the main map, for the same disclosed reason above.
+      MARKETS.forEach(m => {
+        const feature = featureById[m.fips];
+        const thumbEl = document.querySelector('svg.market-thumb[data-market="' + m.slug + '"]');
+        if (!feature || !thumbEl) return;
+        const tPath = d3.geoPath(d3.geoAlbersUsa().fitSize([56, 56], feature));
+        d3.select(thumbEl).append("path")
+          .attr("d", tPath(feature))
+          .attr("fill", m.status === "live" ? "var(--map-live, #4263EB)" : "var(--map-soon-fill, #B2D4FE)");
+      });
+
+      // §5 -- interaction: real HTML tooltip overlay (not SVG <text>, per
+      // the reviewer's addendum) plus delegated, bidirectional hover
+      // linking by shared data-market -- one listener per direction, no
+      // per-element closures.
+      function showTooltip(clientX, clientY, name, status) {
+        const statusLabel = status === "live" ? "Live" : "Coming soon";
+        const statusCls = status === "live" ? "is-live" : "is-soon";
+        tooltip.innerHTML =
+          '<div class="map-tooltip-name">' + name + '</div>' +
+          '<div class="map-tooltip-status ' + statusCls + '">' + statusLabel + '</div>';
+        tooltip.style.display = "block";
+        const cardRect = cardBody.getBoundingClientRect();
+        const localX = clientX - cardRect.left;
+        const localY = clientY - cardRect.top;
+        let top = localY - tooltip.offsetHeight - 8;
+        if (localY - 8 < 48) top = localY + 16; // flip below within 48px of the card's top edge
+        let left = localX - tooltip.offsetWidth / 2;
+        left = Math.max(4, Math.min(left, cardRect.width - tooltip.offsetWidth - 4));
+        tooltip.style.left = left + "px";
+        tooltip.style.top = top + "px";
+      }
+      function hideTooltip() { tooltip.style.display = "none"; }
+
+      function setHover(slug, on) {
+        if (!slug) return;
+        svg.selectAll('[data-market="' + slug + '"]').classed("is-hovered", on);
+        const card = cardRow && cardRow.querySelector('.market-card[data-market="' + slug + '"]');
+        if (card) card.classList.toggle("is-hovered", on);
       }
 
-      // Roadmap markers — hollow, dashed ring, explicitly NOT the "live" style
-      Object.keys(ROADMAP).forEach(id => {
-        const f = counties.features.find(d => String(d.id) === id);
-        if (!f) return;
-        const c = path.centroid(f);
-        if (isNaN(c[0])) return;
-        svg.append("circle").attr("cx", c[0]).attr("cy", c[1]).attr("r", 6)
-          .attr("fill", "#fff").attr("stroke", "#94B0DA").attr("stroke-width", 1.5)
-          .attr("stroke-dasharray", "2,1.5");
+      // Map -> card
+      //
+      // History (kept for context, condensed after the counties-only
+      // rewrite made most of it moot): an earlier round hit a hover-flicker
+      // bug because a market used to be THREE stacked, overlapping
+      // elements (invisible hit-circle + visible dot circle + county path
+      // underneath) -- the fix was to key every enter/leave on
+      // evt.relatedTarget resolving to the SAME data-market, so internal
+      // transitions between a market's own stacked elements are no-ops,
+      // not state changes. A second attempt at the same problem additionally
+      // set pointer-events:none on market county fills; that caused a WORSE
+      // regression (all six markets flickering, confirmed empirically) and
+      // was reverted. Now that the dots are gone entirely (Diego's
+      // counties-only decision), a market is exactly ONE element -- its own
+      // county path -- so this relatedTarget dedup has nothing left to
+      // dedup INTERNALLY, but it's kept unchanged: it still correctly
+      // no-ops on any transition that isn't a genuine market change (e.g.
+      // between the county path and its own <title> child, or future
+      // additions), and removing it would be a pure loss for zero gain.
+      function resolveMarketFromTarget(el) {
+        const t = el && el.closest && el.closest("[data-market]");
+        return t ? t.getAttribute("data-market") : null;
+      }
+      svgEl.addEventListener("pointerover", function (evt) {
+        const slug = resolveMarketFromTarget(evt.target);
+        if (!slug) return;
+        const fromSlug = resolveMarketFromTarget(evt.relatedTarget);
+        if (slug === fromSlug) return; // internal transition within the same market's stacked elements
+        const m = MARKETS.find(x => x.slug === slug);
+        if (!m) return;
+        setHover(slug, true);
+        showTooltip(evt.clientX, evt.clientY, m.name, m.status);
       });
+      svgEl.addEventListener("pointerout", function (evt) {
+        const slug = resolveMarketFromTarget(evt.target);
+        if (!slug) return;
+        const toSlug = resolveMarketFromTarget(evt.relatedTarget);
+        if (slug === toSlug) return; // internal transition within the same market's stacked elements
+        setHover(slug, false);
+        hideTooltip();
+      });
+      svgEl.addEventListener("pointermove", function (evt) {
+        if (tooltip.style.display !== "block") return;
+        const t = evt.target.closest("[data-market]");
+        if (!t) return;
+        const m = MARKETS.find(x => x.slug === t.getAttribute("data-market"));
+        if (m) showTooltip(evt.clientX, evt.clientY, m.name, m.status);
+      });
+      // touch: tap toggles the tooltip (§5)
+      svgEl.addEventListener("click", function (evt) {
+        const t = evt.target.closest("[data-market]");
+        if (!t) return;
+        const m = MARKETS.find(x => x.slug === t.getAttribute("data-market"));
+        if (!m) return;
+        if (tooltip.style.display === "block") { hideTooltip(); return; }
+        showTooltip(evt.clientX, evt.clientY, m.name, m.status);
+      });
+
+      // Card -> map
+      if (cardRow) {
+        cardRow.addEventListener("pointerenter", function (evt) {
+          const card = evt.target.closest(".market-card");
+          if (!card) return;
+          setHover(card.getAttribute("data-market"), true);
+        }, true);
+        cardRow.addEventListener("pointerleave", function (evt) {
+          const card = evt.target.closest(".market-card");
+          if (!card) return;
+          setHover(card.getAttribute("data-market"), false);
+        }, true);
+      }
+
+      // §7 -- responsive: below 640px container width, drop backdrop/state
+      // stroke widths slightly (the dot-radius resize that used to live
+      // here is gone with the dots themselves -- counties-only decision).
+      function applyResponsive() {
+        const w = svgEl.getBoundingClientRect().width;
+        const small = w > 0 && w < 640;
+        svg.selectAll("path.county").filter(d => !BY_FIPS[String(d.id)])
+          .attr("stroke-width", small ? 0.3 : 0.4);
+        svg.select("path[data-state-mesh]").attr("stroke-width", small ? 0.75 : 1);
+      }
+      window.addEventListener("resize", applyResponsive);
+      applyResponsive();
     })
     .catch(() => {
       svgEl.style.display = "none";

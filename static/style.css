@@ -124,6 +124,32 @@
   --preliminary-text:#175CD3;  --preliminary-bg:#EFF6FF;  --preliminary-border:#B2D4FE;
   --na-text:         #98A0AE;
 
+  /* ── Coverage map (Fable design spec, July 2026) ─────────────────────────
+     Declared as tokens (spec §9) rather than literals so the Search page's
+     own coverage map can adopt the same treatment in a later pass -- out of
+     scope for this brief, but the tokens are ready. --map-live/soon-fill/
+     soon-stroke are deliberate aliases onto the existing accent/preliminary
+     tokens above (same colors the rest of the site already uses for
+     "live"/"preliminary" data), not new brand colors; --map-land is the one
+     genuinely new literal this brief introduces (a flat neutral backdrop
+     gray, not previously declared anywhere). */
+  --map-land:       #CBD4DF;
+  --map-live:       var(--accent);
+  --map-soon-fill:  var(--preliminary-border);
+  --map-soon-stroke:var(--preliminary-text);
+  --map-soon-fill-hover: #8FBBFA;
+  /* Counties-only decision (July 2026): hover-emphasis tokens, added when
+     the marker dots were removed and findability moved onto the county
+     shapes themselves. --map-live-hover deepens Travis's fill on hover
+     (an alias onto --accent-active, the same "pressed/active" shade
+     already used site-wide); the two --map-*-glow tokens feed the
+     drop-shadow glow on hover (rgba forms of --accent-active /
+     --preliminary-text, since CSS filter:drop-shadow needs an alpha
+     channel that a plain hex custom property can't carry). */
+  --map-live-hover: var(--accent-active);
+  --map-live-glow:  rgba(44, 68, 171, 0.55);
+  --map-soon-glow:  rgba(23, 92, 211, 0.45);
+
   /* ── Risk callout blocks ────────────────────────────────────────────────── */
   --risk-warn-text:  #B54708; --risk-warn-bg:  #FFFAEB; --risk-warn-border:  #FEDF89;
   --risk-err-text:   #B42318; --risk-err-bg:   #FEF3F2; --risk-err-border:   #FECDCA;
@@ -1087,6 +1113,173 @@ canvas { max-height: 440px; }
   color: var(--text-3);
   font-style: italic;
   white-space: normal;
+}
+
+/* Coverage map (Fable design spec, July 20, 2026) -- replaces Rounds 1-3's
+   .map-callout* entirely (persistent callout boxes + leader lines are gone
+   by design, see templates/index.html for the full rationale). New,
+   uniquely-named classes below; confirmed via grep that none collide with
+   anything else in the codebase before adding them here. */
+
+/* Card header legend chips (spec §2 exact strings, §1 anatomy item 1). The
+   chip text itself is plain secondary copy -- overridden back to normal
+   case/weight in the template inline style since it sits inside
+   .card-header, which forces uppercase/bold/11px on its own text by
+   default (the site's standard "eyebrow" treatment for card titles). */
+.map-legend-chip { font-size: 11.5px; color: var(--text-2); white-space: nowrap; }
+/* Counties-only decision (Diego, July 2026): the map no longer has dots, so
+   the legend's filled/hollow DOT glyphs stopped meaning anything -- they
+   used to mirror the dot styling exactly, and now mirror nothing. Replaced
+   with small color-swatch glyphs (a rounded square of the actual fill each
+   chip refers to), matching the two county fill tiers on the map itself. */
+.map-legend-swatch {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  margin-right: 5px;
+  box-sizing: border-box;
+}
+.map-legend-swatch.is-live { background: var(--map-live); }
+.map-legend-swatch.is-soon { background: var(--map-soon-fill); border: 1px solid var(--map-soon-stroke); }
+
+/* HTML tooltip overlay (spec §5, reviewer's addendum point 2 -- built as a
+   real HTML element, not SVG <text>, so the map SVG itself stays free of
+   <text> nodes per acceptance criterion 3). Positioned absolutely by JS
+   inside #mapCardBody (position:relative, see templates/index.html). */
+.map-tooltip {
+  position: absolute;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xs);
+  box-shadow: var(--shadow-1);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  z-index: 5;
+  white-space: nowrap;
+}
+.map-tooltip .map-tooltip-name { font-size: 13px; font-weight: var(--fw-bold); color: var(--text); }
+.map-tooltip .map-tooltip-status { font-size: 12px; font-weight: var(--fw-bold); }
+.map-tooltip .map-tooltip-status.is-live { color: var(--map-live); }
+.map-tooltip .map-tooltip-status.is-soon { color: var(--map-soon-stroke); }
+
+/* Counties-only decision (Diego, July 2026, amends Fable's spec §4): all
+   marker-dot CSS (.market-dot / .market-dot-visible / @keyframes
+   marketPulse / .market-dot-pulse) is removed -- there is no marker-like
+   element on the map anymore, full stop. The map now carries status
+   through exactly three fill tiers at rest (--map-live / --map-soon-fill /
+   --map-land) and NOTHING else; findability is handled entirely by the
+   hover-emphasis state below, driven by the card row, not by any
+   permanent on-map glyph.
+
+   Hover emphasis (spec item 3, this round): a market county gets a strong,
+   temporary emphasis on hover -- from EITHER direction, since setHover()
+   in the JS applies .is-hovered to every element sharing a data-market,
+   including the county path itself, so hovering the map directly and
+   hovering its card produce the identical visual result. This has to be
+   strong enough that hovering the New York City card makes Manhattan
+   (a few pixels wide at this scale) actually findable with no dot to
+   point at it -- fill deepens, stroke appears/thickens, and a soft
+   colored glow (drop-shadow) lifts the shape off the flat backdrop. */
+path.county[data-market][data-status="soon"]:hover,
+path.county[data-market][data-status="soon"].is-hovered {
+  fill: var(--map-soon-fill-hover);
+  stroke: var(--map-soon-stroke);
+  stroke-width: 2.5px;
+  filter: drop-shadow(0 0 5px var(--map-soon-glow));
+}
+path.county[data-market][data-status="live"]:hover,
+path.county[data-market][data-status="live"].is-hovered {
+  fill: var(--map-live-hover);
+  stroke: #FFFFFF;
+  stroke-width: 2.5px;
+  filter: drop-shadow(0 0 5px var(--map-live-glow));
+}
+path.county[data-market] {
+  transition: fill var(--t-fast), stroke var(--t-fast), stroke-width var(--t-fast), filter var(--t-fast);
+  cursor: pointer;
+}
+/* REVERTED (July 2026, second follow-up brief): the NYC fix's "part 2" --
+   path.county[data-market] { pointer-events: none; } -- turned out to be
+   the cause of a WORSE regression (all six markets flickering, not just
+   NYC), confirmed empirically via test_coverage_map_hover_v2.js before
+   this revert was made. Mechanism: a market county's own polygon is often
+   much LARGER on screen than its 12-unit dot hit-circle (true for all five
+   non-NYC markets -- NYC's tiny sliver was the one case where the county
+   and the dot were nearly the same size). With the county fill excluded
+   from hit-testing, the ordinary, everyday act of hovering near a dot but
+   drifting a few pixels past the hit-circle -- while still clearly over
+   the highlighted county shape on screen -- made the pointer fall through
+   to nothing (the bare, non-market SVG canvas), which the relatedTarget
+   dedup correctly reads as a REAL leave (not an internal same-market
+   transition, since there's no longer any element there to resolve to the
+   same data-market) -- then a real re-enter when drifting back onto the
+   circle. Every such drift is a genuine leave/enter cycle = flicker, for
+   every market except the one (NYC) whose county happens to be about the
+   same size as its dot.
+   The county fill is restored to its default pointer-events:auto so it's
+   once again a valid, same-market fallback target -- drifting off the dot
+   but staying over the county's own shape now correctly resolves to the
+   SAME data-market, which the relatedTarget/slug dedup (kept, unchanged,
+   from the NYC fix) treats as a no-op, exactly as intended. That JS dedup
+   alone is sufficient to fix NYC's original stacked hit-circle/visible-
+   circle flicker too (re-verified below) -- it never needed this CSS rule
+   to work; "removes a redundant competing target" was the wrong call. */
+
+/* Market card row -- six cards in one CSS grid (spec §7: wraps 2-up/3-up on
+   phones rather than horizontal scroll-snap). Cards reuse the existing,
+   shared .audience-card box (background/border/radius/padding) via an
+   additive class, per the standing rule that .audience-card itself must
+   not be edited (it's also used by the unrelated "Who it's for" section). */
+.market-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s-3);
+}
+.market-card {
+  position: relative;
+  transition: box-shadow var(--t-fast), transform var(--t-fast), border-top-color var(--t-fast);
+}
+.market-card:hover, .market-card.is-hovered {
+  box-shadow: var(--shadow-1);
+  transform: translateY(-1px);
+}
+.market-card.is-live { border-top-color: var(--map-live); }
+.market-card.is-soon { border-top-color: var(--map-soon-fill); }
+.market-card.is-soon:hover, .market-card.is-soon.is-hovered { border-top-color: var(--map-soon-stroke); }
+
+.market-thumb {
+  position: absolute;
+  top: 12px; right: 12px;
+  width: 56px; height: 56px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xs);
+}
+.market-card-title { font-size: 13px; font-weight: var(--fw-bold); padding-right: 62px; }
+.market-card-sub { font-size: 12px; padding-right: 62px; }
+.market-card-detail { font-size: 11px; margin-top: 4px; }
+
+.market-pill {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+}
+.market-pill.is-live { background: var(--map-live); color: #FFFFFF; }
+.market-pill.is-soon { background: #EFF5FF; color: var(--map-soon-stroke); }
+
+/* Reduced motion: the pulse this rule originally targeted no longer exists
+   at all (counties-only decision removed the dots it animated), so this is
+   now scoped to what's left -- the market card's hover lift and the county
+   hover-emphasis transition (fill/stroke/glow) both become instant rather
+   than eased, per spec §8's original "hover state changes may be instant." */
+@media (prefers-reduced-motion: reduce) {
+  .market-card, path.county[data-market] { transition: none !important; }
 }
 
 /* Combobox affordance: a select-style chevron on typeahead-select inputs
