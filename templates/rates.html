@@ -542,20 +542,23 @@ document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
 })();
 
 // ── Part 5: "Which entities apply to my property?" ─────────────────────────
-// Address text reuses /api/address_search verbatim (same endpoint/fetch
-// pattern as Search's #spTaList and the homepage's #addrTaList). A typed
-// parcel ID (Enter key) hits the new /api/parcel_entities endpoint, which
-// itself reuses normalize_parcel_id() server-side — no new ID-parsing logic
-// anywhere in this file.
+// Address typeahead now attaches via the shared script (Cowork brief
+// "Search overhaul — Phase 2 go-ahead", July 2026, D1), in "select" mode —
+// this box does NOT navigate away on a selection, it applies the parcel's
+// entities to the checkboxes in place. onSelect below reuses lookup() (the
+// existing /api/parcel_entities call), replacing only this file's own
+// previous copy of the debounce/fetch/render logic. A typed parcel ID
+// (Enter key) still hits /api/parcel_entities directly, unchanged — see the
+// keydown listener further down, and parcel-typeahead.js's own comments on
+// why stopImmediatePropagation() in its Enter handling is what keeps these
+// two listeners from double-firing when a dropdown suggestion IS selected.
 (function () {
   const input  = document.getElementById('parcelLookupInput');
-  const list   = document.getElementById('parcelLookupList');
   const banner = document.getElementById('parcelLookupBanner');
   const bannerText = document.getElementById('parcelLookupBannerText');
   const clearBtn = document.getElementById('parcelLookupClear');
-  if (!input || !list || !banner) return;
+  if (!input || !banner) return;
 
-  let t = null;
   let bannerActive = false;
 
   function applyParcelEntities(geoId, address, entityCodes) {
@@ -590,53 +593,30 @@ document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
       .catch(() => {});
   }
 
-  input.addEventListener('input', function () {
-    const v = input.value.trim();
-    clearTimeout(t);
-    if (v.length < 3) { list.style.display = 'none'; return; }
-    t = setTimeout(() => {
-      fetch('/api/address_search?q=' + encodeURIComponent(v))
-        .then(r => r.json())
-        .then(d => {
-          const rows = (d.results || []);
-          if (!rows.length) { list.style.display = 'none'; return; }
-          list.innerHTML = rows.map(r =>
-            `<a class="ta-item" href="#" data-geo-id="${r.geo_id}">
-               <span>${r.address || '(address unknown)'}</span>
-               <span class="text-muted ms-2" style="font-family:var(--font-mono);font-size:11px;">${r.geo_id}</span>
-             </a>`).join('');
-          list.style.display = 'block';
-        })
-        .catch(() => { list.style.display = 'none'; });
-    }, 180);
+  // Selecting an address result — does NOT navigate away (unlike the
+  // homepage/navbar/search boxes' default mode), it applies the parcel's
+  // entities to the checkboxes in place, same as the direct-entry path below.
+  ParcelTypeahead.attach({
+    inputId: 'parcelLookupInput',
+    mode: 'select',
+    onSelect: function (result) {
+      input.value = result.address || result.geo_id;
+      lookup(result.geo_id);
+    },
   });
-
-  // Selecting an address result — same non-navigating mousedown/preventDefault
-  // pattern as Search's .ta-opt selects (not a page navigation like the
-  // homepage's address dropdown, since this needs to stay on this page).
-  list.addEventListener('mousedown', (e) => {
-    const item = e.target.closest('.ta-item');
-    if (!item) return;
-    e.preventDefault();
-    const geoId = item.getAttribute('data-geo-id');
-    const addrSpan = item.querySelector('span');
-    input.value = addrSpan ? addrSpan.textContent : geoId;
-    list.style.display = 'none';
-    lookup(geoId);
-  });
-
-  input.addEventListener('blur', () => setTimeout(() => { list.style.display = 'none'; }, 160));
 
   // A typed parcel ID (10-digit account, 14-digit tax-office format, or
   // prop_id) won't show up in the address dropdown above, since
   // api_address_search() only matches situs_address text (Part 0 finding).
-  // Enter triggers a direct resolution via /api/parcel_entities instead.
+  // Enter (with no dropdown suggestion highlighted — see
+  // parcel-typeahead.js's stopImmediatePropagation() comment for why this
+  // and the shared script's own Enter handling don't double-fire) triggers
+  // a direct resolution via /api/parcel_entities instead.
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     const v = input.value.trim();
     if (v.length < 3) return;
-    list.style.display = 'none';
     lookup(v);
   });
 

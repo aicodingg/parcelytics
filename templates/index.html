@@ -35,22 +35,31 @@
           </div>
         </div>
 
-        {# Search — unchanged behavior/markup #}
+        {# Search — form/input markup unchanged; typeahead now attaches via
+           shared static/parcel-typeahead.js (Cowork brief "Search overhaul
+           — Phase 2 go-ahead", July 2026, D1) instead of this page's own
+           inline script (deleted from {% block scripts %} below). #}
         <form method="get" action="/" class="hero-search">
           <div class="search-input-wrap">
             <input
-              type="text" name="q"
+              type="text" name="q" id="heroSearchInput"
               class="search-input{% if error %} is-error{% endif %}"
               placeholder="Search a parcel ID or street address — e.g. 1201 S Lamar"
               value="{{ q or '' }}" autocomplete="off" spellcheck="false">
             <button class="search-btn" type="submit">Search</button>
           </div>
-          <div class="ta-wrap" id="addrTaWrap" style="display:none;">
+          <div class="ta-wrap" id="addrTaWrap">
             <div class="ta-list" id="addrTaList"></div>
           </div>
         </form>
         <div class="hero-search-hint">Accepts 10-digit TCAD account, 14-digit Tax Office account, prop_id, or street address — Travis County, TX today.</div>
 
+        {# Cowork brief item D: a completed search's results (or its honest
+           "no results" message) must never be visually indistinguishable
+           from no search having run — this wrapper gives scrollToResults()
+           below a stable anchor to bring into view on load, regardless of
+           which of the two branches below actually rendered. #}
+        <div id="searchResults">
         {% if addr_matches %}
         <div class="card mt-3" style="text-align:left;">
           <div class="card-header">{{ addr_matches|length }} matching parcel{{ 's' if addr_matches|length != 1 }} — select one</div>
@@ -68,6 +77,7 @@
         </div>
         {% endif %}
         {% if error %}<div class="search-error-block mt-3" style="text-align:left;">{{ error }}</div>{% endif %}
+        </div>
       </div>
 
       {# Product visual — unchanged #}
@@ -295,50 +305,21 @@
 {% endblock %}
 
 {% block scripts %}
-{# ── Address typeahead JS (unchanged) ────────────────────────────────────── #}
+{# ── Address typeahead — shared script (Cowork brief "Search overhaul —
+   Phase 2 go-ahead", July 2026, D1). Replaces this page's own previous
+   independent copy of the debounce/fetch/render logic. ─────────────────── #}
 <script>
-(function () {
-  const inp  = document.querySelector('input[name="q"]');
-  const wrap = document.getElementById('addrTaWrap');
-  const list = document.getElementById('addrTaList');
-  if (!inp || !wrap || !list) return;
+  ParcelTypeahead.attach({ inputId: "heroSearchInput" });
 
-  let _timer = null, _last = "";
-  function isAddressLike(v) { return /[a-zA-Z]/.test(v); }
-
-  function showSuggestions(results) {
-    list.innerHTML = "";
-    if (!results || results.length === 0) { wrap.style.display = "none"; return; }
-    results.forEach(r => {
-      const opt = document.createElement("div");
-      opt.className = "ta-opt";
-      opt.innerHTML =
-        `<span style="font-size:13px;">${r.address || '(unknown)'}</span>` +
-        `<span style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-3); margin-left:12px;">${r.geo_id}</span>`;
-      opt.addEventListener("mousedown", e => { e.preventDefault(); window.location.href = "/parcel/" + r.geo_id; });
-      list.appendChild(opt);
-    });
-    wrap.style.display = "block";
-  }
-
-  inp.addEventListener("input", function () {
-    const val = inp.value.trim();
-    if (!isAddressLike(val) || val.length < 3) { wrap.style.display = "none"; return; }
-    if (val === _last) return;
-    _last = val;
-    clearTimeout(_timer);
-    _timer = setTimeout(() => {
-      fetch("/api/address_search?q=" + encodeURIComponent(val))
-        .then(r => r.json())
-        .then(d => { if (d.ok) showSuggestions(d.results); })
-        .catch(() => {});
-    }, 220);
+  // Item D: scroll/anchor to the results section on load, including when
+  // the only thing rendered is the honest "no results" message — a
+  // completed search must never look identical to no search having run.
+  document.addEventListener("DOMContentLoaded", function () {
+    var results = document.getElementById("searchResults");
+    if (results && results.textContent.trim().length > 0) {
+      results.scrollIntoView({ block: "start" });
+    }
   });
-  inp.addEventListener("blur", function () { setTimeout(() => { wrap.style.display = "none"; }, 200); });
-  inp.addEventListener("focus", function () {
-    if (inp.value.trim().length >= 3 && isAddressLike(inp.value)) inp.dispatchEvent(new Event("input"));
-  });
-})();
 </script>
 
 {# ── Roadmap coverage map — reuses search.html's D3/topojson pattern with a

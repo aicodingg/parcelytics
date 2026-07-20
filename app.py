@@ -25,6 +25,7 @@ from tax_logic.texas import estimate_homestead_savings as _tx_hs_savings
 from tax_logic.texas import derive_2026_baseline as _derive_2026_baseline
 from tax_logic.classify import property_type_label, label_case_sql, label_sort_case_sql
 from loaders.scrape_billing_history import fetch_html, parse_receipts, upsert_billing_rows, HTTP_OK
+import search_logic
 
 _BILLING_TARGET_YEARS  = {2021, 2022, 2023, 2024}
 _BILLING_SENTINEL_YEAR = 9999   # stored when portal returns no target-year data
@@ -2091,6 +2092,96 @@ def normalize_parcel_id(raw: str) -> str:
     return s                # return as-is; SQL will handle the lookup
 
 
+# ── Shared search functions ──────────────────────────────────────────────────
+# Cowork brief "Search overhaul — Phase 2 go-ahead", July 2026 (D2/D3). These
+# two functions are the ONE place account-number resolution and address-text
+# matching happen — both index() (full-results submit handler, below) and
+# api_address_search() (the typeahead endpoint) call these identically.
+# Previously these were two independent, slowly-diverging copies (the
+# typeahead excluded AJR* geo_ids, the submit handler didn't — see D3 below);
+# that class of bug can't recur if there's only one implementation to call.
+
+def resolve_exact_parcel(q):
+    """
+    Try to resolve `q` as an exact TCAD account number / prop_id — the same
+    numeric-first behavior index() has always had (10-char geo_id, 14-char
+    Tax Office account, or short prop_id integer). Returns a dict (geo_id,
+    situs_address, owner_name, ...) or None. Used by BOTH index() and
+    api_address_search(), so a typed account number now resolves identically
+    from the navbar typeahead as it does from the full-results submit path.
+    """
+    geo_id = normalize_parcel_id(q)
+    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    if not parcel and q.isdigit():
+        parcel = query("SELECT * FROM parcel WHERE prop_id = %s", (int(q),), one=True)
+    return dict(parcel) if parcel else None
+
+
+def search_parcels_by_address(q, limit=8):
+    """
+    The one shared address-text matcher (D2). Algorithm, informed by Phase
+    1's finding that there is no queryable city column and zip_code is 0%
+    populated (city/zip, when present at all, are free text embedded inside
+    situs_address, present only ~38% of the time in the one AJR year
+    inspectable in this sandbox, with real spelling drift in the source
+    data itself):
+
+      1. search_logic.normalize_query_tokens() — uppercase, strip
+         commas/periods, collapse whitespace, drop standalone TX/TEXAS.
+      2. Try the full token string as a substring of situs_address (this
+         alone preserves every search that already works today).
+      3. On zero matches, progressively drop the trailing token and retry
+         (search_logic.address_match_attempts) — each dropped token becomes
+         a "boost token" — down to a 2-token floor.
+      4. Rank matches (search_logic.rank_candidates): rows whose
+         situs_address contains more boost tokens first, then prefix
+         matches, then alphabetical.
+
+    geo_id NOT LIKE 'AJR%%' is applied at every attempt (D3 — see the brief
+    response; matches the CANONICAL_PARCEL_EXCL convention already used at
+    ~8 other call sites in this file for "real, situs-addressable property
+    only", now made consistent here too instead of only in the old
+    typeahead). City/zip are NEVER a hard filter anywhere in this function —
+    a row missing a city token (like 3411 Bridle Path's own situs_address)
+    or a user's wrong zip still surfaces via its street-level match; boost
+    tokens only affect ranking, never inclusion.
+
+    ORDER BY before LIMIT 200 (post-review fix, July 2026): with no ORDER
+    BY, Postgres returns an arbitrary, undefined 200 rows whenever a
+    pattern matches more than 200 parcels countywide (e.g. a bare "CAMERON
+    RD" attempt) — rank_candidates() below would then be ranking a random
+    subset of the real candidate pool, silently able to drop the actual
+    best match, and identical repeated searches could return different
+    results run to run. Prefix matches are sorted into the pool first
+    (same bias the old standalone typeahead endpoint used, restored here so
+    a >200-match pattern doesn't lose its exact-prefix rows to arbitrary
+    ordering before rank_candidates() even sees them), then alphabetical
+    purely for determinism. rank_candidates()'s own boost-token ranking
+    runs on top of this pool afterward and is unchanged.
+    """
+    tokens = search_logic.normalize_query_tokens(q)
+    if not tokens:
+        return []
+    for pattern_tokens, boost_tokens in search_logic.address_match_attempts(tokens):
+        pattern = " ".join(pattern_tokens)
+        rows = query("""
+            SELECT geo_id, situs_address, owner_name
+            FROM   parcel
+            WHERE  UPPER(situs_address) ILIKE %(pattern)s
+              AND  geo_id NOT LIKE 'AJR%%'
+            ORDER  BY
+                CASE WHEN UPPER(situs_address) LIKE %(prefix_pattern)s THEN 0 ELSE 1 END,
+                situs_address
+            LIMIT  200
+        """, {"pattern": f"%{pattern}%", "prefix_pattern": f"{pattern}%"})
+        if rows:
+            ranked = search_logic.rank_candidates(
+                [dict(r) for r in rows], boost_tokens, pattern_tokens
+            )
+            return ranked[:limit]
+    return []
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -2100,38 +2191,20 @@ def index():
     error = None
 
     if q:
-        geo_id = normalize_parcel_id(q)
-
-        # Try exact geo_id match first
-        parcel = query(
-            "SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True
-        )
-
-        # Fall back to prop_id match (user entered the short integer)
-        if not parcel and q.isdigit():
-            parcel = query(
-                "SELECT * FROM parcel WHERE prop_id = %s", (int(q),), one=True
-            )
+        parcel = resolve_exact_parcel(q)
 
         if parcel:
             return redirect(url_for("property_detail", geo_id=parcel["geo_id"]))
 
         # Address-like query (contains letters) — show disambiguation list
         elif any(c.isalpha() for c in q):
-            q_norm = " ".join(q.upper().split())
-            addr_matches = query("""
-                SELECT geo_id, situs_address, owner_name
-                FROM   parcel
-                WHERE  UPPER(situs_address) ILIKE %(pattern)s
-                ORDER  BY situs_address
-                LIMIT  20
-            """, {"pattern": f"%{q_norm}%"})
+            addr_matches = search_parcels_by_address(q, limit=20)
             if addr_matches:
                 return render_template(
                     "index.html",
                     q=q,
                     error=None,
-                    addr_matches=[dict(r) for r in addr_matches],
+                    addr_matches=addr_matches,
                 )
             error = (
                 f"No parcels found matching address \"{q}\". "
@@ -4762,58 +4835,42 @@ def api_estimate_acq(geo_id):
 @limiter.limit(_LIMIT_TYPEAHEAD)
 def api_address_search():
     """
-    Address typeahead API (Task 2).
-    Returns up to 10 matching parcels for a partial address query.
+    Address typeahead API (Task 2; matching rebuilt per Cowork brief "Search
+    overhaul — Phase 2 go-ahead", July 2026, D2/D3).
+    Returns up to 8 matching parcels for a partial address OR account-number
+    query, via the two shared functions above (resolve_exact_parcel() /
+    search_parcels_by_address()) — the exact same functions the "/" route's
+    full-results submit handler uses, so a query resolves identically
+    whether it came from this typeahead or a full-page Enter submit.
     Query params:
-      q   str   partial address string (min 3 chars)
+      q   str   partial address string, or an account number (min 3 chars)
     """
     q = request.args.get("q", "").strip()
     if len(q) < 3:
         return jsonify({"ok": True, "results": []})
 
-    # Normalise: collapse whitespace, uppercase for consistent matching
-    q_norm = " ".join(q.upper().split())
+    # D2 item 5 / D3: a numeric account number resolves here too now (it
+    # didn't before — this endpoint never did geo_id/prop_id matching,
+    # only address text), so typing an account number into any of the four
+    # search boxes shows a typeahead suggestion, not just a blank dropdown
+    # until Enter is pressed.
+    if search_logic.is_numeric_account_query(q):
+        exact = resolve_exact_parcel(q)
+        if exact:
+            return jsonify({"ok": True, "results": [{
+                "geo_id":  exact["geo_id"],
+                "address": exact.get("situs_address") or "",
+                "owner":   exact.get("owner_name") or "",
+            }]})
+        # Falls through to address-text matching below on a numeric miss —
+        # e.g. a 5-digit zip typed alone shouldn't just dead-end here.
 
-    # AJR* geo_ids = personal property supplement accounts loaded from AJR
-    # (not real, situs-addressable property) — same convention used
-    # elsewhere in this file (see the ~8 other `NOT LIKE 'AJR%%'` call
-    # sites), excluded here too since this is an address lookup for real
-    # parcels, not placeholder accounts.
-    #
-    # Relevance ranking: the match condition stays a substring ILIKE (so a
-    # mid-address search like "Lamar" still works), but results where
-    # situs_address STARTS WITH the query now rank above ones that only
-    # contain it elsewhere, via a CASE-based sort key, before falling back
-    # to alphabetical within each tier. Without this, e.g. "1201 S LAMAR
-    # BLVD" (searching "1201") could rank behind any other address merely
-    # containing "1201" somewhere, sorted alphabetically — which is exactly
-    # what was happening before this fix.
-    #
-    # Note: geo_id/parcel-ID matching (normalize_parcel_id()) is a
-    # completely separate code path used only by the "/" route's parcel-ID
-    # search — this endpoint has never done geo_id matching and doesn't
-    # need to preserve any such behavior here.
-    #
-    # pg_trgm index (idx_parcel_situs_trgm) will be used if installed;
-    # ILIKE works correctly either way — just slower without the index.
-    rows = query("""
-        SELECT geo_id, situs_address, owner_name, state_cd1, neighborhood_cd
-        FROM   parcel
-        WHERE  UPPER(situs_address) ILIKE %(pattern)s
-          AND  geo_id NOT LIKE 'AJR%%'
-        ORDER  BY
-            CASE WHEN UPPER(situs_address) LIKE %(prefix_pattern)s THEN 0 ELSE 1 END,
-            situs_address
-        LIMIT  10
-    """, {"pattern": f"%{q_norm}%", "prefix_pattern": f"{q_norm}%"})
-
+    rows = search_parcels_by_address(q, limit=8)
     results = [
         {
-            "geo_id":       r["geo_id"],
-            "address":      r["situs_address"] or "",
-            "owner":        r["owner_name"] or "",
-            "state_cd1":    r["state_cd1"] or "",
-            "neighborhood": r["neighborhood_cd"] or "",
+            "geo_id":  r["geo_id"],
+            "address": r.get("situs_address") or "",
+            "owner":   r.get("owner_name") or "",
         }
         for r in rows
     ]

@@ -177,6 +177,29 @@ scheme distinct from TCAD's certified-export `geo_id`, which the loader's
 `PARCEL[:10]` convention wouldn't catch even if they are billed. Not yet
 run through the same fuzzy-match check as the `A` set.
 
+### Address search: parcels with blank situs_address are reachable only by account number (July 2026)
+
+`search_parcels_by_address()` (`app.py`, backing both the `/` route and
+`/api/address_search` — see the Search overhaul Phase 2 build, July 2026)
+matches only against `parcel.situs_address`. Investigation of the 2021 AJR
+file (`227000`-entity rows, 472,403 total) found **0.80% of parcels have a
+completely blank `situs_address`** — no street text at all, not just a
+missing city/zip. These accounts (and any 2025/2026-only parcels never
+present in an AJR file, which would inherit the same gap since
+`situs_address` is written only by `load_ajr.py`'s upsert) cannot be found by
+typing any address text into any of the four search boxes, no matter how the
+query is phrased — there is nothing there to match against.
+
+**Workaround, unaffected by this limitation:** these parcels remain fully
+reachable by TCAD account number (geo_id) or prop_id, in every search box and
+via direct URL (`/parcel/<geo_id>`). `resolve_exact_parcel()` has no
+dependency on `situs_address`.
+
+**Not fixed as part of the Phase 2 build** — out of scope per the go-ahead
+brief (D5: document, don't build). A future fix would need a fallback match
+against another field (e.g. owner_name, legal_desc) for the blank-address
+population specifically, which is a separate scoping decision.
+
 ### tax_billing.data_source / confidence_level — write-time fix (July 2026)
 
 `load_tax_current.py` now tags every row it writes with

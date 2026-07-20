@@ -433,37 +433,12 @@
     });
 })();
 
-// ── Address typeahead (reuses /api/address_search, same as home search) ──────
-(function () {
-  const input = document.getElementById("spQ");
-  const list  = document.getElementById("spTaList");
-  if (!input || !list) return;
-  let t = null;
-  input.addEventListener("input", function () {
-    const v = input.value.trim();
-    clearTimeout(t);
-    if (v.length < 3) { list.style.display = "none"; return; }
-    t = setTimeout(() => {
-      fetch("/api/address_search?q=" + encodeURIComponent(v))
-        .then(r => r.json())
-        .then(d => {
-          const rows = (d.results || []);
-          if (!rows.length) { list.style.display = "none"; return; }
-          list.innerHTML = rows.map(r =>
-            `<a class="ta-item" href="/parcel/${encodeURIComponent(r.geo_id)}">
-               <span>${r.address || '(address unknown)'}</span>
-               <span class="text-muted ms-2" style="font-family:var(--font-mono);font-size:11px;">${r.geo_id}</span>
-             </a>`).join('');
-          // Same fix as initTypeaheadSelect()'s render(): .ta-list's CSS
-          // class default is display:none, so clearing the inline style
-          // back to "" doesn't show it — it has to be set to a real value.
-          list.style.display = "block";
-        })
-        .catch(() => { list.style.display = "none"; });
-    }, 180);
-  });
-  input.addEventListener("blur", () => setTimeout(() => { list.style.display = "none"; }, 160));
-})();
+// ── Address typeahead — shared script (Cowork brief "Search overhaul —
+// Phase 2 go-ahead", July 2026, D1). Replaces this page's own previous
+// independent copy of the debounce/fetch/render logic. This box's Enter
+// behavior (submit to "/") is unchanged — the shared script only intercepts
+// Enter when a dropdown suggestion is highlighted. ──────────────────────────
+ParcelTypeahead.attach({ inputId: "spQ" });
 
 // ── Filter Parcels panel ───────────────────────────────────────────────────
 // Reuses the Rate Trends page's "type to filter a visible option list"
