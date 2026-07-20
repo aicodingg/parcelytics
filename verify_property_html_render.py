@@ -48,6 +48,15 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 # keys) and masking template bugs that only StrictUndefined would catch.
 from tax_logic.texas import derive_2026_baseline as _derive_2026_baseline
 
+# Cowork brief "Version Display + Single Source of Truth", July 2026: base.html
+# now reads config.VERSION, injected in production by app.py's inject_mode()
+# context processor for every request regardless of what an individual route's
+# render_template() call passes. The real config module is imported and
+# registered as a Jinja global below (same treatment as url_for/request) so
+# every existing scenario picks this up automatically, with no per-scenario
+# context dict needing an explicit "config" key added.
+import config as _real_config
+
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
 # ── Flask-Jinja integration stubs ───────────────────────────────────────────
@@ -81,6 +90,7 @@ def make_env():
     )
     env.globals["url_for"] = _url_for
     env.globals["request"] = _FakeRequest()
+    env.globals["config"] = _real_config
     env.filters["tojson"] = _tojson
     return env
 
@@ -1744,6 +1754,145 @@ def run():
     else:
         print("FAIL [quarantine_contamination.py source] generic sanity bound check missing or no longer distinctly labeled")
         all_ok = False
+
+    # ── Cowork brief "Version Display + Single Source of Truth" (July 2026):
+    # base.html's footer now reads config.VERSION (injected as a Jinja global
+    # in make_env(), mirroring app.py's real inject_mode() context processor).
+    # Real render check -- confirms the actual VERSION file's contents reach
+    # the actual footer markup, not just that config.VERSION is importable.
+    print()
+    print("── base.html: version display ──")
+    _version_ctx = base_context()
+    _version_html = tmpl.render(**_version_ctx)
+    _expected_version_str = f"v{_real_config.VERSION}"
+    if _real_config.VERSION == "1.0.0" and _expected_version_str in _version_html:
+        print(f"PASS [base.html footer] '{_expected_version_str}' found in rendered output, sourced from the real VERSION file (config.VERSION == '1.0.0')")
+    else:
+        print(f"FAIL [base.html footer] expected '{_expected_version_str}' in rendered output (VERSION file contents: {_real_config.VERSION!r}) -- not found, or VERSION file no longer reads '1.0.0'")
+        all_ok = False
+
+    # ── Cowork brief "Terms of Service, Privacy Policy, Disclaimer Page,
+    # Beta Popup, Footer Notice" (July 2026): real renders of the three new
+    # legal pages, the site-wide beta popup markup, and the footer additions.
+    # These templates don't need property.html's elaborate mock context --
+    # they extend base.html directly, so the only per-render context key
+    # needed (beyond the url_for/request/config globals already registered)
+    # is `mode`, which base.html's nav reads directly (not a Jinja global in
+    # this harness, unlike production where inject_mode() supplies it).
+    print()
+    print("── /terms, /privacy, /disclaimer: real render + exact-text spot checks ──")
+
+    def _render_simple(template_name):
+        t = env.get_template(template_name)
+        html = t.render(mode="homeowner")
+        if "{%" in html or "#}" in html:
+            print(f"FAIL [{template_name}] raw Jinja delimiter leaked into rendered output")
+            return html, False
+        return html, True
+
+    _terms_html, _terms_ok = _render_simple("terms.html")
+    all_ok = all_ok and _terms_ok
+    _terms_expected_strings = [
+        "Parcelytics — Terms of Service",
+        "Last updated: Jul 19, 2026",
+        "By accessing or using Parcelytics (\"the Service,\" \"we,\" \"us\"), you agree to",
+        "Parcelytics is currently in beta.",
+        "Parcelytics is not affiliated with, endorsed by, or officially",
+        "connected to any government entity.",
+        "TO THE MAXIMUM EXTENT PERMITTED BY LAW, PARCELYTICS AND ITS OPERATORS",
+        "THE SERVICE IS PROVIDED WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR",
+        "These Terms are governed by the laws of the State of Texas",
+        "Questions about these Terms:",
+        "parcelytics@gmail.com",
+        "Use automated tools to scrape, crawl, or bulk-extract data from the Service beyond normal browsing use",
+    ]
+    _missing = [s for s in _terms_expected_strings if s not in _terms_html]
+    if not _missing:
+        print(f"PASS [terms.html] all {len(_terms_expected_strings)} exact-text spot-check strings found in rendered output")
+    else:
+        print(f"FAIL [terms.html] missing expected strings: {_missing}")
+        all_ok = False
+
+    _privacy_html, _privacy_ok = _render_simple("privacy.html")
+    all_ok = all_ok and _privacy_ok
+    _privacy_expected_strings = [
+        "Parcelytics — Privacy Policy",
+        "Last updated: Jul 19, 2026",
+        "Parcelytics does not currently require an account to use the Service.",
+        "Error and diagnostic data via Sentry (our error-monitoring provider)",
+        "we do not send request bodies, headers, or other personally-identifying details to Sentry.",
+        "We do not sell your data.",
+        "Render (hosting and database infrastructure)",
+        "Sentry (error monitoring)",
+        "to remember",
+        "that you've seen the beta/disclaimer notice so it isn't shown again.",
+        "Our database is not publicly accessible and is restricted to authorized",
+        "Parcelytics is not directed at children under 13",
+        "Questions about this Privacy Policy:",
+    ]
+    _missing = [s for s in _privacy_expected_strings if s not in _privacy_html]
+    if not _missing:
+        print(f"PASS [privacy.html] all {len(_privacy_expected_strings)} exact-text spot-check strings found in rendered output")
+    else:
+        print(f"FAIL [privacy.html] missing expected strings: {_missing}")
+        all_ok = False
+
+    _disclaimer_html, _disclaimer_ok = _render_simple("disclaimer.html")
+    all_ok = all_ok and _disclaimer_ok
+    _disclaimer_expected_strings = [
+        "Parcelytics — Disclaimer",
+        "Last updated: Jul 19, 2026",
+        "NOT INVESTMENT, TAX, OR LEGAL ADVICE",
+        "Always consult a licensed",
+        "DATA ACCURACY",
+        "NOT AFFILIATED WITH ANY GOVERNMENT ENTITY",
+        "For the full legal terms governing your use of this site, see our",
+        'href="/terms"',
+        'href="/privacy"',
+    ]
+    _missing = [s for s in _disclaimer_expected_strings if s not in _disclaimer_html]
+    if not _missing:
+        print(f"PASS [disclaimer.html] all {len(_disclaimer_expected_strings)} exact-text spot-check strings found in rendered output")
+    else:
+        print(f"FAIL [disclaimer.html] missing expected strings: {_missing}")
+        all_ok = False
+
+    # base.html itself (via any of the above renders, since they all extend
+    # it): beta popup markup + footer additions.
+    print()
+    print("── base.html: beta popup markup + footer additions ──")
+    _popup_checks = {
+        'id="betaDisclaimerModal"': "modal element present",
+        'data-bs-backdrop="static"': "backdrop-click dismissal disabled (only Continue/× dismiss, per brief)",
+        'data-bs-keyboard="false"': "Escape-key dismissal disabled (only Continue/× dismiss, per brief)",
+        "Parcelytics is in beta.": "modal title text",
+        "We're still actively testing and refining this platform.": "modal body paragraph 1",
+        "always verify anything important directly with the relevant": "modal body paragraph 2",
+        "By clicking Continue, you agree to our": "modal body paragraph 3 (agreement line)",
+        ">Continue<": "Continue button text",
+        'class="btn-close" data-bs-dismiss="modal"': "close (×) icon, same dismiss mechanism as Continue",
+        "beta-disclaimer.js": "popup JS included",
+    }
+    for needle, desc in _popup_checks.items():
+        if needle in _terms_html:
+            print(f"PASS [base.html popup] {desc}")
+        else:
+            print(f"FAIL [base.html popup] {desc} -- expected {needle!r} not found in rendered output")
+            all_ok = False
+
+    _footer_checks = {
+        'href="/terms"': "footer links to Terms of Service",
+        'href="/privacy"': "footer links to Privacy Policy",
+        'href="/disclaimer"': "footer links to Disclaimer",
+        "Parcelytics is not affiliated with any government entity.": "non-affiliation line present",
+        "Not legal or tax advice": "pre-existing footer line untouched",
+    }
+    for needle, desc in _footer_checks.items():
+        if needle in _terms_html:
+            print(f"PASS [base.html footer] {desc}")
+        else:
+            print(f"FAIL [base.html footer] {desc} -- expected {needle!r} not found in rendered output")
+            all_ok = False
 
     return all_ok
 

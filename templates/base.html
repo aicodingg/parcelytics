@@ -105,6 +105,9 @@
       <a href="/snapshot">Market snapshot</a>
       <a href="/rates">Rate trends</a>
       <a href="/about">About</a>
+      <a href="/terms">Terms of Service</a>
+      <a href="/privacy">Privacy Policy</a>
+      <a href="/disclaimer">Disclaimer</a>
     </div>
     <div class="footer-col">
       <div class="footer-col-title">Data sources — Travis County, TX</div>
@@ -131,12 +134,64 @@
   </div>
   <div class="footer-bottom">
     <span>Data: Travis Central Appraisal District &amp; Travis County Tax Office · Live market: Travis County, TX</span>
-    <span>Not legal or tax advice</span>
+    {# Cowork brief "Terms of Service, Privacy Policy, Disclaimer Page, Beta
+       Popup, Footer Notice", July 2026, item 5: non-affiliation line added
+       to the right side of the footer. Grouped with the existing two spans
+       in their own right-aligned wrapper (rather than added as a 4th
+       top-level child of this flex row) so .footer-bottom's own
+       justify-content:space-between doesn't redistribute and shift the two
+       existing, untouched lines' positions -- they stay exactly where they
+       were, just now grouped together on the right along with the new
+       line. #}
+    <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center;">
+      <span>Not legal or tax advice</span>
+      <span>Parcelytics is not affiliated with any government entity.</span>
+      <span style="font-size:11px; color:var(--text-3);">v{{ config.VERSION }}</span>
+    </div>
   </div>
 </footer>
 
+{# Beta disclaimer popup (Cowork brief "Terms of Service, Privacy Policy,
+   Disclaimer Page, Beta Popup, Footer Notice", July 2026, item 4). Markup
+   lives in base.html so it's site-wide on first page load, not just the
+   homepage. Shown/hidden via beta-disclaimer.js below, gated on the
+   parcelytics_disclaimer_seen localStorage flag -- see that script for the
+   show/dismiss logic and scroll-lock override rationale. #}
+<div class="modal fade beta-disclaimer-modal" id="betaDisclaimerModal" tabindex="-1"
+     aria-labelledby="betaDisclaimerLabel" aria-hidden="true"
+     data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="betaDisclaimerLabel">Parcelytics is in beta.</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>
+          We're still actively testing and refining this platform. Data may contain
+          errors, and features may change without notice.
+        </p>
+        <p>
+          Nothing on this site is investment, tax, legal, or financial advice. Every
+          figure comes from a specific government source with its own confidence
+          label — always verify anything important directly with the relevant
+          county office before making a decision based on it.
+        </p>
+        <p>
+          By clicking Continue, you agree to our <a href="/terms">Terms of Service</a> and
+          <a href="/privacy">Privacy Policy</a>.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-cta" data-bs-dismiss="modal">Continue</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='beta-disclaimer.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

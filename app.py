@@ -1968,7 +1968,9 @@ app.secret_key = config.FLASK_SECRET
 # "/search" (confirmed: renders a static coverage-map page, no query at
 # all), "/about", "/info", "/styleguide", "/api/benchmark/meta" (metadata,
 # not the aggregation itself), "/api/news", "/rates", "/api/rates",
-# "/api/parcel_entities", "/parcels".
+# "/api/parcel_entities", "/parcels". Also "/terms", "/privacy",
+# "/disclaimer" (added later, "Terms of Service..." Cowork brief) -- static
+# legal content, same category as /about.
 limiter = Limiter(
     get_remote_address,
     app=app,
@@ -1997,7 +1999,11 @@ def _resolve_mode():
 
 @app.context_processor
 def inject_mode():
-    return {"mode": _resolve_mode()}
+    # Cowork brief "Version Display + Single Source of Truth", July 2026:
+    # also inject `config` here so templates can read config.VERSION (and
+    # any other config constant) without each route having to pass it
+    # through render_template() individually.
+    return {"mode": _resolve_mode(), "config": config}
 
 
 @app.after_request
@@ -5791,6 +5797,25 @@ def info():
 @app.route("/about")
 def about():
     return render_template("about.html")
+
+
+# Cowork brief "Terms of Service, Privacy Policy, Disclaimer Page, Beta
+# Popup, Footer Notice", July 2026. Static legal content, no DB/network
+# involved -- same undecorated (global-rate-limit-only) treatment as /about,
+# /info, /styleguide above.
+@app.route("/terms")
+def terms():
+    return render_template("terms.html")
+
+
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html")
+
+
+@app.route("/disclaimer")
+def disclaimer():
+    return render_template("disclaimer.html")
 
 
 @app.route("/styleguide")

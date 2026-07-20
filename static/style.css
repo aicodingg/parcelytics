@@ -1689,3 +1689,39 @@ footer:not(.site-footer) {
   table.annual-trends-table td:first-child { background: var(--surface); }
   table.annual-trends-table th:first-child { background: var(--surface-2); }
 }
+
+/* ── Beta disclaimer popup ──────────────────────────────────────────────────── */
+/* Cowork brief "Terms of Service, Privacy Policy, Disclaimer Page, Beta
+   Popup, Footer Notice", July 2026, item 4. Built on Bootstrap's own Modal
+   component (already loaded site-wide via bootstrap.bundle.min.js) rather
+   than a hand-rolled overlay -- no other modal/dialog component existed
+   anywhere in this codebase to match against (confirmed via a full grep
+   before building this), so Bootstrap's own primitive is the closest thing
+   to an existing pattern, restyled with this site's own tokens below.
+   Only the scroll-lock behavior is deliberately overridden: the brief calls
+   for the popup to NOT block page scroll while shown, which differs from
+   Bootstrap's own default (body overflow:hidden + scrollbar-gutter padding
+   while a modal is open). */
+body.modal-open {
+  overflow: visible !important;
+  padding-right: 0 !important;
+}
+.beta-disclaimer-modal .modal-content {
+  border-radius: var(--r-sm);
+  border: none;
+  box-shadow: var(--shadow-3);
+}
+.beta-disclaimer-modal .modal-title {
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-lg);
+}
+.beta-disclaimer-modal .modal-body p {
+  color: var(--text-2);
+  font-size: var(--fs-base);
+  line-height: var(--lh-body);
+}
+.beta-disclaimer-modal .modal-body p:last-child {
+  margin-bottom: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}

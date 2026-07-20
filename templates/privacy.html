@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Privacy Policy — Parcelytics{% endblock %}
+{% block container_class %} is-frontdoor{% endblock %}
+
+{% block content %}
+
+{# New page (July 2026, "Terms of Service, Privacy Policy, Disclaimer Page,
+   Beta Popup, Footer Notice" Cowork brief, item 2): same fd-section pattern
+   as about.html / terms.html. Body text is Diego's exact copy, transcribed
+   verbatim -- only "[today's date]" was substituted, matching this
+   codebase's existing abbreviated-month date convention. #}
+<section class="fd-section-tight">
+  <div class="fd-kicker">Legal</div>
+  <h2 class="fd-h2">Parcelytics — Privacy Policy</h2>
+  <p class="fd-lead">Last updated: Jul 19, 2026</p>
+</section>
+
+<section class="fd-section-tight">
+  <div class="card">
+    <div class="card-body">
+
+      <h3 style="font-size:15px; font-weight:700;">1. WHAT WE COLLECT</h3>
+      <p class="mb-2">
+        Parcelytics does not currently require an account to use the Service.
+        We collect:
+      </p>
+      <ul>
+        <li>Standard web server logs (IP address, browser type, pages visited, timestamps) for operating and securing the Service</li>
+        <li>IP addresses specifically to enforce rate limits and prevent abuse</li>
+        <li>Error and diagnostic data via Sentry (our error-monitoring provider) when something goes wrong on the Service. This is limited to technical error information (stack traces, the page/action that triggered the error); we do not send request bodies, headers, or other personally-identifying details to Sentry.</li>
+      </ul>
+      <p>
+        We do not currently collect names, email addresses, or payment
+        information, since accounts and payments are not yet part of the
+        Service.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">2. WHAT WE DON'T DO</h3>
+      <p>
+        We do not sell your data. We do not share data with third parties for
+        their own marketing purposes.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">3. THIRD-PARTY SERVICES</h3>
+      <p class="mb-2">
+        We use the following third-party services to operate Parcelytics, each
+        of which may process limited technical data as described above:
+      </p>
+      <ul>
+        <li>Render (hosting and database infrastructure)</li>
+        <li>Sentry (error monitoring)</li>
+      </ul>
+      <p>
+        These providers have their own privacy practices governing the data
+        they process on our behalf.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">4. COOKIES AND LOCAL STORAGE</h3>
+      <p>
+        We use minimal, functional browser storage — for example, to remember
+        that you've seen the beta/disclaimer notice so it isn't shown again.
+        We do not use third-party advertising or tracking cookies.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">5. DATA SECURITY</h3>
+      <p>
+        Our database is not publicly accessible and is restricted to authorized
+        connections only. The Service is served over HTTPS.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">6. CHILDREN'S PRIVACY</h3>
+      <p>
+        Parcelytics is not directed at children under 13, and we do not
+        knowingly collect data from children under 13.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">7. YOUR RIGHTS</h3>
+      <p>
+        If you have questions about data we may have collected in connection
+        with your use of the Service, contact us at <a href="mailto:parcelytics@gmail.com">parcelytics@gmail.com</a>.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">8. CHANGES TO THIS POLICY</h3>
+      <p>
+        We may update this Privacy Policy as the Service evolves (for example,
+        when accounts or payments are introduced). Material changes will be
+        reflected by updating the "Last updated" date above.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">9. CONTACT</h3>
+      <p class="mb-0">
+        Questions about this Privacy Policy: <a href="mailto:parcelytics@gmail.com">parcelytics@gmail.com</a>
+      </p>
+
+    </div>
+  </div>
+</section>
+
+{% endblock %}

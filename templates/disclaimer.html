@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Disclaimer — Parcelytics{% endblock %}
+{% block container_class %} is-frontdoor{% endblock %}
+
+{% block content %}
+
+{# New page (July 2026, "Terms of Service, Privacy Policy, Disclaimer Page,
+   Beta Popup, Footer Notice" Cowork brief, item 3): same fd-section pattern
+   as about.html / terms.html / privacy.html. Body text is Diego's exact
+   copy, transcribed verbatim -- only "[today's date]" was substituted. The
+   closing line's references to "Terms of Service" and "Privacy Policy" are
+   linked to /terms and /privacy respectively (wording itself unchanged). #}
+<section class="fd-section-tight">
+  <div class="fd-kicker">Legal</div>
+  <h2 class="fd-h2">Parcelytics — Disclaimer</h2>
+  <p class="fd-lead">Last updated: Jul 19, 2026</p>
+</section>
+
+<section class="fd-section-tight">
+  <div class="card">
+    <div class="card-body">
+
+      <p>
+        Parcelytics is currently in beta. Features, data, and functionality may
+        change, be removed, or be interrupted at any time without notice.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">NOT INVESTMENT, TAX, OR LEGAL ADVICE</h3>
+      <p>
+        Nothing on Parcelytics constitutes investment, financial, tax, legal, or
+        other professional advice. Parcelytics does not have a fiduciary
+        relationship with any user. Estimates, projections, and calculated
+        figures (including but not limited to tax projections, savings
+        estimates, and post-acquisition estimates) are illustrative only and
+        are not guarantees of any future outcome. Always consult a licensed
+        professional — an attorney, accountant, tax advisor, or real estate
+        professional — before making a decision based on information from this
+        site.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">DATA ACCURACY</h3>
+      <p>
+        We source data directly from official government records and label its
+        confidence level honestly (Verified, Preliminary, Partial, Estimated,
+        or Not Available). However, government source data itself may contain
+        errors, omissions, or delays, and we do not guarantee the accuracy,
+        completeness, or timeliness of any information on the Service.
+        Confidence labels reflect our data-sourcing methodology, not a
+        guarantee of correctness. Always verify anything important directly
+        with the relevant government office before relying on it.
+      </p>
+
+      <h3 style="font-size:15px; font-weight:700;">NOT AFFILIATED WITH ANY GOVERNMENT ENTITY</h3>
+      <p>
+        Parcelytics is an independent platform and is not affiliated with,
+        endorsed by, or officially connected to any government entity.
+      </p>
+
+      <p class="mb-0">
+        For the full legal terms governing your use of this site, see our
+        <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a>.
+      </p>
+
+    </div>
+  </div>
+</section>
+
+{% endblock %}

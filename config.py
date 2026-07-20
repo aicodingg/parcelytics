@@ -144,3 +144,10 @@ if not FLASK_SECRET:
 # skips initialization entirely when this is unset (e.g. local dev without
 # it exported), rather than erroring or silently using a placeholder.
 SENTRY_DSN = os.environ.get("SENTRY_DSN")
+
+# ── Version ───────────────────────────────────────────────────────────────────
+# Cowork brief "Version Display + Single Source of Truth", July 2026. The
+# VERSION file at the repo root is the ONE place this number lives -- bump it
+# there and it's picked up everywhere (currently: the site footer) with no
+# other edit required. Read once at import time, not per-request.
+VERSION = open(os.path.join(os.path.dirname(__file__), "VERSION")).read().strip()
