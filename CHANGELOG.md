@@ -8,6 +8,9 @@ All notable changes to Parcelytics are tracked here, using [Semantic Versioning]
 
 Version numbers are tied to actual production deploys, not every commit.
 
+## [1.3.4] — 2026-07-21
+- Added Plausible Analytics (privacy-friendly, no cookies) site-wide via base.html
+
 ## [1.3.3] — 2026-07-21
 - Property page: added disclosure tooltips on the estimated annual tax figures (Investment Snapshot and the 2026 KPI card) explaining that the estimate applies one combined rate to a single taxable value and doesn't account for exemptions that vary by taxing entity — shown on every parcel, not just ones with a recorded exemption code, since that field is incomplete on preliminary-year data
 - Added a caption on the 2025→2026 Total Tax change confirming the estimate uses unchanged 2025 rates (not a rate increase), while noting the two years' figures aren't computed identically
