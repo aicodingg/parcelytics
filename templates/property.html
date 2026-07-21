@@ -175,36 +175,77 @@
 <div class="card mb-4 tax-calendar-card">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>{{ tax_calendar.cycle_year }} Property Tax Calendar</span>
-    <span class="text-muted" style="font-size:11px; font-weight:400;">Today: {{ tax_calendar.today.strftime('%B %-d, %Y') }}</span>
+    <span class="text-muted" style="font-size:11px; font-weight:400;">◷ Today: {{ tax_calendar.today.strftime('%B %-d, %Y') }}</span>
   </div>
   <div class="card-body">
-    <div class="tax-calendar-track">
+    {# "The line is the indicator" redesign (Fable's design spec, July
+       2026) -- replaces the round-1/round-2 floating "You are here" badge
+       entirely. Rather than a separately-positioned element that has to
+       be kept clear of each node's own label/date text (font-metrics-
+       dependent, and the source of both live-bug reports so far), the
+       TRACK itself is the indicator: a progress-fill bar plus a thin
+       "today" tick, both driven off the SAME --today-frac custom property
+       (emitted inline below, from build_tax_calendar() in app.py) so they
+       cannot disagree. All text -- including the countdown, previously
+       the piece most prone to collide -- now lives in normal document
+       flow as a flex-column child of the upcoming milestone's own label
+       stack, so collision is impossible by CSS specification rather than
+       by pixel arithmetic. today_frac_pct is derived in app.py from the
+       exact same current_index/here_fraction values the prior two rounds
+       already verified -- no new date math, just a different way of
+       expressing an already-correct position. #}
+    <div class="tax-calendar-track-row">
+      <div class="tax-calendar-track" style="--today-frac: {{ tax_calendar.today_frac_pct }}%;">
+        <div class="tax-calendar-fill"></div>
+        <div class="tax-calendar-tick" title="Today · {{ tax_calendar.today.strftime('%B %-d, %Y') }}"></div>
+        {% for m in tax_calendar.milestones %}
+        {# build_tax_calendar() (app.py) only sets "current"/"days_until"/
+           "countdown_full"/"countdown_compact" on the one matching
+           milestone -- genuinely absent, not present-but-None, on the
+           rest, hence the `is defined` guards (same convention used
+           elsewhere in this template, e.g. `kpi.yoy_pct is defined`). #}
+        {% set _is_next = m.current is defined and m.current %}
+        <div class="tax-calendar-tdot {% if _is_next %}next{% elif m.passed %}passed{% else %}future{% endif %}"
+             style="left: calc({{ loop.index0 }} * 100% / 6);"
+             title="{{ m.label }} — {{ m.date.strftime('%b %-d') }}"></div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="tax-calendar-labels">
       {% for m in tax_calendar.milestones %}
-      {# build_tax_calendar() (app.py) only sets the "current"/"days_to_next"
-         keys on the one matching milestone, and "parcel_note" only where a
-         real per-parcel signal exists -- so these three are genuinely
-         absent (not present-but-None) on most milestones. StrictUndefined
-         raises on a bare `m.current` truthiness check when the key is
-         missing entirely, hence the explicit `is defined` guard on each
-         (same convention this template already uses elsewhere, e.g.
-         `kpi.yoy_pct is defined`). #}
-      {% set _is_current = m.current is defined and m.current %}
-      <div class="tax-calendar-node {% if _is_current %}current{% elif m.passed %}passed{% else %}upcoming{% endif %}"
+      {% set _is_next = m.current is defined and m.current %}
+      <div class="tax-calendar-label-stack {% if _is_next %}next{% elif m.passed %}passed{% else %}future{% endif %}"
            title="{{ m.desc }}">
-        <div class="tax-calendar-dot"></div>
-        <div class="tax-calendar-label">
-          {{ m.label }}{% if _is_current %}<span class="tax-calendar-here">You are here</span>{% endif %}
-        </div>
+        <div class="tax-calendar-label">{{ m.label }}</div>
         <div class="tax-calendar-date">{{ m.date.strftime('%b %-d') }}</div>
-        {% if _is_current and m.days_to_next is defined %}
-        <div class="tax-calendar-countdown">{{ m.days_to_next }} day{{ 's' if m.days_to_next != 1 else '' }} to next</div>
-        {% endif %}
-        {% if m.parcel_note is defined and m.parcel_note %}
-        <div class="tax-calendar-note">{{ m.parcel_note }}</div>
+        {# Countdown pill: a NORMAL flow child of this milestone's own
+           column, only for the one milestone that's "next" -- it can only
+           ever make THIS column taller, never intrude into a neighboring
+           column's space (spec's whole point: no more collision-by-
+           construction bugs). countdown_full renders at normal widths;
+           countdown_compact is the same string shortened for <=640px
+           (static/style.css media query swaps which one is visible --
+           both are always in the DOM so no JS is needed either way). #}
+        {% if _is_next and m.countdown_full is defined %}
+        <div class="tax-calendar-countdown-pill">
+          <span class="tax-calendar-countdown-full">{{ m.countdown_full }}</span>
+          <span class="tax-calendar-countdown-compact">{{ m.countdown_compact }}</span>
+        </div>
         {% endif %}
       </div>
       {% endfor %}
     </div>
+    {# Amber per-parcel callout: moved to a full-width sibling below the
+       whole grid (spec §4) -- previously rendered INSIDE a single node's
+       own narrow column, forcing that one column taller than its
+       neighbors. In practice at most one milestone ever carries a
+       parcel_note, but this loop doesn't assume that -- it renders one
+       full-width callout per note that actually exists. #}
+    {% for m in tax_calendar.milestones %}
+    {% if m.parcel_note is defined and m.parcel_note %}
+    <div class="tax-calendar-note">{{ m.parcel_note }}</div>
+    {% endif %}
+    {% endfor %}
   </div>
   <div class="card-footer text-muted small">
     Statutory Travis County annual property-tax calendar — Tax Code §23.01 (valuation), §41.44 (protest deadline);

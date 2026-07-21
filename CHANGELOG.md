@@ -8,6 +8,11 @@ All notable changes to Parcelytics are tracked here, using [Semantic Versioning]
 
 Version numbers are tied to actual production deploys, not every commit.
 
+## [1.3.2] — 2026-07-21
+- Property tax calendar: the "current" milestone is no longer mislabeled — a passed deadline now shows a plain checkmark, and the next upcoming milestone gets an accurate day countdown
+- Redesigned "today" indicator (outside design review by Fable, after two in-house attempts): the connecting track is now a progress fill with a today tick at the true proportional position; the countdown moved into a normal-flow pill under the next milestone's own label, eliminating the text/label overlap bugs from earlier attempts by construction
+- The "values still Preliminary" note is now a full-width row below the calendar instead of crowding a single milestone
+
 ## [1.3.1] — 2026-07-20
 - Coverage Map: market county shapes are magnified in place (real silhouettes scaled around their true centroids to a minimum visible size via one computed formula) so all six markets are findable at national scale; disclosure microcopy added by the legend
 

@@ -1417,68 +1417,155 @@ path.county[data-market] {
 /* ════════════════════════════════════════════════════════════════════════════
    TAX CALENDAR STRIP (July 2026 Cowork brief, item 1) — "where a parcel sits
    in the annual property tax cycle right now"
+
+   "The line is the indicator" redesign (Fable's design spec, July 2026,
+   commissioned after two rounds of live-screenshot bug reports against the
+   prior floating "You are here" badge). Both failed rounds shared one
+   structural decision: a badge, absolutely positioned off the track, that
+   had to be kept clear of each node's own label/date text using pixel and
+   line-height arithmetic -- exactly the kind of font-metrics-dependent math
+   a browserless sandbox can compute but never fully trust without a live
+   screenshot. This redesign removes that entire class of bug: the track
+   ITSELF is the indicator (a progress-fill bar + a thin "today" tick, both
+   driven by ONE --today-frac custom property emitted inline on
+   .tax-calendar-track by templates/property.html, so fill and tick cannot
+   disagree -- spec acceptance criterion 4), dots sit ON the track rather
+   than floating above it, and ALL text -- including the countdown,
+   previously the single most collision-prone element -- lives in normal
+   document flow as a flex-column child of each milestone's own label
+   stack. Collision is now impossible by CSS specification, not by tuned
+   offsets: a tall countdown pill can only ever push its OWN column's
+   height, which the other 6 columns (display:flex, align-items:
+   flex-start) simply tolerate by being shorter, the same way any ordinary
+   flex row of unequal-height children behaves.
    ════════════════════════════════════════════════════════════════════════════ */
+
+/* Track row: a fixed-height (no floating content anymore, so a fixed
+   height is safe) positioning context for the bar + its fill/tick/dots.
+   20px comfortably fits the largest child (the 12px "next" dot) centered
+   vertically with room to spare -- verified numerically in the
+   accompanying harness, not just eyeballed. */
+.tax-calendar-track-row {
+  position: relative;
+  height: 20px;
+}
+/* The bar's own left/right insets (100%/14 each) put its ends exactly
+   under the FIRST and LAST milestone's own center in the 7-column label
+   grid below: each column is 100%/7 wide, so a column's center sits
+   100%/14 in from that column's outer edge. That means a dot placed at
+   `left: calc(i * 100%/6)` inside this bar (i = 0..6, 6 equal gaps across
+   7 dots) lands exactly under milestone i's own label with no separate
+   alignment step between the bar and the grid below it. */
 .tax-calendar-track {
+  position: absolute;
+  top: 50%;
+  left: calc(100% / 14);
+  right: calc(100% / 14);
+  height: 4px;
+  transform: translateY(-50%);
+  background: #E2E8F0;
+  border-radius: 2px;
+}
+.tax-calendar-fill {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: var(--today-frac);
+  background: #12B76A;
+  border-radius: 2px;
+}
+/* Today tick: centered the same way the dots are (top:50% of the track +
+   translate(-50%,-50%) of its OWN box), so it shares the track's own
+   vertical center exactly -- no negative top offset guessed against
+   content height, the bug that caused both prior rounds' collisions. */
+.tax-calendar-tick {
+  position: absolute;
+  top: 50%;
+  left: var(--today-frac);
+  width: 2px; height: 12px;
+  background: #1D2939;
+  transform: translate(-1px, -50%);
+  border-radius: 1px;
+  z-index: 2;
+}
+.tax-calendar-tdot {
+  position: absolute;
+  top: 50%;
+  left: 0; /* overridden per-dot by the inline `left: calc(i * 100%/6)` style */
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  box-sizing: border-box;
+  z-index: 1;
+  cursor: help;
+}
+.tax-calendar-tdot.passed { background: #12B76A; }
+.tax-calendar-tdot.future { background: #CBD5E1; }
+.tax-calendar-tdot.next {
+  background: #4263EB;
+  width: 12px; height: 12px;
+  box-shadow: 0 0 0 3px rgba(66, 99, 235, 0.18);
+}
+
+/* Label stacks: normal document flow, 7 equal columns matching the dots
+   above. Nothing in this block is absolutely positioned -- the countdown
+   pill (the element that collided in both prior rounds) is just another
+   flex-column child here, so it can only ever grow ITS OWN stack taller,
+   never overlap a sibling's. */
+.tax-calendar-labels {
   display: flex;
   align-items: flex-start;
   gap: 0;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  padding-top: 4px;
 }
-.tax-calendar-node {
-  flex: 1 0 110px;
-  min-width: 110px;
-  position: relative;
+.tax-calendar-label-stack {
+  flex: 1 0 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
-  padding: 0 6px;
+  padding: 6px 4px 0;
   cursor: help;
 }
-/* Connecting line through every dot, drawn once via each node's own
-   ::before so it reads as one continuous track without an extra wrapper el */
-.tax-calendar-node::before {
-  content: "";
-  position: absolute;
-  top: 5px; left: -50%; width: 100%; height: 2px;
-  background: var(--border-strong);
-  z-index: 0;
-}
-.tax-calendar-node:first-child::before { display: none; }
-.tax-calendar-node.passed::before,
-.tax-calendar-node.current::before { background: var(--verified-text); opacity: 0.4; }
-
-.tax-calendar-dot {
-  width: 12px; height: 12px; border-radius: 50%;
-  margin: 0 auto 8px; position: relative; z-index: 1;
-  background: var(--surface-2); border: 2px solid var(--border-strong);
-}
-.tax-calendar-node.passed .tax-calendar-dot {
-  background: var(--verified-text); border-color: var(--verified-text);
-}
-.tax-calendar-node.current .tax-calendar-dot {
-  background: var(--accent); border-color: var(--accent);
-  width: 14px; height: 14px;
-  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.18);
-}
-
 .tax-calendar-label {
-  font-size: 11.5px; font-weight: var(--fw-semibold); color: var(--text-2);
+  font-size: 11.5px; font-weight: var(--fw-semibold);
+  color: #667085;
   line-height: 1.3; margin-bottom: 2px;
+  overflow-wrap: break-word;
 }
-.tax-calendar-node.current .tax-calendar-label { color: var(--accent); }
-.tax-calendar-here {
-  display: block;
-  font-size: 9.5px; font-weight: var(--fw-semibold); text-transform: uppercase;
-  letter-spacing: 0.04em; color: var(--accent); margin-top: 2px;
+.tax-calendar-label-stack.next .tax-calendar-label { color: #1D2939; }
+.tax-calendar-date {
+  font-size: 10.5px; color: #667085;
+  font-variant-numeric: tabular-nums;
 }
-.tax-calendar-date { font-size: 10.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
-.tax-calendar-countdown {
-  font-size: 10px; color: var(--accent); margin-top: 3px; font-weight: var(--fw-semibold);
+.tax-calendar-countdown-pill {
+  margin-top: 4px;
+  font-size: 10px; font-weight: var(--fw-semibold);
+  color: #175CD3; background: #EFF5FF;
+  border-radius: var(--r-pill);
+  padding: 2px 8px;
+  white-space: nowrap;
 }
+/* Responsive swap (spec §6/7): countdown_full ("In 4 days") at normal
+   widths, countdown_compact ("4d") at <=640px, where seven columns of
+   full-length text would crowd/wrap on a narrow device. Both strings are
+   already emitted by build_tax_calendar() (app.py) from the same
+   days_until int -- this is a pure CSS display swap, no JS needed. */
+.tax-calendar-countdown-compact { display: none; }
+@media (max-width: 640px) {
+  .tax-calendar-countdown-full { display: none; }
+  .tax-calendar-countdown-compact { display: inline; }
+  .tax-calendar-label { font-size: 10px; }
+  .tax-calendar-date { font-size: 9.5px; }
+}
+
+/* Amber per-parcel callout: full-width sibling below the whole grid (spec
+   §4) rather than nested inside a single node's own narrow column, where
+   it previously forced that one column's box taller than its neighbors. */
 .tax-calendar-note {
-  margin-top: 5px; font-size: 10px; color: var(--partial-text);
+  margin-top: 8px; font-size: 10px; color: var(--partial-text);
   background: var(--partial-bg); border: 1px solid var(--partial-border);
-  border-radius: 6px; padding: 3px 6px; line-height: 1.35;
+  border-radius: 6px; padding: 4px 8px; line-height: 1.35;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

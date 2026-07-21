@@ -679,23 +679,117 @@ def build_tax_calendar(today, current_2026, delinquent):
     for m in milestones:
         m["passed"] = today >= m["date"]
 
-    current_index = None
-    for i, m in enumerate(milestones):
-        nxt_date = milestones[i + 1]["date"] if i + 1 < len(milestones) else None
-        if m["passed"] and (nxt_date is None or today < nxt_date):
-            current_index = i
+    # "Current" milestone selection (Part B fix, Diego-confirmed, July 2026):
+    # the PREVIOUS logic picked the most-recently-PASSED milestone as
+    # "current" and attached the countdown to the FOLLOWING milestone --
+    # so a fully-passed deadline (e.g. Protest Deadline, May 15) got the
+    # "You are here" / accent-glow treatment while the countdown text below
+    # it counted down to a DIFFERENT, later milestone (e.g. Roll Certified,
+    # Jul 25). Correct, but confusing: the highlighted node and the "N days"
+    # text described two different events.
+    #
+    # Fixed definition: "current" is the NEXT UPCOMING milestone -- the
+    # first one that hasn't passed yet -- and its own countdown (days until
+    # ITSELF, not some other milestone) is attached to that same node. Every
+    # already-passed milestone (the `m["passed"]` flag above, computed
+    # first and unchanged) just renders as plain "done" -- no accent, no
+    # "You are here" -- per templates/property.html's `_is_current` check
+    # and static/style.css's `.passed` vs `.current` rules.
+    current_index = next((i for i, m in enumerate(milestones) if not m["passed"]), None)
     if current_index is not None:
         milestones[current_index]["current"] = True
-        if current_index + 1 < len(milestones):
-            milestones[current_index]["days_to_next"] = (
-                milestones[current_index + 1]["date"] - today
-            ).days
+        # Renamed from days_to_next -> days_until: this now counts down to
+        # the SAME milestone that's marked current, not "the next one after
+        # current" (that concept no longer exists -- current IS next).
+        milestones[current_index]["days_until"] = (
+            milestones[current_index]["date"] - today
+        ).days
+        # Countdown strings (Fable's "the line is the indicator" redesign,
+        # July 2026): both derived from the SAME days_until above, no new
+        # date math. countdown_full feeds the pill at normal container
+        # widths; countdown_compact feeds it at <=640px (spec §6) -- the
+        # server emits both so the responsive swap is a pure CSS media
+        # query, no JS needed. "Today" (n==0) is included for completeness
+        # per the spec's own enumeration, though in practice n is never 0
+        # for the CURRENT milestone specifically: the moment today reaches
+        # a milestone's own date, `passed` (today >= date) flips true for
+        # THAT milestone and current_index advances to the next one, whose
+        # own days_until is always >= 1. Kept anyway so this is correct if
+        # that invariant ever changes, rather than silently assuming it.
+        _n = milestones[current_index]["days_until"]
+        milestones[current_index]["countdown_full"] = (
+            "Today" if _n == 0 else "Tomorrow" if _n == 1 else f"In {_n} days"
+        )
+        milestones[current_index]["countdown_compact"] = "Now" if _n == 0 else f"{_n}d"
+        # Proportional positioning fraction (Diego-confirmed, July 2026):
+        # today's position along [last-passed date, this milestone's date],
+        # clamped [0, 1]. Round 1/2 consumed this for a floating badge that
+        # collided with node text at high fractions; Fable's redesign
+        # (below) instead folds it into --today-frac, a single percentage
+        # along the WHOLE track, so the "indicator" is the track's own
+        # fill/tick rather than a separately-positioned element.
+        #
+        # current_index > 0 always holds here in any real invocation:
+        # milestones[0] (Valuation Date, Jan 1 of today.year) can never
+        # itself be "current", because Jan 1 of today's own year is always
+        # <= today -- i.e. it's always already "passed" by the time this
+        # function runs with a real server-clock `today`. Guarded anyway
+        # (current_index > 0) so a synthetic/test `today` before Jan 1
+        # can't hit a negative list index -- see today_frac_pct below for
+        # how that defensive case (spec §5, "today before the first
+        # milestone") is handled instead.
+        if current_index > 0:
+            prev_date = milestones[current_index - 1]["date"]
+            cur_date = milestones[current_index]["date"]
+            span_days = (cur_date - prev_date).days
+            fraction = (today - prev_date).days / span_days if span_days else 0.0
+            milestones[current_index]["here_fraction"] = max(0.0, min(1.0, fraction))
+    # Edge case: every milestone in this cycle has already passed --
+    # current_index stays None, no milestone gets "current"/a pill, and the
+    # strip shows all seven as plain done checkmarks (spec §5, "today past
+    # the final milestone").
+    #
+    # In practice this branch is structurally very hard to reach through a
+    # real page load: `cycle_year` is pinned to `today.year` on every call
+    # (two lines below), so the last milestone (Payment Due) is always
+    # `date(today.year + 1, 1, 31)` -- by construction always later than any
+    # `today` that still has `today.year == cycle_year`. Verified by direct
+    # execution with a synthetic `today` past that date (see verification
+    # notes) rather than assumed; handled defensively regardless, so a
+    # future caller passing an atypical `today` (e.g. a test harness) can't
+    # hit an unhandled state.
+
+    # --today-frac (Fable's "the line is the indicator" redesign, July
+    # 2026): ONE percentage (0-100) locating today along the whole 7-node
+    # track, where node 0's center = 0% and node 6's center = 100% (6 equal
+    # gaps between 7 nodes). Built entirely from the SAME already-verified
+    # current_index/here_fraction above -- no new date math, just a
+    # different way of expressing an already-correct position. This is the
+    # one new value this redesign adds; every other field above is
+    # untouched from the already-verified Part B / proportional-positioning
+    # rounds. Emitted as an inline CSS custom property on the track element
+    # (templates/property.html), consumed by both the progress-fill width
+    # and the today-tick's left offset (static/style.css) -- one source of
+    # truth, so they cannot disagree (spec acceptance criterion 4).
+    #
+    #   current_index is None    -> every milestone passed -> 100% (full fill)
+    #   current_index == 0       -> nothing passed yet      -> 0% (no fill)
+    #   otherwise                -> (i_last_passed + fraction) / 6 * 100,
+    #                                i_last_passed = current_index - 1
+    if current_index is None:
+        today_frac_pct = 100.0
+    elif current_index == 0:
+        today_frac_pct = 0.0
+    else:
+        i_last_passed = current_index - 1
+        today_frac_pct = round(((i_last_passed + milestones[current_index]["here_fraction"]) / 6) * 100, 2)
 
     return {
         "today": today,
         "cycle_year": today.year,
         "milestones": milestones,
         "current_index": current_index,
+        "today_frac_pct": today_frac_pct,
     }
 
 
