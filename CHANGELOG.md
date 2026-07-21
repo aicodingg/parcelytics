@@ -8,6 +8,9 @@ All notable changes to Parcelytics are tracked here, using [Semantic Versioning]
 
 Version numbers are tied to actual production deploys, not every commit.
 
+## [1.3.1] — 2026-07-20
+- Coverage Map: market county shapes are magnified in place (real silhouettes scaled around their true centroids to a minimum visible size via one computed formula) so all six markets are findable at national scale; disclosure microcopy added by the legend
+
 ## [1.3.0] — 2026-07-20
 - Coverage Map redesigned (outside design review by Fable, amended by product decision): text-free national map with Live and Coming-soon counties colored directly — no marker glyphs — on a darkened backdrop that no longer blends into the page
 - Market card row is now the map's legend: new leading Austin/Travis "Live" card, county-shape thumbnails, Live/Coming soon status pills, bidirectional hover linking (hovering a card makes its county glow on the map)

@@ -230,6 +230,13 @@
            style="text-transform:none; font-weight:400; letter-spacing:normal;">
         <span class="map-legend-chip"><span class="map-legend-swatch is-live"></span>Travis County, TX — Live</span>
         <span class="map-legend-chip"><span class="map-legend-swatch is-soon"></span>5 markets — Coming soon</span>
+        {# Honesty microcopy (Diego's "magnify market counties in place"
+           brief, item 4): a quiet, factual disclosure that the five
+           non-Travis county shapes are shown larger than true national
+           scale so they're findable at all -- styled like the page's
+           existing fine-print register (e.g. the roadmap disclaimer
+           paragraph below the market-card row), not hidden in a tooltip. #}
+        <span class="map-legend-note">County shapes enlarged for visibility.</span>
       </div>
     </div>
     <div class="card-body p-2" id="mapCardBody" style="position:relative;">
@@ -506,6 +513,47 @@
       // in hindsight was exactly the right call for this outcome too.
       const featureById = {};
       counties.features.forEach(f => { featureById[String(f.id)] = f; });
+
+      // §NEW -- Brief E: magnify market counties in place (Diego's decision,
+      // second product amendment to Fable's spec, July 2026). Live reality
+      // check on the counties-only build: at national scale the five
+      // non-Travis market counties are too small to see -- NYC especially is
+      // effectively invisible. Fix: scale each market county's own real
+      // silhouette up to a minimum visible footprint, in place, around its
+      // own centroid. Nothing generic returns (no dot, no circle) -- the
+      // shape stays the county's real geometry, matching its card thumbnail
+      // exactly, just enlarged. Continues the no-hand-placed-geometry rule
+      // from every earlier round: the scale factor is one formula applied
+      // uniformly, not a per-county literal -- MIN_SIZE is the only tunable.
+      const MIN_SIZE = 14; // viewBox units (of 975x610) -- start value per spec
+      MARKETS.forEach(m => {
+        const feature = featureById[m.fips];
+        const el = svg.select('path.county[data-market="' + m.slug + '"]').node();
+        if (!feature || !el) return;
+        // path.bounds()/path.centroid() are the same d3-geo path generator
+        // used to draw every county on this map -- both return PROJECTED
+        // (viewBox pixel) coordinates, already run through the exact
+        // geoAlbersUsa().fitSize([975,610], states) pipeline above, so the
+        // resulting transform composes correctly with the untouched paint.
+        const b = path.bounds(feature);
+        const c = path.centroid(feature);
+        const bboxWidth = b[1][0] - b[0][0];
+        const bboxHeight = b[1][1] - b[0][1];
+        const k = Math.max(1, MIN_SIZE / Math.max(bboxWidth, bboxHeight));
+        el.setAttribute(
+          "transform",
+          "translate(" + c[0] + "," + c[1] + ") scale(" + k + ") translate(" + (-c[0]) + "," + (-c[1]) + ")"
+        );
+      });
+      // Layering: the enlarged market shapes must paint above the backdrop
+      // counties and the state-line mesh (both drawn above already), below
+      // the tooltip (a separate HTML overlay, unaffected by SVG paint
+      // order). .raise() moves each selected node to be the last child of
+      // its parent -- the county's original-size footprint underneath is
+      // simply painted over, not removed from the DOM (its own <title> and
+      // data-market/data-status attributes are unchanged, so it stays the
+      // hover target -- see below).
+      svg.selectAll("path.county[data-market]").raise();
 
       // §6 -- six 56x56 thumbnails, fitSize'd per feature (islands are not
       // cropped -- fitSize operates on the county's own full geometry, so

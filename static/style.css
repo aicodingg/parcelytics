@@ -1143,6 +1143,13 @@ canvas { max-height: 440px; }
 .map-legend-swatch.is-live { background: var(--map-live); }
 .map-legend-swatch.is-soon { background: var(--map-soon-fill); border: 1px solid var(--map-soon-stroke); }
 
+/* "Magnify market counties in place" brief (Diego, July 2026), item 4 --
+   honesty microcopy disclosing the scale-in-place transform. Matches the
+   site's existing fine-print register: same size/color as the roadmap
+   disclaimer paragraph below the market-card row (11.5px, --text-2,
+   font-weight 400) -- a quiet aside, not a warning. */
+.map-legend-note { font-size: 11px; color: var(--text-2); font-weight: 400; white-space: nowrap; }
+
 /* HTML tooltip overlay (spec §5, reviewer's addendum point 2 -- built as a
    real HTML element, not SVG <text>, so the map SVG itself stays free of
    <text> nodes per acceptance criterion 3). Positioned absolutely by JS
