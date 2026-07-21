@@ -1890,6 +1890,16 @@
     <div class="kpi-sub">
       {% if estimated_tax_2026 %}
         2026 <span class="badge-estimated" style="font-size:9px; padding:1px 5px;" title="2026 taxable value × your entities' 2025 rates — 2026 rates aren't adopted until August/September, so this uses last year's rates as the best available assumption">Estimated</span>
+        {# Disclosure ⓘ (July 2026, Cowork brief) -- a SEPARATE disclosure
+           from the badge's own tooltip above: that one covers rate-timing
+           (2025 rates standing in for not-yet-adopted 2026 rates); this one
+           covers the different, entity-exemption-blending gap Part A's
+           investigation confirmed (single combined rate × single stored
+           taxable_value, discarding each entity's own exemption base -- see
+           the Investment Snapshot tile's identical disclosure above for the
+           full writeup). Shown unconditionally for the same reason: exemption_codes
+           is too sparsely populated to safely gate a warning on. #}
+        <span title="This estimate applies one combined rate to the 2026 preliminary taxable value. It doesn't account for exemptions that vary by taxing entity (e.g. homestead exemptions), so it may be higher than the actual billed amount for parcels with exemptions." style="cursor:help; font-size:11px; color:var(--text-3);">ⓘ</span>
       {% else %}—{% endif %}
     </div>
   </div>
@@ -2493,9 +2503,15 @@
         <span class="text-muted" style="font-size:11px; font-weight:400;">— 2025 certified basis</span>
       </div>
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:16px; font-variant-numeric:tabular-nums;">
-        {% macro stat(label, value, sub='') -%}
+        {# `tooltip` (July 2026, disclosure brief): optional 4th param, defaults
+           to '' so the other 7 call sites below are untouched. When set, renders
+           the same ⓘ + title="" + cursor:help affordance already used elsewhere
+           on this page (e.g. the "Est. 2026 Total Tax" badge tooltip below) --
+           reusing the site's existing hover-disclosure idiom rather than
+           inventing a new tooltip component. #}
+        {% macro stat(label, value, sub='', tooltip='') -%}
         <div style="border:1px solid var(--border,#e5e7eb); border-radius:7px; padding:9px 11px;">
-          <div style="font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);">{{ label }}</div>
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-3);">{{ label }}{% if tooltip %} <span title="{{ tooltip }}" style="cursor:help; color:var(--text-3);">ⓘ</span>{% endif %}</div>
           <div style="font-size:15px; font-weight:700; color:var(--ink,#1f2933);">{{ value }}</div>
           {% if sub %}<div style="font-size:10.5px; color:var(--text-3);">{{ sub }}</div>{% endif %}
         </div>
@@ -2543,7 +2559,24 @@
         {% if _ratio is not none and (_ratio - 100) | abs >= 0.5 %}
         {{ stat('Assessment Ratio', "{:.1f}%".format(_ratio), 'below typical ~100%' if _ratio < 100 else 'above typical ~100% — check for a data anomaly') }}
         {% endif %}
-        {{ stat('Est. Annual Tax', ("${:,.0f}".format(insights.est_annual_tax)) if insights.est_annual_tax else '—', '2025 taxable × rate') }}
+        {# Disclosure ⓘ (July 2026, Cowork brief -- Part A investigation
+           confirmed the platform stores one taxable_value per parcel and
+           multiplies it by the COMBINED rate of all 5 entities, discarding
+           each entity's own real, entity-specific exemption base; on parcel
+           0262100402 the entities landed on different real bases -- three at
+           the standard 20% local-option exemption, the school district on
+           its own flat $140,000, one barely reduced -- so this figure
+           systematically overstates the true bill wherever a parcel carries
+           any exemption (~256K of ~517K Travis County parcels carry the HS
+           code alone). Shown unconditionally, not gated on
+           exemption_codes -- that field is only ~53% populated (see
+           app.py's own note near current_2026 assembly), so conditioning
+           the warning on it would silently hide it for exactly the parcels
+           whose exemption isn't recorded in that field, the opposite of
+           what an honest disclosure should do. No formula/number changed
+           here -- copy only. #}
+        {% set _est_annual_tax_tip = "This estimate applies one combined tax rate to the certified taxable value. It doesn't account for exemptions that vary by taxing entity (e.g. homestead exemptions), so it may be higher than the actual billed amount for parcels with exemptions." %}
+        {{ stat('Est. Annual Tax', ("${:,.0f}".format(insights.est_annual_tax)) if insights.est_annual_tax else '—', '2025 taxable × rate', _est_annual_tax_tip if insights.est_annual_tax else '') }}
       </div>
 
       {# Value composition / redevelopment lens #}
@@ -3452,7 +3485,37 @@
                 {% elif current and current.total_tax %}<span class="primary-value">${{ "{:,.0f}".format(current.total_tax) }}</span>
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
-              <td></td>
+              {# Delta caption (July 2026, Cowork brief item 2 -- addresses Sam's
+                 Investor D note that "what's driving the change 2026e vs 2025
+                 tax [is] not immediately apparent"). Investigated before writing
+                 this: unlike the Market/Assessed/Taxable Value rows above, this
+                 Change cell was deliberately left blank (no "+X%" is computed
+                 for Total Tax anywhere on this page) -- confirmed by grep, not
+                 assumed. Rather than inventing a new percentage here (out of
+                 scope per this brief's item 3, and arguably misleading: verified
+                 below that the two dollar figures aren't computed the same way,
+                 so a naive ratio between them wouldn't isolate value growth
+                 cleanly), this adds a plain-text ⓘ instead.
+                 What IS verified true, directly from estimated_tax_2026's own
+                 formula (property_detail(), app.py): the 2026 estimate always
+                 multiplies by `blended_rate_2025` -- the SAME 2025 entity
+                 rates shown as this row's 2025 baseline -- never a different
+                 or assumed-higher rate. So "not a rate change" is a safe,
+                 verified claim. What is NOT safe to claim: that the visible
+                 gap between the two numbers is PURELY value growth -- the 2025
+                 figure is a real/reconstructed bill (county-reported total,
+                 summed entity billing, or a portal payment receipt), while the
+                 2026 figure is a single-formula model estimate; those two
+                 numbers can differ for reasons beyond value change even when
+                 no rate changed. Worded to state the verified fact (no rate
+                 change) without overclaiming the unverified one (pure value
+                 growth). Only shown when there's actually a 2025-vs-2026
+                 comparison on screen to explain. #}
+              <td class="text-end">
+                {% if estimated_tax_2026 and current and current.total_tax %}
+                <span title="This 2026 estimate uses your 2025 entity tax rates — 2026 rates aren't adopted until certification — so it isn't a rate increase. Note the 2025 figure above is your actual/reconstructed bill while 2026 is a modeled estimate (see ⓘ on the KPI card), so the two aren't computed identically." style="cursor:help; font-size:11px; color:var(--text-3);">ⓘ</span>
+                {% endif %}
+              </td>
             </tr>
           </tbody>
         </table>

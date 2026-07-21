@@ -8,6 +8,10 @@ All notable changes to Parcelytics are tracked here, using [Semantic Versioning]
 
 Version numbers are tied to actual production deploys, not every commit.
 
+## [1.3.3] — 2026-07-21
+- Property page: added disclosure tooltips on the estimated annual tax figures (Investment Snapshot and the 2026 KPI card) explaining that the estimate applies one combined rate to a single taxable value and doesn't account for exemptions that vary by taxing entity — shown on every parcel, not just ones with a recorded exemption code, since that field is incomplete on preliminary-year data
+- Added a caption on the 2025→2026 Total Tax change confirming the estimate uses unchanged 2025 rates (not a rate increase), while noting the two years' figures aren't computed identically
+
 ## [1.3.2] — 2026-07-21
 - Property tax calendar: the "current" milestone is no longer mislabeled — a passed deadline now shows a plain checkmark, and the next upcoming milestone gets an accurate day countdown
 - Redesigned "today" indicator (outside design review by Fable, after two in-house attempts): the connecting track is now a progress fill with a today tick at the true proportional position; the countdown moved into a normal-flow pill under the next milestone's own label, eliminating the text/label overlap bugs from earlier attempts by construction
