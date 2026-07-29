@@ -928,9 +928,20 @@
    the waterfall's container id. #}
 
 {# ── Left: links + exemptions + neighborhood · Right: satellite ──────── #}
+{# Mobile-stacking reorder (July 2026, Small Polish Batch item 1, per Sam's
+   beta feedback + Diego's confirmed Option B): on phones this row stacks
+   vertically in DOM order, which put three text cards (Helpful Links, Your
+   Exemptions, How You Compare) ahead of the Satellite View image -- Sam's
+   feedback was that the satellite image sat too far down the page. Diego
+   confirmed keeping the desktop two-column visual layout exactly as-is (no
+   change lg and up) and using Bootstrap's flexbox `order-*` utilities to
+   move Satellite View first in the MOBILE/tablet stacking order only.
+   `order-1`/`order-2` apply below the lg breakpoint (row is display:flex);
+   `order-lg-1`/`order-lg-2` re-assert the original left-right desktop order
+   at lg and up, so large screens render byte-for-byte the same as before. #}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <div class="row g-3 mb-4">
-<div class="col-lg-7">
+<div class="col-lg-7 order-2 order-lg-1">
 
 {# ── Helpful links (kept near the top for quick action) ──────────────── #}
 <div class="card mb-3"><div class="card-header">Helpful Links</div>
@@ -1095,7 +1106,7 @@
 {% endif %}
 
 </div>{# /col-lg-7 #}
-<div class="col-lg-5">
+<div class="col-lg-5 order-1 order-lg-2">
   {# Missing-imagery fallback fix (July 2026, per Diego — parcel 0438011527):
      this card used to be `display:none` in the HTML and only ever unhidden by
      the JS below once /api/geocode/<geo_id> came back with real coordinates —
@@ -1940,6 +1951,28 @@
    two-column row closes (after Improvement Detail, before the Post-
    Acquisition Tax Estimator) -- see that location for the actual card
    markup, unchanged in content/logic, only moved. #}
+
+{# ── Value Trend chart RELOCATED here (July 2026, Small Polish Batch item
+   5a, per Sam's beta feedback + Diego's confirmed decision): used to sit
+   deep in the full-width tables section, 5th item within an already-late
+   section (below Rate Environment / Entity Split / History tables). Diego
+   confirmed moving it to right after the KPI cards, before the Bill-Change
+   Waterfall (which -- per the comment just above -- itself now renders
+   further down, after Property Details) so it's visible immediately.
+   Mirrors where Homeowner mode's own analogous value chart already sits,
+   early on the page. Card content/JS unchanged -- same canvas
+   id="valueTrendChart", same Chart.js config (1.75px lines, minimal
+   gridlines, white tooltips -- existing convention, not reinvented). #}
+{% if history %}
+<div class="card mb-4">
+  <div class="card-header">
+    Value Trend
+  </div>
+  <div class="card-body">
+    <canvas id="valueTrendChart" height="120"></canvas>
+  </div>
+</div>
+{% endif %}
 
 {# ── Scroll-anchor section nav (Task 4) ───────────────────────────────────── #}
 <div id="sectionNavBar" class="section-nav-bar mb-2">
@@ -3120,88 +3153,25 @@
   </div>
   {% endif %}
 
-  {# ── 1b. 2025 Tax by Entity — detail table (donut removed; the ranked
-         horizontal bar above is the single visual per design brief) ──────── #}
-  {% set _ent_with_amounts = entity_detail | selectattr('amount_due') | list %}
-  {% if _ent_with_amounts %}
-  <div class="card mb-4">
-    <div class="card-header">2025 Tax by Entity — Rate, Amount &amp; Share</div>
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table mb-0">
-          <thead class="table-light small text-muted text-uppercase">
-            <tr>
-              <th>Entity</th>
-              <th class="text-end">Tax Rate</th>
-              <th class="text-end">Amount Due</th>
-              <th class="text-end">Share</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% set _total_due = _ent_with_amounts | sum(attribute='amount_due') %}
-            {% for e in _ent_with_amounts %}
-            <tr>
-              <td>
-                <span class="entity-badge me-1">{{ e.entity_code }}</span>
-                <span style="font-size:12px; color:var(--text-2);">{{ e.entity_name or "" }}</span>
-              </td>
-              <td class="text-end text-muted" style="font-variant-numeric:tabular-nums;">
-                {{ "{:.4f}%".format(e.rate) if e.rate else "—" }}
-              </td>
-              <td class="text-end" style="font-variant-numeric:tabular-nums;">${{ "{:,.2f}".format(e.amount_due) }}</td>
-              <td class="text-end text-muted">
-                {{ "{:.1f}%".format(e.amount_due / _total_due * 100) if _total_due else "—" }}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-          {# Total row (July 2026, Property Page Polish Round item 3, per
-             Diego's live review): the ranked bar chart above already shows
-             the same grand total ($88,655-style figure) -- this table itself
-             had no total row. Reuses the exact "Combined Rate" tfoot pattern
-             from the Rate Environment table above (tr.combined-rate-row,
-             fw-semibold, same partial-sum "n of n" disclosure convention
-             when not every entity has a rate on file -- e.g. PID/WCID codes,
-             which can have real amount_due with no county_tax_rate match at
-             all, per ENTITY_CODE_AUDIT.md) rather than inventing a new
-             pattern. Amount Due sums to the same total shown in the bar
-             chart above; Share sums to exactly 100%. #}
-          <tfoot>
-            {% set _n_ent_amt = _ent_with_amounts | length %}
-            {% set _tot2 = namespace(rate=0, rate_n=0) %}
-            {% for e in _ent_with_amounts %}
-              {% if e.rate %}{% set _tot2.rate = _tot2.rate + e.rate %}{% set _tot2.rate_n = _tot2.rate_n + 1 %}{% endif %}
-            {% endfor %}
-            {% set _rate_partial = (_tot2.rate_n > 0 and _tot2.rate_n < _n_ent_amt) %}
-            <tr class="combined-rate-row">
-              <td class="fw-semibold">Total</td>
-              <td class="text-end fw-semibold" style="font-variant-numeric:tabular-nums;">
-                {% if _tot2.rate_n > 0 %}
-                  {{ "{:.4f}%".format(_tot2.rate) }}
-                  {% if _rate_partial %}<span class="badge-partial d-block" style="font-size:10px; margin-top:2px;" title="Not every entity below has a matching rate on file">{{ _tot2.rate_n }} of {{ _n_ent_amt }}</span>{% endif %}
-                {% else %}—{% endif %}
-              </td>
-              <td class="text-end fw-semibold" style="font-variant-numeric:tabular-nums;">${{ "{:,.2f}".format(_total_due) }}</td>
-              <td class="text-end fw-semibold">100.0%</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </div>
-  </div>
-  {% else %}
-  {# No 2025 billing amounts matched — show explicit notice per Data Integrity Standard #}
-  <div class="card mb-4">
-    <div class="card-header">2025 Tax Burden by Entity</div>
-    <div class="card-body py-3 px-4">
-      <span class="na-cell">Pending historical billing data</span>
-      <span class="text-muted small ms-2">
-        2025 billing amounts for this parcel are not available in the current dataset.
-        This section will populate when billing data is matched.
-      </span>
-    </div>
-  </div>
-  {% endif %}{# /ent_with_amounts #}
+  {# ── "2025 Tax by Entity — Rate, Amount & Share" detail table REMOVED
+         (July 2026, Small Polish Batch item 5b, per Sam's beta feedback +
+         Diego's confirmed decision): field-by-field comparison confirmed
+         every column here duplicated data already shown directly above --
+         Tax Rate duplicates the Historical Tax Rates by Entity table
+         ("Rate Environment" section, 2025 Rate column); Amount Due and
+         Share both duplicate the Entity Amount Horizontal Bar ("2025 Tax
+         Burden — Entity Split") immediately above, which already shows the
+         dollar amount and percentage per entity. Genuinely redundant, not a
+         distinct-precision table (Claude's original design-brief read was
+         reconsidered and overturned here). Gated before removal on the PDF
+         "Tax Due Diligence" export (app.py export_due_diligence_pdf(),
+         ~line 2818): confirmed its "2025 Entity-Level Tax Breakdown" table
+         (~line 3206) runs its own independent entity_detail query and its
+         own reportlab table construction -- it does not read, reference, or
+         reuse this HTML table's markup, macro, or Jinja logic in any way
+         (see that route's own docstring: "queries its own minimal data set
+         rather than reusing property_detail()'s full pipeline"). Removing
+         this table has zero effect on the PDF export. #}
 
   {# ── 2. Unified Current & Preliminary Values ──────────────────────── #}
   <div class="section-hdr">Value History <span class="section-hdr-badge">2021–2026</span></div>
@@ -3745,22 +3715,19 @@
     </div>
   </div>
 
-  {# ── Value Trend chart — MOVED here from below Growth & Assessment Metrics
-     (Part 4 redesign) so the "small bar chart underneath showing the trend"
-     Diego asked for sits directly beneath the Value History table it charts,
-     instead of one card further down the page. Card content/JS unchanged —
-     same canvas id="valueTrendChart", same Chart.js config (1.75px lines,
-     minimal gridlines, white tooltips — existing convention, not reinvented). #}
-  {% if history %}
-  <div class="card mb-4">
-    <div class="card-header">
-      Value Trend
-    </div>
-    <div class="card-body">
-      <canvas id="valueTrendChart" height="120"></canvas>
-    </div>
-  </div>
-  {% endif %}
+  {# ── Value Trend chart RELOCATED (July 2026, Small Polish Batch item 5a,
+     per Sam's beta feedback + Diego's confirmed decision): this card used to
+     render here, deep in the full-width tables section (5th item within an
+     already-late section, below the Rate Environment / Entity Split /
+     History tables). Moved to right after the KPI headline cards, before
+     the Bill-Change Waterfall — see that new location, just after the KPI
+     cards close above, for the actual card markup (unchanged in content/JS,
+     only position moved). Mirrors where Homeowner
+     mode's own analogous value chart already sits, early on the page.
+     value_taxable_gap_chart(history) below is a separate chart (Value vs.
+     Taxable dual-line, built in an earlier round) and was not part of this
+     item's scope — it stays here with the Value History table it charts
+     against. #}
 
   {{ value_taxable_gap_chart(history) }}
 
@@ -4752,6 +4719,13 @@
 // explicit ESTIMATE (~ prefix, muted/estimate styling) — never as recorded fact.
 (function () {
   const GEO_ID = {{ parcel.geo_id | tojson }};
+  // Mode flag (July 2026, Small Polish Batch item 4, per Sam's beta feedback):
+  // this script is shared between Homeowner and Investor mode (see the July
+  // 2026 comment above this block) -- MODE lets the one shared render()
+  // function below use plain language for Homeowner mode's "Δ vs Seller's
+  // Current Bill" chip label while leaving Investor mode's more technical
+  // audience unchanged, without duplicating this whole script per mode.
+  const MODE = {{ mode | tojson }};
 
   const $ = id => document.getElementById(id);
   const fmt0  = n => '$' + Math.round(n).toLocaleString('en-US');
@@ -4822,7 +4796,7 @@
       </div>`);
     chips.push(`
       <div class="estimator-chip">
-        <div class="estimator-chip-label">~Δ vs Seller's Current Bill</div>
+        <div class="estimator-chip-label">${MODE === 'homeowner' ? '~Change vs Seller\'s Current Bill' : '~Δ vs Seller\'s Current Bill'}</div>
         <div class="estimator-chip-val">${deltaHtml(deltaDisplay, true)}</div>
       </div>`);
     if (isOwner && d.gap_year_tax != null) {
@@ -4942,7 +4916,7 @@
             <div class="hs-grid">
               <div><span class="hs-k">What it is</span><span class="hs-v">A reduction in the taxable value of your primary residence. Requires you to own <em>and occupy</em> the home.</span></div>
               <div><span class="hs-k">School exemption</span><span class="hs-v">$140,000 off the school-district (ISD) taxable value — state-mandated (§11.13(b)(1), 2025).</span></div>
-              <div><span class="hs-k">10% appraisal cap</span><span class="hs-v">Once homesteaded, assessed value can rise at most 10%/yr regardless of market — caps your tax growth.</span></div>
+              <div><span class="hs-k">10% appraisal cap</span><span class="hs-v">Once homesteaded, assessed value can rise at most 10%/yr regardless of market — caps your tax growth (§23.23).</span></div>
               <div><span class="hs-k">Filing</span><span class="hs-v">File with TCAD by April 30 of the year after purchase. Free; no annual refiling needed.</span></div>
               <div><span class="hs-k">Year-1 gap</span><span class="hs-v">Neither the exemption nor the cap applies in the purchase year — full value is taxable until they activate.</span></div>
             </div>
@@ -5123,7 +5097,13 @@
       data: { labels: enNames, datasets: [{ data: enAmts,
         backgroundColor: ['#94B0DA','#DCEDFF','#8F91A2','#505A5B','#b7c7e0','#cdd3da'] }] },
       options: { plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } },
-        tooltip: { callbacks: { label: c => c.label + ': $' + Number(c.raw).toLocaleString() } } }, cutout: '58%' }
+        {# Tooltip redundancy fix (July 2026, Small Polish Batch item 3, per Sam's
+           beta feedback): tooltip used to repeat c.label (the entity name) before
+           the dollar value -- but the entity name is already shown directly below
+           in this same chart's legend (legend.position: 'bottom' just above),
+           making the label redundant on hover. Value-only now, same pattern as
+           the Value Trend bar chart's own tooltip a few lines up (line ~5111). #}
+        tooltip: { callbacks: { label: c => '$' + Number(c.raw).toLocaleString() } } }, cutout: '58%' }
     });
   }
   // Homeowner news (homestead / residential)

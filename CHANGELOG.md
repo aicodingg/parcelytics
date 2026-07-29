@@ -8,6 +8,13 @@ All notable changes to Parcelytics are tracked here, using [Semantic Versioning]
 
 Version numbers are tied to actual production deploys, not every commit.
 
+## [1.3.6] — 2026-07-29
+- Homeowner: Satellite View now appears first on mobile (desktop layout unchanged); homestead exemption explainer cites Tax Code §23.23
+- Homeowner: pie chart tooltips show value only, no repeated category name
+- Homeowner: acquisition estimator now says "Change vs Seller's Current Bill" instead of the Δ symbol (Investor mode keeps the technical symbol)
+- Investor: Value Trend chart moved up, now right after the KPI cards
+- Investor: removed the redundant "Tax by Entity" table (duplicated the Historical Tax Rates table and Entity Amount Bar; confirmed the PDF export uses its own independent query, unaffected)
+
 ## [1.3.5] — 2026-07-29
 - Removed "Request access" entirely (nav CTA, About page section, homepage section) — the site has always been fully open, this was a stale lead-capture CTA left over from an earlier phase
 - Reordered the top navbar: Home, About, Info, Search, Rate Trends, Market Snapshot
