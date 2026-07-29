@@ -8,6 +8,9 @@ All notable changes to Parcelytics are tracked here, using [Semantic Versioning]
 
 Version numbers are tied to actual production deploys, not every commit.
 
+## [1.3.7] — 2026-07-29
+- Added a statement_timeout safety net on all database connections (8s), to prevent a genuinely regressed query from silently consuming a worker's entire timeout budget
+
 ## [1.3.6] — 2026-07-29
 - Homeowner: Satellite View now appears first on mobile (desktop layout unchanged); homestead exemption explainer cites Tax Code §23.23
 - Homeowner: pie chart tooltips show value only, no repeated category name

@@ -2111,10 +2111,47 @@ def persist_mode(resp):
 
 
 # ── DB helper ─────────────────────────────────────────────────────────────────
+# statement_timeout safety net (July 2026, per Cowork's "confirm root cause and
+# propose fix" investigation into the WORKER TIMEOUT/SIGKILL Sentry incidents):
+# every connection this app opens goes through get_db() -- query() and
+# query_no_nestloop() both call it, and the two routes that manage their own
+# cursor (api_geocode(), api_billing()) call it directly too (confirmed via
+# grep: no other psycopg2.connect() call exists anywhere in app.py) -- so
+# setting statement_timeout here, once, at connection time covers every query
+# this web app runs with no per-call-site duplication.
+#
+# 8000ms (8s): comfortably above the worst FIXED query time already measured
+# in this codebase (the Market Snapshot neighborhoods query, 2393ms post-
+# query_no_nestloop()-fix -- see that helper's own docstring for the full
+# on/off measurement history), and well under gunicorn's 30s worker timeout
+# (Start Command is `gunicorn app:app`, no --timeout flag, confirmed against
+# Render's dashboard directly -- the plain default is in effect). This is a
+# pure safety net, independent of which endpoint turns out to be the actual
+# cause of the current SIGKILL incidents: a query that legitimately regresses
+# (stale stats, planner misjudgment, data growth) now fails fast with a
+# clean, catchable Postgres error instead of silently consuming an entire
+# worker's timeout budget.
+#
+# Scope note (flagged, not silently assumed away): get_db() is NOT the only
+# connection helper in this repo. loaders/db.py's own get_conn() is a
+# separate, independent choke point used by all 21 loader scripts under
+# loaders/ (compute_metrics.py, load_certified_2025.py, load_2026_
+# preliminary.py, etc.) -- deliberately untouched here. Those scripts
+# legitimately run bulk upserts over hundreds of thousands of rows
+# (batch_upsert() in loaders/db.py) that can genuinely take far longer than
+# 8 seconds; capping them at 8s would break real, intended-to-be-slow work,
+# not catch a regression. A handful of standalone one-off investigation
+# scripts at the repo root (query_2026_vs_2025.py, verify_ajr_fix.py,
+# review_check.py, and similar) also hand-roll their own psycopg2.connect()
+# -- these are manual dev tools never invoked by the running web app or by
+# gunicorn, so they're outside this fix's scope for the same reason: this
+# fix targets the live request path specifically, not every script in the
+# repo that happens to open a database connection.
 def get_db():
     return psycopg2.connect(
         host=config.DB_HOST, port=config.DB_PORT,
         dbname=config.DB_NAME, user=config.DB_USER, password=config.DB_PASS,
+        options="-c statement_timeout=8000",
     )
 
 
