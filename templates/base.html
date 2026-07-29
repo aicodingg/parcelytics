@@ -58,6 +58,8 @@
       </div>
       <div class="navbar-nav ms-auto d-flex align-items-lg-center">
         <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">Home</a>
+        <a class="nav-link {% if request.path == '/about' %}active{% endif %}" href="/about">About</a>
+        <a class="nav-link {% if request.path == '/info' %}active{% endif %}" href="/info">Info</a>
         <a class="nav-link {% if request.path == '/search' %}active{% endif %}" href="/search">Search</a>
         <a class="nav-link {% if request.path == '/rates' %}active{% endif %}" href="/rates">Rate Trends</a>
 
@@ -78,9 +80,6 @@
             <li><a class="dropdown-item" href="/snapshot?view=agricultural">Agricultural</a></li>
           </ul>
         </div>
-        <a class="nav-link {% if request.path == '/info' %}active{% endif %}" href="/info">Info</a>
-        <a class="nav-link {% if request.path == '/about' %}active{% endif %}" href="/about">About</a>
-        <a class="nav-link nav-cta" href="/about#request">Request access</a>
       </div>
     </div>
   </div>

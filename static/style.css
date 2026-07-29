@@ -301,20 +301,6 @@ main.container.is-frontdoor { max-width: var(--maxw); }
 }
 .navbar .nav-link.active { color: var(--accent) !important; font-weight: var(--fw-semibold); }
 
-/* Primary CTA living in the nav — accent reserved for this */
-.navbar .nav-cta {
-  background: var(--accent);
-  color: #fff !important;
-  font-weight: var(--fw-semibold);
-  padding: 0.42rem 0.95rem !important;
-  border-radius: var(--r-sm);
-  margin-left: var(--s-2);
-  box-shadow: 0 1px 2px rgba(11,18,32,0.12);
-  transition: background var(--t-fast), transform var(--t-fast);
-}
-.navbar .nav-cta:hover { background: var(--accent-hover); color: #fff !important; }
-.navbar .nav-cta.active { color: #fff !important; }
-
 /* Mobile collapse toggler — dark icon for the light bar */
 .navbar-toggler {
   border-color: var(--border-strong) !important;
@@ -332,7 +318,6 @@ main.container.is-frontdoor { max-width: var(--maxw); }
     margin: 0 calc(-1 * var(--s-5));
     padding: 8px var(--s-5) 12px;
   }
-  .navbar .nav-cta { display: inline-block; margin-left: 0; margin-top: 6px; }
 }
 
 /* Sector dropdown — light surface */
