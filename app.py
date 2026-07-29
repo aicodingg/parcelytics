@@ -25,6 +25,7 @@ from tax_logic.texas import estimate_homestead_savings as _tx_hs_savings
 from tax_logic.texas import derive_2026_baseline as _derive_2026_baseline
 from tax_logic.classify import property_type_label, label_case_sql, label_sort_case_sql
 from loaders.scrape_billing_history import fetch_html, parse_receipts, upsert_billing_rows, HTTP_OK
+from parcel_filters import CANONICAL_PARCEL_EXCL, peer_state_cd1_match_sql
 import search_logic
 
 _BILLING_TARGET_YEARS  = {2021, 2022, 2023, 2024}
@@ -3533,12 +3534,16 @@ def api_parcel_entities():
 # snapshot_neighborhood() below) reuses these exactly rather than each
 # re-declaring its own copy of the same literal SQL.
 #
-# CANONICAL_PARCEL_EXCL — verified against loaders/compute_metrics.py's
-# BENCHMARK_EXCLUDE_PREFIXES = ["X", "N"] (the filter
-# compute_county_benchmarks() itself uses) plus its own
-# "AND p.geo_id NOT LIKE 'AJR%%'" — matches /api/benchmark's excl_filter
-# exactly (commented there as "mirrors compute_metrics.py").
-CANONICAL_PARCEL_EXCL = "AND p.state_cd1 NOT LIKE 'X%%' AND p.state_cd1 NOT LIKE 'N%%' AND p.geo_id NOT LIKE 'AJR%%'"
+# CANONICAL_PARCEL_EXCL (July 2026 fix): now imported from parcel_filters.py
+# — the single canonical, NULL-safe definition every consumer in this
+# codebase reuses (app.py's routes below, /api/benchmark, the /parcels
+# drill-through, and loaders/compute_metrics.py's county_benchmark
+# builder). See parcel_filters.py's own docstring for the full story: this
+# used to be FOUR independently-typed copies of the same intended filter,
+# one of which had already drifted (silently dropping fewer exclusions
+# than the others), and none of which were NULL-safe against state_cd1 —
+# which is what produced the ~20% Market Snapshot county-total undercount
+# this fix addresses.
 
 # view -> property_type_label, matching templates/snapshot.html's
 # _view_to_prop_type Jinja mapping and search.html's SNAPSHOT_VIEW_BY_LABEL
@@ -3889,6 +3894,60 @@ def _compute_snapshot_data(view):
     """)
 
     rows = [r for r in breakdown if r["ptype"] is not None]
+
+    # INNER JOIN suppression fix (July 2026, "Fix parcel-exclusion
+    # filtering" brief, item 5): the breakdown query above requires BOTH a
+    # 2025 AND a 2026 row to exist for a parcel before it counts at all
+    # (t25/t26 are both plain JOINs). That's the correct requirement for
+    # n_up/n_down/n_flat/median_pct/p25_pct/p75_pct -- a "% change" is only
+    # meaningful for a parcel present in both years, so those fields are
+    # untouched. It is NOT correct for total_mv25_b/total_mv26_b: a parcel
+    # loaded for 2025 but not yet present in the 2026 preliminary batch (or
+    # vice versa) was being silently dropped from BOTH years' dollar totals
+    # by the paired JOIN, not just the year it's actually missing from --
+    # part of what produced this investigation's ~20% county-total
+    # undercount (alongside the NULL-state_cd1 bug fixed in
+    # parcel_filters.py).
+    #
+    # Fixed by computing each year's dollar total independently, with its
+    # OWN single-year query that has no dependency on the other year's join
+    # succeeding, then overwriting (not merging with) the paired query's
+    # total_mv25_b/total_mv26_b values below -- both per-ptype (so section
+    # subtotals are correct too) and for the grand total row. ptype_case
+    # only ever references p.classi_cd/p.state_cd1 (confirmed: it's a
+    # year-independent classification of the PARCEL, not of either year's
+    # market_value row), so it's safe to reuse verbatim against a
+    # single-year join aliased just `t`.
+    #
+    # Uses plain query(), NOT query_no_nestloop(): that helper's own
+    # docstring reserves it for the three queries in this function that
+    # join parcel_tax_year TWICE (once per year) and were EMPIRICALLY
+    # confirmed, via repeated on/off EXPLAIN ANALYZE runs, to hit a specific
+    # planner misjudgment on that second join. A single-year query here has
+    # only one parcel_tax_year join -- a structurally different shape with
+    # no evidence it shares that problem. Reaching for query_no_nestloop()
+    # here anyway, without measurement, would be exactly the kind of
+    # unverified assumption this file's own perf-fix history (see the
+    # rounds 2-4 comments above) explicitly warns against.
+    def _single_year_mv_totals(year):
+        return query(f"""
+            SELECT
+                ({ptype_case})                                  AS ptype,
+                ROUND(SUM(t.market_value)::NUMERIC / 1e9, 3)     AS total_mv_b
+            FROM parcel p
+            JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = {year}
+            WHERE t.market_value > 0
+              {canonical_excl}
+              {view_where}
+            GROUP BY GROUPING SETS ((({ptype_case})), ())
+        """)
+
+    _mv25_by_ptype = {r["ptype"]: r["total_mv_b"] for r in _single_year_mv_totals(2025)}
+    _mv26_by_ptype = {r["ptype"]: r["total_mv_b"] for r in _single_year_mv_totals(2026)}
+    for r in rows:
+        r["total_mv25_b"] = _mv25_by_ptype.get(r["ptype"], r["total_mv25_b"])
+        r["total_mv26_b"] = _mv26_by_ptype.get(r["ptype"], r["total_mv26_b"])
+
     # Part 2 fix: cap the within-tab subtype breakdown to the top
     # SNAPSHOT_SUBTYPE_CAP rows by parcel count for sector-scoped views
     # (the new 8 tabs, plus the legacy "commercial" view) -- see
@@ -3918,8 +3977,11 @@ def _compute_snapshot_data(view):
             "n_up":         _total_row["n_up"],
             "n_down":       _total_row["n_down"],
             "n_flat":       _total_row["n_flat"],
-            "total_mv25_b": _total_row["total_mv25_b"],
-            "total_mv26_b": _total_row["total_mv26_b"],
+            # INNER JOIN suppression fix (see the comment above rows'
+            # per-ptype merge): the grand total also comes from the
+            # independent single-year queries, not the paired-JOIN row.
+            "total_mv25_b": _mv25_by_ptype.get(None, _total_row["total_mv25_b"]),
+            "total_mv26_b": _mv26_by_ptype.get(None, _total_row["total_mv26_b"]),
             "median_pct":   _total_row["median_pct"],
         }
 
@@ -4176,11 +4238,16 @@ def api_benchmark():
     # 2026 has no filter — preliminary data is intentionally included.
     ds_filter = "" if year == 2026 else "AND (t.data_source IS NULL OR t.data_source != 'preliminary')"
     nb_filter = "AND p.neighborhood_cd = %s" if neighborhood else ""
-    # Exclude non-real-property accounts from all live benchmark queries (mirrors compute_metrics.py).
+    # Exclude non-real-property accounts from all live benchmark queries.
     # Only X (exempt) and N (personal property, 3 parcels) excluded from state_cd1.
     # M (manufactured homes) and O (other real property) are kept — confirmed real property in Travis CAD.
     # AJR* geo_ids = personal property supplement accounts loaded from AJR (not real estate); excluded.
-    excl_filter = "AND p.state_cd1 NOT LIKE 'X%%' AND p.state_cd1 NOT LIKE 'N%%' AND p.geo_id NOT LIKE 'AJR%%'"
+    # July 2026 fix: this used to be an independently-typed literal that
+    # merely CLAIMED to mirror compute_metrics.py's BENCHMARK_EXCLUDE_PREFIXES
+    # (comment-enforced, not structural) — now a direct reference to the same
+    # canonical, NULL-safe constant every other exclusion consumer uses (see
+    # parcel_filters.py). Cannot drift from the others again.
+    excl_filter = CANONICAL_PARCEL_EXCL
 
     if classi_cd and classi_cd != "all":
         # ── On-the-fly aggregation by classi_cd ──────────────────────────
@@ -5036,6 +5103,16 @@ def api_peer_benchmark_local(geo_id):
     mv_lo = this_mv * 0.50
     mv_hi = this_mv * 1.50
 
+    # NULL-safety fix (July 2026): `LEFT(p.state_cd1, 1) = %(sc1)s` silently
+    # drops any candidate peer row with NULL state_cd1 (new-construction
+    # parcels newer than the 2021-2024 AJR extract) via the same
+    # NULL-propagation mechanism as CANONICAL_PARCEL_EXCL's bug — see
+    # parcel_filters.py's peer_state_cd1_match_sql() docstring for the full
+    # reasoning. state_cd1 above is already Python-side NULL-safe
+    # (`or ""` coalesces None); this makes the SQL-side candidate column
+    # NULL-safe too, applied to both this query and its fallback below.
+    _peer_match = peer_state_cd1_match_sql()
+
     # Peer set: same neighborhood, same state_cd1 prefix, MV band ±50%
     # tb.total_tax is 0.00 (not NULL) for ~93% of 2025 tax_billing rows at the
     # source (see KNOWN_LIMITATIONS.md) — entity_tax_sum is the per-geo_id
@@ -5051,7 +5128,7 @@ def api_peer_benchmark_local(geo_id):
     # sets (confirmed live: "Peer Median Tax" exactly equaling the subject's
     # own tax figure on a peer set of only ~5 properties). AND p.geo_id !=
     # %(geo_id)s added to both this query and its fallback below.
-    peers = query("""
+    peers = query(f"""
         SELECT
             p.geo_id,
             pty.market_value,
@@ -5068,7 +5145,7 @@ def api_peer_benchmark_local(geo_id):
             GROUP  BY geo_id
         ) tbe ON tbe.geo_id = p.geo_id
         WHERE  p.neighborhood_cd = %(nb)s
-          AND  LEFT(p.state_cd1, 1) = %(sc1)s
+          AND  {_peer_match}
           AND  pty.market_value BETWEEN %(lo)s AND %(hi)s
           AND  p.geo_id NOT LIKE 'AJR%%'
           AND  p.geo_id != %(geo_id)s
@@ -5079,7 +5156,7 @@ def api_peer_benchmark_local(geo_id):
     n = len(peers)
     if n < 3:
         # Fallback: relax to neighborhood + type only, drop MV band
-        peers = query("""
+        peers = query(f"""
             SELECT p.geo_id, pty.market_value, pty.assessed_value,
                    tb.total_tax, tbe.entity_tax_sum
             FROM   parcel p
@@ -5092,7 +5169,7 @@ def api_peer_benchmark_local(geo_id):
                 GROUP  BY geo_id
             ) tbe ON tbe.geo_id = p.geo_id
             WHERE  p.neighborhood_cd = %(nb)s
-              AND  LEFT(p.state_cd1, 1) = %(sc1)s
+              AND  {_peer_match}
               AND  p.geo_id NOT LIKE 'AJR%%'
               AND  p.geo_id != %(geo_id)s
               AND  pty.market_value > 0
@@ -5220,6 +5297,11 @@ def api_peer_benchmark_sf(geo_id):
     if not neighborhood:
         return jsonify({"ok": False, "error": "No neighborhood code for this parcel"})
 
+    # NULL-safety fix (July 2026) -- see api_peer_benchmark_local()'s
+    # identical comment above; parcel_filters.py's peer_state_cd1_match_sql()
+    # docstring has the full reasoning.
+    _peer_match = peer_state_cd1_match_sql()
+
     this_market_psf   = round(this_mv / sqft, 2) if this_mv   else None
     this_assessed_psf = round(this_av / sqft, 2) if this_av   else None
 
@@ -5264,7 +5346,7 @@ def api_peer_benchmark_sf(geo_id):
             FROM   parcel p
             JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
             WHERE  p.neighborhood_cd  = %(nb)s
-              AND  LEFT(p.state_cd1, 1) = %(sc1)s
+              AND  {_peer_match}
               AND  p.living_area_sqft > 0
               AND  p.geo_id NOT LIKE 'AJR%%'
               AND  p.geo_id != %(geo_id)s
@@ -5565,6 +5647,11 @@ def api_peer_set(geo_id):
     sc1        = (parcel.get("state_cd1") or "").strip()[:1]
     subj_mv    = float(subj["market_value"])
     lbl_sql    = label_case_sql("p.classi_cd", "p.state_cd1")
+    # NULL-safety fix (July 2026) -- Tier 2 below matches on state_cd1
+    # prefix; see api_peer_benchmark_local()'s comment / parcel_filters.py's
+    # peer_state_cd1_match_sql() docstring for the full reasoning.
+    # upper=True matches this tier's existing UPPER(p.state_cd1) usage.
+    _peer_match_upper = peer_state_cd1_match_sql(upper=True)
 
     common_cols = """
         SELECT p.geo_id, p.prop_id, p.situs_address, p.classi_cd,
@@ -5602,7 +5689,7 @@ def api_peer_set(geo_id):
         # Tier 2: exact use code, same state_cd1 prefix (any neighborhood)
         if len(peers) < 5:
             wider = query(exact_select + " AND pty.market_value BETWEEN %(lo)s AND %(hi)s"
-                          " AND LEFT(UPPER(p.state_cd1),1) = %(sc1)s"
+                          " AND " + _peer_match_upper +
                           " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5", params)
             if len(wider) > len(peers):
                 peers, scope = wider, "exact_state_prefix"
@@ -5867,8 +5954,7 @@ def parcel_list():
             FROM   parcel p
             JOIN   parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = 2025
             WHERE  t.market_value > 0
-              AND  p.state_cd1 NOT LIKE 'X%%'
-              AND  p.geo_id NOT LIKE 'AJR%%'
+              {CANONICAL_PARCEL_EXCL}
               AND  ({where_fragment})
         )
         SELECT

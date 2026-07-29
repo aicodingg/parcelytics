@@ -95,3 +95,4 @@ loaders/.scrape_errors.log
 # FUSE in-use placeholder files (from the mounted volume)
 .fuse_hidden*
 **/.fuse_hidden*
+backups/

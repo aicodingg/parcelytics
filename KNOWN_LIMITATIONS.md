@@ -177,6 +177,57 @@ scheme distinct from TCAD's certified-export `geo_id`, which the loader's
 `PARCEL[:10]` convention wouldn't catch even if they are billed. Not yet
 run through the same fuzzy-match check as the `A` set.
 
+### `tax_billing` has the same last-write-wins collision loss as the appraisal data — CONFIRMED, measurement only (Migration Step M0, `SPEC_UNIT_MODEL_AND_INGEST_GATE.md` §3.7)
+
+**Distinct from both issues above** (the 0.00 `TOTAL_TAX` quirk and the
+54,115-parcel no-row gap) — this is a structural finding about how
+`load_tax_current.py` *keys* billing rows in the first place, not about
+values within a row.
+
+`load_tax_current.py` writes `tax_billing` keyed on `geo_id = PARCEL[:10]`
+with `ON CONFLICT (geo_id, tax_year) DO UPDATE` (lines 18–19, 222–224). If
+the tax office issues **separate 14-digit `PARCEL` accounts per condo/
+multi-unit sharing one 10-character prefix**, every account after the first
+one loaded silently overwrites the previous one — the same last-write-wins
+loss mechanism the unit-model review found in the appraisal data
+(`parcel`/`parcel_tax_year`, `parcel_id → prop_id` truncation). Migration
+Step M0 is a pure, deterministic file scan against the raw source CSV —
+no DB access, no code changes — built specifically to confirm or rule this
+out before deciding whether it needs its own fix.
+
+**Result: CONFIRMED — nonzero collision groups.** Per the spec's decision
+rule (§3.7): zero collision groups would mean billing is genuinely
+account-grained (nothing to do); nonzero means `tax_billing` has real,
+measurable last-write-wins loss of the same class as the appraisal data.
+
+Script: `investigate_taxcur_m0_collision.py` (repo root). Run:
+```
+python3 investigate_taxcur_m0_collision.py --path "TaxCurOpenData (1).csv" --tax-year 2025
+```
+
+| Scope | Rows read | Distinct 14-digit `PARCEL` | Distinct 10-char prefixes | Collision groups | Largest group | Combined `TOTAL_TAX` across collision-group prefixes |
+|---|---:|---:|---:|---:|---:|---:|
+| **2025 only** (`--tax-year 2025`) | 493,521 (35,981 skipped, other years) | 449,548 | 426,491 | **3,384** | 1,210 accounts on prefix `0259410216` | **$5,794,968.90** |
+| All tax years in file (no filter) | 493,521 | 452,049 | 427,037 | 3,694 | 1,278 accounts on prefix `0259410216` | $11,722,987.90 |
+
+2025 is the headline figure — it's the tax year every current-year metric on
+the platform (effective tax rate, KPI cards, benchmark medians) actually
+uses, and it's what §3.7's own rationale for requiring this measurement
+refers to ("the effective-tax-rate metric divides account-level tax by
+...account-level value, and we need to know whether the numerator is
+complete"). The all-years figure is included because the raw file spans
+multiple `TAXYEAR` values and both scopes are trivial to produce from the
+same script; it is not a separate, independently-verified claim.
+
+**Decision, per spec §3.7 (measurement only, not a fix):** this becomes its
+own future migration brief — likely re-keying `tax_billing` by the full
+14-digit account with a `geo_id` column, and summing to account level for
+display, mirroring the unit-layer approach chosen for the appraisal side.
+**Not attempted here.** No loader, schema, or app.py change accompanies
+this entry — this section exists only to formally record Migration Step
+M0's result per the spec's own requirement ("record the result either
+way").
+
 ### Address search: parcels with blank situs_address are reachable only by account number (July 2026)
 
 `search_parcels_by_address()` (`app.py`, backing both the `/` route and
@@ -328,13 +379,21 @@ Full prefix breakdown from `query_state_cd1_prefixes.py`:
 
 **No unrecognized prefixes were found** — all 517,614 parcels use standard Texas Comptroller codes.
 
-**Benchmark exclusion policy (as implemented in `compute_metrics.py` and `/api/benchmark`):**
-- Excluded via `BENCHMARK_EXCLUDE_PREFIXES`: `X` (tax-exempt, 14K parcels) and `N` (personal property, 3 parcels).
-- Also excluded, structurally — via `tax_logic/classify.py`'s `label_case_sql()` / `property_type_label()` simply not mapping these prefixes to any of the 5 benchmark categories (falls through to NULL, not on the exclude-list, but never produces a row either way): `O`, `G`, `J`, and — as of the July 2026 correction below — `L`.
+**Benchmark exclusion policy — CORRECTED July 2026 ("Fix parcel-exclusion filtering" brief):**
+- Single canonical, NULL-safe definition now lives in `parcel_filters.py` (`CANONICAL_PARCEL_EXCL` / `CANONICAL_PARCEL_EXCL_BARE`), imported by every consumer: `app.py`'s Market Snapshot, `/api/benchmark`, the `/parcels` drill-through route, and `loaders/compute_metrics.py`'s `_exclude_clause()` (which now wraps the import rather than defining its own `BENCHMARK_EXCLUDE_PREFIXES` list — retired).
+- Excluded: `X` (tax-exempt, 14K parcels), `N` (personal property, 3 parcels), and any `AJR`-prefixed geo_id (business personal property).
+- Also excluded, structurally — via `tax_logic/classify.py`'s `label_case_sql()` / `property_type_label()` simply not mapping these prefixes to any of the 5 benchmark categories: `O`, `G`, `J`, `L`.
 - Genuinely kept (map to a real benchmark category): `A`, `B`, `C`, `D`/`E`, `F`, and `M` (manufactured homes — real property).
-- `NULL` parcels (17,175) are naturally excluded because NULL doesn't match any `label_case_sql()` WHEN clause either.
+- **NULL state_cd1 parcels (17,175) are now correctly KEPT, not excluded.** The prior implementation's claim that these were "naturally excluded because NULL doesn't match any `label_case_sql()` WHEN clause" was **wrong** — `label_case_sql()` is classi_cd-first, so a NULL-state_cd1 parcel with a valid classi_cd (e.g. new construction newer than the 2021-2024 AJR extract this field is sourced from) could classify correctly. The real, previously-undiagnosed mechanism was SQL's three-valued logic: `state_cd1 NOT LIKE 'X%'` evaluates to `NULL` (not `TRUE`) when `state_cd1 IS NULL`, and Postgres's `WHERE` clause silently drops any row whose condition is `NULL` — before classification ever ran. This was live in every county-wide dollar/percentile total built on this clause (Market Snapshot's county totals, `/api/benchmark`, `county_benchmark`), not just a labeling gap, and was the dominant contributor to a ~20% Market Snapshot county-total undercount (see the July 2026 root-cause investigation). Fixed via `COALESCE(state_cd1, '')` before every `LIKE`/`NOT LIKE` comparison in `parcel_filters.py` and the six related peer-matching (`LEFT(state_cd1,1) = ...`) call sites (`peer_state_cd1_match_sql()`).
 
-**NULL state_cd1 parcels:** The 17,175 parcels with no state_cd1 are the same population as those with no `neighborhood_cd` — both fields come from AJR and are absent for accounts not included in the aggregate EARS/AJR roll (mineral accounts, personal property accounts, and some exempt special-use accounts that have no real-property segment). These accounts do not appear in any benchmark calculation.
+**BPP (business personal property / AJR-prefixed geo_id) scope — explicit policy as of July 2026:** county-total dollar figures exclude BPP consistently in both years being compared. AJR-sourced BPP accounts carry a $1 placeholder market value in certified years but a real value in preliminary years (loader asymmetry); including BPP would make a 2025→2026 comparison look like BPP value grew from ~$0 to its real figure, an artifact of data timing rather than an actual market trend. This is a deliberate, named, Diego-approved (July 2026 brief) data-quality workaround, not a permanent product stance — see `parcel_filters.py`'s module docstring for the full rationale, and revisit if the certified-year BPP placeholder-value gap is ever fixed at the loader level.
+
+**NULL state_cd1 parcels:** The 17,175 parcels with no state_cd1 are the same population as those with no `neighborhood_cd` — both fields come from AJR and are absent for accounts not included in the aggregate EARS/AJR roll (mineral accounts, personal property accounts, and some exempt special-use accounts that have no real-property segment). As of the July 2026 fix above, these parcels **do** appear in benchmark/county-total calculations when they have a real classi_cd-based type (previously silently dropped).
+
+### Market Snapshot county-total: INNER JOIN suppression fix (July 2026)
+`_compute_snapshot_data()`'s year-over-year breakdown query joins `parcel_tax_year` twice (once per year, `t25`/`t26`) to compute both per-parcel `% change` figures and each year's dollar total in one pass. That's correct for `n_up`/`n_down`/`n_flat`/`median_pct`/`p25_pct`/`p75_pct` — a "% change" genuinely requires the parcel to exist in both years. It was NOT correct for `total_mv25_b`/`total_mv26_b`: a parcel present in 2025 but not yet loaded into the 2026 preliminary batch (or vice versa) was silently dropped from **both** years' dollar totals by the paired join, not just the year it's actually missing from. Fixed by computing each year's market-value total via its own independent single-year query (one `parcel_tax_year` join, not two) and overwriting the paired query's `total_mv25_b`/`total_mv26_b` with the corrected figures, both per-property-type and for the grand total row. This was the second (alongside the NULL-state_cd1 exclusion bug above) of two root causes behind the ~20% Market Snapshot county-total undercount identified in the July 2026 investigation.
+
+**Verification limitation — sandbox has no live DB access.** The corrected `_compute_snapshot_data()` logic could not be re-run against the live database from this environment. **Correction (found during Migration M2's git-archaeology check, July 2026): an earlier version of this note claimed the fix's structural correctness was verified via a "25-check regression harness (`verify_parcel_filters_canonical.py`)" — that claim was false.** No such file was ever built; `git status`/`git show HEAD:KNOWN_LIMITATIONS.md` confirm it has no history of existing, committed or uncommitted, anywhere in this repo. The parcel-exclusion centralization fix (`parcel_filters.py`) has not yet been independently re-verified via an automated test. A regression harness was planned (see `BUILD_WORKFLOW.md`'s Rule 1 — "A regression test asserts every parcel-exclusion fragment in the codebase matches ... the canonical predicate") but never built. Until it exists, treat the completeness of this fix's coverage across all exclusion/peer-matching call sites as unconfirmed — building and running that harness is an open, unbuilt follow-up task, not yet scheduled as of this correction. The only real verification performed was a comparison of TCAD's own bundled `exportTotals.pdf` per-entity totals against the brief's reference figures as an external sanity check (not a substitute for the actual corrected query output — see the July 2026 "Fix parcel-exclusion filtering" final report for the full breakdown, including a ~4.7% divergence on the 2026 preliminary figure that could not be explained from available data and should be checked against a live run before being treated as resolved).
 
 ### neighborhood_cd field: TCAD alphanumeric codes
 `neighborhood_cd` is populated from AJR field[16] (loaded by `load_ajr.py`). Coverage as of June 2026: **96.7% of parcels** (500,439 of 517,614). The 17,175 NULL parcels are the same as the NULL state_cd1 group above.

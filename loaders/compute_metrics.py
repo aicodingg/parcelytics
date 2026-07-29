@@ -46,6 +46,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn, execute_schema
 from tax_logic.classify import label_case_sql
+from parcel_filters import CANONICAL_PARCEL_EXCL_BARE
 import psycopg2.extras
 
 COMPUTATION_VERSION = "2.0"
@@ -174,22 +175,44 @@ TYPE_GROUPS = [
 #                 through to NULL like O*/J*/S*/G*, so L* never appears in
 #                 county_benchmark output either. 99.5% of state_cd1='L' rows
 #                 already carried a synthetic "AJR"-prefixed geo_id and were
-#                 already excluded by the `geo_id NOT LIKE 'AJR%%'` filter
-#                 below; the remaining ~0.5% (real, resolvable 10-digit
-#                 geo_ids) are the ones this classify.py fix newly excludes.
+#                 already excluded by the AJR-prefix leg of the canonical
+#                 exclude clause (see _exclude_clause() below, now sourced
+#                 from parcel_filters.py); the remaining ~0.5% (real,
+#                 resolvable 10-digit geo_ids) are the ones this classify.py
+#                 fix newly excludes.
 #
-# NULL state_cd1 (17,175) parcels are naturally excluded because NULL does not
-# match any LIKE pattern in the exclude clause, but also can't match any
-# label_case_sql() WHEN clause, so it never appears in output either.
-BENCHMARK_EXCLUDE_PREFIXES = ["X", "N"]
-
-
+# NULL state_cd1 (17,175 parcels, per the July 2026 recount) — CORRECTED
+# (July 2026, "Fix parcel-exclusion filtering" brief): the claim this
+# comment used to make here ("naturally excluded... but also can't match
+# any label_case_sql() WHEN clause, so it never appears in output either")
+# was WRONG, not just imprecise. label_case_sql() is classi_cd-FIRST — a
+# NULL-state_cd1 parcel with a valid classi_cd (e.g. new-construction
+# apartments built after the 2021-2024 AJR extract this field is sourced
+# from) CAN independently match one of its five real-estate WHEN clauses.
+# The actual mechanism dropping these rows was the exclude clause's own
+# WHERE-level NULL propagation: `state_cd1 NOT LIKE 'X%'` evaluates to SQL
+# NULL (not TRUE) when state_cd1 IS NULL, and Postgres's WHERE silently
+# drops any row whose condition is NULL — before label_case_sql() ever ran.
+# That's a real bug, not a benign double-exclusion, and it was live in
+# every county-wide dollar/percentile total built on this exclude clause,
+# not just this file's own output (the same un-centralized fragment was
+# independently retyped in app.py three more times — see parcel_filters.py's
+# module docstring for the full blast-radius writeup).
+#
+# BENCHMARK_EXCLUDE_PREFIXES / _exclude_clause() are retired as of this fix
+# — this file now imports CANONICAL_PARCEL_EXCL_BARE from the repo-root
+# parcel_filters.py, the single NULL-safe definition every consumer
+# (this file, and every app.py route that needs the same scoping) shares,
+# so this exclusion logic can't independently drift again the way it
+# already had (app.py's /parcels route was found to have silently dropped
+# the N% leg entirely before this fix).
 def _exclude_clause():
-    """SQL fragment excluding non-real-property state_cd1 prefixes from benchmark queries."""
-    parts = " AND ".join(
-        f"p.state_cd1 NOT LIKE '{px}%%'" for px in BENCHMARK_EXCLUDE_PREFIXES
-    )
-    return f"AND ({parts})"
+    """SQL fragment excluding non-real-property state_cd1 prefixes AND
+    AJR-prefixed business-personal-property geo_ids from benchmark queries.
+    See parcel_filters.py for the canonical, NULL-safe definition this
+    wraps -- kept as a function (not a bare import) so every call site
+    below is unchanged."""
+    return f"AND ({CANONICAL_PARCEL_EXCL_BARE})"
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -521,6 +544,24 @@ def compute_parcel_metrics(conn):
     #     data_coverage.py). Copy must be tentative (see property.html) --
     #     this can also just mean the preliminary file hasn't caught up yet,
     #     not a genuine loss, until 2026 certifies.
+    # NULL-safety note (July 2026, "Fix parcel-exclusion filtering" brief):
+    # `p.state_cd1 LIKE 'A%'` below is a POSITIVE match (residential
+    # scoping), not an exclusion, so a NULL state_cd1 already evaluates to
+    # NULL/false in this WHERE either way -- wrapping it in
+    # COALESCE(p.state_cd1, '') doesn't change what matches today (COALESCE
+    # to '' still fails 'A%'), but makes that NULL-handling explicit and
+    # documented rather than incidental, consistent with the rest of this
+    # file's exclusion logic (see _exclude_clause() / parcel_filters.py).
+    # KNOWN LIMITATION, left open by this brief (out of scope -- this is a
+    # positive-match site, not one of the four exclusion-fragment copies or
+    # six peer-matching sites this brief was scoped to fix): a
+    # NULL-state_cd1 residential parcel (new construction newer than the
+    # 2021-2024 AJR extract this field is sourced from) never matches 'A%'
+    # here, so it's never evaluated for homestead-cap step-up/expiry risk on
+    # the property page, even if it genuinely carries an HS exemption. A
+    # real fix would need a classi_cd-based residential check (matching
+    # label_case_sql()'s classi_cd-first approach) as a fallback when
+    # state_cd1 is NULL -- flagged for a future brief, not built here.
     t1 = time.time()
     with conn.cursor() as cur:
         cur.execute("""
@@ -531,7 +572,7 @@ def compute_parcel_metrics(conn):
                 FROM parcel_tax_year pty
                 JOIN parcel p ON p.geo_id = pty.geo_id
                 LEFT JOIN tax_billing tb ON tb.geo_id = pty.geo_id AND tb.tax_year = 2025
-                WHERE p.state_cd1 LIKE 'A%'
+                WHERE COALESCE(p.state_cd1, '') LIKE 'A%'
                   AND pty.tax_year = 2025
                   AND pty.exemption_codes LIKE '%HS%'
                   AND pty.market_value > 0
@@ -542,6 +583,17 @@ def compute_parcel_metrics(conn):
                         NULLIF(tb.total_tax, 0) / NULLIF(pty.taxable_value, 0),
                         0.02
                       ) >= 500
+                  -- Migration M2 gating (SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.5):
+                  -- a multi-unit account's market_value/assessed_value are now
+                  -- SUMS across every unit sharing this geo_id (parcel_rollup.py).
+                  -- A summed gap crossing the 22%/$500 thresholds doesn't mean any
+                  -- ONE homestead has that much cap exposure -- it can just be an
+                  -- artifact of adding several units' unrelated gaps together. Only
+                  -- evaluate genuinely single-unit parcels (unit_count = 1) or rows
+                  -- rollup hasn't touched yet (unit_count IS NULL, pre-migration
+                  -- legacy state -- preserves this signal's existing behavior for
+                  -- any environment that hasn't run the M2 loaders yet).
+                  AND (pty.unit_count = 1 OR pty.unit_count IS NULL)
             ) cse
             WHERE pm.geo_id = cse.geo_id AND pm.tax_year = 2025
         """)
@@ -560,7 +612,7 @@ def compute_parcel_metrics(conn):
                 JOIN parcel p ON p.geo_id = pty25.geo_id
                 LEFT JOIN parcel_tax_year pty26
                        ON pty26.geo_id = pty25.geo_id AND pty26.tax_year = 2026
-                WHERE p.state_cd1 LIKE 'A%'
+                WHERE COALESCE(p.state_cd1, '') LIKE 'A%'
                   AND pty25.tax_year = 2025
                   AND pty25.exemption_codes LIKE '%HS%'
                   AND (
@@ -568,6 +620,15 @@ def compute_parcel_metrics(conn):
                         OR pty26.exemption_codes IS NULL
                         OR pty26.exemption_codes NOT LIKE '%HS%'
                       )
+                  -- Migration M2 gating -- same rationale as cap_step_up_exposure
+                  -- above: exemption_codes on a multi-unit row is a UNION across
+                  -- every unit sharing the geo_id (parcel_rollup.py), so "HS absent
+                  -- in 2026" for the summed row doesn't mean the SAME unit that had
+                  -- HS in 2025 actually lost it -- it could be a different unit's
+                  -- exemption state changing. Only single-unit parcels (unit_count
+                  -- = 1) or pre-rollup legacy rows (unit_count IS NULL) are
+                  -- unambiguous enough for this signal.
+                  AND (pty25.unit_count = 1 OR pty25.unit_count IS NULL)
             ) ces
             WHERE pm.geo_id = ces.geo_id AND pm.tax_year = 2025
         """)
@@ -674,7 +735,6 @@ def compute_county_benchmarks(conn):
                   ON pm.geo_id = pty.geo_id AND pm.tax_year = pty.tax_year
                 WHERE ({label_expr}) = %s
                   {excl}
-                  AND p.geo_id NOT LIKE 'AJR%%'
                   AND pty.market_value > 0
                   AND (pty.data_source IS NULL OR pty.data_source != 'preliminary')
                 GROUP BY pty.tax_year

@@ -8,6 +8,13 @@ All notable changes to Parcelytics are tracked here, using [Semantic Versioning]
 
 Version numbers are tied to actual production deploys, not every commit.
 
+## [1.3.8] — 2026-07-29
+- Centralized parcel-exclusion filtering into a single canonical, NULL-safe module (parcel_filters.py) - fixes a NULL-propagation bug that silently dropped ~17K post-2024 parcels from every county-wide aggregate, and fixes a drifted /parcels route that had lost its N% exclusion leg
+- Fixed an INNER JOIN in the Market Snapshot breakdown that could suppress a parcel's dollar total from both years if either year's data was incomplete
+- Added a real, mechanically-verified regression test (verify_parcel_filters_coverage.py) proving every exclusion/peer-matching call site references the canonical definition - found the real call-site count is 8, not the 6 previously documented
+- Corrected a false claim in KNOWN_LIMITATIONS.md that an automated verification harness had already run - it hadn't; the harness built here is the real one
+- Real root cause of the ~20% Market Snapshot county-total undercount discovered while investigating a LinkedIn post's figures
+
 ## [1.3.7] — 2026-07-29
 - Added a statement_timeout safety net on all database connections (8s), to prevent a genuinely regressed query from silently consuming a worker's entire timeout budget
 
