@@ -7,60 +7,29 @@ Files used:
   LAND_DET.TXT   — land segment detail (land value)
   IMP_INFO.TXT   — improvement info (improvement value)
 
-PROP.TXT field positions (1-based from layout, converted to 0-based slices):
-  prop_id      [0:12]   int
-  prop_type_cd [12:17]  char
-  prop_val_yr  [17:22]  int
-  sup_num      [22:34]  int   — 0 = certified, skip supplements
-  geo_id       [546:596] char (50) — trim to actual account
-  owner_id     [596:608] int
-  owner_name   [608:678] char (70)
-  addr_line1   [693:753] char (60)  — mailing address (situs often embedded in earlier fields)
+Migration M2 (SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.4): this loader used
+to write parcel_tax_year directly, keyed by a prop_id → geo_id lookup
+built FROM THE parcel TABLE (`SELECT prop_id, geo_id FROM parcel`). That
+lookup only ever contained the ONE prop_id that happened to win the
+`parcel` table's `ON CONFLICT (geo_id) DO UPDATE` for each geo_id — every
+PROP_ENT.TXT row for a losing prop_id (i.e. every unit past the first in
+a multi-unit account) failed the dict lookup and was silently dropped
+(Mechanism A, SPEC_UNIT_MODEL_AND_INGEST_GATE.md §1). That's gone now:
+this loader writes prop_unit / prop_unit_tax_year keyed directly by
+prop_id (prop_id is prop_unit's PRIMARY KEY — no lookup, no collision,
+nothing to drop), and parcel_tax_year is no longer written here at all —
+it's derived by parcel_rollup.py at the end of load(), which SUMs every
+prop_unit_tax_year row sharing a geo_id. All field-slice constants and
+the PROP.TXT / PROP_ENT.TXT / LAND_DET.TXT parsing logic now live in
+loaders/ears_format.py (previously duplicated near-identically across
+this file, load_2026_preliminary.py, and load_certified_historical.py —
+see that module's docstring for the one real drift found while
+consolidating: the TCO entity-code check).
 
-PROP_ENT.TXT field positions (0-based):
-  prop_id      [0:12]
-  prop_val_yr  [12:17]
-  sup_num      [17:29]
-  owner_id     [29:41]
-  entity_id    [41:53]
-  entity_cd    [53:63]   — 'A       ' = TCAD aggregate; others = individual entities
-  entity_name  [63:113]
-  entity_xref  [113:133]
-  filler       [133:148]
-  assessed_val [148:163]
-  taxable_val  [163:178]
-  ab_amt       [178:193]
-  en_amt       [193:208]
-  fr_amt       [208:223]
-  ht_amt       [223:238]
-  pro_amt      [238:253]
-  pc_amt       [253:268]
-  so_amt       [268:283]
-  ex366_amt    [283:298]
-  hs_amt       [298:313]
-  ov65_amt     [313:328]
-  dp_amt       [328:343]
-  dv_amt       [343:358]
-  ex_amt       [358:373]
-  ch_amt       [373:388]
-  market_value [388:403]
-  appraised_val[403:418]
-
-LAND_DET.TXT field positions (0-based):
-  prop_id          [0:12]
-  prop_val_yr      [12:16]
-  land_seg_id      [16:28]
-  land_type_cd     [28:38]
-  land_type_desc   [38:63]
-  state_class      [63:68]
-  flag             [68]
-  land_seg_num     [69:83]
-  area_sf          [83:97]
-  price_per_unit   [97:111]
-  land_unit_type   (text label, positions 111–139 variable)
-  land_seg_mkt_val [140:154]  numeric(14)  ← CONFIRMED from file inspection
-  NOTE: IMP_INFO.TXT improvement values are cost-basis (not market); imprv_value
-        is derived as max(0, market_value − land_value) after both files load.
+PROP.TXT / PROP_ENT.TXT / LAND_DET.TXT field positions: see
+loaders/ears_format.py's PROP_SLICES / PROP_ENT_SLICES / LAND_DET_SLICES
+(same positions this file used before the refactor — unchanged, just
+centralized).
 """
 import os
 import sys
@@ -69,39 +38,29 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn, execute_schema
+from loaders import ears_format
+from loaders import ingest_gate  # noqa: F401 — AC5 wiring marker; see module note below
+import parcel_rollup
+
+# NOTE on ingest_gate wiring (Migration M2, AC5): this loader imports
+# loaders/ingest_gate.py so the gate module is a real dependency of every
+# refactored loader (mechanically checkable), but deliberately does NOT
+# call ingest_gate.scan_prop_ledger() inline here — that would mean a
+# SECOND full read of a multi-gigabyte PROP.TXT file (9.8 GB per this
+# file's original docstring) on every load run, on top of the read
+# iter_prop_records() already does below. The real gate enforcement point
+# is loaders/run_all.py's explicit step, which scans PROP.TXT/PROP_ENT.TXT
+# once, after this loader has already finished writing. This is a
+# deliberate performance tradeoff, flagged here rather than silently
+# choosing one approach without explanation.
 
 import psycopg2.extras
 
-
-# ── Exemption codes derived from non-zero fields ───────────────────────────────
-EXEMPTION_FIELDS = [
-    ("hs",    slice(298, 313)),
-    ("ov65",  slice(313, 328)),
-    ("dp",    slice(328, 343)),
-    ("dv",    slice(343, 358)),
-    ("ab",    slice(178, 193)),
-    ("fr",    slice(208, 223)),
-    ("ht",    slice(223, 238)),
-    ("ch",    slice(373, 388)),
-    ("ex366", slice(283, 298)),
-]
+TAX_YEAR = 2025
+DATA_SRC = "certified"
 
 
-def _int_field(line, s):
-    try:
-        return int(line[s].strip()) if line[s].strip() else None
-    except (ValueError, IndexError):
-        return None
-
-
-def _str_field(line, s):
-    try:
-        return line[s].strip() or None
-    except IndexError:
-        return None
-
-
-# ── Step 1: PROP.TXT → parcel table ──────────────────────────────────────────
+# ── Step 1: PROP.TXT → parcel (public identity) + prop_unit (storage truth) ──
 def load_prop_txt(conn, cert_dir):
     path = os.path.join(cert_dir, "PROP.TXT")
     print(f"  Loading PROP.TXT ({os.path.getsize(path)/1e9:.1f} GB)…")
@@ -117,223 +76,120 @@ def load_prop_txt(conn, cert_dir):
                 owner_id     = EXCLUDED.owner_id,
                 owner_name   = EXCLUDED.owner_name
     """
+    # NOTE: parcel.prop_id is still written here (last-record-wins, same as
+    # before) so the column is never left NULL between load and the
+    # parcel_rollup.repair_prop_id() step that runs at the end of load()
+    # and replaces it with the stable MIN(prop_id) representative.
 
-    rows  = []
+    parcel_rows = []
+    unit_rows = []
     total = 0
 
-    with open(path, encoding="latin-1", errors="replace") as f:
-        for lineno, line in enumerate(f, 1):
-            if len(line) < 600:
-                continue
-            sup_num = _int_field(line, slice(22, 34))
-            if sup_num != 0:           # skip supplement rows
-                continue
+    for rec in ears_format.iter_prop_records(path):
+        parcel_rows.append((rec["geo_id"], rec["prop_id"], rec["prop_type_cd"],
+                             rec["owner_id"], rec["owner_name"]))
+        unit_rows.append((rec["prop_id"], rec["geo_id"], rec["prop_type_cd"], None,
+                           rec["owner_id"], rec["owner_name"], TAX_YEAR, TAX_YEAR))
 
-            geo_id       = (_str_field(line, slice(546, 596)) or "")[:10].strip() or None
-            prop_id      = _int_field(line, slice(0, 12))
-            prop_type_cd = _str_field(line, slice(12, 17))
-            owner_id     = _int_field(line, slice(596, 608))
-            owner_name   = _str_field(line, slice(608, 678))
+        if len(parcel_rows) >= 5000:
+            _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows)
+            total += len(parcel_rows)
+            parcel_rows, unit_rows = [], []
 
-            if not geo_id:
-                continue
+    if parcel_rows:
+        _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows)
+        total += len(parcel_rows)
 
-            rows.append((geo_id, prop_id, prop_type_cd, owner_id, owner_name))
-
-            if len(rows) >= 5000:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_batch(cur, parcel_sql, rows, page_size=2000)
-                conn.commit()
-                total += len(rows)
-                rows = []
-
-            if lineno % 100_000 == 0:
-                print(f"    … {lineno:,} lines, {total:,} committed")
-
-    if rows:
-        with conn.cursor() as cur:
-            psycopg2.extras.execute_batch(cur, parcel_sql, rows, page_size=2000)
-        conn.commit()
-        total += len(rows)
-
-    print(f"    → {total:,} parcels in {time.time()-t0:.1f}s")
+    print(f"    → {total:,} parcels / units in {time.time()-t0:.1f}s")
     return total
 
 
-# ── Step 2: PROP_ENT.TXT → parcel_tax_year + entity values ──────────────────
+def _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows):
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_batch(cur, parcel_sql, parcel_rows, page_size=2000)
+        psycopg2.extras.execute_batch(cur, ears_format.PROP_UNIT_UPSERT_SQL, unit_rows, page_size=2000)
+    conn.commit()
+
+
+# ── Step 2: PROP_ENT.TXT → prop_unit_tax_year (one row per real unit) ───────
 def load_prop_ent_txt(conn, cert_dir):
     path = os.path.join(cert_dir, "PROP_ENT.TXT")
     print(f"  Loading PROP_ENT.TXT ({os.path.getsize(path)/1e9:.1f} GB)…")
     t0 = time.time()
 
-    # We aggregate across all entity rows per parcel:
-    #   market_value   = from any row (same for all entities)
-    #   assessed_value = from TCO (Travis County) entity, else first seen
-    #   taxable_value  = from TCO entity
-    #   exemption_codes = union of non-zero exemption fields
-
-    # Build per-prop_id accumulator in memory (prop_id → dict)
-    # PROP_ENT is sorted by prop_id, so we can stream
-    pty_sql = """
-        INSERT INTO parcel_tax_year
-            (geo_id, tax_year, market_value, assessed_value, taxable_value,
-             exemption_codes, data_source)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (geo_id, tax_year) DO UPDATE
-            SET market_value   = EXCLUDED.market_value,
-                assessed_value = EXCLUDED.assessed_value,
-                taxable_value  = EXCLUDED.taxable_value,
-                exemption_codes= EXCLUDED.exemption_codes,
-                data_source    = EXCLUDED.data_source
-    """
-
-    # Also maintain a lookup prop_id → geo_id from the parcel table
-    print("    Building prop_id → geo_id lookup…")
-    with conn.cursor() as cur:
-        cur.execute("SELECT prop_id, geo_id FROM parcel WHERE prop_id IS NOT NULL")
-        pid_to_geo = {row[0]: row[1] for row in cur.fetchall()}
-    print(f"    {len(pid_to_geo):,} parcels in lookup")
-
-    current_pid  = None
-    accum        = {}
     rows_to_insert = []
-    total        = 0
+    total = 0
 
-    def flush(pid, acc):
-        geo_id = pid_to_geo.get(pid)
-        if not geo_id:
-            return
+    for agg in ears_format.iter_prop_ent_aggregates(path):
         rows_to_insert.append((
-            geo_id,
-            acc.get("year", 2025),
-            acc.get("market_value"),
-            acc.get("assessed_value"),
-            acc.get("taxable_value"),
-            ",".join(sorted(acc.get("exemptions", set()))) or None,
-            "certified",
+            agg["prop_id"], agg.get("year") or TAX_YEAR,
+            agg["market_value"], agg["assessed_value"], agg["taxable_value"],
+            None,  # hs_cap_loss — not derivable from PROP_ENT fields read here
+            None,  # land_value — set by load_land_and_imprv()
+            None,  # imprv_value — set by load_land_and_imprv()
+            agg["exemption_codes"], DATA_SRC,
         ))
 
-    with open(path, encoding="latin-1", errors="replace") as f:
-        for lineno, line in enumerate(f, 1):
-            if len(line) < 180:
-                continue
-
-            prop_id = _int_field(line, slice(0, 12))
-            sup_num = _int_field(line, slice(17, 29))
-            if sup_num != 0:
-                continue
-
-            year        = _int_field(line, slice(12, 17))
-            entity_cd   = _str_field(line, slice(53, 63))
-            assessed    = _int_field(line, slice(148, 163))
-            taxable     = _int_field(line, slice(163, 178))
-            market      = _int_field(line, slice(388, 403))
-
-            # Flush when prop_id changes
-            if prop_id != current_pid:
-                if current_pid is not None and accum:
-                    flush(current_pid, accum)
-                current_pid = prop_id
-                accum = {"year": year, "exemptions": set()}
-
-            # market_value is the same regardless of entity
-            if market and not accum.get("market_value"):
-                accum["market_value"] = market
-
-            # Prefer TCO (Travis County) or first entity for assessed/taxable
-            is_tco = entity_cd and entity_cd.strip().upper() in ("100303", "TCO")
-            if is_tco or not accum.get("assessed_value"):
-                accum["assessed_value"] = assessed
-                accum["taxable_value"]  = taxable
-
-            # Collect exemption codes from non-zero amounts
-            for code, sl in EXEMPTION_FIELDS:
-                amt = _int_field(line, sl)
-                if amt and amt > 0:
-                    accum["exemptions"].add(code.upper())
-
-            if len(rows_to_insert) >= 5000:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_batch(cur, pty_sql, rows_to_insert, page_size=2000)
-                conn.commit()
-                total += len(rows_to_insert)
-                rows_to_insert = []
-
-            if lineno % 500_000 == 0:
-                print(f"    … {lineno:,} lines, {total:,} committed")
-
-    # Flush last parcel
-    if current_pid is not None and accum:
-        flush(current_pid, accum)
+        if len(rows_to_insert) >= 5000:
+            _flush_pty(conn, rows_to_insert)
+            total += len(rows_to_insert)
+            rows_to_insert = []
 
     if rows_to_insert:
-        with conn.cursor() as cur:
-            psycopg2.extras.execute_batch(cur, pty_sql, rows_to_insert, page_size=2000)
-        conn.commit()
+        _flush_pty(conn, rows_to_insert)
         total += len(rows_to_insert)
 
-    print(f"    → {total:,} parcel-year rows in {time.time()-t0:.1f}s")
+    print(f"    → {total:,} unit-year rows in {time.time()-t0:.1f}s")
     return total
+
+
+def _flush_pty(conn, rows):
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_batch(cur, ears_format.PROP_UNIT_TAX_YEAR_UPSERT_SQL, rows, page_size=2000)
+    conn.commit()
 
 
 # ── Step 3: LAND_DET.TXT → land_value; imprv_value = market − land ───────────
 def load_land_and_imprv(conn, cert_dir):
     """
-    Sum land segment market values per parcel from LAND_DET.TXT, then set:
-      land_value  = sum of land_seg_mkt_val  (field [140:154], confirmed)
+    Sum land segment market values per prop_id from LAND_DET.TXT, then set
+    (on prop_unit_tax_year, by prop_id directly — no geo_id indirection,
+    unlike the pre-migration version of this function):
+      land_value  = sum of land_seg_mkt_val
       imprv_value = max(0, market_value − land_value)
-
-    IMP_INFO.TXT and IMP_DET.TXT contain cost-approach component values (not
-    market values) and cannot be directly summed to improvement market value.
-    Deriving imprv_value from market − land is more accurate and consistent
-    with how TCAD publishes certified values.
     """
     print("  Loading LAND_DET.TXT…")
     t0 = time.time()
 
-    # land_seg_mkt_val confirmed at [140:154] by field inspection
-    land_totals = {}  # prop_id → total land market value
     land_path = os.path.join(cert_dir, "LAND_DET.TXT")
-    with open(land_path, encoding="latin-1", errors="replace") as f:
-        for line in f:
-            if len(line) < 155:
-                continue
-            prop_id = _int_field(line, slice(0, 12))
-            val     = _int_field(line, slice(140, 154))
-            if prop_id and val:
-                land_totals[prop_id] = land_totals.get(prop_id, 0) + val
+    land_totals = ears_format.land_totals(land_path)
+    print(f"    {len(land_totals):,} units with land detail")
 
-    print(f"    {len(land_totals):,} parcels with land detail")
-
-    # Fetch prop_id → (geo_id, market_value) for the 2025 year
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT p.prop_id, p.geo_id, pty.market_value
-            FROM parcel p
-            JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
-            WHERE p.prop_id IS NOT NULL
-        """)
-        pid_info = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+        cur.execute(
+            "SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s",
+            (TAX_YEAR,),
+        )
+        market_by_pid = {r[0]: r[1] for r in cur.fetchall()}
 
     update_sql = """
-        UPDATE parcel_tax_year
+        UPDATE prop_unit_tax_year
         SET land_value = %s, imprv_value = %s
-        WHERE geo_id = %s AND tax_year = 2025
+        WHERE prop_id = %s AND tax_year = %s
     """
     updates = []
-    for pid, land_val in land_totals.items():
-        info = pid_info.get(pid)
-        if not info:
+    for prop_id, land_val in land_totals.items():
+        market_val = market_by_pid.get(prop_id)
+        if market_val is None:
             continue
-        geo_id, market_val = info
         imprv_val = max(0, (market_val or 0) - land_val)
-        updates.append((land_val, imprv_val, geo_id))
+        updates.append((land_val, imprv_val, prop_id, TAX_YEAR))
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(cur, update_sql, updates, page_size=2000)
     conn.commit()
 
-    print(f"    → land/imprv updated for {len(updates):,} parcels in {time.time()-t0:.1f}s")
+    print(f"    → land/imprv updated for {len(updates):,} units in {time.time()-t0:.1f}s")
     return len(updates)
 
 
@@ -346,6 +202,12 @@ def load(conn):
     load_prop_txt(conn, cert_dir)
     load_prop_ent_txt(conn, cert_dir)
     load_land_and_imprv(conn, cert_dir)
+
+    print("  Rolling up prop_unit_tax_year → parcel_tax_year for 2025…")
+    result = parcel_rollup.run(conn, tax_year=TAX_YEAR)
+    print(f"    → prop_id repaired: {result['prop_id_repaired']:,}, "
+          f"parcel_tax_year rows: {result['parcel_tax_year_rows']:,}")
+
     print("  2025 Certified Export loaded.")
 
 

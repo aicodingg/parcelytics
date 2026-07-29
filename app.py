@@ -2233,6 +2233,32 @@ def normalize_parcel_id(raw: str) -> str:
 # typeahead excluded AJR* geo_ids, the submit handler didn't — see D3 below);
 # that class of bug can't recur if there's only one implementation to call.
 
+def resolve_prop_id_to_geo_id(prop_id):
+    """
+    Resolve a prop_id to its geo_id — the ONE shared prop_id fallback,
+    used by both call sites below (Migration M2,
+    SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.5).
+
+    Looks in `prop_unit` FIRST, not `parcel`. Before this migration, a
+    prop_id search only ever worked if that prop_id happened to be the one
+    that won parcel's `ON CONFLICT (geo_id) DO UPDATE` for its geo_id —
+    every other unit sharing that geo_id (e.g. a condo regime's non-primary
+    units) had no row anywhere with THAT prop_id in the `prop_id` column,
+    so searching for it silently found nothing. `prop_unit` now contains
+    every prop_id ever loaded, each pointing at its real geo_id, so this
+    fallback now actually finds every unit, not just whichever one
+    happened to load last. Falls back to `parcel` directly only as a
+    defensive last resort (e.g. before any M2 loader has run against a
+    given environment) — should not be the normal path once migration
+    data is loaded.
+    """
+    row = query("SELECT geo_id FROM prop_unit WHERE prop_id = %s", (prop_id,), one=True)
+    if row:
+        return row["geo_id"]
+    row = query("SELECT geo_id FROM parcel WHERE prop_id = %s", (prop_id,), one=True)
+    return row["geo_id"] if row else None
+
+
 def resolve_exact_parcel(q):
     """
     Try to resolve `q` as an exact TCAD account number / prop_id — the same
@@ -2245,7 +2271,9 @@ def resolve_exact_parcel(q):
     geo_id = normalize_parcel_id(q)
     parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
     if not parcel and q.isdigit():
-        parcel = query("SELECT * FROM parcel WHERE prop_id = %s", (int(q),), one=True)
+        fallback_geo_id = resolve_prop_id_to_geo_id(int(q))
+        if fallback_geo_id:
+            parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (fallback_geo_id,), one=True)
     return dict(parcel) if parcel else None
 
 
@@ -2398,6 +2426,30 @@ def property_detail(geo_id):
         WHERE  pty.geo_id = %s
         ORDER  BY pty.tax_year
     """, (geo_id,))
+
+    # Multi-unit panel (Migration M2, SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.5).
+    # A geo_id can now genuinely represent more than one TCAD unit (condo
+    # regime, multi-improvement account, etc — see parcel_tax_year.unit_count
+    # on the `history` rows above). This surfaces those individual units so a
+    # visitor isn't shown one blended number with no indication it's a sum.
+    # "latest" = the most recent tax_year we have any history row for, not a
+    # hardcoded year, so this keeps working as new years get loaded.
+    units = None
+    latest_unit_year = max((row["tax_year"] for row in history), default=None)
+    if latest_unit_year is not None:
+        unit_rows = query("""
+            SELECT u.prop_id, u.owner_name, u.situs_address,
+                   y.market_value, y.assessed_value, y.taxable_value
+            FROM   prop_unit u
+            LEFT JOIN prop_unit_tax_year y
+                   ON y.prop_id = u.prop_id AND y.tax_year = %s
+            WHERE  u.geo_id = %s
+            ORDER  BY u.prop_id
+        """, (latest_unit_year, geo_id))
+        # Only render a "multi-unit" panel when there's genuinely more than
+        # one unit — a single-unit parcel showing a one-row panel would just
+        # repeat the KPI cards above with no new information.
+        units = unit_rows if unit_rows and len(unit_rows) > 1 else None
 
     # Current-year entity breakdown
     entity_detail = query("""
@@ -2813,6 +2865,8 @@ def property_detail(geo_id):
         parcel=parcel,
         imp_det=imp_det,
         history=history,
+        units=units,
+        units_tax_year=latest_unit_year,
         rate_history=rate_history,
         current=current,
         current_2026=current_2026,
@@ -3506,9 +3560,13 @@ def api_parcel_entities():
         "SELECT geo_id, situs_address FROM parcel WHERE geo_id = %s", (geo_id,), one=True
     )
     if not parcel and q.isdigit():
-        parcel = query(
-            "SELECT geo_id, situs_address FROM parcel WHERE prop_id = %s", (int(q),), one=True
-        )
+        # Shared prop_id fallback (Migration M2) — see resolve_prop_id_to_geo_id()'s
+        # docstring for why this now checks prop_unit before parcel.
+        fallback_geo_id = resolve_prop_id_to_geo_id(int(q))
+        if fallback_geo_id:
+            parcel = query(
+                "SELECT geo_id, situs_address FROM parcel WHERE geo_id = %s", (fallback_geo_id,), one=True
+            )
     if not parcel:
         return jsonify({"ok": False, "error": f"No parcel found matching \"{q}\"."})
 

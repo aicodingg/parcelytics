@@ -1142,6 +1142,52 @@
 </div>
 </div>{# /row #}
 
+{# ── Multi-unit panel (Migration M2, SPEC_UNIT_MODEL_AND_INGEST_GATE.md
+   §3.5, July 2026). `units` is only non-None when app.py's property_detail()
+   found more than one real TCAD unit (prop_id) sharing this geo_id — a
+   condo regime, a multi-improvement account, etc. Every KPI card and the
+   Value History table above show the SUMMED total across all of them
+   (parcel_rollup.py's SUM() aggregation); this panel is what shows the
+   individual units that sum came from, so a visitor isn't shown one
+   blended number with no indication it's a sum of several. Same partial
+   (units, units_tax_year) in both Homeowner and Investor branches. #}
+{% if units %}
+<div class="card mb-4">
+  <div class="card-header">
+    This Account Includes {{ units|length }} Units
+    <span class="text-muted" style="font-size:12px; font-weight:400;">({{ units_tax_year }} values — the figures above on this page are the sum of these rows)</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm mb-0" style="font-size:13px;">
+        <thead>
+          <tr>
+            <th>Unit (prop_id)</th>
+            <th>Owner</th>
+            <th>Address</th>
+            <th class="text-end">Market Value</th>
+            <th class="text-end">Assessed Value</th>
+            <th class="text-end">Taxable Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in units %}
+          <tr>
+            <td>{{ u.prop_id }}</td>
+            <td>{{ u.owner_name or '—' }}</td>
+            <td>{{ u.situs_address or '—' }}</td>
+            <td class="text-end">{{ "${:,.0f}".format(u.market_value) if u.market_value is not none else '—' }}</td>
+            <td class="text-end">{{ "${:,.0f}".format(u.assessed_value) if u.assessed_value is not none else '—' }}</td>
+            <td class="text-end">{{ "${:,.0f}".format(u.taxable_value) if u.taxable_value is not none else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief;
    relocated July 2026 per "Property Page Polish Round" item 6 — see the
    comment left at its original position, right after the KPI cards, for
@@ -2855,6 +2901,46 @@
 
 </div>{# /col-lg-8 — insight report #}
 </div>{# /row — top two-column section #}
+
+{# ── Multi-unit panel (Migration M2, SPEC_UNIT_MODEL_AND_INGEST_GATE.md
+   §3.5, July 2026) — Investor-mode instance of the same partial rendered
+   in the Homeowner branch above; see that comment for the full rationale. #}
+{% if units %}
+<div class="card mb-4">
+  <div class="card-header">
+    This Account Includes {{ units|length }} Units
+    <span class="text-muted" style="font-size:12px; font-weight:400;">({{ units_tax_year }} values — the figures above on this page are the sum of these rows)</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm mb-0" style="font-size:13px;">
+        <thead>
+          <tr>
+            <th>Unit (prop_id)</th>
+            <th>Owner</th>
+            <th>Address</th>
+            <th class="text-end">Market Value</th>
+            <th class="text-end">Assessed Value</th>
+            <th class="text-end">Taxable Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in units %}
+          <tr>
+            <td>{{ u.prop_id }}</td>
+            <td>{{ u.owner_name or '—' }}</td>
+            <td>{{ u.situs_address or '—' }}</td>
+            <td class="text-end">{{ "${:,.0f}".format(u.market_value) if u.market_value is not none else '—' }}</td>
+            <td class="text-end">{{ "${:,.0f}".format(u.assessed_value) if u.assessed_value is not none else '—' }}</td>
+            <td class="text-end">{{ "${:,.0f}".format(u.taxable_value) if u.taxable_value is not none else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 {# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief;
    MOVED July 2026, Property Page Polish Round item 6, per Diego's live

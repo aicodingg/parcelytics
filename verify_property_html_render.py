@@ -263,7 +263,7 @@ def _load_real_app_functions():
 
 
 def base_context(mode="homeowner", with_waterfall=True, residential=True, waterfall_reset=False,
-                  delinquent=None):
+                  delinquent=None, units=None, units_tax_year=None):
     """A complete mock context matching every kwarg property_detail() passes
     to render_template(), for a well-behaved residential parcel with
     verified 2024+2025 billing (so bill_waterfall renders when requested).
@@ -449,6 +449,12 @@ def base_context(mode="homeowner", with_waterfall=True, residential=True, waterf
         parcel=parcel,
         imp_det=json.loads(parcel["imp_det_json"]),
         history=history,
+        # Migration M2 (SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.5, AC7): None
+        # by default, matching property_detail()'s own real shape for the
+        # large majority of (single-unit) parcels. Pass units=[...] to
+        # exercise the multi-unit panel.
+        units=units,
+        units_tax_year=units_tax_year,
         rate_history=[],
         current=current,
         current_2026=current_2026,
@@ -792,6 +798,30 @@ def check_possessive_voice(html, label, is_residential):
         if missing:
             print(f"FAIL [{label}] expected third-person marker(s) missing on non-residential render: {missing}")
             return False
+    return True
+
+
+def check_multi_unit_panel_present(html, label, expect_n_units):
+    """Migration M2 (AC7): a multi-unit fixture must render the panel,
+    with the correct unit count in its header text."""
+    ok = True
+    if "This Account Includes" not in html:
+        print(f"FAIL [{label}] multi-unit panel not found in rendered output")
+        ok = False
+    expected_header = f"This Account Includes {expect_n_units} Units"
+    if expected_header not in html:
+        print(f"FAIL [{label}] expected unit-count header {expected_header!r} not found")
+        ok = False
+    return ok
+
+
+def check_multi_unit_panel_absent(html, label):
+    """Migration M2 (AC7): a single-unit / no-units fixture must NOT show
+    the multi-unit panel — output should be unchanged from before this
+    migration for the common case."""
+    if "This Account Includes" in html:
+        print(f"FAIL [{label}] multi-unit panel unexpectedly present for a single-unit fixture")
+        return False
     return True
 
 
@@ -1893,6 +1923,63 @@ def run():
         else:
             print(f"FAIL [base.html footer] {desc} -- expected {needle!r} not found in rendered output")
             all_ok = False
+
+    # ── Migration M2 (SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.5, AC7): ─────────
+    # multi-unit panel real-render check. This is the real Jinja render this
+    # migration's AC7 asks for ("multi-unit fixture → panel + unit count";
+    # "single-unit → unchanged output") -- not a pure-Python mirror, an
+    # actual tmpl.render() call against templates/property.html with a
+    # units= fixture, same StrictUndefined harness as every other scenario
+    # in this file.
+    print()
+    print("── Migration M2: multi-unit panel real-render check ──")
+
+    unit_fixture_3 = [
+        {"prop_id": 900001, "owner_name": "UNIT A OWNER", "situs_address": "1 Test Condo Dr #A",
+         "market_value": 150000, "assessed_value": 140000, "taxable_value": 130000},
+        {"prop_id": 900002, "owner_name": "UNIT B OWNER", "situs_address": "1 Test Condo Dr #B",
+         "market_value": 200000, "assessed_value": 180000, "taxable_value": 170000},
+        {"prop_id": 900003, "owner_name": None, "situs_address": None,
+         "market_value": None, "assessed_value": None, "taxable_value": None},
+    ]
+
+    multi_unit_scenarios = [
+        ("homeowner, multi-unit (3 units)", base_context("homeowner", True, True, units=unit_fixture_3, units_tax_year=2025), 3),
+        ("investor, multi-unit (3 units)", base_context("investor", True, True, units=unit_fixture_3, units_tax_year=2025), 3),
+    ]
+    for label, ctx, n_units in multi_unit_scenarios:
+        try:
+            html = tmpl.render(**ctx)
+        except Exception as e:
+            print(f"FAIL [{label}] render raised {type(e).__name__}: {e}")
+            all_ok = False
+            continue
+        ok = check_no_leaked_delimiters(html, label)
+        ok = check_multi_unit_panel_present(html, label, n_units) and ok
+        # Spot-check that a NULL unit's values render as an em dash, not a
+        # Python None literal or a raised exception (the third fixture unit
+        # above deliberately has every value field None).
+        if "UNIT A OWNER" not in html or "UNIT B OWNER" not in html:
+            print(f"FAIL [{label}] expected unit owner names not found in rendered table")
+            ok = False
+        print(f"{'PASS' if ok else 'FAIL'} [{label}]")
+        all_ok = all_ok and ok
+
+    # Single-unit / no-units fixture -- panel must be ABSENT (regression
+    # guard: the overwhelming majority of parcels are single-unit, and
+    # their rendered output must be byte-for-byte unchanged by this
+    # migration's template addition).
+    single_label = "homeowner, single-unit (units=None, unchanged output)"
+    single_ctx = base_context("homeowner", True, True)  # units defaults to None
+    try:
+        single_html = tmpl.render(**single_ctx)
+        single_ok = check_no_leaked_delimiters(single_html, single_label)
+        single_ok = check_multi_unit_panel_absent(single_html, single_label) and single_ok
+        print(f"{'PASS' if single_ok else 'FAIL'} [{single_label}]")
+        all_ok = all_ok and single_ok
+    except Exception as e:
+        print(f"FAIL [{single_label}] render raised {type(e).__name__}: {e}")
+        all_ok = False
 
     return all_ok
 

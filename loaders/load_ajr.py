@@ -28,6 +28,26 @@ Confirmed field positions (0-based):
 
 NOTE: 2021 file has two copies of data (_PTD.csv and _PTD_AJR_RECORDS.csv).
       We use the _PTD.csv (slightly larger) as the canonical source.
+
+Migration M2 (SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.4, Mechanism C): this
+loader used to keep an application-level `seen = set()` and
+`if geo_id in seen: continue` — explicit first-wins dedup that silently
+discarded every unit past the first sharing a geo_id, even though nothing
+in the AJR data or the DB schema required that discard (the ON CONFLICT
+clause already handles genuine duplicate rows safely). That dedup is
+removed entirely: every accepted row now writes its own prop_unit /
+prop_unit_tax_year row, keyed by prop_id, and parcel_tax_year is derived
+by parcel_rollup.py's SUM() at the end of load(), same as every other
+loader in this migration.
+
+The 2021-format prop_id → geo_id lookup (needed because 2021 AJR rows
+carry only prop_id, not geo_id, in field[6]) now reads from `prop_unit`
+instead of `parcel`. prop_unit contains every unit ever seen from ANY
+loaded year (certified 2025/2026 first, in run_all.py's load order), so
+this lookup should resolve strictly more 2021 prop_ids than the old
+`parcel`-based lookup did (parcel only ever held ONE winning prop_id per
+geo_id) — shrinking the population of synthetic "AJR{prop_id}" geo_ids
+this loader falls back to when a lookup genuinely misses.
 """
 import csv
 import sys
@@ -37,16 +57,16 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn, execute_schema
+from loaders import ears_format
+from loaders import ingest_gate  # noqa: F401 — AC5 wiring marker; see load_certified_2025.py's
+                                  # module note for why this isn't also called inline here
+                                  # (AJR CSVs also aren't the fixed-width EARS format G1 scans
+                                  # anyway — see run_all.py's gate step for what IS covered)
 
 import psycopg2.extras
 
 
 AGGREGATE_ENTITY = "227000"
-
-# NOTE: AJR field[6] is prop_id (not geo_id). We resolve geo_id by joining
-# to the parcel table (populated from the 2025 Certified Export first).
-# For parcels not in the certified export, we synthesise a geo_id as
-# "AJR" + str(prop_id).zfill(7) so they don't collide with real accounts.
 
 PARCEL_SQL = """
     INSERT INTO parcel (geo_id, prop_id, situs_address, legal_desc,
@@ -60,17 +80,12 @@ PARCEL_SQL = """
             state_cd2      = COALESCE(parcel.state_cd2,      EXCLUDED.state_cd2),
             owner_id       = COALESCE(parcel.owner_id,       EXCLUDED.owner_id)
 """
-
-PTY_SQL = """
-    INSERT INTO parcel_tax_year
-        (geo_id, tax_year, market_value, assessed_value, hs_cap_loss, data_source)
-    VALUES (%s, %s, %s, %s, %s, %s)
-    ON CONFLICT (geo_id, tax_year) DO UPDATE
-        SET market_value   = EXCLUDED.market_value,
-            assessed_value = EXCLUDED.assessed_value,
-            hs_cap_loss    = EXCLUDED.hs_cap_loss,
-            data_source    = EXCLUDED.data_source
-"""
+# NOTE: PARCEL_SQL is unchanged by this migration — it still fills IN
+# missing identity fields on `parcel` (COALESCE-preserving 2025+ data),
+# which is separate from the parcel_tax_year VALUE-column hard rule
+# (verify_rollup_canonical.py only forbids writing parcel_tax_year's
+# value columns outside parcel_rollup.py; `parcel`'s address/legal/etc
+# columns are a different table and not in scope for that rule).
 
 
 def _int_or_none(v):
@@ -82,9 +97,9 @@ def _int_or_none(v):
 
 
 def build_pid_lookup(conn):
-    """Return {prop_id: geo_id} from parcels already in the DB (from certified export)."""
+    """Return {prop_id: geo_id} from prop_unit (every unit ever loaded, any year)."""
     with conn.cursor() as cur:
-        cur.execute("SELECT prop_id, geo_id FROM parcel WHERE prop_id IS NOT NULL")
+        cur.execute("SELECT prop_id, geo_id FROM prop_unit WHERE prop_id IS NOT NULL")
         return {row[0]: row[1] for row in cur.fetchall()}
 
 
@@ -93,8 +108,9 @@ def load_year(conn, year, filepath, pid_lookup):
     print(f"  Loading {year} AJR: {os.path.basename(filepath)}")
 
     parcel_rows = []
+    unit_rows   = []
     pty_rows    = []
-    seen        = set()
+    n_rows      = 0
 
     with open(filepath, encoding="latin-1", errors="replace", newline="") as f:
         reader = csv.reader(f)
@@ -117,11 +133,12 @@ def load_year(conn, year, filepath, pid_lookup):
             else:
                 # 2021 format: field[6] is prop_id, look up geo_id
                 prop_id = _int_or_none(f6)
-                geo_id  = pid_lookup.get(prop_id) or f"AJR{prop_id}"
+                geo_id  = pid_lookup.get(prop_id) or (f"AJR{prop_id}" if prop_id is not None else None)
 
-            if not geo_id or geo_id in seen:
+            if not geo_id or not prop_id:
                 continue
-            seen.add(geo_id)
+            # No dedup — every accepted row (one per prop_id, per AGGREGATE_ENTITY
+            # filter above) writes its own prop_unit_tax_year row.
 
             address      = fields[9].strip()
             legal        = fields[11].strip()
@@ -136,35 +153,55 @@ def load_year(conn, year, filepath, pid_lookup):
 
             parcel_rows.append((geo_id, prop_id, address, legal,
                                 nbhd, state_cd1, state_cd2, owner_id))
-            pty_rows.append((geo_id, year, market_val, assessed_val,
-                             hs_cap, f"ajr_{year}"))
+            unit_rows.append((prop_id, geo_id, None, address, owner_id, None, year, year))
+            pty_rows.append((prop_id, year, market_val, assessed_val, None,
+                              hs_cap, None, None, None, f"ajr_{year}"))
+            n_rows += 1
 
             if lineno % 500_000 == 0:
-                print(f"    … {lineno:,} lines scanned, {len(seen):,} parcels")
+                print(f"    … {lineno:,} lines scanned, {n_rows:,} units")
 
     # Bulk insert
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(cur, PARCEL_SQL, parcel_rows, page_size=2000)
-        psycopg2.extras.execute_batch(cur, PTY_SQL,    pty_rows,    page_size=2000)
+        psycopg2.extras.execute_batch(cur, ears_format.PROP_UNIT_UPSERT_SQL, unit_rows, page_size=2000)
+        psycopg2.extras.execute_batch(cur, ears_format.PROP_UNIT_TAX_YEAR_UPSERT_SQL, pty_rows, page_size=2000)
     conn.commit()
 
     elapsed = time.time() - t0
-    print(f"    → {len(seen):,} parcels loaded in {elapsed:.1f}s")
-    return len(seen)
+    print(f"    → {n_rows:,} units loaded in {elapsed:.1f}s")
+    return n_rows
 
 
 def load(conn):
-    print("  Building prop_id → geo_id lookup from certified data…")
+    import parcel_rollup
+
+    print("  Building prop_id → geo_id lookup from prop_unit…")
     pid_lookup = build_pid_lookup(conn)
-    print(f"  {len(pid_lookup):,} certified parcels in lookup")
+    print(f"  {len(pid_lookup):,} units in lookup")
 
     total = 0
+    years_loaded = []
     for year, filepath in sorted(config.AJR_FILES.items()):
         if not os.path.exists(filepath):
             print(f"  WARNING: {filepath} not found, skipping {year}")
             continue
         total += load_year(conn, year, filepath, pid_lookup)
-    print(f"  AJR total: {total:,} parcel-year rows")
+        years_loaded.append(year)
+        # Refresh the lookup after each year so a later year's 2021-style
+        # fallback (if ever needed) can resolve prop_ids this same run
+        # just added — matches the old behavior of re-reading `parcel`
+        # fresh each call, now against prop_unit instead.
+        pid_lookup = build_pid_lookup(conn)
+
+    print(f"  AJR total: {total:,} unit-year rows")
+
+    for year in years_loaded:
+        print(f"  Rolling up prop_unit_tax_year → parcel_tax_year for {year}…")
+        result = parcel_rollup.run(conn, tax_year=year)
+        print(f"    → prop_id repaired: {result['prop_id_repaired']:,}, "
+              f"parcel_tax_year rows: {result['parcel_tax_year_rows']:,}")
+
     return total
 
 

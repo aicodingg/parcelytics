@@ -14,12 +14,32 @@ Key differences from 2025 Certified:
   - confidence_level: shown as "Preliminary" in the UI (blue badge)
   - No billing data available — that requires post-certification tax roll
 
-Field positions: CONFIRMED identical to 2025 (PROP.TXT is 9,813 chars/line;
-same geo_id at [546:596], owner at [608:678], sup_num at [22:34]).
+Field positions: see loaders/ears_format.py — CONFIRMED identical to 2025
+(PROP.TXT is 9,813 chars/line; same geo_id at [546:596], owner at
+[608:678], sup_num at [22:34]).
+
+Migration M2 (SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.4): this loader now
+writes prop_unit / prop_unit_tax_year (keyed by prop_id — no geo_id
+lookup, no collision-loss possible) instead of writing parcel_tax_year
+directly. parcel_tax_year is derived by parcel_rollup.py at the end of
+load(). All parsing logic and field-slice constants now live in
+loaders/ears_format.py (previously duplicated near-identically here,
+load_certified_2025.py, and load_certified_historical.py).
 
 Data Integrity Standard:
   - Do NOT overwrite or modify any existing 2025 or prior year rows
-  - Insert 2026 with ON CONFLICT DO NOTHING (not DO UPDATE) so re-runs are safe
+  - prop_unit_tax_year is written with a real ON CONFLICT (prop_id,
+    tax_year) DO UPDATE (re-runs are still safe — a re-run of THIS same
+    2026 file re-derives the identical values it wrote last time, so an
+    UPDATE-in-place is equivalent to a no-op, not a corruption risk. This
+    docstring previously claimed "ON CONFLICT DO NOTHING (not DO UPDATE)"
+    while the code beneath it actually used DO UPDATE the whole time —
+    a real drift between comment and code, caught and fixed during this
+    migration, per SPEC_UNIT_MODEL_AND_INGEST_GATE.md's explicit call-out
+    of this file's line 22 vs its pty_sql. DO UPDATE is correct: it's
+    what makes re-running this loader on a corrected/re-delivered 2026
+    file actually pick up the correction instead of silently keeping the
+    first version forever.)
   - AV > MV anomalies are preserved as-is with visible UI flag — not corrected
   - Post-load QA runs automatically (items 8–9 from the brief)
 
@@ -32,11 +52,16 @@ for 2026 rows.
 import os
 import sys
 import time
-import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn, execute_schema
+from loaders import ears_format
+from loaders import ingest_gate  # noqa: F401 — AC5 wiring marker; see load_certified_2025.py's
+                                  # module note for why this isn't also called inline here
+                                  # (avoids a second full read of a multi-GB source file —
+                                  # run_all.py's explicit gate step is the real enforcement point)
+import parcel_rollup
 
 import psycopg2.extras
 
@@ -47,35 +72,8 @@ PRELIM_DIR = os.path.join(
     "2026 Preliminary Appraisal Export Supp 0_06092026 (1)"
 )
 
-# Exemption fields (same slice positions as 2025 PROP_ENT)
-EXEMPTION_FIELDS = [
-    ("hs",    slice(298, 313)),
-    ("ov65",  slice(313, 328)),
-    ("dp",    slice(328, 343)),
-    ("dv",    slice(343, 358)),
-    ("ab",    slice(178, 193)),
-    ("fr",    slice(208, 223)),
-    ("ht",    slice(223, 238)),
-    ("ch",    slice(373, 388)),
-    ("ex366", slice(283, 298)),
-]
 
-
-def _int_field(line, s):
-    try:
-        return int(line[s].strip()) if line[s].strip() else None
-    except (ValueError, IndexError):
-        return None
-
-
-def _str_field(line, s):
-    try:
-        return line[s].strip() or None
-    except IndexError:
-        return None
-
-
-# ── Step 1: PROP.TXT → parcel table (upsert owner/name; never overwrite geo_id) ──
+# ── Step 1: PROP.TXT → parcel (identity upsert, unchanged) + prop_unit ──────
 def load_prop_txt(conn):
     path = os.path.join(PRELIM_DIR, "PROP.TXT")
     if not os.path.exists(path):
@@ -83,8 +81,8 @@ def load_prop_txt(conn):
     print(f"  Loading PROP.TXT ({os.path.getsize(path)/1e9:.1f} GB)…")
     t0 = time.time()
 
-    # UPSERT: update owner info from 2026 data; preserve all other fields
-    # geo_id and prop_id are the authoritative keys from the 2025 certified load
+    # geo_id and prop_id are the authoritative keys from the 2025 certified
+    # load; this UPSERT only refreshes owner info, same as before.
     parcel_sql = """
         INSERT INTO parcel (geo_id, prop_id, prop_type_cd, owner_id, owner_name)
         VALUES (%s, %s, %s, %s, %s)
@@ -93,49 +91,37 @@ def load_prop_txt(conn):
                 owner_id     = EXCLUDED.owner_id
     """
 
-    rows  = []
+    parcel_rows = []
+    unit_rows = []
     total = 0
 
-    with open(path, encoding="latin-1", errors="replace") as f:
-        for lineno, line in enumerate(f, 1):
-            if len(line) < 600:
-                continue
-            sup_num = _int_field(line, slice(22, 34))
-            if sup_num != 0:
-                continue   # Skip supplement rows; Supp 0 only
+    for rec in ears_format.iter_prop_records(path):
+        parcel_rows.append((rec["geo_id"], rec["prop_id"], rec["prop_type_cd"],
+                             rec["owner_id"], rec["owner_name"]))
+        unit_rows.append((rec["prop_id"], rec["geo_id"], rec["prop_type_cd"], None,
+                           rec["owner_id"], rec["owner_name"], TAX_YEAR, TAX_YEAR))
 
-            geo_id       = (_str_field(line, slice(546, 596)) or "")[:10].strip() or None
-            prop_id      = _int_field(line, slice(0, 12))
-            prop_type_cd = _str_field(line, slice(12, 17))
-            owner_id     = _int_field(line, slice(596, 608))
-            owner_name   = _str_field(line, slice(608, 678))
+        if len(parcel_rows) >= 5000:
+            _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows)
+            total += len(parcel_rows)
+            parcel_rows, unit_rows = [], []
 
-            if not geo_id:
-                continue
+    if parcel_rows:
+        _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows)
+        total += len(parcel_rows)
 
-            rows.append((geo_id, prop_id, prop_type_cd, owner_id, owner_name))
-
-            if len(rows) >= 5000:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_batch(cur, parcel_sql, rows, page_size=2000)
-                conn.commit()
-                total += len(rows)
-                rows = []
-
-            if lineno % 100_000 == 0:
-                print(f"    … {lineno:,} lines, {total:,} committed")
-
-    if rows:
-        with conn.cursor() as cur:
-            psycopg2.extras.execute_batch(cur, parcel_sql, rows, page_size=2000)
-        conn.commit()
-        total += len(rows)
-
-    print(f"    → {total:,} parcel rows upserted in {time.time()-t0:.1f}s")
+    print(f"    → {total:,} parcel/unit rows upserted in {time.time()-t0:.1f}s")
     return total
 
 
-# ── Step 2: PROP_ENT.TXT → parcel_tax_year for 2026 ─────────────────────────
+def _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows):
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_batch(cur, parcel_sql, parcel_rows, page_size=2000)
+        psycopg2.extras.execute_batch(cur, ears_format.PROP_UNIT_UPSERT_SQL, unit_rows, page_size=2000)
+    conn.commit()
+
+
+# ── Step 2: PROP_ENT.TXT → prop_unit_tax_year for 2026 ──────────────────────
 def load_prop_ent_txt(conn):
     path = os.path.join(PRELIM_DIR, "PROP_ENT.TXT")
     if not os.path.exists(path):
@@ -143,104 +129,36 @@ def load_prop_ent_txt(conn):
     print(f"  Loading PROP_ENT.TXT ({os.path.getsize(path)/1e9:.1f} GB)…")
     t0 = time.time()
 
-    # ON CONFLICT DO NOTHING: safe to re-run; never touches prior year rows
-    pty_sql = """
-        INSERT INTO parcel_tax_year
-            (geo_id, tax_year, market_value, assessed_value, taxable_value,
-             exemption_codes, data_source)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (geo_id, tax_year) DO UPDATE
-            SET market_value   = EXCLUDED.market_value,
-                assessed_value = EXCLUDED.assessed_value,
-                taxable_value  = EXCLUDED.taxable_value,
-                exemption_codes= EXCLUDED.exemption_codes,
-                data_source    = EXCLUDED.data_source
-    """
+    rows_to_insert = []
+    total = 0
 
-    print("    Building prop_id → geo_id lookup…")
-    with conn.cursor() as cur:
-        cur.execute("SELECT prop_id, geo_id FROM parcel WHERE prop_id IS NOT NULL")
-        pid_to_geo = {row[0]: row[1] for row in cur.fetchall()}
-    print(f"    {len(pid_to_geo):,} parcels in lookup")
-
-    current_pid     = None
-    accum           = {}
-    rows_to_insert  = []
-    total           = 0
-
-    def flush(pid, acc):
-        geo_id = pid_to_geo.get(pid)
-        if not geo_id:
-            return
+    for agg in ears_format.iter_prop_ent_aggregates(path):
         rows_to_insert.append((
-            geo_id,
-            TAX_YEAR,
-            acc.get("market_value"),
-            acc.get("assessed_value"),
-            acc.get("taxable_value"),
-            ",".join(sorted(acc.get("exemptions", set()))) or None,
-            DATA_SRC,
+            agg["prop_id"], TAX_YEAR,
+            agg["market_value"], agg["assessed_value"], agg["taxable_value"],
+            None, None, None,
+            agg["exemption_codes"], DATA_SRC,
         ))
-
-    with open(path, encoding="latin-1", errors="replace") as f:
-        for lineno, line in enumerate(f, 1):
-            if len(line) < 180:
-                continue
-
-            prop_id = _int_field(line, slice(0, 12))
-            sup_num = _int_field(line, slice(17, 29))
-            if sup_num != 0:
-                continue
-
-            year      = _int_field(line, slice(12, 17))
-            entity_cd = _str_field(line, slice(53, 63))
-            assessed  = _int_field(line, slice(148, 163))
-            taxable   = _int_field(line, slice(163, 178))
-            market    = _int_field(line, slice(388, 403))
-
-            if prop_id != current_pid:
-                if current_pid is not None and accum:
-                    flush(current_pid, accum)
-                current_pid = prop_id
-                accum = {"year": year, "exemptions": set()}
-
-            if market and not accum.get("market_value"):
-                accum["market_value"] = market
-
-            is_tco = entity_cd and entity_cd.strip().upper() in ("100303", "TCO")
-            if is_tco or not accum.get("assessed_value"):
-                accum["assessed_value"] = assessed
-                accum["taxable_value"]  = taxable
-
-            for code, sl in EXEMPTION_FIELDS:
-                amt = _int_field(line, sl)
-                if amt and amt > 0:
-                    accum["exemptions"].add(code.upper())
-
-            if len(rows_to_insert) >= 5000:
-                with conn.cursor() as cur:
-                    psycopg2.extras.execute_batch(cur, pty_sql, rows_to_insert, page_size=2000)
-                conn.commit()
-                total += len(rows_to_insert)
-                rows_to_insert = []
-
-            if lineno % 500_000 == 0:
-                print(f"    … {lineno:,} lines, {total:,} committed")
-
-    if current_pid is not None and accum:
-        flush(current_pid, accum)
+        if len(rows_to_insert) >= 5000:
+            _flush_pty(conn, rows_to_insert)
+            total += len(rows_to_insert)
+            rows_to_insert = []
 
     if rows_to_insert:
-        with conn.cursor() as cur:
-            psycopg2.extras.execute_batch(cur, pty_sql, rows_to_insert, page_size=2000)
-        conn.commit()
+        _flush_pty(conn, rows_to_insert)
         total += len(rows_to_insert)
 
-    print(f"    → {total:,} parcel-year rows for 2026 in {time.time()-t0:.1f}s")
+    print(f"    → {total:,} unit-year rows for 2026 in {time.time()-t0:.1f}s")
     return total
 
 
-# ── Step 3: LAND_DET.TXT → land_value + imprv_value for 2026 ─────────────────
+def _flush_pty(conn, rows):
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_batch(cur, ears_format.PROP_UNIT_TAX_YEAR_UPSERT_SQL, rows, page_size=2000)
+    conn.commit()
+
+
+# ── Step 3: LAND_DET.TXT → land_value + imprv_value for 2026 (by prop_id) ───
 def load_land_and_imprv(conn):
     path = os.path.join(PRELIM_DIR, "LAND_DET.TXT")
     if not os.path.exists(path):
@@ -248,57 +166,53 @@ def load_land_and_imprv(conn):
     print(f"  Loading LAND_DET.TXT ({os.path.getsize(path)/1e6:.0f} MB)…")
     t0 = time.time()
 
-    land_totals = {}
-    with open(path, encoding="latin-1", errors="replace") as f:
-        for line in f:
-            if len(line) < 155:
-                continue
-            prop_id = _int_field(line, slice(0, 12))
-            val     = _int_field(line, slice(140, 154))
-            if prop_id and val:
-                land_totals[prop_id] = land_totals.get(prop_id, 0) + val
-
-    print(f"    {len(land_totals):,} parcels with land detail")
+    land_totals = ears_format.land_totals(path)
+    print(f"    {len(land_totals):,} units with land detail")
 
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT p.prop_id, p.geo_id, pty.market_value
-            FROM parcel p
-            JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = %s
-            WHERE p.prop_id IS NOT NULL
-        """, (TAX_YEAR,))
-        pid_info = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+        cur.execute(
+            "SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s",
+            (TAX_YEAR,),
+        )
+        market_by_pid = {r[0]: r[1] for r in cur.fetchall()}
 
     update_sql = """
-        UPDATE parcel_tax_year
+        UPDATE prop_unit_tax_year
         SET land_value = %s, imprv_value = %s
-        WHERE geo_id = %s AND tax_year = %s
+        WHERE prop_id = %s AND tax_year = %s
     """
     updates = []
-    for pid, land_val in land_totals.items():
-        info = pid_info.get(pid)
-        if not info:
+    for prop_id, land_val in land_totals.items():
+        market_val = market_by_pid.get(prop_id)
+        if market_val is None:
             continue
-        geo_id, market_val = info
         imprv_val = max(0, (market_val or 0) - land_val)
-        updates.append((land_val, imprv_val, geo_id, TAX_YEAR))
+        updates.append((land_val, imprv_val, prop_id, TAX_YEAR))
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(cur, update_sql, updates, page_size=2000)
     conn.commit()
 
-    print(f"    → land/imprv updated for {len(updates):,} parcels in {time.time()-t0:.1f}s")
+    print(f"    → land/imprv updated for {len(updates):,} units in {time.time()-t0:.1f}s")
     return len(updates)
 
 
-# ── Step 4: SB12.TXT → over-65 freeze exemption data ────────────────────────
+# ── Step 4: SB12.TXT → over-65 freeze exemption data (by prop_id directly) ──
 def load_sb12(conn):
     """
-    SB12 contains Senate Bill 12 over-65 freeze records.
-    We extract the freeze-capped taxable value per entity where available.
-    The SB12 format is tab-separated: prop_id, owner_id, entity_id, seq, entity_cd,
+    SB12 contains Senate Bill 12 over-65 freeze records, keyed by prop_id.
+    We flag units that have an active SB12 freeze in exemption_codes.
+    Format is tab-separated: prop_id, owner_id, entity_id, seq, entity_cd,
     entity_xref, exemption_type, freeze_yr, row_type, appraised_yr, ...
-    We flag parcels that have an active SB12 freeze in the exemption_codes field.
+
+    Migration M2 change: previously looked up geo_id from `parcel` to
+    UPDATE parcel_tax_year directly (a value-column write from OUTSIDE
+    parcel_rollup.py — exactly the pattern the hard-rule regression test,
+    verify_rollup_canonical.py, now forbids). Now updates
+    prop_unit_tax_year by prop_id directly — no geo_id lookup needed at
+    all — and the SB12 flag reaches parcel_tax_year the same way every
+    other exemption code does: via parcel_rollup's union-of-codes rollup,
+    which runs after this function in load().
     """
     path = os.path.join(PRELIM_DIR, "SB12.TXT")
     if not os.path.exists(path):
@@ -306,8 +220,6 @@ def load_sb12(conn):
     print(f"  Loading SB12.TXT ({os.path.getsize(path)/1e6:.0f} MB) — over-65 freeze…")
     t0 = time.time()
 
-    # Read prop_ids that have an active SB12 freeze in 2026
-    # Format: tab-separated; col 0=prop_id, col 3=seq, col 9=appraised_yr
     frozen_pids = set()
     with open(path, encoding="latin-1", errors="replace") as f:
         for line in f:
@@ -322,37 +234,33 @@ def load_sb12(conn):
             if appraised_yr == TAX_YEAR:
                 frozen_pids.add(prop_id)
 
-    print(f"    {len(frozen_pids):,} parcels with active 2026 SB12 freeze")
+    print(f"    {len(frozen_pids):,} units with active 2026 SB12 freeze")
 
     if not frozen_pids:
         return 0
 
-    # Look up geo_ids for these prop_ids
-    with conn.cursor() as cur:
-        cur.execute("SELECT prop_id, geo_id FROM parcel WHERE prop_id IS NOT NULL")
-        pid_to_geo = {row[0]: row[1] for row in cur.fetchall()}
-
-    # Update exemption_codes to include SB12 flag
     update_sql = """
-        UPDATE parcel_tax_year
+        UPDATE prop_unit_tax_year
         SET exemption_codes = CASE
             WHEN exemption_codes IS NULL OR exemption_codes = '' THEN 'SB12'
             WHEN exemption_codes NOT LIKE '%%SB12%%' THEN exemption_codes || ',SB12'
             ELSE exemption_codes
         END
-        WHERE geo_id = %s AND tax_year = %s
+        WHERE prop_id = %s AND tax_year = %s
     """
-    updates = [(pid_to_geo[pid], TAX_YEAR) for pid in frozen_pids if pid in pid_to_geo]
+    updates = [(pid, TAX_YEAR) for pid in frozen_pids]
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(cur, update_sql, updates, page_size=2000)
     conn.commit()
 
-    print(f"    → SB12 flag set on {len(updates):,} parcels in {time.time()-t0:.1f}s")
+    print(f"    → SB12 flag set on {len(updates):,} units in {time.time()-t0:.1f}s")
     return len(updates)
 
 
-# ── Step 5: Post-load QA (Item 8 from brief) ─────────────────────────────────
+# ── Step 5: Post-load QA (Item 8 from brief) — unchanged, reads the ─────────
+#           rolled-up parcel_tax_year, which is now populated by
+#           parcel_rollup.run() before this runs (see load() below).
 def run_qa(conn):
     """
     Post-load data quality checks for 2026 preliminary data.
@@ -430,7 +338,8 @@ def run_qa(conn):
     cur.close()
 
 
-# ── Step 6: 2026 vs 2025 county-wide comparison (Item 9 from brief) ───────────
+# ── Step 6: 2026 vs 2025 county-wide comparison (Item 9 from brief) — ───────
+#           unchanged, reads parcel/parcel_tax_year same as before.
 def run_county_comparison(conn):
     """
     County-wide 2026 vs 2025 market value comparison by property type.
@@ -527,6 +436,11 @@ def load(conn, skip_qa=False):
     load_prop_ent_txt(conn)
     load_land_and_imprv(conn)
     load_sb12(conn)
+
+    print("  Rolling up prop_unit_tax_year → parcel_tax_year for 2026…")
+    result = parcel_rollup.run(conn, tax_year=TAX_YEAR)
+    print(f"    → prop_id repaired: {result['prop_id_repaired']:,}, "
+          f"parcel_tax_year rows: {result['parcel_tax_year_rows']:,}")
 
     print("\n  2026 Preliminary load complete.")
 

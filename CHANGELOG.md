@@ -8,6 +8,16 @@ All notable changes to Parcelytics are tracked here, using [Semantic Versioning]
 
 Version numbers are tied to actual production deploys, not every commit.
 
+## [1.4.0] — 2026-07-29
+- Added the unit-model architecture (Migration M2): a new prop_unit/prop_unit_tax_year layer stores TCAD's real per-unit data (a single geo_id can legitimately contain multiple prop_ids — condo regimes, multi-improvement accounts). parcel_tax_year is now a derived rollup computed from this unit layer (parcel_rollup.py), rather than being written directly by loaders
+- All four loaders (certified 2025, 2026 preliminary, certified historical, AJR) refactored to write unit-grain data via a new shared parser (loaders/ears_format.py), fixing three independent data-loss mechanisms that were silently dropping units sharing a geo_id
+- New Ingestion Conservation Gate (loaders/ingest_gate.py, checks G1-G6): exact internal reconciliation (source file counts and dollar sums must match the database precisely) plus banded external reconciliation against TCAD's published totals
+- New multi-unit panel on the property detail page for accounts with more than one unit; centralized prop_id-to-geo_id resolution so previously-orphaned prop_ids are now searchable
+- Homestead-cap risk signals (compute_metrics.py) now gated to single-unit parcels only, to avoid false signals from summed multi-unit values
+- Full fixture-based test coverage (83 total checks across 4 new test suites) including deliberate-corruption cases proving the gate's alarms actually fire
+- Schema changes are additive only (new tables, one new column) - existing geo_id-keyed queries, URLs, and joins are unaffected
+- Live data reload against real production data (Migration M3) not yet run - this commit adds the capability only
+
 ## [1.3.8] — 2026-07-29
 - Centralized parcel-exclusion filtering into a single canonical, NULL-safe module (parcel_filters.py) - fixes a NULL-propagation bug that silently dropped ~17K post-2024 parcels from every county-wide aggregate, and fixes a drifted /parcels route that had lost its N% exclusion leg
 - Fixed an INNER JOIN in the Market Snapshot breakdown that could suppress a parcel's dollar total from both years if either year's data was incomplete

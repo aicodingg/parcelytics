@@ -388,4 +388,89 @@ CREATE INDEX IF NOT EXISTS idx_parcel_neighborhood_cd ON parcel(neighborhood_cd)
 CREATE INDEX IF NOT EXISTS idx_parcel_classi_cd       ON parcel(classi_cd);
 CREATE INDEX IF NOT EXISTS idx_parcel_year_built      ON parcel(year_built);
 CREATE INDEX IF NOT EXISTS idx_pty_year_market_value  ON parcel_tax_year(tax_year, market_value);
+
+-- ============================================================
+-- Migration M2 — unit-model architecture (SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.2)
+-- ============================================================
+--
+-- Root cause this fixes: TCAD's real grain is prop_id (a "unit" — one
+-- structure/improvement/land-segment bundle), not geo_id. Multiple
+-- prop_ids can share one geo_id (condo regimes, multi-improvement
+-- accounts, etc — see the M0 measurement: 3,384 collision groups,
+-- $5,794,968.90 combined exposure just in tax_billing's 2025 data).
+-- Every existing loader assumed geo_id was 1:1 with prop_id and silently
+-- dropped or overwrote the losing units (three distinct mechanisms — see
+-- SPEC_UNIT_MODEL_AND_INGEST_GATE.md §1).
+--
+-- New two-layer model:
+--   prop_unit / prop_unit_tax_year  — storage truth, keyed by prop_id,
+--                                     one row per real TCAD unit.
+--   parcel / parcel_tax_year        — public identity layer, keyed by
+--                                     geo_id, now DERIVED by summing
+--                                     prop_unit_tax_year rows that share
+--                                     a geo_id (see parcel_rollup.py —
+--                                     the only module allowed to write
+--                                     parcel_tax_year's value columns).
+--
+-- unit_count on parcel_tax_year: NULL = legacy row, rollup hasn't run yet
+-- (pre-migration data). 1 = simple single-unit parcel (values are that
+-- unit's own values, not a sum). >1 = true multi-unit account (values are
+-- SUM() across that many prop_unit_tax_year rows for the year).
+ALTER TABLE parcel_tax_year ADD COLUMN IF NOT EXISTS unit_count SMALLINT;
+
+-- prop_unit: one row per real TCAD unit (prop_id), the storage-truth
+-- identity layer. geo_id is a foreign-key-style pointer back to the
+-- public-identity parcel row it rolls up into — NOT unique here, since
+-- many prop_ids can point at the same geo_id (that's the whole point).
+CREATE TABLE IF NOT EXISTS prop_unit (
+    prop_id         BIGINT       PRIMARY KEY,
+    geo_id          VARCHAR(20)  NOT NULL,
+    prop_type_cd    VARCHAR(5),
+    situs_address   TEXT,
+    owner_id        BIGINT,
+    owner_name      TEXT,
+    first_seen_year SMALLINT,                     -- earliest tax_year this prop_id was observed in any source file
+    last_seen_year  SMALLINT                      -- most recent tax_year this prop_id was observed in any source file
+);
+
+CREATE INDEX IF NOT EXISTS idx_prop_unit_geo_id ON prop_unit(geo_id);
+
+-- prop_unit_tax_year: one row per (prop_id, tax_year) — the actual
+-- per-unit values, loaded directly from source files (PROP_ENT.TXT /
+-- AJR CSVs) with no geo_id-collision loss. parcel_tax_year is computed
+-- FROM this table (SUM by geo_id) by parcel_rollup.py; nothing else may
+-- write parcel_tax_year's value columns (enforced by
+-- verify_rollup_canonical.py, §4.3 / AC5).
+CREATE TABLE IF NOT EXISTS prop_unit_tax_year (
+    prop_id         BIGINT       NOT NULL,
+    tax_year        SMALLINT     NOT NULL,
+    market_value    BIGINT,
+    assessed_value  BIGINT,
+    taxable_value   BIGINT,
+    hs_cap_loss     BIGINT,
+    land_value      BIGINT,
+    imprv_value     BIGINT,
+    exemption_codes TEXT,
+    data_source     VARCHAR(20),
+    PRIMARY KEY (prop_id, tax_year)
+);
+
+CREATE INDEX IF NOT EXISTS idx_put_year ON prop_unit_tax_year(tax_year);
+
+-- ingest_audit: one row per (source_tag, tax_year) loader run, written by
+-- loaders/ingest_gate.py's G1-G6 checks (§4.2). Append-only audit trail —
+-- each gate run inserts a new row rather than updating a prior one, so
+-- history of pass/fail across re-runs is preserved.
+CREATE TABLE IF NOT EXISTS ingest_audit (
+    id              BIGSERIAL    PRIMARY KEY,
+    source_tag      VARCHAR(50)  NOT NULL,         -- e.g. 'certified_2025', 'preliminary_2026', 'ajr_2023'
+    tax_year        SMALLINT,
+    run_at          TIMESTAMPTZ  DEFAULT NOW(),
+    check_code      VARCHAR(10)  NOT NULL,          -- 'G1'..'G6'
+    passed          BOOLEAN      NOT NULL,
+    detail          TEXT                            -- human-readable counts/explanation
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_audit_source ON ingest_audit(source_tag, run_at);
+CREATE INDEX IF NOT EXISTS idx_ingest_audit_failed  ON ingest_audit(passed) WHERE passed = FALSE;
 CREATE INDEX IF NOT EXISTS idx_metrics_year_etr       ON parcel_metrics(tax_year, effective_tax_rate);
