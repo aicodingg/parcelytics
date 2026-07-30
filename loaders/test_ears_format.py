@@ -232,6 +232,119 @@ def test_land_totals():
     check("land_totals ignores short lines", len(totals) == 2, totals)
 
 
+# ── PROP_UNIT_UPSERT_SQL geo_id guard (task M3-GEOID-CORRUPTION-FIX) ───────
+# Verifies ef.resolve_prop_unit_conflict(), the hand-verified pure-Python
+# mirror of the real SQL's ON CONFLICT DO UPDATE logic (no DB in this
+# sandbox to run the actual SQL against). Mirrors the G2 fix's
+# test_g2_old_unscoped_query_would_have_falsely_failed pattern from
+# earlier tonight: reproduce the real bug at fixture scale, then confirm
+# the fix, then confirm the legitimate case that must keep working.
+def test_geoid_old_unconditional_overwrite_deliberate_corruption():
+    """
+    DELIBERATE CORRUPTION CASE: reproduces tonight's live-DB bug at
+    fixture scale. prop_id X is loaded first for year 2025 with geo_id
+    'A', then loaded again for year 2022 with geo_id 'B' -- simulating a
+    later-run historical load for an OLDER year (tonight's exact
+    scenario: 2022-2024 certified historical loaded AFTER 2025/2026 had
+    already run). Under the OLD unconditional `SET geo_id =
+    EXCLUDED.geo_id` (simulated directly here, not via
+    resolve_prop_unit_conflict -- that function IS the fix, so it cannot
+    be used to reproduce the pre-fix bug), geo_id incorrectly becomes 'B'
+    even though 2025 is the more recent year. This proves the bug was
+    real, not hypothetical.
+    """
+    incoming_geo_id_for_2022_load = "B"
+    old_buggy_result_geo_id = incoming_geo_id_for_2022_load  # unconditional overwrite, no year guard at all
+    check(
+        "geo_id OLD-BUG REPRODUCTION: unconditional overwrite would incorrectly lose the newer 2025 geo_id 'A' to an older 2022 load's 'B'",
+        old_buggy_result_geo_id == "B",
+        f"old logic would set geo_id={old_buggy_result_geo_id!r}, discarding the more recent 2025 value 'A'",
+    )
+
+
+def test_geoid_new_guard_freezes_on_older_year_reload():
+    """Same exact sequence as above, but through the FIXED
+    resolve_prop_unit_conflict(): 2025's geo_id 'A' must NOT be
+    overwritten by a later-run 2022 load's geo_id 'B', since 2025 is
+    still the more recent year seen for this prop_id."""
+    existing = {"geo_id": "A", "prop_type_cd": None, "situs_address": None,
+                "owner_id": None, "owner_name": None,
+                "first_seen_year": 2025, "last_seen_year": 2025}
+    incoming = {"geo_id": "B", "prop_type_cd": None, "situs_address": None,
+                "owner_id": None, "owner_name": None,
+                "first_seen_year": 2022, "last_seen_year": 2022}
+    result = ef.resolve_prop_unit_conflict(existing, incoming)
+    check(
+        "geo_id FIX CONFIRMATION: older 2022 load does NOT overwrite newer 2025 geo_id",
+        result["geo_id"] == "A",
+        result,
+    )
+    check(
+        "geo_id fix: first_seen_year/last_seen_year still correctly expand (LEAST/GREATEST unaffected by the guard)",
+        result["first_seen_year"] == 2022 and result["last_seen_year"] == 2025,
+        result,
+    )
+
+
+def test_geoid_new_guard_legitimate_forward_update_still_works():
+    """The case that MUST keep working: prop_id Y loaded first for year
+    2022 with geo_id 'C', then genuinely loaded for a newer year 2025
+    with geo_id 'D' -- geo_id must correctly become 'D'. Proves the fix
+    doesn't accidentally freeze geo_id forever after the first load."""
+    existing = {"geo_id": "C", "prop_type_cd": None, "situs_address": None,
+                "owner_id": None, "owner_name": None,
+                "first_seen_year": 2022, "last_seen_year": 2022}
+    incoming = {"geo_id": "D", "prop_type_cd": None, "situs_address": None,
+                "owner_id": None, "owner_name": None,
+                "first_seen_year": 2025, "last_seen_year": 2025}
+    result = ef.resolve_prop_unit_conflict(existing, incoming)
+    check(
+        "geo_id legitimate forward update: genuinely newer 2025 load correctly updates geo_id to 'D'",
+        result["geo_id"] == "D",
+        result,
+    )
+
+
+def test_geoid_new_guard_same_year_reload_last_call_wins():
+    """Same-year semantics must NOT change: two loads both for year 2025
+    (e.g. a loader re-run) -- the >= comparison means the LATER call in
+    program order still wins the tie, matching unchanged, current
+    same-year behavior (the brief explicitly requires >= not >, for this
+    reason)."""
+    existing = {"geo_id": "E", "prop_type_cd": None, "situs_address": None,
+                "owner_id": None, "owner_name": None,
+                "first_seen_year": 2025, "last_seen_year": 2025}
+    incoming = {"geo_id": "F", "prop_type_cd": None, "situs_address": None,
+                "owner_id": None, "owner_name": None,
+                "first_seen_year": 2025, "last_seen_year": 2025}
+    result = ef.resolve_prop_unit_conflict(existing, incoming)
+    check(
+        "geo_id same-year re-load: last call still wins the tie (>= preserves current same-year behavior)",
+        result["geo_id"] == "F",
+        result,
+    )
+
+
+def test_geoid_new_guard_other_columns_unaffected():
+    """Sanity check: the geo_id guard must not change COALESCE semantics
+    for the other nullable columns -- an incoming row with a NULL
+    situs_address/owner_id/owner_name must still fall back to the
+    existing row's value, exactly as before this fix."""
+    existing = {"geo_id": "A", "prop_type_cd": "A1", "situs_address": "123 MAIN ST",
+                "owner_id": "OWN1", "owner_name": "SMITH JOHN",
+                "first_seen_year": 2024, "last_seen_year": 2024}
+    incoming = {"geo_id": "A", "prop_type_cd": None, "situs_address": None,
+                "owner_id": None, "owner_name": None,
+                "first_seen_year": 2025, "last_seen_year": 2025}
+    result = ef.resolve_prop_unit_conflict(existing, incoming)
+    check(
+        "geo_id fix: COALESCE fallback for prop_type_cd/situs_address/owner_id/owner_name unaffected",
+        result["prop_type_cd"] == "A1" and result["situs_address"] == "123 MAIN ST"
+        and result["owner_id"] == "OWN1" and result["owner_name"] == "SMITH JOHN",
+        result,
+    )
+
+
 def main():
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

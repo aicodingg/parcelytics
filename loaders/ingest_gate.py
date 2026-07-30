@@ -25,7 +25,12 @@ included property classes, etc).
        "did we account for every single line" check.
   G2 — identity coverage: the count of distinct prop_ids the file scan
        says should exist for a source must exactly equal the count of
-       matching rows actually landed in prop_unit / prop_unit_tax_year.
+       distinct prop_ids that landed a prop_unit_tax_year row for THAT
+       SAME tax_year (fixed 2026-07-29, task M3-G2-FIX: an earlier version
+       of this check compared against an unscoped COUNT(*) FROM prop_unit,
+       which accumulates across every year ever loaded and can never
+       match a single year's file scan -- see g2_identity_coverage_check's
+       own docstring for the live-DB numbers that exposed this).
   G3 — dollar conservation: SUM(market_value) computed directly from the
        source file (one value per prop_id, not per entity-line) must
        exactly equal SUM(market_value) in prop_unit_tax_year, which must
@@ -37,9 +42,18 @@ included property classes, etc).
        it claims to do, checked independently of parcel_rollup.py's own
        code (this check re-derives the aggregation itself rather than
        trusting parcel_rollup ran correctly).
-  G5 — account coverage: COUNT(DISTINCT geo_id) in prop_unit must exactly
-       equal COUNT(*) in parcel — every geo_id that exists at the unit
-       layer has exactly one row at the account layer, and vice versa.
+  G5 — account coverage: for THIS SAME tax_year, the count of distinct
+       geo_ids with real unit data (prop_unit_tax_year JOIN prop_unit)
+       must exactly equal the count of rows in parcel_tax_year (fixed
+       2026-07-29, task M3-G5-FIX: an earlier version of this check
+       compared an unscoped COUNT(DISTINCT geo_id) FROM prop_unit -- all
+       years ever loaded -- against COUNT(*) FROM parcel, the
+       year-independent master reference table, not parcel_tax_year;
+       confirmed live it printed the identical number for every tax_year
+       passed to --check-db, proving it was blind to year entirely). A
+       small residual mismatch is still expected post-fix -- see
+       g5_account_coverage_check's own docstring and KNOWN_LIMITATIONS.md's
+       orphaned P-type prop_unit_tax_year entry.
   G6 — external reconciliation: computed county-wide total vs a
        TCAD-published total, banded (not exact) — see docstring below.
 
@@ -125,11 +139,28 @@ def g1_conservation_check(ledger):
 # ══════════════════════════════════════════════════════════════════════
 # G2 — identity coverage (pure decision; counts supplied by caller)
 # ══════════════════════════════════════════════════════════════════════
-def g2_identity_coverage_check(file_prop_id_count, db_prop_unit_count):
-    passed = file_prop_id_count == db_prop_unit_count
-    detail = f"file: {file_prop_id_count:,} distinct prop_ids, prop_unit: {db_prop_unit_count:,} rows"
+def g2_identity_coverage_check(file_prop_id_count, db_landed_count):
+    """
+    PASS iff the number of distinct prop_ids the source file scan says
+    should exist for THIS tax_year exactly equals the number that actually
+    landed a prop_unit_tax_year row for that same tax_year.
+
+    Fixed 2026-07-29 (task M3-G2-FIX): db_landed_count must be a
+    tax-year-scoped count (e.g. `SELECT COUNT(DISTINCT prop_id) FROM
+    prop_unit_tax_year WHERE tax_year = %s`), NOT an unscoped `SELECT
+    COUNT(*) FROM prop_unit` (which accumulates one row per prop_id ever
+    seen across every year ever loaded, and will never match a single
+    year's file scan -- confirmed against the live DB: 518,894 all-time
+    prop_unit rows vs 449,290 distinct prop_ids in the 2025 file, a
+    69,604 gap explained 100% by scope, not a real data problem). This
+    function itself didn't change -- it was always a correct, generic
+    count-equality check; the bug was entirely in what count the caller
+    supplied as the second argument.
+    """
+    passed = file_prop_id_count == db_landed_count
+    detail = f"file: {file_prop_id_count:,} distinct prop_ids, landed (this tax_year): {db_landed_count:,} rows"
     if not passed:
-        detail += f"  MISMATCH ({db_prop_unit_count - file_prop_id_count:+,})"
+        detail += f"  MISMATCH ({db_landed_count - file_prop_id_count:+,})"
     return passed, detail
 
 
@@ -202,8 +233,32 @@ def g4_rollup_integrity_check(unit_rows, parcel_tax_year_rows, tax_year):
 # G5 — account coverage (pure decision)
 # ══════════════════════════════════════════════════════════════════════
 def g5_account_coverage_check(distinct_geo_ids_in_units, geo_id_count_in_parcel):
+    """
+    PASS iff, for a given tax_year, the count of distinct geo_ids with
+    real unit data exactly equals the count of rows in that same year's
+    parcel_tax_year.
+
+    Fixed 2026-07-29 (task M3-G5-FIX): both caller-supplied counts must
+    now be scoped to the SAME tax_year (distinct_geo_ids_in_units from
+    `prop_unit_tax_year JOIN prop_unit WHERE tax_year = %s`,
+    geo_id_count_in_parcel from `parcel_tax_year WHERE tax_year = %s` --
+    NOT the year-independent `parcel` master reference table, which is a
+    different table with a different meaning). The pre-fix version was
+    unscoped on both sides and confirmed live to report the identical
+    number for every tax_year passed to --check-db -- it could never
+    have caught a real per-year gap. This function itself never changed;
+    the bug was entirely in what the caller supplied.
+
+    Known, already-documented residual even after this fix: ~3,119/year
+    orphaned "P-type" prop_unit_tax_year rows have no matching prop_unit
+    row (see KNOWN_LIMITATIONS.md), so they're never counted on the left
+    side either way; any stale parcel_tax_year rows without current unit
+    data would inflate the right side. A small nonzero gap post-fix is
+    expected, not proof the fix didn't work -- compare its size against
+    this documented cause before treating it as new.
+    """
     passed = distinct_geo_ids_in_units == geo_id_count_in_parcel
-    detail = f"prop_unit distinct geo_ids: {distinct_geo_ids_in_units:,}  parcel rows: {geo_id_count_in_parcel:,}"
+    detail = f"prop_unit_tax_year distinct geo_ids: {distinct_geo_ids_in_units:,}  parcel_tax_year rows: {geo_id_count_in_parcel:,}"
     if not passed:
         detail += f"  MISMATCH ({geo_id_count_in_parcel - distinct_geo_ids_in_units:+,})"
     return passed, detail
@@ -268,19 +323,72 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
         results["G1_prop_ent"] = g1_conservation_check(ent_ledger)
 
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM prop_unit")
-        prop_unit_count = cur.fetchone()[0]
-        cur.execute("SELECT SUM(market_value) FROM prop_unit_tax_year WHERE tax_year = %s", (tax_year,))
-        unit_table_sum = cur.fetchone()[0]
+        # G2 fix (task M3-G2-FIX): the old `SELECT COUNT(*) FROM prop_unit`
+        # here was unscoped by year -- prop_unit accumulates one row per
+        # prop_id ever seen across every year ever loaded (2025 certified +
+        # 2021-2024 AJR + eventually 2022-2024 certified historical + 2026
+        # preliminary), so it could never match a single year's file scan.
+        # Folded the replacement COUNT(DISTINCT prop_id) into this existing
+        # tax_year-scoped query (rather than firing a second one) since
+        # G3 already queries prop_unit_tax_year WHERE tax_year = %s.
+        cur.execute(
+            "SELECT SUM(market_value), COUNT(DISTINCT prop_id) "
+            "FROM prop_unit_tax_year WHERE tax_year = %s",
+            (tax_year,),
+        )
+        unit_table_sum, g2_landed_count = cur.fetchone()
         cur.execute("SELECT SUM(market_value) FROM parcel_tax_year WHERE tax_year = %s", (tax_year,))
         account_table_sum = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(DISTINCT geo_id) FROM prop_unit")
-        distinct_geo_ids = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM parcel")
-        parcel_count = cur.fetchone()[0]
+
+        # G4 inputs: independently re-derive the rollup from prop_unit_tax_year
+        # and diff it against what's actually stored in parcel_tax_year.
+        cur.execute("""
+            SELECT y.prop_id, u.geo_id, y.tax_year, y.market_value, y.assessed_value,
+                   y.taxable_value, y.hs_cap_loss, y.land_value, y.imprv_value,
+                   y.exemption_codes, y.data_source
+            FROM prop_unit_tax_year y
+            JOIN prop_unit u ON u.prop_id = y.prop_id
+            WHERE y.tax_year = %s
+        """, (tax_year,))
+        g4_cols = [d[0] for d in cur.description]
+        g4_unit_rows = [dict(zip(g4_cols, row)) for row in cur.fetchall()]
+
+        cur.execute("""
+            SELECT geo_id, market_value, assessed_value, taxable_value, hs_cap_loss,
+                   land_value, imprv_value, exemption_codes, unit_count
+            FROM parcel_tax_year
+            WHERE tax_year = %s
+        """, (tax_year,))
+        pty_cols = [d[0] for d in cur.description]
+        g4_parcel_rows = {row[0]: dict(zip(pty_cols, row)) for row in cur.fetchall()}
+
+        # G5 fix (task M3-G5-FIX): the old queries here were unscoped by
+        # year (`SELECT COUNT(DISTINCT geo_id) FROM prop_unit` -- all years
+        # ever loaded) AND queried the wrong table on the right side
+        # (`parcel`, the year-independent master reference table, instead
+        # of `parcel_tax_year`, the year-scoped rollup table G3/G4 already
+        # use) -- confirmed live tonight: G5 printed the identical number
+        # for every tax_year passed to --check-db, proving it was blind to
+        # year entirely. Fixed by deriving both sides from the SAME
+        # tax_year-scoped result sets G4 already fetched above, in Python,
+        # rather than firing two more near-identical queries:
+        #   - distinct_geo_ids: distinct u.geo_id values across this
+        #     year's prop_unit_tax_year JOIN prop_unit rows (g4_unit_rows)
+        #     -- equivalent to `SELECT COUNT(DISTINCT u.geo_id) FROM
+        #     prop_unit_tax_year y JOIN prop_unit u ON u.prop_id=y.prop_id
+        #     WHERE y.tax_year = %s`.
+        #   - parcel_count: g4_parcel_rows is already a {geo_id: row} dict
+        #     built from `parcel_tax_year WHERE tax_year = %s` -- its
+        #     length is exactly `SELECT COUNT(*) FROM parcel_tax_year
+        #     WHERE tax_year = %s` (one row per geo_id per year, the same
+        #     one-row-per-geo_id-per-year assumption G4 already relies on).
+        distinct_geo_ids = len({row["geo_id"] for row in g4_unit_rows})
+        parcel_count = len(g4_parcel_rows)
 
     if prop_path:
-        results["G2"] = g2_identity_coverage_check(len(prop_ledger["prop_ids"]), prop_unit_count)
+        results["G2"] = g2_identity_coverage_check(len(prop_ledger["prop_ids"]), g2_landed_count)
+
+    results["G4"] = g4_rollup_integrity_check(g4_unit_rows, g4_parcel_rows, tax_year)
 
     file_sum = None
     if prop_ent_path:

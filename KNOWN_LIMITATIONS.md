@@ -452,3 +452,113 @@ The state_cd1 table above (and this file's original characterization of "L\* —
 See BUILD_WORKFLOW.md for the actual step-by-step process used to build and
 verify changes to this project (Claude writes a brief, Cowork implements,
 Diego verifies live, then commits).
+## Unit-Model Migration (M3) — Known Data Gaps, 2026-07-29
+
+Following the M3 live reload (unit-model architecture, SPEC_UNIT_MODEL_AND_INGEST_GATE.md),
+two categories of residual gap were identified, measured, and resolved or documented:
+
+### 1. Pre-migration AJR placeholder rows (RESOLVED — deleted)
+19,220 (2025) and 18,675 (2026) `parcel_tax_year` rows carried synthetic `AJR`-prefixed
+geo_ids — placeholder account numbers invented by a pre-migration loader for prop_ids it
+couldn't match to a real TCAD account. These were never real accounts. Confirmed via
+`prop_unit` lookup (zero matches for any AJR-prefixed geo_id in any year) before deletion.
+Exported for the record to backups/deleted_ajr_placeholders_2025.csv and
+_2026.csv before deletion. Removing them corrected ~$21.06B (2025) and ~$20.77B (2026)
+of fabricated value from county totals.
+
+### 2. Orphaned PROP_ENT.TXT entity rows (DOCUMENTED — not a bug, excluded by design)
+3,119 (2025) `prop_unit_tax_year` rows (~$1.71B) and a comparable count in 2026 reference
+prop_ids that exist in PROP_ENT.TXT (the entity/value file) but are NOT standard property
+records (`R`) in PROP.TXT (the master property file) — confirmed by direct byte-offset
+inspection: these records carry a `P` record-type marker at the same field position
+where real records carry `R`, and are structurally truncated compared to normal ~4,000-
+character property records. `ears_format.py`'s `iter_prop_records()` correctly excludes
+them; this is not a parser bug. Root cause of the `P`-record type is not yet determined
+(possibly a TCAD internal cross-reference, correction marker, or sub-record type distinct
+from a standalone property). These prop_ids are therefore invisible to county-wide totals
+by design, not by omission. Flagged for future investigation, not urgent.
+
+### 3. Account-tracking granularity gap (DOCUMENTED — real architectural deviation from spec)
+`prop_unit_tax_year` (as actually built) has no `geo_id` column of its own — contrary to
+SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.2, which specified geo_id denormalized onto the year
+row for replat-safety (a unit's account membership as-of a specific year, not "latest
+known"). `parcel_rollup.py`'s real ROLLUP_SQL joins to `prop_unit.geo_id` (latest-known)
+for every year, including historical ones. Effect: a property whose TCAD account was
+merged/reissued after a given year will have that year's rollup silently use the *current*
+account assignment instead of the assignment that was actually true at the time.
+
+**Severity correction (2026-07-29, task M3-GEOID-CORRUPTION-FIX — supersedes this entry's
+original impact figure below):** that figure (4 geo_ids, ~$3.19M) was measured BEFORE the
+2022-2024 certified historical loads ran. Loading those three additional years surfaced a
+second, load-order-dependent bug on top of this same architectural gap: `prop_unit.geo_id`
+was being unconditionally overwritten on every upsert (`SET geo_id = EXCLUDED.geo_id`, no
+guard), so loading OLDER years' data *after* 2025/2026 had already been loaded silently
+reassigned `geo_id` for every property whose account changed across 2022-2025 — not just
+the 4 previously identified. Real, live-measured impact: 2025's G3 dollar-conservation
+check dropped by ~$1.40B and 2026's by ~$2.40B (hundreds of geo_ids, not 4) purely from
+this write-order corruption; the underlying `prop_unit_tax_year` value data was never
+touched.
+
+**Fixed** in `loaders/ears_format.py`'s `PROP_UNIT_UPSERT_SQL`: `geo_id` is now guarded by
+`last_seen_year`, the same way `first_seen_year`/`last_seen_year` themselves already were
+(`CASE WHEN EXCLUDED.last_seen_year >= prop_unit.last_seen_year THEN EXCLUDED.geo_id ELSE
+prop_unit.geo_id END`) — only a row for a year that is actually the most recent one seen
+so far for that prop_id may update `geo_id` (`>=` so same-year re-loads keep their current,
+unchanged tie-break behavior — only cross-year load *order* is now protected against).
+This makes `geo_id` correctly mean "latest-known account membership as of the most recent
+year loaded so far," which is what was originally intended; it stops load order from
+silently corrupting that value.
+
+**This fix does NOT close the architectural gap described above.** `geo_id` is still a
+single latest-known value on `prop_unit`, not a true per-year value on
+`prop_unit_tax_year` — a property whose account changed between 2023 and 2025 still has
+its *current* (2025) account assignment applied to the 2023 rollup, same as before this
+fix. The 4-geo_id/~$3.19M figure below describes that remaining, still-open gap; it is a
+different, much smaller number than the load-order bug this fix resolves. Closing the
+deeper gap still requires adding a real `geo_id` column to `prop_unit_tax_year` and
+re-deriving membership from source per year — a separate, larger follow-up migration, not
+attempted here.
+
+Measured impact of the (still-open) architectural gap itself, pre-dating tonight's
+load-order incident: 4 known geo_ids per year (~$3.19M combined, 2025+2026), all traced to
+one property (geo_id 0000746140 and 3 others) whose account was reissued between 2023 and
+2025. Small today; will grow as more replats/reissues accumulate across years. Not fixed as
+part of M3 — would require adding a real `geo_id` column to `prop_unit_tax_year` and
+re-deriving membership from source per year, which is a nontrivial follow-up migration.
+
+**Open question for Diego (repair of already-written corrupted rows):** this fix stops
+FUTURE upserts from re-corrupting `geo_id`, but does not retroactively touch rows already
+written wrong by tonight's loads. Whether those existing rows self-heal depends on
+`first_seen_year`/`last_seen_year` never having been part of the bug (they weren't —
+`LEAST`/`GREATEST` were always correct): for any currently-corrupted prop_id,
+`prop_unit.last_seen_year` should already correctly equal the true most-recent year (2025
+or 2026), even though its `geo_id` currently holds an older year's value. That means
+re-running the LOADER for that most-recent year again (once this fix is live) should
+self-heal it via the normal `ON CONFLICT` path, since `EXCLUDED.last_seen_year >=
+prop_unit.last_seen_year` will hold (equal, satisfying `>=`). `parcel_rollup.py --all-years`
+alone will NOT repair this — it only reads/aggregates through whatever `geo_id` currently
+exists in `prop_unit`; it never writes to `prop_unit` itself, so running it before
+`prop_unit.geo_id` is repaired will just recompute the still-wrong totals. This reasoning
+is derived from code inspection only (no live DB in the sandbox to confirm which/how many
+rows are actually affected) — Diego should confirm live before deciding between
+re-running the 2025/2026 loaders' PROP.TXT step vs. a targeted one-time repair query.
+
+**Ingestion Conservation Gate status post-fix (2026-07-29):** G1 (source conservation) and
+G4 (rollup integrity, real errors only) pass clean for 2025 and 2026. G3 (dollar
+conservation) and G5 (account coverage) still report residual mismatches driven entirely
+by items #2 and #3 above — both understood and documented, not open bugs. G2 (identity
+coverage) mismatch is unresolved — suspected to be comparing the wrong scope (all-time
+`prop_unit` count vs. one year's file scan) rather than a real data issue; needs its own
+follow-up check before being trusted either way.
+### 2025-07-29 addendum #2: G2 fix confirmed working — real no-geo_id gap surfaced
+Live-verified: after the G2 scope fix (Option A), the check now reports a real,
+accurate gap rather than a false scope mismatch — 37,569 (2025) and 36,149 (2026)
+prop_ids. Root cause confirmed via scan_prop_ledger(): these are well-formed PROP.TXT
+records (not supplements, not short lines) whose geo_id field is blank. Our loader
+correctly excludes any prop_id with no account number to file it under — there's
+nowhere for it to go. PROP_ENT.TXT still carries value data for these prop_ids
+regardless, which is why they "landed" in prop_unit_tax_year's dollar totals but never
+made it into prop_unit's identity layer. This is a genuine data-quality condition in
+TCAD's own export, not a loader bug — worth investigating as its own future item
+(how much value these 37,569+ properties represent, whether they can be matched to a
+geo_id via a different field), not part of M3.

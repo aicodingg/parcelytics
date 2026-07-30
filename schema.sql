@@ -466,7 +466,7 @@ CREATE TABLE IF NOT EXISTS ingest_audit (
     source_tag      VARCHAR(50)  NOT NULL,         -- e.g. 'certified_2025', 'preliminary_2026', 'ajr_2023'
     tax_year        SMALLINT,
     run_at          TIMESTAMPTZ  DEFAULT NOW(),
-    check_code      VARCHAR(10)  NOT NULL,          -- 'G1'..'G6'
+    check_code      VARCHAR(20)  NOT NULL,          -- 'G1'..'G6', or 'G1_prop'/'G1_prop_ent'
     passed          BOOLEAN      NOT NULL,
     detail          TEXT                            -- human-readable counts/explanation
 );

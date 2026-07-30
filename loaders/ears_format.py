@@ -332,13 +332,40 @@ def land_totals(path=None, lines=None):
 # same copy-drift risk for their UPSERT statements as they did for the
 # slice tables — one canonical copy here instead of four independently
 # retyped ones, same rationale as the rest of this module.
+#
+# geo_id guard (fixed 2026-07-29, task M3-GEOID-CORRUPTION-FIX): geo_id
+# used to be unconditionally overwritten with EXCLUDED.geo_id on every
+# upsert -- load-order dependent, not recency dependent. Confirmed live
+# tonight: loading 2022-2024 certified historical data AFTER 2025/2026 had
+# already been loaded silently reassigned geo_id for properties whose
+# account number changed between those years (replats/subdivisions/
+# merges), which retroactively corrupted parcel_rollup.py's rollup for
+# EVERY year that joins through prop_unit.geo_id -- 2025's G3 dropped
+# ~$1.40B and 2026's dropped ~$2.40B, though the underlying
+# prop_unit_tax_year value data was never touched. Guarded the same way
+# last_seen_year already was (LEAST/GREATEST): only the row for the most
+# recent year seen so far may set geo_id, using >= so same-year re-loads
+# (the last one committed wins) keep their current behavior unchanged --
+# only cross-year load-order is now protected against.
+#
+# This makes geo_id correctly mean "latest-known account membership as of
+# the most recent year loaded so far", which is what SPEC_UNIT_MODEL_AND_
+# INGEST_GATE.md §3.2 originally specified -- it does NOT add true
+# per-year historical accuracy (a prop_unit_tax_year row from 2022 still
+# has no geo_id of its own, only prop_unit's single latest-known value).
+# That deeper gap is unchanged and is still open follow-up work -- see
+# KNOWN_LIMITATIONS.md's "item 3: account-tracking granularity gap".
 PROP_UNIT_UPSERT_SQL = """
     INSERT INTO prop_unit
         (prop_id, geo_id, prop_type_cd, situs_address, owner_id, owner_name,
          first_seen_year, last_seen_year)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (prop_id) DO UPDATE
-        SET geo_id          = EXCLUDED.geo_id,
+        SET geo_id          = CASE
+                                  WHEN EXCLUDED.last_seen_year >= prop_unit.last_seen_year
+                                  THEN EXCLUDED.geo_id
+                                  ELSE prop_unit.geo_id
+                              END,
             prop_type_cd    = COALESCE(EXCLUDED.prop_type_cd, prop_unit.prop_type_cd),
             situs_address   = COALESCE(EXCLUDED.situs_address, prop_unit.situs_address),
             owner_id        = COALESCE(EXCLUDED.owner_id, prop_unit.owner_id),
@@ -346,6 +373,39 @@ PROP_UNIT_UPSERT_SQL = """
             first_seen_year = LEAST(prop_unit.first_seen_year, EXCLUDED.first_seen_year),
             last_seen_year  = GREATEST(prop_unit.last_seen_year, EXCLUDED.last_seen_year)
 """
+
+
+def resolve_prop_unit_conflict(existing, incoming):
+    """
+    Pure-Python mirror of PROP_UNIT_UPSERT_SQL's ON CONFLICT DO UPDATE
+    conflict-resolution logic, kept in sync by hand -- same division of
+    labor as parcel_rollup.py's ROLLUP_SQL vs compute_rollup(), so the
+    upsert's actual semantics can be fixture-tested without a live DB
+    (there is no DB in this sandbox to execute the real SQL against).
+
+    existing: dict with keys geo_id, prop_type_cd, situs_address, owner_id,
+        owner_name, first_seen_year, last_seen_year -- the current
+        prop_unit row for this prop_id.
+    incoming: same shape -- the row being upserted (SQL's EXCLUDED.*).
+    Returns the new row dict prop_unit would contain after this upsert.
+
+    geo_id is guarded by last_seen_year (>=, so a same-year re-load's
+    LATER call still wins the tie, matching unchanged same-year
+    behavior) -- only a row for a year that is actually >= the most
+    recent year already seen may set geo_id. All other columns' logic
+    (COALESCE / LEAST / GREATEST) is unchanged from before this fix.
+    """
+    return {
+        "geo_id": (incoming["geo_id"]
+                   if incoming["last_seen_year"] >= existing["last_seen_year"]
+                   else existing["geo_id"]),
+        "prop_type_cd": incoming["prop_type_cd"] if incoming["prop_type_cd"] is not None else existing["prop_type_cd"],
+        "situs_address": incoming["situs_address"] if incoming["situs_address"] is not None else existing["situs_address"],
+        "owner_id": incoming["owner_id"] if incoming["owner_id"] is not None else existing["owner_id"],
+        "owner_name": incoming["owner_name"] if incoming["owner_name"] is not None else existing["owner_name"],
+        "first_seen_year": min(existing["first_seen_year"], incoming["first_seen_year"]),
+        "last_seen_year": max(existing["last_seen_year"], incoming["last_seen_year"]),
+    }
 
 PROP_UNIT_TAX_YEAR_UPSERT_SQL = """
     INSERT INTO prop_unit_tax_year
