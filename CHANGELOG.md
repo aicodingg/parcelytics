@@ -8,6 +8,14 @@ All notable changes to Parcelytics are tracked here, using [Semantic Versioning]
 
 Version numbers are tied to actual production deploys, not every commit.
 
+## [1.5.0] — 2026-07-30
+- Loaded TCAD's real 2026 Certified Appraisal Export for the first time, replacing the previously-loaded preliminary 2026 data. Extended load_certified_historical.py to support tax year 2026 (previously 2022-2024 only)
+- Fixed a real bug: many places across the site (5 functions in app.py, 7 templates) hardcoded "2026 = preliminary" as literal text/badges, built before certified 2026 data ever existed. Certified values were displaying correctly but mislabeled "Preliminary" throughout. Now computed from the real data_source everywhere
+- New "2026: Preliminary → Certified" comparison card on the property page (Investor mode): shows real market/taxable value deltas between TCAD's June 9 preliminary notice and the July 25 certified roll for any parcel with both values available. Backed by a new parcel_2026_preliminary_snapshot table that permanently retains the original preliminary values, which would otherwise have been overwritten in place
+- Fixed the geo_id load-order corruption bug from the 1.4.0 unit-model migration: a full chronological rebuild of the prop_unit identity table, confirmed by the rollup-integrity gate check (G4) passing clean on all tested years for the first time since the migration began
+- Ran the platform's first-ever external reconciliation check (G6) against TCAD's real published county totals; confirmed certified 2026 data is meaningfully more accurate than the preliminary data it replaced (5.45% deviation vs. 10.61%)
+- Homeowner-mode parity for the preliminary/certified comparison card is a known, deliberate gap — not yet built
+
 ## [1.4.0] — 2026-07-29
 - Added the unit-model architecture (Migration M2): a new prop_unit/prop_unit_tax_year layer stores TCAD's real per-unit data (a single geo_id can legitimately contain multiple prop_ids — condo regimes, multi-improvement accounts). parcel_tax_year is now a derived rollup computed from this unit layer (parcel_rollup.py), rather than being written directly by loaders
 - All four loaders (certified 2025, 2026 preliminary, certified historical, AJR) refactored to write unit-grain data via a new shared parser (loaders/ears_format.py), fixing three independent data-loss mechanisms that were silently dropping units sharing a geo_id
