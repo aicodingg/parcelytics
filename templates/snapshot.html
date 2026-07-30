@@ -5,9 +5,19 @@
 <div class="page-header mb-3 d-flex align-items-center gap-3 flex-wrap">
   <div>
     <h1 class="page-title mb-0">{% if mode == 'homeowner' %}Travis County Home Values{% else %}Travis County Market Snapshot{% endif %}</h1>
+    {# M4-2026-PRELIM-SNAPSHOT Part 1 fix: badge/label used to hardcode
+       "Preliminary" regardless of actual data_source. status_2026 is
+       computed in _compute_snapshot_data() (app.py) from the real
+       data_source split across this view's population. #}
     <p class="text-muted mb-0" style="font-size:13px; margin-top:4px;">
-      {% if mode == 'homeowner' %}How home values changed across Travis County, 2025 → 2026{% else %}2026 Preliminary vs 2025 Certified{% endif %}
+      {% if mode == 'homeowner' %}How home values changed across Travis County, 2025 → 2026{% else %}2026 {% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}(mixed Certified/Preliminary){% else %}Preliminary{% endif %} vs 2025 Certified{% endif %}
+      {% if status_2026 == "certified" %}
+      <span class="badge-verified ms-2">Certified</span>
+      {% elif status_2026 == "mixed" %}
+      <span class="badge-preliminary ms-2">Mixed</span>
+      {% else %}
       <span class="badge-preliminary ms-2">Preliminary</span>
+      {% endif %}
     </p>
   </div>
 </div>
@@ -110,9 +120,14 @@
     <div class="kpi-sub"><span class="badge-verified" style="font-size:9px;">Verified</span></div>
   </div>
   <div class="kpi-card">
-    <div class="kpi-label">2026 Total MV (Preliminary)</div>
+    <div class="kpi-label">2026 Total MV ({% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}Mixed{% else %}Preliminary{% endif %})</div>
     <div class="kpi-value">${{ "{:,.2f}B".format(totals.total_mv26_b) }}</div>
-    <div class="kpi-sub"><span class="badge-preliminary" style="font-size:9px;">Preliminary</span></div>
+    <div class="kpi-sub">
+      {% if status_2026 == "certified" %}<span class="badge-verified" style="font-size:9px;">Certified</span>
+      {% elif status_2026 == "mixed" %}<span class="badge-preliminary" style="font-size:9px;">Mixed</span>
+      {% else %}<span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
+      {% endif %}
+    </div>
   </div>
   <div class="kpi-card">
     <div class="kpi-label">Net Change</div>
@@ -199,7 +214,7 @@
       <strong style="color:var(--accent);">
         {{ "declined" if totals.median_pct < 0 else "increased" }}
       </strong>
-      on a median basis ({{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%) from 2025 certified to 2026 preliminary.
+      on a median basis ({{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%) from 2025 certified to 2026 {% if status_2026 == "certified" %}certified{% elif status_2026 == "mixed" %}certified/preliminary{% else %}preliminary{% endif %}.
       {% if sub1 %}
         {{ sub1.ptype }}: median {{ "+" if sub1.median_pct >= 0 else "" }}{{ sub1.median_pct }}%,
         {{ "{:,}".format(sub1.n_up) }} up / {{ "{:,}".format(sub1.n_down) }} down.
@@ -342,7 +357,7 @@
         {{ "{:,}".format(res.n_down) }} down / {{ "{:,}".format(res.n_up) }} up).
       {% endif %}
       {% if _com_sectors %}
-        Retail/Industrial/Office/Hotel combined added ${{ "{:,.1f}B".format(_com_total_mv26 - _com_total_mv25) }} in aggregate preliminary value
+        Retail/Industrial/Office/Hotel combined added ${{ "{:,.1f}B".format(_com_total_mv26 - _com_total_mv25) }} in aggregate {% if status_2026 == "certified" %}certified{% elif status_2026 == "mixed" %}certified/preliminary{% else %}preliminary{% endif %} value
         {%- if _com_largest %} ({{ _com_largest.ptype }} is the largest of the four by parcel count, median {{ "+" if _com_largest.median_pct >= 0 else "" }}{{ _com_largest.median_pct }}%){% endif %}.
       {% endif %}
       {% if mf %}
@@ -357,8 +372,11 @@
 {# ── Property-type breakdown table ─────────────────────────────── #}
 <div class="card mb-4">
   <div class="card-header d-flex align-items-center gap-2">
-    2026 Preliminary vs 2025 Certified — By Property Type
-    <span class="badge-preliminary">Preliminary</span>
+    2026 {% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}(mixed Certified/Preliminary){% else %}Preliminary{% endif %} vs 2025 Certified — By Property Type
+    {% if status_2026 == "certified" %}<span class="badge-verified">Certified</span>
+    {% elif status_2026 == "mixed" %}<span class="badge-preliminary">Mixed</span>
+    {% else %}<span class="badge-preliminary">Preliminary</span>
+    {% endif %}
   </div>
   <div class="card-body p-0">
     <div class="table-responsive">
@@ -473,8 +491,14 @@
     </div>
   </div>
   <div class="card-footer text-muted small">
+    {% if status_2026 == "certified" %}
+    Based on 2026 Certified TCAD Appraisal Export vs 2025 Certified Export. 2026 values are final, not subject to change.
+    {% elif status_2026 == "mixed" %}
+    Based on a mix of 2026 Certified and 2026 Preliminary TCAD Appraisal Export data (June 9, 2026 preliminary export; certified July 25, 2026) vs 2025 Certified Export.
+    {% else %}
     Based on 2026 Preliminary TCAD Appraisal Export (June 9, 2026) vs 2025 Certified Export.
     Subject to change at certification (July 25, 2026).
+    {% endif %}
     Excludes: tax-exempt accounts (X state_cd1 prefix), personal property accounts (N prefix, 3 accounts),
     and AJR* personal property supplement records (placeholder $1 values in certified data).
     M (manufactured homes) and O/G/J (other real property, minerals, utilities) are included as real property.
@@ -727,7 +751,7 @@
 
 {% else %}
 <div class="alert alert-info">
-  2026 preliminary data not yet loaded. Run the preliminary loader to populate this page.
+  2026 data not yet loaded for this view. Run the 2026 loader to populate this page.
 </div>
 {% endif %}
 {% endblock %}

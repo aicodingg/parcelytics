@@ -904,11 +904,23 @@ def build_document_sources(parcel, history, current, entity_detail, delinquent):
         })
 
     if row_2026:
+        # M4-2026-PRELIM-SNAPSHOT Part 1 fix: this used to hardcode
+        # "TCAD Preliminary Export" / badge="preliminary" unconditionally
+        # -- wrong as of today's 2026 certified load for any parcel whose
+        # row_2026.data_source is now cert_2026 (or another certified-tier
+        # value). Mirrors the row_2025 block above (which already checks
+        # data_source != "preliminary" the same way) instead of assuming
+        # 2026 can only ever be preliminary.
+        _row2026_certified = row_2026.get("data_source") in CERTIFIED_TIER_DATA_SOURCES
         sources.append({
-            "name": "TCAD Preliminary Export",
-            "provides": "First-look 2026 appraisal value, subject to change at certification",
-            "coverage": "2026 (exported June 9, 2026; certifies July 25, 2026)",
-            "badge": "preliminary", "badge_label": "Preliminary",
+            "name": "TCAD Certified Appraisal Export" if _row2026_certified else "TCAD Preliminary Export",
+            "provides": (
+                "2026 certified appraisal value" if _row2026_certified
+                else "First-look 2026 appraisal value, subject to change at certification"
+            ),
+            "coverage": "2026" if _row2026_certified else "2026 (exported June 9, 2026; certifies July 25, 2026)",
+            "badge": "verified" if _row2026_certified else "preliminary",
+            "badge_label": "Certified" if _row2026_certified else "Preliminary",
             "link": "https://traviscad.org/propertytaxsystem/",
             "link_label": "TCAD — Property Tax System",
         })
@@ -2385,7 +2397,17 @@ def index():
 def search_page():
     """Task 13 — dedicated search page with a US coverage map (visual only).
     Not an interactive GIS map; just communicates current coverage (Travis County)."""
-    return render_template("search.html")
+    # M4-2026-PRELIM-SNAPSHOT Part 1 fix: the Tax Year filter's "2026"
+    # option used to hardcode "(Preliminary)" regardless of actual
+    # data_source -- today's certified load means most 2026 rows are now
+    # certified. Cheap EXISTS check (stops at first match) rather than a
+    # full COUNT, since the dropdown only needs a yes/no for whether any
+    # 2026 row is still on the preliminary tier.
+    has_preliminary_2026 = bool(query(
+        "SELECT EXISTS(SELECT 1 FROM parcel_tax_year WHERE tax_year = 2026 AND data_source = 'preliminary') AS x",
+        one=True,
+    )["x"])
+    return render_template("search.html", has_preliminary_2026=has_preliminary_2026)
 
 
 @app.route("/parcel/<geo_id>")
@@ -2657,6 +2679,34 @@ def property_detail(geo_id):
             "confidence_2026": None,
         })
 
+    # M4-2026-PRELIM-SNAPSHOT Part 3: original 2026 Preliminary values,
+    # read from the standalone parcel_2026_preliminary_snapshot table (Part
+    # 2) rather than parcel_tax_year -- today's certified load overwrote
+    # the live preliminary values in place, so this snapshot table is now
+    # the ONLY place the original preliminary numbers still exist. None
+    # when this parcel has no snapshot row (e.g. it didn't exist yet as of
+    # the preliminary export, or the snapshot loader hasn't been run) --
+    # the template must show an explicit "not available" gap for that case,
+    # never a blank/zero/assumed value (brief's data-honesty requirement).
+    prelim_2026_snapshot = query("""
+        SELECT market_value, assessed_value, taxable_value,
+               land_value, imprv_value, exemption_codes, unit_count
+        FROM   parcel_2026_preliminary_snapshot
+        WHERE  geo_id = %s
+    """, (geo_id,), one=True)
+
+    # M4-2026-PRELIM-SNAPSHOT Part 1 fix: computed here (Python), not as a
+    # Jinja {% set %} inside property.html's {% block content %} -- a
+    # {% set %} there is invisible inside the file's separate
+    # {% block scripts %} (Jinja gives every named block its own local
+    # scope), which is exactly the render-harness failure that surfaced
+    # while building Part 3 (the Chart.js tooltip in {% block scripts %}
+    # references this flag). Passing it as a real context variable, like
+    # current_2026 itself, makes it visible in every block.
+    is_2026_certified = bool(
+        current_2026 and current_2026.get("data_source") in CERTIFIED_TIER_DATA_SOURCES
+    )
+
     insights    = build_insights(parcel, history, entity_detail, delinquent)
     projections, proj_baseline, proj_bands = build_projections(
         history, rate_history, entity_detail,
@@ -2744,7 +2794,17 @@ def property_detail(geo_id):
     if current_2026 and current_2026.get("market_value"):
         kpi["market_value"]        = current_2026["market_value"]
         kpi["market_value_year"]   = 2026
-        kpi["market_value_source"] = "preliminary"
+        # M4-2026-PRELIM-SNAPSHOT Part 1 fix: this used to hardcode
+        # "preliminary" unconditionally -- wrong as of today's 2026
+        # certified load for any parcel whose 2026 row is now cert_2026.
+        # Not currently read by property.html (that template computes its
+        # own is_2026_certified from current_2026.data_source directly),
+        # but fixed here too so this field is never factually wrong for
+        # any future consumer.
+        kpi["market_value_source"] = (
+            "certified" if current_2026.get("data_source") in CERTIFIED_TIER_DATA_SOURCES
+            else "preliminary"
+        )
     elif current and current.get("market_value"):
         kpi["market_value"]        = current["market_value"]
         kpi["market_value_year"]   = 2025
@@ -2870,6 +2930,8 @@ def property_detail(geo_id):
         rate_history=rate_history,
         current=current,
         current_2026=current_2026,
+        is_2026_certified=is_2026_certified,
+        prelim_2026_snapshot=prelim_2026_snapshot,
         tax_calendar=tax_calendar,
         doc_sources=doc_sources,
         entity_detail=entity_detail,
@@ -3223,7 +3285,17 @@ def export_due_diligence_pdf(geo_id):
         pct = (float(v2026) - float(v2025)) / float(v2025) * 100
         return f"{'+' if pct >= 0 else ''}{pct:.1f}%"
 
-    col_2026_label = "2026 Preliminary" if current_2026 else "2026 (not yet available)"
+    # M4-2026-PRELIM-SNAPSHOT Part 1 fix: this used to hardcode
+    # "2026 Preliminary" unconditionally whenever current_2026 existed --
+    # wrong as of today's 2026 certified load. appraisal_tier_2026
+    # (computed just above via the same _row_confidence() this route
+    # already uses) is the single source of truth for whether this
+    # parcel's 2026 row is actually certified; reused here rather than a
+    # second, independent data_source check.
+    col_2026_label = (
+        "2026 Certified" if appraisal_tier_2026 == "verified"
+        else "2026 Preliminary" if current_2026 else "2026 (not yet available)"
+    )
     col_2025_label = "2025 Certified" if appraisal_tier == "verified" else "2025"
     cv_rows = [["Metric", col_2026_label, col_2025_label, "Change"]]
     cv_rows.append([
@@ -4099,6 +4171,40 @@ def _compute_snapshot_data(view):
             new_construction_count = int(agg["n_new_construction"] or 0)
             risk_flagged_count = int(agg["n_risk_flagged"] or 0)
 
+    # M4-2026-PRELIM-SNAPSHOT Part 1 fix: this page's 2026 labels (header
+    # badge, KPI badge, By Property Type section header, footer) used to
+    # hardcode "Preliminary" regardless of actual data_source -- today's
+    # certified load means most/all 2026 rows in-scope for this view are
+    # now certified. Scoped to the same population the breakdown table
+    # above shows (canonical_excl + view_where, both years present), same
+    # technique as /api/benchmark's n_preliminary fix and
+    # snapshot_neighborhood()'s status_2026. One query for the whole view
+    # (not per property-type row) since the page's shared header/footer
+    # text is view-wide, not per-row.
+    status_2026 = "none"
+    if totals:
+        cert_agg = query_no_nestloop(f"""
+            SELECT
+                COUNT(*) FILTER (WHERE t26.data_source = 'preliminary') AS n_preliminary,
+                COUNT(*)                                                AS n_total
+            FROM parcel p
+            JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
+            JOIN parcel_tax_year t26 ON t26.geo_id = p.geo_id AND t26.tax_year = 2026
+            WHERE t25.market_value > 0
+              AND t26.market_value > 0
+              {canonical_excl}
+              {view_where}
+        """, one=True)
+        if cert_agg and cert_agg["n_total"]:
+            n_prelim = int(cert_agg["n_preliminary"] or 0)
+            n_total = int(cert_agg["n_total"])
+            if n_prelim == 0:
+                status_2026 = "certified"
+            elif n_prelim == n_total:
+                status_2026 = "preliminary"
+            else:
+                status_2026 = "mixed"
+
     # Top/bottom moving neighborhoods within the current sector. county_benchmark
     # has no neighborhood_cd column (confirmed via schema.sql — it's county-wide
     # only, PRIMARY KEY county_code/tax_year/property_type_label), so this is a
@@ -4149,6 +4255,7 @@ def _compute_snapshot_data(view):
         "subtype_cap": SNAPSHOT_SUBTYPE_CAP,
         "top_neighborhoods": top_neighborhoods,
         "bottom_neighborhoods": bottom_neighborhoods,
+        "status_2026": status_2026,
     }
 
 
@@ -4228,6 +4335,7 @@ def snapshot_neighborhood(code):
             p.situs_address,
             t25.market_value AS mv25,
             t26.market_value AS mv26,
+            t26.data_source  AS data_source_2026,
             ({ptype_case}) AS prop_type,
             (t26.market_value - t25.market_value)::FLOAT / t25.market_value * 100 AS pct_chg,
             COUNT(*) OVER() AS total_count
@@ -4246,6 +4354,26 @@ def snapshot_neighborhood(code):
     total = int(rows[0]["total_count"]) if rows else 0
     total_pages = (total + SEARCH_FILTER_PAGE_SIZE - 1) // SEARCH_FILTER_PAGE_SIZE if total else 0
     parcels = [dict(r) for r in rows]
+    for p in parcels:
+        # Precomputed here (not left to the template) since Jinja can't see
+        # the Python-side CERTIFIED_TIER_DATA_SOURCES set directly -- same
+        # reasoning as property.html's is_2026_certified / compare.html's
+        # is_2026_certified per-parcel field.
+        p["is_2026_certified"] = p.get("data_source_2026") in CERTIFIED_TIER_DATA_SOURCES
+
+    # M4-2026-PRELIM-SNAPSHOT Part 1 fix: same technique as parcel_list()'s
+    # status_2026 -- this page's header/legend used to hardcode "2026
+    # Preliminary" regardless of data_source. Every row here has a 2026
+    # value (INNER JOIN above), so no "none" case is needed.
+    _n_certified_2026 = sum(1 for p in parcels if p["is_2026_certified"])
+    if not parcels:
+        status_2026 = "none"
+    elif _n_certified_2026 == len(parcels):
+        status_2026 = "certified"
+    elif _n_certified_2026 == 0:
+        status_2026 = "preliminary"
+    else:
+        status_2026 = "mixed"
 
     return render_template(
         "snapshot_neighborhood.html",
@@ -4256,6 +4384,7 @@ def snapshot_neighborhood(code):
         total=total,
         total_pages=total_pages,
         parcels=parcels,
+        status_2026=status_2026,
     )
 
 
@@ -4317,7 +4446,8 @@ def api_benchmark():
                 COUNT(*)                                                               AS n_parcels,
                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.market_value)           AS median_market_value,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY t.market_value)          AS p25_market_value,
-                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY t.market_value)          AS p75_market_value
+                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY t.market_value)          AS p75_market_value,
+                COUNT(*) FILTER (WHERE t.data_source = 'preliminary')                 AS n_preliminary
             FROM parcel p
             JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = %s
             WHERE p.classi_cd = %s
@@ -4361,7 +4491,13 @@ def api_benchmark():
                 "median_yoy_value_change_pct": yoy,
                 "filter_label": filter_label,
                 "year": year,
-                "is_preliminary": year == 2026,
+                # M4-2026-PRELIM-SNAPSHOT Part 1 fix: this used to hardcode
+                # year == 2026 -- wrong as of today's 2026 certified load.
+                # n_preliminary is a real count of THIS slice's rows still on
+                # data_source='preliminary', not a year-based guess; > 0
+                # means at least one parcel in this exact filter/year combo
+                # hasn't been certified yet.
+                "is_preliminary": bool(row.get("n_preliminary") or 0) > 0,
             })
         return jsonify({"ok": False, "error": "No data for this use code / year combination."})
 
@@ -4382,7 +4518,8 @@ def api_benchmark():
                     COUNT(*)                                                            AS n_parcels,
                     PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.market_value)        AS median_market_value,
                     PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY t.market_value)       AS p25_market_value,
-                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY t.market_value)       AS p75_market_value
+                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY t.market_value)       AS p75_market_value,
+                    COUNT(*) FILTER (WHERE t.data_source = 'preliminary')              AS n_preliminary
                 FROM parcel p
                 JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = 2026
                 WHERE ({like_parts})
@@ -4400,9 +4537,12 @@ def api_benchmark():
                     "median_yoy_value_change_pct": None,
                     "filter_label": prop_type,
                     "year": 2026,
-                    "is_preliminary": True,
+                    # M4-2026-PRELIM-SNAPSHOT Part 1 fix: was hardcoded True
+                    # unconditionally -- see the classi_cd branch above for
+                    # the same fix and rationale.
+                    "is_preliminary": bool(row.get("n_preliminary") or 0) > 0,
                 })
-            return jsonify({"ok": False, "error": "No 2026 preliminary data for this property type."})
+            return jsonify({"ok": False, "error": "No 2026 data for this property type."})
         else:
             # ── Pre-aggregated county_benchmark table ─────────────────────────
             row = query("""
@@ -4630,7 +4770,7 @@ def combine_confidence_tiers(inputs):
 # any vintage."
 CERTIFIED_TIER_DATA_SOURCES = frozenset({
     "certified",
-    "cert_2021", "cert_2022", "cert_2023", "cert_2024",
+    "cert_2021", "cert_2022", "cert_2023", "cert_2024", "cert_2026",
     "ajr_2021", "ajr_2022", "ajr_2023", "ajr_2024",
 })
 
@@ -6020,7 +6160,8 @@ def parcel_list():
             y25.situs_address  AS address,
             y25.owner_name     AS owner,
             y25.mv25,
-            t26.market_value   AS mv26
+            t26.market_value   AS mv26,
+            t26.data_source    AS data_source_2026
         FROM  y25
         LEFT JOIN parcel_tax_year t26
                ON t26.geo_id = y25.geo_id AND t26.tax_year = 2026
@@ -6028,11 +6169,36 @@ def parcel_list():
         LIMIT 500
     """, {"ptype": ptype, "rolled": rolled})
 
+    parcels = [dict(r) for r in rows]
+
+    # M4-2026-PRELIM-SNAPSHOT Part 1 fix: this list used to hardcode a
+    # page-wide "2026 Preliminary" header/footer regardless of each row's
+    # actual data_source. Up to 500 parcels are shown here, so rather than
+    # add a per-row badge (noisy at this scale) we compute the real
+    # certified/preliminary split across just the rows that actually have a
+    # 2026 value, and use that to pick an accurate, honest page-level label
+    # (all-certified / all-preliminary / mixed) -- same technique as
+    # /api/benchmark's n_preliminary fix.
+    _2026_present = [p for p in parcels if p.get("mv26") is not None]
+    _n_certified_2026 = sum(
+        1 for p in _2026_present
+        if p.get("data_source_2026") in CERTIFIED_TIER_DATA_SOURCES
+    )
+    if not _2026_present:
+        status_2026 = "none"
+    elif _n_certified_2026 == len(_2026_present):
+        status_2026 = "certified"
+    elif _n_certified_2026 == 0:
+        status_2026 = "preliminary"
+    else:
+        status_2026 = "mixed"
+
     return render_template(
         "parcel_list.html",
         view=view,
         ptype=ptype or "All",
-        parcels=[dict(r) for r in rows],
+        parcels=parcels,
+        status_2026=status_2026,
     )
 
 
@@ -6066,7 +6232,7 @@ def compare_parcels():
         """, (geo_id,), one=True)
 
         current_2026 = query("""
-            SELECT market_value, assessed_value
+            SELECT market_value, assessed_value, data_source
             FROM   parcel_tax_year WHERE geo_id = %s AND tax_year = 2026
         """, (geo_id,), one=True)
 
@@ -6109,6 +6275,11 @@ def compare_parcels():
             "current":       cur_dict,
             "current_2026":  dict(current_2026) if current_2026 else {},
             "billing":       dict(billing) if billing else {},
+            # M4-2026-PRELIM-SNAPSHOT Part 1 fix: compare.html used to
+            # hardcode "2026 Preliminary" unconditionally for every parcel.
+            "is_2026_certified": bool(
+                current_2026 and current_2026.get("data_source") in CERTIFIED_TIER_DATA_SOURCES
+            ),
         })
 
     if not parcels:

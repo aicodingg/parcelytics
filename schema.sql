@@ -474,3 +474,37 @@ CREATE TABLE IF NOT EXISTS ingest_audit (
 CREATE INDEX IF NOT EXISTS idx_ingest_audit_source ON ingest_audit(source_tag, run_at);
 CREATE INDEX IF NOT EXISTS idx_ingest_audit_failed  ON ingest_audit(passed) WHERE passed = FALSE;
 CREATE INDEX IF NOT EXISTS idx_metrics_year_etr       ON parcel_metrics(tax_year, effective_tax_rate);
+
+-- ── parcel_2026_preliminary_snapshot (Task M4-2026-PRELIM-SNAPSHOT, Part 2,
+-- July 2026) ──────────────────────────────────────────────────────────────
+-- Permanent, standalone retention of the ORIGINAL 2026 Preliminary Export
+-- values, taken before today's load_certified_historical.py --year 2026
+-- run overwrote them in place in parcel_tax_year/prop_unit_tax_year (same
+-- upsert-on-(geo_id,tax_year) overwrite pattern used for 2022-2024's
+-- AJR->certified transition). Deliberately narrow-scoped, one-time,
+-- read-mostly: NOT a new vintage layer on parcel_tax_year, NOT touched by
+-- parcel_rollup.py or ingest_gate.py, and NOT kept in sync with future
+-- loader runs -- it exists solely to make a preliminary-vs-certified
+-- comparison possible now that the live preliminary values are gone from
+-- parcel_tax_year. Populated once by loaders/snapshot_2026_preliminary.py
+-- directly from the untouched 2026 Preliminary Export source files
+-- (config.PRELIM_2026_DIR).
+--
+-- Column types intentionally mirror parcel_tax_year's real types exactly
+-- (BIGINT dollar columns, TEXT exemption_codes, SMALLINT unit_count) --
+-- NOT the NUMERIC/VARCHAR(200)/INTEGER types in the brief's initial
+-- proposed DDL, which didn't match schema.sql's actual parcel_tax_year
+-- definition above (checked before building, per the brief's own
+-- instruction to "match parcel_tax_year's existing column meanings/types
+-- exactly where names overlap").
+CREATE TABLE IF NOT EXISTS parcel_2026_preliminary_snapshot (
+    geo_id          VARCHAR(20)  PRIMARY KEY,
+    market_value    BIGINT,
+    assessed_value  BIGINT,
+    taxable_value   BIGINT,
+    land_value      BIGINT,
+    imprv_value     BIGINT,
+    exemption_codes TEXT,
+    unit_count      SMALLINT,
+    snapshotted_at  TIMESTAMP    DEFAULT NOW()
+);

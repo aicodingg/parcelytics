@@ -247,7 +247,10 @@
           <div class="col-md-3">
             <label class="form-label small text-muted mb-1" for="fltTaxYear">Tax Year</label>
             <select id="fltTaxYear" class="form-select form-select-sm" style="font-size:12px;">
-              <option value="2026">2026 (Preliminary)</option>
+              {# M4-2026-PRELIM-SNAPSHOT Part 1 fix: was hardcoded "(Preliminary)"
+                 regardless of actual data_source; has_preliminary_2026 (search_page(),
+                 app.py) reflects whether any 2026 row is still on that tier. #}
+              <option value="2026">2026{% if has_preliminary_2026 %} (mostly Certified, some Preliminary){% else %} (Certified){% endif %}</option>
               <option value="2025" selected>2025 (Certified)</option>
               <option value="2024">2024</option>
               <option value="2023">2023</option>

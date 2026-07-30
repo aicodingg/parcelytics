@@ -95,6 +95,16 @@ def make_env():
     return env
 
 
+# M4-2026-PRELIM-SNAPSHOT Part 1: same members as app.py's
+# CERTIFIED_TIER_DATA_SOURCES -- kept as an independent copy here for the
+# same reason property.html's now-removed Jinja copy was (this harness has
+# no live app.py import), must change together if the real set ever does.
+_CERTIFIED_TIER_DATA_SOURCES = frozenset({
+    "certified", "cert_2021", "cert_2022", "cert_2023", "cert_2024", "cert_2026",
+    "ajr_2021", "ajr_2022", "ajr_2023", "ajr_2024",
+})
+
+
 # ── Mock data builders ──────────────────────────────────────────────────────
 def _hist_row(year, market_value, assessed_value, taxable_value, total_tax,
                is_billing_verified, total_tax_derived=False, computed_total_tax=None,
@@ -263,7 +273,7 @@ def _load_real_app_functions():
 
 
 def base_context(mode="homeowner", with_waterfall=True, residential=True, waterfall_reset=False,
-                  delinquent=None, units=None, units_tax_year=None):
+                  delinquent=None, units=None, units_tax_year=None, prelim_2026_snapshot=None):
     """A complete mock context matching every kwarg property_detail() passes
     to render_template(), for a well-behaved residential parcel with
     verified 2024+2025 billing (so bill_waterfall renders when requested).
@@ -492,6 +502,14 @@ def base_context(mode="homeowner", with_waterfall=True, residential=True, waterf
         hs_potential_savings=hs_potential_savings,
         bill_waterfall=bill_waterfall,
         mode=mode,
+        # M4-2026-PRELIM-SNAPSHOT Part 1/3: real production context now
+        # includes these two (property_detail(), app.py) -- computed here
+        # the same way app.py does, from current_2026's actual data_source,
+        # not hardcoded, so scenarios that pass a certified current_2026
+        # fixture (data_source in _CERTIFIED_TIER_DATA_SOURCES) correctly
+        # exercise the certified branches.
+        is_2026_certified=bool(current_2026.get("data_source") in _CERTIFIED_TIER_DATA_SOURCES),
+        prelim_2026_snapshot=prelim_2026_snapshot,
     )
 
 

@@ -120,14 +120,17 @@
         </td>{% endfor %}
       </tr>
 
-      {# 2026 preliminary #}
-      <tr class="table-light"><td colspan="{{ parcels|length + 1 }}" class="small fw-semibold text-uppercase" style="letter-spacing:.05em;">2026 Preliminary</td></tr>
+      {# 2026 (M4-2026-PRELIM-SNAPSHOT Part 1 fix: header is now generic --
+         with up to 4 parcels compared side by side, some may be certified
+         and some still preliminary; the per-parcel badge below is the real
+         source of truth, not a single page-wide assumption). #}
+      <tr class="table-light"><td colspan="{{ parcels|length + 1 }}" class="small fw-semibold text-uppercase" style="letter-spacing:.05em;">2026</td></tr>
       <tr>
         <td class="small text-muted">2026 Market Value</td>
         {% for p in parcels %}<td class="text-center" style="font-family:var(--font-mono); font-size:12.5px; font-weight:600;">
           {% if p.current_2026 and p.current_2026.market_value %}
             ~${{ "{:,.0f}".format(p.current_2026.market_value) }}
-            <span class="badge-preliminary ms-1">Pre</span>
+            {% if p.is_2026_certified %}<span class="badge-verified ms-1">Cert</span>{% else %}<span class="badge-preliminary ms-1">Pre</span>{% endif %}
           {% else %}—{% endif %}
         </td>{% endfor %}
       </tr>
@@ -146,8 +149,23 @@
   </table>
 </div>
 
+{# M4-2026-PRELIM-SNAPSHOT Part 1 fix: this footer used to hardcode "All
+   2026 values are Preliminary" regardless of actual data_source. With
+   parcels compared side by side, status can differ per parcel, so this is
+   now computed from the real per-parcel flags rather than assumed. #}
+{% set _2026_parcels = parcels | selectattr("current_2026") | list %}
+{% set _certified_2026_count = _2026_parcels | selectattr("is_2026_certified") | list | length %}
 <p class="text-muted small mt-2">
-  All 2026 values are Preliminary (not certified). Effective tax rate = Total Tax ÷ Market Value.
+  {% if _2026_parcels %}
+    {% if _certified_2026_count == _2026_parcels | length %}
+      All 2026 values shown are Certified (final, not subject to change).
+    {% elif _certified_2026_count == 0 %}
+      All 2026 values shown are Preliminary (not yet certified).
+    {% else %}
+      2026 values shown are a mix of Certified and Preliminary — see the "Cert"/"Pre" badge on each parcel above.
+    {% endif %}
+  {% endif %}
+  Effective tax rate = Total Tax ÷ Market Value.
   Cap loss (Est.) is market value minus assessed value for parcels with a homestead exemption on file — not a TCAD-reported figure for 2025.
   Click any parcel heading to view its full detail page.
 </p>

@@ -562,3 +562,35 @@ made it into prop_unit's identity layer. This is a genuine data-quality conditio
 TCAD's own export, not a loader bug — worth investigating as its own future item
 (how much value these 37,569+ properties represent, whether they can be matched to a
 geo_id via a different field), not part of M3.
+### 2026-07-30 addendum: 2022-2024 AJR placeholders are NOT the same as 2025/2026's — do not delete
+Investigated as a planned follow-up to the 2025/2026 AJR placeholder cleanup (see the
+2026-07-29 entry above). Found a real, important difference: `AJR{prop_id}` is not a
+bug artifact — it is a deliberate, documented fallback in loaders/load_ajr.py (line
+136): `geo_id = pid_lookup.get(prop_id) or (f"AJR{prop_id}" if prop_id is not None
+else None)`. When the loader cannot resolve a property's real TCAD account number via
+lookup, it intentionally synthesizes this placeholder rather than dropping the row —
+an honest "we don't know this property's real account yet" marker, consistent with the
+platform's confidence-labeling principle.
+
+994 (2022) / 983 (2023) / 606 (2024) `parcel_tax_year` rows still carry this synthetic
+geo_id. Unlike the 2025/2026 case (where equivalent rows had ZERO match anywhere in
+`prop_unit` — genuinely orphaned, safe to delete, and were deleted 2026-07-29), these
+2022-2024 rows were checked directly and confirmed to point to `prop_unit` rows that
+are ALSO still synthetic (same `AJR{prop_id}` value, `last_seen_year` up to 2024) —
+meaning these specific properties' real account numbers remain genuinely unresolved
+even with the full, freshly-rebuilt cross-year lookup as of the 2026-07-29/30 `prop_unit`
+rebuild. This is not leftover corruption; it is an accurate, current reflection of a
+real data gap.
+
+**Decision: do NOT delete these rows.** Deleting them would discard real dollar-value
+data for real properties merely because their account number is unknown — directly
+against the platform's data-honesty principle. They should remain, correctly labeled
+as low-confidence/account-unknown wherever they surface in the product (verify this
+labeling is actually happening in the UI as a separate follow-up — not confirmed as
+part of this investigation).
+
+**For future reference:** before ever deleting an `AJR`-prefixed row again, always
+run the zero-match check against `prop_unit` first (as done in this and the prior
+session) — do not assume "AJR-prefixed" alone means "safe to delete." Only rows with
+zero match anywhere in `prop_unit` are genuinely orphaned; a nonzero match means the
+placeholder is still actively in use as an honest unknown-account marker.

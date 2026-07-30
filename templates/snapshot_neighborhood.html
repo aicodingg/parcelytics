@@ -8,11 +8,23 @@
 <div class="page-header mb-3 mt-2 d-flex align-items-center gap-3 flex-wrap">
   <div>
     <h1 class="page-title mb-0" style="font-family:var(--font-mono);">{{ code }}</h1>
+    {# M4-2026-PRELIM-SNAPSHOT Part 1 fix: header used to hardcode "2026
+       Preliminary" regardless of actual data_source. status_2026 is
+       computed in snapshot_neighborhood() (app.py) from this page's real
+       per-row data_source split. #}
     <p class="text-muted mb-0" style="font-size:13px; margin-top:4px;">
       {{ "{:,}".format(total) }} parcel{{ "" if total == 1 else "s" }}
       {% if view_prop_type %}&middot; {{ view_prop_type }} only{% endif %}
+      {% if status_2026 == "certified" %}
+      &middot; 2025 Certified vs 2026 Certified
+      <span class="badge-verified ms-2">Certified</span>
+      {% elif status_2026 == "preliminary" %}
       &middot; 2025 Certified vs 2026 Preliminary
       <span class="badge-preliminary ms-2">Preliminary</span>
+      {% elif status_2026 == "mixed" %}
+      &middot; 2025 Certified vs 2026 (mixed Certified/Preliminary)
+      <span class="badge-preliminary ms-2">Mixed</span>
+      {% endif %}
     </p>
   </div>
 </div>
@@ -27,7 +39,12 @@
             <th>Address</th>
             <th>Parcel ID</th>
             <th class="text-end">2025 Market Value <span class="badge-verified" style="font-size:8px; padding:1px 4px;">V</span></th>
-            <th class="text-end">2026 Preliminary Value <span class="badge-preliminary" style="font-size:8px; padding:1px 4px;">P</span></th>
+            <th class="text-end">
+              2026 Value
+              {% if status_2026 == "certified" %}<span class="badge-verified" style="font-size:8px; padding:1px 4px;">C</span>
+              {% elif status_2026 == "preliminary" %}<span class="badge-preliminary" style="font-size:8px; padding:1px 4px;">P</span>
+              {% endif %}
+            </th>
             <th class="text-end">% Change</th>
             {% if view == 'overall' %}<th>Property Type</th>{% endif %}
           </tr>
@@ -44,8 +61,13 @@
             <td class="text-end" style="font-family:var(--font-mono); font-size:12px;" data-label="2025 Market Value">
               {{ "$" + "{:,.0f}".format(p.mv25) if p.mv25 else "—" }}
             </td>
-            <td class="text-end" style="font-family:var(--font-mono); font-size:12px;" data-label="2026 Preliminary Value">
+            <td class="text-end" style="font-family:var(--font-mono); font-size:12px;" data-label="2026 Value">
               {{ "$" + "{:,.0f}".format(p.mv26) if p.mv26 else "—" }}
+              {% if status_2026 == "mixed" %}
+                {% if p.is_2026_certified %}<span class="badge-verified ms-1" style="font-size:8px; padding:1px 4px;">C</span>
+                {% else %}<span class="badge-preliminary ms-1" style="font-size:8px; padding:1px 4px;">P</span>
+                {% endif %}
+              {% endif %}
             </td>
             {# Coherence fix (July 2026, per Fable review finding 6): raw market-value
                change, not tax burden -- neutral color, not red/green. #}
@@ -61,7 +83,14 @@
   </div>
   <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span class="text-muted small">
-      V = Certified 2025 data. P = Preliminary 2026 data, subject to change at certification (July 25, 2026).
+      V = Certified 2025 data.
+      {% if status_2026 == "certified" %}
+      2026 data shown is Certified — final, not subject to change.
+      {% elif status_2026 == "preliminary" %}
+      P = Preliminary 2026 data, subject to change at certification (July 25, 2026).
+      {% elif status_2026 == "mixed" %}
+      C = Certified 2026 data. P = Preliminary 2026 data (not yet certified for this parcel).
+      {% endif %}
       Excludes tax-exempt (X), personal-property (N), and AJR* supplement records — same population as Market Snapshot.
     </span>
     {% if total_pages > 1 %}

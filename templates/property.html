@@ -3,6 +3,36 @@
 
 {% block content %}
 
+{# ── 2026 certified-vs-preliminary status (task M4-2026-PRELIM-SNAPSHOT,
+   Part 1 fix, July 2026) ─────────────────────────────────────────────────
+   Confirmed live bug: 2026 Certified Appraisal Export data was loaded
+   today (load_certified_historical.py --year 2026), overwriting
+   parcel_tax_year's 2026 rows in place -- but every "Preliminary"
+   badge/label below used to be hardcoded, assuming 2026 could never be
+   anything but preliminary. Every 2026 badge/label below branches on
+   is_2026_certified instead of hardcoding "Preliminary" text. Not every
+   parcel is necessarily certified yet -- a parcel whose 2026 row is still
+   genuinely data_source='preliminary' must keep showing real
+   "Preliminary" language; this flag reflects THIS parcel's actual state,
+   not a site-wide assumption either way.
+
+   is_2026_certified is now computed ONCE in Python (property_detail(),
+   app.py) from the real CERTIFIED_TIER_DATA_SOURCES set and passed into
+   this template's render context directly -- NOT a Jinja {% set %} here.
+   That's a deliberate correction from this variable's first version
+   (which WAS a top-of-content-block {% set %}): Jinja's {% block %}
+   inheritance gives each named block (content, scripts, etc.) its OWN
+   local scope, so a {% set %} made inside {% block content %} is invisible
+   inside {% block scripts %} -- confirmed by a real render-harness failure
+   ('is_2026_certified' is undefined) at this file's Chart.js tooltip code
+   (search "2026 Certified'" below), which lives in {% block scripts %}.
+   A true render-context variable (passed via render_template(), like
+   current_2026 itself) doesn't have this problem -- it's visible in every
+   block. The 2025 header badge's separate _certified_tier_sources Jinja
+   copy (search this file for that name) predates this fix and happens to
+   only be used inside {% block content %}, so it wasn't hit by the same
+   bug; left as-is, unrelated to this fix. #}
+
 {# ── Post-Acquisition Tax Estimator — shared macro (July 2026, per Diego) ───
    Was Investor-mode-only markup, hand-copied in place. Diego asked for the
    same feature in Homeowner mode too, reusing the existing structure/logic
@@ -803,22 +833,30 @@
   </div>
 </div>
 
-{# ── 2026 — Preliminary ────────────────────────────────────────────────── #}
+{# ── 2026 — Certified/Preliminary (M4-2026-PRELIM-SNAPSHOT Part 1 fix: now
+   branches on is_2026_certified instead of hardcoding "Preliminary" for
+   every parcel, regardless of this parcel's real data_source) ─────────── #}
 <div class="d-flex align-items-center gap-2 mb-2">
   <span style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3);">2026</span>
-  <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
+  {% if is_2026_certified %}<span class="badge-verified" style="font-size:9px;">Certified</span>
+  {% else %}<span class="badge-preliminary" style="font-size:9px;">Preliminary</span>{% endif %}
 </div>
 <div class="row g-3 mb-4">
   <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
-      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home is worth (2026 preliminary){% else %}What this property is worth (2026 preliminary){% endif %}</div>
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home is worth (2026{% if is_2026_certified %} certified{% else %} preliminary{% endif %}){% else %}What this property is worth (2026{% if is_2026_certified %} certified{% else %} preliminary{% endif %}){% endif %}</div>
       <div class="kpi-value">{% if mv26 %}${{ "{:,.0f}".format(mv26) }}{% else %}—{% endif %}</div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if mv26 %}
+        {% if is_2026_certified %}
+        TCAD's 2026 certified appraisal{% if mv25 %} — {{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }} vs. 2025{% endif %}. Final, not subject to change.
+        <span class="badge-verified" style="font-size:9px;">Certified</span>
+        {% else %}
         TCAD's 2026 preliminary appraisal{% if mv25 %} — {{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }} vs. 2025{% endif %}. A real appraisal figure, not yet certified.
         <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
+        {% endif %}
         {% else %}
-        2026 preliminary value not yet available for this parcel.
+        2026 value not yet available for this parcel.
         {% endif %}
       </div>
     </div></div>
@@ -840,19 +878,22 @@
      -- badged accordingly below (tv26_is_approx). #}
   <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
-      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home will be taxed on (2026 preliminary){% else %}What this property will be taxed on (2026 preliminary){% endif %}</div>
+      <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}What your home will be taxed on (2026{% if is_2026_certified %} certified{% else %} preliminary{% endif %}){% else %}What this property will be taxed on (2026{% if is_2026_certified %} certified{% else %} preliminary{% endif %}){% endif %}</div>
       <div class="kpi-value">{% if tv26 %}{% if tv26_is_approx %}~{% endif %}${{ "{:,.0f}".format(tv26) }}{% else %}—{% endif %}</div>
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if tv26 %}
         {% if tv26_is_approx %}
-        Parcelytics's estimate of the homestead-capped 2026 taxable value — TCAD's own preliminary export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification){% if mv26 and mv26 > tv26 %}, {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below preliminary market value{% endif %}.
+        Parcelytics's estimate of the homestead-capped 2026 taxable value — TCAD's own {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification){% if mv26 and mv26 > tv26 %}, {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below {% if is_2026_certified %}certified{% else %}preliminary{% endif %} market value{% endif %}.
         <span class="badge-estimated" style="font-size:9px;">Estimated</span>
+        {% elif is_2026_certified %}
+        TCAD's 2026 certified taxable value{% if mv26 and mv26 > tv26 %} — {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below market value{% if has_hs %} thanks to the homestead cap and exemptions{% endif %}{% endif %}. Final, not subject to change.
+        <span class="badge-verified" style="font-size:9px;">Certified</span>
         {% else %}
         TCAD's 2026 preliminary taxable value{% if mv26 and mv26 > tv26 %} — {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below market value{% if has_hs %} thanks to the homestead cap and exemptions{% endif %}{% endif %}. A real appraisal figure, not yet certified.
         <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
         {% endif %}
         {% else %}
-        2026 preliminary taxable value not yet available for this parcel.
+        2026 taxable value not yet available for this parcel.
         {% endif %}
       </div>
     </div></div>
@@ -1652,7 +1693,7 @@
        'certified' -- but the same certified-tier-eligible set and AV>MV
        demotion are applied here anyway for consistency with the shared
        rule, not as a special 2025-only case. #}
-    {%- set _certified_tier_sources = ["certified", "cert_2021", "cert_2022", "cert_2023", "cert_2024",
+    {%- set _certified_tier_sources = ["certified", "cert_2021", "cert_2022", "cert_2023", "cert_2024", "cert_2026",
                                         "ajr_2021", "ajr_2022", "ajr_2023", "ajr_2024"] -%}
     {% if current %}
       {% set _cur_av_anomaly = current.assessed_value and current.market_value and current.assessed_value > current.market_value %}
@@ -1873,11 +1914,13 @@
 
 <div class="d-flex align-items-center gap-2 mb-2">
   <span style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3);">2026</span>
-  <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
+  {% if is_2026_certified %}<span class="badge-verified" style="font-size:9px;">Certified</span>
+  {% else %}<span class="badge-preliminary" style="font-size:9px;">Preliminary</span>{% endif %}
 </div>
 <div class="kpi-row">
 
-  {# Card 1: Market Value (2026 preliminary) — folds the prior standalone
+  {# Card 1: Market Value (2026, certified or preliminary per is_2026_certified,
+     M4-2026-PRELIM-SNAPSHOT Part 1 fix) — folds the prior standalone
      "YoY Value Change" card into this card's subtext instead, per Diego's
      brief, matching the pattern Homeowner mode's own 2026 Market Value card
      already uses (a value with its YoY delta as a sub-line, not a separate
@@ -1895,7 +1938,7 @@
       {% if kpi.yoy_pct is defined %}
         {{ "{:+.1f}%".format(kpi.yoy_pct) }} {{ kpi.yoy_label if kpi.yoy_label is defined else "" }}
       {% else %}—{% endif %}
-      {% if inv_mv26 %}<span class="badge-preliminary" style="font-size:9px; padding:1px 5px;">Preliminary</span>{% endif %}
+      {% if inv_mv26 %}{% if is_2026_certified %}<span class="badge-verified" style="font-size:9px; padding:1px 5px;">Certified</span>{% else %}<span class="badge-preliminary" style="font-size:9px; padding:1px 5px;">Preliminary</span>{% endif %}{% endif %}
     </div>
   </div>
 
@@ -1914,14 +1957,16 @@
      row shows a real cap, this app's own capped-value estimate otherwise,
      badged accordingly. #}
   <div class="kpi-card">
-    <div class="kpi-label" title="What the tax rate will be applied to — TCAD's 2026 preliminary assessed value after exemptions, not the market value above">Taxable Value</div>
+    <div class="kpi-label" title="What the tax rate will be applied to — TCAD's 2026 {% if is_2026_certified %}certified{% else %}preliminary{% endif %} assessed value after exemptions, not the market value above">Taxable Value</div>
     <div class="kpi-value">
       {% if inv_tv26 %}{% if inv_tv26_is_approx %}~{% endif %}${{ "{:,.0f}".format(inv_tv26) }}{% else %}—{% endif %}
     </div>
     <div class="kpi-sub">
       {% if inv_tv26 %}
         {% if inv_tv26_is_approx %}
-          2026 <span class="badge-estimated" style="font-size:9px; padding:1px 5px;" title="TCAD's preliminary export doesn't yet reflect the homestead cap for this parcel (Tax Code §23.23 applies it at certification) — this is Parcelytics's estimate of the capped value.">Estimated</span>
+          2026 <span class="badge-estimated" style="font-size:9px; padding:1px 5px;" title="TCAD's {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the homestead cap for this parcel (Tax Code §23.23 applies it at certification) — this is Parcelytics's estimate of the capped value.">Estimated</span>
+        {% elif is_2026_certified %}
+          2026 <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Certified</span>
         {% else %}
           2026 <span class="badge-preliminary" style="font-size:9px; padding:1px 5px;">Preliminary</span>
         {% endif %}
@@ -3264,7 +3309,7 @@
   {% if current or current_2026 %}
   <div class="card mb-4">
     <div class="card-header">
-      Current &amp; Preliminary Values
+      Current &amp; {% if is_2026_certified %}Certified{% else %}Preliminary{% endif %} Values
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
@@ -3273,8 +3318,8 @@
             <tr>
               <th style="width:22%"></th>
               <th class="text-end" style="width:26%;">
-                2026 Preliminary
-                {% if current_2026 %}<span class="badge-preliminary ms-1" style="font-size:9.5px;">Preliminary</span>{% endif %}
+                {% if is_2026_certified %}2026 Certified{% else %}2026 Preliminary{% endif %}
+                {% if current_2026 %}{% if is_2026_certified %}<span class="badge-verified ms-1" style="font-size:9.5px;">Certified</span>{% else %}<span class="badge-preliminary ms-1" style="font-size:9.5px;">Preliminary</span>{% endif %}{% endif %}
               </th>
               {# Coherence fix (July 2026, per Fable review finding 4, wave 2): this
                  column includes a Total Tax row a few lines below, which can
@@ -3301,7 +3346,7 @@
                 {% if current_2026 and current_2026.market_value %}
                   <span class="primary-value">${{ "{:,.0f}".format(current_2026.market_value) }}</span>
                   {% if current_2026.assessed_value and current_2026.assessed_value > current_2026.market_value %}
-                    <span class="badge-data-anomaly ms-1" title="Assessed > Market in 2026 preliminary">!</span>
+                    <span class="badge-data-anomaly ms-1" title="Assessed > Market in the 2026 {% if is_2026_certified %}certified{% else %}preliminary{% endif %} row">!</span>
                   {% endif %}
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
@@ -3334,7 +3379,7 @@
               <td class="text-end">
                 {% if current_2026 and current_2026.est_assessed_2026 %}
                   {% if current_2026.basis_2026 == 'derived_cap_estimate' %}
-                    <span title="{% if current_2026.assessed_value is not none %}TCAD's preliminary export shows ${{ '{:,.0f}'.format(current_2026.assessed_value) }} before the 10% homestead cap; the cap applies at certification (Tax Code §23.23). Shown here as an estimate of the capped value.{% else %}Estimate of the homestead-capped value; TCAD's preliminary export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification).{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current_2026.est_assessed_2026) }}</span>
+                    <span title="{% if current_2026.assessed_value is not none %}TCAD's {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export shows ${{ '{:,.0f}'.format(current_2026.assessed_value) }} before the 10% homestead cap; the cap applies at certification (Tax Code §23.23). Shown here as an estimate of the capped value.{% else %}Estimate of the homestead-capped value; TCAD's {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification).{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current_2026.est_assessed_2026) }}</span>
                   {% else %}${{ "{:,.0f}".format(current_2026.est_assessed_2026) }}
                   {% endif %}
                 {% else %}<span class="na-cell">—</span>{% endif %}
@@ -3404,7 +3449,7 @@
               <td class="text-end">
                 {% if current_2026 and current_2026.est_taxable_2026 %}
                   {% if current_2026.basis_2026 == 'derived_cap_estimate' %}
-                    <span title="{% if current_2026.taxable_value is not none %}TCAD's preliminary export shows ${{ '{:,.0f}'.format(current_2026.taxable_value) }} before the 10% homestead cap; the cap applies at certification (Tax Code §23.23). Shown here as an estimate of the capped value.{% else %}Estimate of the homestead-capped value; TCAD's preliminary export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification).{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current_2026.est_taxable_2026) }}</span>
+                    <span title="{% if current_2026.taxable_value is not none %}TCAD's {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export shows ${{ '{:,.0f}'.format(current_2026.taxable_value) }} before the 10% homestead cap; the cap applies at certification (Tax Code §23.23). Shown here as an estimate of the capped value.{% else %}Estimate of the homestead-capped value; TCAD's {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification).{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current_2026.est_taxable_2026) }}</span>
                   {% else %}${{ "{:,.0f}".format(current_2026.est_taxable_2026) }}
                   {% endif %}
                 {% else %}<span class="na-cell">—</span>{% endif %}
@@ -3578,11 +3623,15 @@
       </div>
     </div>
     <div class="card-footer text-muted small">
+      {% if is_2026_certified %}
+      2026 from TCAD's certified appraisal roll — final, not subject to change.
+      {% else %}
       2026 from June 9, 2026 TCAD preliminary export — subject to change; certified July 25, 2026.
-      No 2026 tax billing until post-certification.
+      {% endif %}
+      No 2026 tax billing until entity budgets are adopted.
       {% if estimated_tax_2026 %}
-      <span class="badge-estimated">Estimated</span> 2026 Total Tax = 2026 preliminary taxable value × 2025 blended entity rates.
-      Actual 2026 tax set after certification and entity budget adoption.
+      <span class="badge-estimated">Estimated</span> 2026 Total Tax = 2026 {% if is_2026_certified %}certified{% else %}preliminary{% endif %} taxable value × 2025 blended entity rates.
+      Actual 2026 tax set after entity budget adoption.
       {% endif %}
       {# Red/green Change% legend sentence removed (July 2026, Property Page
          Polish Round item 4, per Diego's live review) -- the prior coherence
@@ -3592,6 +3641,108 @@
          (2026 preliminary export note, no-billing note, Estimated Total Tax
          note) is unchanged. #}
     </div>
+  </div>
+  {% endif %}
+
+  {# ── 2b. 2026 Preliminary → Certified comparison (task
+     M4-2026-PRELIM-SNAPSHOT, Part 3, July 2026) ───────────────────────────
+     Only shown once this parcel's live 2026 row has actually transitioned
+     to certified -- before that happens, the live 2026 value in the table
+     above IS still the preliminary value, so there's nothing yet to
+     "compare" (this is a deliberate scope call, not an oversight: showing
+     an empty/degenerate comparison for every non-certified parcel would
+     just be noise). prelim_2026_snapshot (property_detail(), app.py) reads
+     the ORIGINAL preliminary values from the standalone
+     parcel_2026_preliminary_snapshot table (Part 2) -- the live
+     parcel_tax_year row no longer has them once certified data has
+     overwritten it in place. Data-honesty requirement (non-negotiable,
+     per the brief): if this parcel has no snapshot row (e.g. it didn't
+     exist yet as of the June 9, 2026 preliminary export, or the snapshot
+     loader hasn't been run against it), show a real labeled gap, never a
+     blank/zero/assumed value. #}
+  {% if is_2026_certified and current_2026 %}
+  <div class="card mb-4">
+    <div class="card-header">
+      2026: Preliminary → Certified
+      <span class="text-muted" style="font-size:11px; font-weight:400;">how this parcel's 2026 value moved since the June 9, 2026 preliminary notice</span>
+    </div>
+    {% if prelim_2026_snapshot %}
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead class="table-light small text-muted text-uppercase">
+            <tr>
+              <th style="width:22%"></th>
+              <th class="text-end" style="width:26%;">
+                2026 Preliminary
+                <span class="badge-preliminary ms-1" style="font-size:9.5px;">Preliminary</span>
+              </th>
+              <th class="text-end" style="width:26%;">
+                2026 Certified
+                <span class="badge-verified ms-1" style="font-size:9.5px;">Certified</span>
+              </th>
+              <th class="text-end" style="width:26%;">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {# Market Value #}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">Market Value</th>
+              <td class="text-end">
+                {% if prelim_2026_snapshot.market_value %}${{ "{:,.0f}".format(prelim_2026_snapshot.market_value) }}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if current_2026.market_value %}<span class="primary-value">${{ "{:,.0f}".format(current_2026.market_value) }}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if prelim_2026_snapshot.market_value and current_2026.market_value %}
+                  {% set _d = current_2026.market_value - prelim_2026_snapshot.market_value %}
+                  {% set _dp = (_d / prelim_2026_snapshot.market_value * 100) if prelim_2026_snapshot.market_value else none %}
+                  {# Coherence fix pattern (July 2026, per Fable review finding 6, reused
+                     here): raw asset value change, not tax burden -- neutral color. #}
+                  <span class="fw-semibold" style="color:var(--accent);">{{ "{:+,.0f}".format(_d) }}{% if _dp is not none %} ({{ "{:+.1f}%".format(_dp) }}){% endif %}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+            </tr>
+            {# Taxable Value #}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">Taxable Value</th>
+              <td class="text-end">
+                {% if prelim_2026_snapshot.taxable_value %}${{ "{:,.0f}".format(prelim_2026_snapshot.taxable_value) }}
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {# current_2026.est_taxable_2026 -- same homestead-cap-aware figure the
+                   table above and the KPI cards use, not the raw taxable_value field
+                   (see that table's own comment for the full derivation writeup). #}
+                {% if current_2026.est_taxable_2026 %}<span class="primary-value">${{ "{:,.0f}".format(current_2026.est_taxable_2026) }}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if prelim_2026_snapshot.taxable_value and current_2026.est_taxable_2026 %}
+                  {% set _dt = current_2026.est_taxable_2026 - prelim_2026_snapshot.taxable_value %}
+                  {% set _dtp = (_dt / prelim_2026_snapshot.taxable_value * 100) if prelim_2026_snapshot.taxable_value else none %}
+                  <span class="fw-semibold" style="color:var(--accent);">{{ "{:+,.0f}".format(_dt) }}{% if _dtp is not none %} ({{ "{:+.1f}%".format(_dtp) }}){% endif %}</span>
+                {% else %}<span class="na-cell">—</span>{% endif %}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card-footer text-muted small">
+      Preliminary from TCAD's June 9, 2026 export; certified from TCAD's July 25, 2026 certified appraisal roll — final, not subject to change.
+      Taxable-value comparison uses the same homestead-cap-aware figure shown elsewhere on this page, not TCAD's raw preliminary/certified export value.
+    </div>
+    {% else %}
+    <div class="card-body">
+      <p class="text-muted small mb-0">
+        Preliminary value not available for this parcel. This parcel may not have existed yet as of the June 9, 2026 preliminary export, or its preliminary snapshot hasn't been loaded — the certified value above is still accurate.
+      </p>
+    </div>
+    {% endif %}
   </div>
   {% endif %}
 
@@ -3704,7 +3855,14 @@
                   </span>
                 {% elif r.total_tax %}
                   ${{ "{:,.0f}".format(r.total_tax) }}
-                {% elif r.data_source == 'preliminary' %}
+                {% elif r.data_source == 'preliminary' or (r.tax_year == 2026 and is_2026_certified) %}
+                  {# M4-2026-PRELIM-SNAPSHOT Part 1 fix: widened from just
+                     data_source == 'preliminary' -- a certified-but-not-yet-
+                     billed 2026 row is the same "no billing yet" state, not
+                     a different one, so it gets the same honest label
+                     instead of silently falling into a different branch
+                     below (which would misleadingly imply this row itself
+                     is somehow uncertain, when only its BILLING is absent). #}
                   <span class="na-cell">Not yet — post-cert</span>
                 {% elif r.computed_total_tax %}
                   {# Issue 5 fix ("Homestead-Cap Data Integrity" Cowork brief, July
@@ -3750,6 +3908,15 @@
                   <span class="badge-verified" title="Verified — confirmed directly from the Travis County Tax Office">Verified</span>
                 {% elif r.data_source == 'preliminary' %}
                   <span class="badge-preliminary">Preliminary</span>
+                {% elif r.tax_year == 2026 and is_2026_certified %}
+                  {# M4-2026-PRELIM-SNAPSHOT Part 1 fix: once 2026's appraisal is
+                     certified but tax billing still isn't available (billing
+                     depends on entity budget adoption, not appraisal
+                     certification alone), the old fallthrough to a bare
+                     "Partial" badge here misleadingly implied uncertainty in
+                     the APPRAISAL itself rather than simply "billing not yet
+                     set." This is honest about which one is actually true. #}
+                  <span class="badge-verified" title="2026 appraisal is certified; tax billing isn't available until taxing entities adopt their 2026 rates">Certified — no billing yet</span>
                 {% elif r.computed_total_tax %}
                   <span class="badge-estimated" title="Computed from certified taxable value × combined entity rate — not actual billing data">Computed</span>
                 {% elif r.data_source %}
@@ -3778,7 +3945,7 @@
       2025 — TCAD Certified Appraisal Export (Appraisal: Certified — this describes property value data, not tax billing; see each row's Source column above for billing confidence).
       2021–2024 values — Texas Comptroller Annual Jurisdiction Roll (AJR).
       2021–2024 tax — sourced directly from Travis County Tax Office billing records (Verified); this is a comprehensive countywide billing load, not a rate-based estimate or portal receipt. See the "2021–24 billing" badge above for this specific parcel's coverage.
-      {% if _has_2026 %}2026 — TCAD Preliminary Export, June 9, 2026 (Preliminary — subject to change until July 25, 2026 certification).{% endif %}
+      {% if _has_2026 %}{% if is_2026_certified %}2026 — TCAD Certified Appraisal Export (Certified — final, not subject to change).{% else %}2026 — TCAD Preliminary Export, June 9, 2026 (Preliminary — subject to change until July 25, 2026 certification).{% endif %}{% endif %}
       {# Ambiguity fix (July 2026, per Fable review P0-2): "Billing detail is
          only available for 2025" sat directly under a sentence saying
          2021-2024 billing is Verified -- reading as a flat contradiction.
@@ -5387,7 +5554,7 @@ new Chart(document.getElementById('valueTrendChart'), {
           },
           afterBody: items => {
             const yr = items[0]?.label;
-            if (yr == 2026) return ['⚡ 2026 Preliminary'];
+            if (yr == 2026) return [{{ (is_2026_certified and "'✓ 2026 Certified'" or "'⚡ 2026 Preliminary'") | safe }}];
             if (projYears.includes(yr)) return ['📊 Forecast (estimated)'];
             return [];
           }

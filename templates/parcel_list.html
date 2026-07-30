@@ -7,10 +7,24 @@
 <div class="page-header mb-3 mt-2 d-flex align-items-center gap-3 flex-wrap">
   <div>
     <h1 class="page-title mb-0">{{ ptype }} Parcels</h1>
+    {# M4-2026-PRELIM-SNAPSHOT Part 1 fix: header used to hardcode "2026
+       Preliminary" regardless of actual data_source. status_2026 is
+       computed in parcel_list() (app.py) from the real per-row
+       data_source split across the listed parcels. #}
     <p class="text-muted mb-0" style="font-size:13px; margin-top:4px;">
       {{ "{:,}".format(parcels|length) }} parcels
+      {% if status_2026 == "certified" %}
+      — 2025 Certified vs 2026 Certified
+      <span class="badge-verified ms-2">Certified</span>
+      {% elif status_2026 == "preliminary" %}
       — 2025 Certified vs 2026 Preliminary
       <span class="badge-preliminary ms-2">Preliminary</span>
+      {% elif status_2026 == "mixed" %}
+      — 2025 Certified vs 2026 (mixed Certified/Preliminary)
+      <span class="badge-preliminary ms-2">Mixed</span>
+      {% else %}
+      — 2025 Certified
+      {% endif %}
     </p>
   </div>
   <div class="ms-auto d-flex gap-2 align-items-center">
@@ -74,7 +88,13 @@
   </div>
   <div class="card-footer text-muted small">
     Showing first {{ "{:,}".format(parcels|length) }} results.
-    2026 values are Preliminary — not certified.
+    {% if status_2026 == "certified" %}
+    2026 values are Certified — final, not subject to change.
+    {% elif status_2026 == "preliminary" %}
+    2026 values are Preliminary — not yet certified.
+    {% elif status_2026 == "mixed" %}
+    2026 values shown are a mix of Certified and Preliminary.
+    {% endif %}
     Click any parcel to view its full detail page.
   </div>
 </div>

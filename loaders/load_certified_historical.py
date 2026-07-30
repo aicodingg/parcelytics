@@ -52,6 +52,7 @@ CERT_DIRS = {
     2022: os.path.join(config.DATA_DIR, "2022_Certified_Export"),
     2023: os.path.join(config.DATA_DIR, "2023_Certified_Export"),
     2024: os.path.join(config.DATA_DIR, "2024_Certified_Export"),
+    2026: os.path.join(config.DATA_DIR, "2026_Certified_Export"),
 }
 
 
@@ -224,8 +225,8 @@ def post_load_summary(conn, year, data_source, rows_before, ajr_before):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--year', type=int, required=True, choices=[2022, 2023, 2024],
-                    help='Tax year to load (2022, 2023, or 2024)')
+    ap.add_argument('--year', type=int, required=True, choices=[2022, 2023, 2024, 2026],
+                    help='Tax year to load (2022, 2023, 2024, or 2026)')
     args = ap.parse_args()
 
     year        = args.year
