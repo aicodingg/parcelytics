@@ -5916,28 +5916,173 @@ def api_peer_set(geo_id):
         "lbl": subj_label, "nb": nb, "sc1": sc1, "cc": subj_cc, "mv": subj_mv,
     }
 
+    # Task PEER-SET-PERF-1/2 (Aug 2026): Tiers 2 and 3 below, history:
+    #
+    # Round 1 diagnosis (correct, still stands): confirmed via production
+    # EXPLAIN ANALYZE on geo_id 0172190210's real Tier-2 query -- 8.2s, past
+    # the 8s statement_timeout (Sentry PYTHON-FLASK-6). NOT the same bug as
+    # M6 (api_peer_benchmark_local's full-table aggregate; this query's
+    # total_tax_rate correlated subquery is fast, ~1.7ms/lookup). The
+    # original problem was join ORDER: the planner drove from
+    # parcel_tax_year (weakly filtered by market_value alone, ~73,768 rows)
+    # and probed `parcel` by primary key ONE ROW AT A TIME (73,768 lookups)
+    # to apply the actually-selective classi_cd/state_cd1 filters, for only
+    # 532 real matches.
+    #
+    # Round 1 FIX REGRESSED, confirmed live (do not repeat this mistake):
+    # a single MATERIALIZED CTE (parcel filters only) joined directly to
+    # parcel_tax_year measured 16.4s -- WORSE than the 8.2s original. The
+    # CTE itself worked exactly as intended (idx_parcel_classi_cd, ~220ms,
+    # 10,144 real rows) -- the regression was the planner UNDERESTIMATING
+    # that CTE's own output (guessed ~1,550 rows, 10,144 actual, a ~6.5x
+    # miss) and choosing ANOTHER bad Nested Loop -- this time probing
+    # parcel_tax_year_pkey 10,144 times -- to join it to parcel_tax_year.
+    # Moving the bottleneck from one join to another isn't a fix.
+    # classi_cd='01' (this incident's real value, "Single-Family Residence")
+    # is confirmed (not inferred, per round 2's live count) to match
+    # 308,046 of 517,614 parcels county-wide -- a candidate pool in the
+    # thousands after Tier 2's full filter set is a normal, EXPECTED outcome
+    # for this use code, not a fluke; the query has to handle that pool
+    # size well, not just relocate where it chokes on it.
+    #
+    # Round 2 fix (current): two INDEPENDENTLY computed MATERIALIZED CTEs,
+    # joined to each other on geo_id equality, rather than one CTE driving a
+    # per-row probe into the other table:
+    #   - `candidates`: parcel's own filters (classi_cd, state_cd1 prefix,
+    #     geo_id exclusion) -- unchanged from round 1, already confirmed
+    #     fast (~220ms).
+    #   - `mv_band`: parcel_tax_year filtered independently by
+    #     tax_year=2025 AND the market_value band -- using
+    #     idx_pty_year_market_value ON parcel_tax_year(tax_year,
+    #     market_value), a composite index that ALREADY EXISTS in
+    #     schema.sql for exactly this filter shape (confirmed by reading
+    #     schema.sql directly, not assumed).
+    # Neither CTE's plan depends on the other's row count, and the join
+    # between them is a plain equality with no ORDER BY dependency forcing
+    # either side to drive a per-row lookup into the other -- this is the
+    # shape Postgres's planner naturally prefers to execute as a Hash Join
+    # regardless of which side's cardinality estimate is off, unlike round
+    # 1's shape, which forced a correlated per-row lookup no matter which
+    # side any estimate favored. This avoids BOTH the original bug's
+    # mechanism (probing `parcel` per parcel_tax_year row) and round 1's
+    # regression (probing `parcel_tax_year` per candidate row), rather than
+    # trading one for the other again.
+    #
+    # ALSO applied (schema.sql, additive): `ALTER TABLE parcel ALTER COLUMN
+    # classi_cd/state_cd1 SET STATISTICS 500` + `ANALYZE parcel` -- the
+    # brief's own "cheapest thing to try first": better statistics should
+    # make the planner's cardinality estimate for `candidates` much more
+    # accurate on its own, independent of this query-shape change, for this
+    # and any future query filtering on these columns.
+    #
+    # Still NOT applying query_no_nestloop(): even with round 2's real
+    # evidence that THIS query's planner can badly misjudge a Nested Loop,
+    # this query runs for every classi_cd value, including genuinely RARE
+    # ones where a small candidate count legitimately makes Nested Loop the
+    # correct, fast choice -- unconditionally forcing it off risks quietly
+    # regressing those currently-fine cases to fix this one, a real,
+    # unmeasured trade this sandbox cannot evaluate. The two-independent-
+    # CTE restructure above targets the actual mechanism without forcing
+    # any planner setting, so it doesn't need that trade -- IF it measures
+    # well live; see the report for why this is not asserted as proven,
+    # given round 1's own lesson.
+    #
+    # Tier 1 (below, unchanged) is NOT touched -- per the brief's own
+    # assessment, neighborhood_cd (idx_parcel_neighborhood_cd, confirmed in
+    # schema.sql) is a genuinely selective filter for most neighborhoods
+    # (e.g. the single largest neighborhood is ~3,462 of 517,614 parcels,
+    # per KNOWN_LIMITATIONS.md), so Tier 1 was not confirmed to share this
+    # bug and the brief asks to leave anything not confirmed broken alone.
+    #
+    # Logic unchanged: identical WHERE conditions, identical SELECT columns,
+    # identical ORDER BY/LIMIT, identical tier cascade order and thresholds
+    # -- this is a query-shape rewrite only (see the final report for the
+    # equivalence reasoning), not a change to which tier wins or what a tier
+    # returns.
     peers, scope = [], "none"
     if subj_cc:
-        # Tier 1: exact use code, same neighborhood
+        # Tier 1: exact use code, same neighborhood — unchanged (not
+        # confirmed to share this bug; see comment above).
         if nb:
             peers = query(exact_select + " AND pty.market_value BETWEEN %(lo)s AND %(hi)s"
                           " AND p.neighborhood_cd = %(nb)s"
                           " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5", params)
             if peers:
                 scope = "exact_neighborhood"
-        # Tier 2: exact use code, same state_cd1 prefix (any neighborhood)
+        # Tier 2: exact use code, same state_cd1 prefix (any neighborhood) —
+        # confirmed slow (8.2s in production, round 1); rewritten again
+        # (round 2) per the comment above after round 1's own rewrite
+        # measured worse (16.4s).
         if len(peers) < 5:
-            wider = query(exact_select + " AND pty.market_value BETWEEN %(lo)s AND %(hi)s"
-                          " AND " + _peer_match_upper +
-                          " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5", params)
+            wider = query(f"""
+                WITH candidates AS MATERIALIZED (
+                    SELECT p.geo_id, p.prop_id, p.situs_address, p.classi_cd,
+                           p.living_area_sqft, p.land_sqft, p.year_built
+                    FROM   parcel p
+                    WHERE  p.geo_id <> %(geo)s
+                      AND  p.geo_id NOT LIKE 'AJR%%'
+                      AND  UPPER(TRIM(p.classi_cd)) = %(cc)s
+                      AND  {_peer_match_upper}
+                ),
+                mv_band AS MATERIALIZED (
+                    SELECT pty.geo_id, pty.market_value, pty.assessed_value
+                    FROM   parcel_tax_year pty
+                    WHERE  pty.tax_year = 2025
+                      AND  pty.market_value BETWEEN %(lo)s AND %(hi)s
+                )
+                SELECT c.geo_id, c.prop_id, c.situs_address, c.classi_cd,
+                       c.living_area_sqft, c.land_sqft, c.year_built,
+                       m.market_value, m.assessed_value,
+                       ROUND(m.assessed_value::numeric / NULLIF(m.market_value, 0), 4) AS assessment_ratio,
+                       (SELECT SUM(ctr.rate)
+                          FROM tax_billing_entity tbe
+                          JOIN county_tax_rate ctr
+                            ON ctr.entity_code = tbe.entity_code AND ctr.tax_year = 2025
+                         WHERE tbe.geo_id = c.geo_id AND tbe.tax_year = 2025) AS total_tax_rate
+                FROM   candidates c
+                JOIN   mv_band m ON m.geo_id = c.geo_id
+                ORDER  BY ABS(m.market_value - %(mv)s) LIMIT 5
+            """, params)
             if len(wider) > len(peers):
                 peers, scope = wider, "exact_state_prefix"
         # Tier 3: exact use code, county-wide, wider value band (±40%) — the
         # "widen the radius, keep the exact use code" fallback for a genuinely
         # rare use code rather than silently reverting to broad category.
+        # Structurally at LEAST as exposed as Tier 2 (even wider MV band,
+        # and drops the state_cd1 prefix filter entirely, so more rows
+        # would pass the WHERE if it hit the same bad plan) — same round-2
+        # two-independent-CTE rewrite applied as a precaution; not
+        # separately confirmed via its own live Tier-3 EXPLAIN ANALYZE
+        # (see final report).
         if len(peers) < 3:
-            widest = query(exact_select + " AND pty.market_value BETWEEN %(lo_wide)s AND %(hi_wide)s"
-                           " ORDER BY ABS(pty.market_value - %(mv)s) LIMIT 5", params)
+            widest = query(f"""
+                WITH candidates AS MATERIALIZED (
+                    SELECT p.geo_id, p.prop_id, p.situs_address, p.classi_cd,
+                           p.living_area_sqft, p.land_sqft, p.year_built
+                    FROM   parcel p
+                    WHERE  p.geo_id <> %(geo)s
+                      AND  p.geo_id NOT LIKE 'AJR%%'
+                      AND  UPPER(TRIM(p.classi_cd)) = %(cc)s
+                ),
+                mv_band AS MATERIALIZED (
+                    SELECT pty.geo_id, pty.market_value, pty.assessed_value
+                    FROM   parcel_tax_year pty
+                    WHERE  pty.tax_year = 2025
+                      AND  pty.market_value BETWEEN %(lo_wide)s AND %(hi_wide)s
+                )
+                SELECT c.geo_id, c.prop_id, c.situs_address, c.classi_cd,
+                       c.living_area_sqft, c.land_sqft, c.year_built,
+                       m.market_value, m.assessed_value,
+                       ROUND(m.assessed_value::numeric / NULLIF(m.market_value, 0), 4) AS assessment_ratio,
+                       (SELECT SUM(ctr.rate)
+                          FROM tax_billing_entity tbe
+                          JOIN county_tax_rate ctr
+                            ON ctr.entity_code = tbe.entity_code AND ctr.tax_year = 2025
+                         WHERE tbe.geo_id = c.geo_id AND tbe.tax_year = 2025) AS total_tax_rate
+                FROM   candidates c
+                JOIN   mv_band m ON m.geo_id = c.geo_id
+                ORDER  BY ABS(m.market_value - %(mv)s) LIMIT 5
+            """, params)
             if len(widest) > len(peers):
                 peers, scope = widest, "exact_widened"
 

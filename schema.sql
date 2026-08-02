@@ -389,6 +389,58 @@ CREATE INDEX IF NOT EXISTS idx_parcel_classi_cd       ON parcel(classi_cd);
 CREATE INDEX IF NOT EXISTS idx_parcel_year_built      ON parcel(year_built);
 CREATE INDEX IF NOT EXISTS idx_pty_year_market_value  ON parcel_tax_year(tax_year, market_value);
 
+-- api_peer_set() expression indexes (Task PEER-SET-PERF-2, Aug 2026).
+-- api_peer_set() filters on UPPER(TRIM(classi_cd)) and, in Tiers 2/3, also
+-- LEFT(UPPER(COALESCE(state_cd1,'')),1) -- a plain btree index on the raw
+-- column (idx_parcel_classi_cd above) cannot be used once a column is
+-- wrapped in functions; only a matching expression index can.
+--
+-- idx_parcel_use_code_exact was recommended in PEER_SET_DISTRIBUTION_CHECK.sql's
+-- comments and built live on production at some point -- but was NEVER added
+-- here, meaning a fresh database built from this file alone would silently
+-- be missing it and could regress back to Tier 1's original slow-scan
+-- behavior. Documented here retroactively, not newly built.
+--
+-- idx_parcel_classi_state_expr is the NEW index this task added, covering
+-- Tier 2/3's additional state_cd1-prefix filter. Confirmed via production
+-- EXPLAIN ANALYZE: without it, Tier 2's real-world query took 8.2s (the
+-- original Sentry PYTHON-FLASK-6 bug) and neither of two query-only
+-- rewrites attempted first (a single MATERIALIZED CTE, then two independent
+-- MATERIALIZED CTEs) fixed it -- both measured WORSE (16.4s, 15.4s) because
+-- the real bottleneck was this missing index, not the query shape. With
+-- this index in place, the two-independent-CTE query shape (kept, since it
+-- lets Postgres use both this index and idx_pty_year_market_value
+-- independently) completes in ~1.3-1.9s on two different real test cases,
+-- confirmed row-for-row identical to the original query's output.
+CREATE INDEX IF NOT EXISTS idx_parcel_use_code_exact
+    ON parcel (UPPER(TRIM(classi_cd)), neighborhood_cd);
+CREATE INDEX IF NOT EXISTS idx_parcel_classi_state_expr
+    ON parcel (UPPER(TRIM(classi_cd)), (LEFT(UPPER(COALESCE(state_cd1, '')), 1)));
+
+-- Task PEER-SET-PERF-2 (Aug 2026): round-2 fix for api_peer_set's Tier 2/3
+-- QueryCanceled bug (Sentry PYTHON-FLASK-6). Round 1's confirmed-live
+-- regression (a MATERIALIZED CTE rewrite that measured 16.4s -- WORSE than
+-- the original 8.2s bug) was traced to a genuine cardinality-estimation
+-- problem: the planner estimated ~1,550 rows for the classi_cd='01' +
+-- state_cd1 candidate CTE, but the real count is 10,144 (a ~6.5x miss),
+-- causing it to choose a Nested Loop probing parcel_tax_year_pkey 10,144
+-- times instead of a bulk join. Increasing the statistics target on the
+-- two columns this query (and the Search filter panel, see the block above)
+-- filters most heavily by gives the planner a finer-grained histogram to
+-- estimate from -- the standard, lowest-risk first thing to try for a
+-- cardinality-misestimate-driven bad plan, per Postgres's own documentation
+-- on ALTER TABLE ... SET STATISTICS. This changes ONLY planning quality,
+-- never query results, so it's safe to apply unconditionally; ANALYZE must
+-- run after for the new target to take effect (idempotent -- safe to
+-- re-run any number of times, same as every other statement in this file).
+-- NOT a substitute for confirming this actually fixes the plan via a real,
+-- live EXPLAIN ANALYZE against the exact incident parameters -- see the
+-- PEER-SET-PERF-2 report for the honest disclosure that this could not be
+-- measured in the sandbox that wrote it.
+ALTER TABLE parcel ALTER COLUMN classi_cd SET STATISTICS 500;
+ALTER TABLE parcel ALTER COLUMN state_cd1 SET STATISTICS 500;
+ANALYZE parcel;
+
 -- ============================================================
 -- Migration M2 — unit-model architecture (SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.2)
 -- ============================================================
