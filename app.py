@@ -5326,52 +5326,93 @@ def api_peer_benchmark_local(geo_id):
     # sets (confirmed live: "Peer Median Tax" exactly equaling the subject's
     # own tax figure on a peer set of only ~5 properties). AND p.geo_id !=
     # %(geo_id)s added to both this query and its fallback below.
+    # Task M6-PEER-QUERY-PERF (Aug 2026): both this query and the fallback
+    # below used to LEFT JOIN a subquery that GROUPed BY geo_id over the
+    # ENTIRE tax_billing_entity table for tax_year=2025 (~2.1M rows scanned
+    # county-wide, confirmed via production EXPLAIN ANALYZE — 13.4s, past
+    # the 8s statement_timeout, the direct cause of Sentry PYTHON-FLASK-5),
+    # then merge-joined that whole-county aggregate against a candidate set
+    # of only ~200-300 rows (narrowed by neighborhood_cd/state_cd1/MV band).
+    # All the aggregation work for the whole county was done to use a few
+    # hundred rows of it.
+    #
+    # Fixed (Option A per the brief — CTE the candidates first, then
+    # aggregate only against them): `candidates` is computed once, and the
+    # tax_billing_entity subquery is scoped with
+    # `geo_id IN (SELECT geo_id FROM candidates)`, so the planner aggregates
+    # only the rows belonging to this request's actual candidate set instead
+    # of the whole table. tax_billing_entity's existing PRIMARY KEY is
+    # (geo_id, tax_year, entity_code) — already geo_id-first, so this scoped
+    # form can drive off that index directly; no new index needed (Option B
+    # not applied — see this task's final report for the reasoning and the
+    # explicit disclosure that this could not be timed against a live DB in
+    # this sandbox).
+    #
+    # Logic is unchanged: identical WHERE conditions (NULL-safe state_cd1
+    # match, MV band, AJR exclusion, self-contamination exclusion), identical
+    # output columns, identical ORDER BY — this is a performance-only
+    # rewrite, verified for equivalence by inspection (see report), not a
+    # peer-set/logic change.
     peers = query(f"""
+        WITH candidates AS (
+            SELECT p.geo_id, pty.market_value, pty.assessed_value
+            FROM   parcel p
+            JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+            WHERE  p.neighborhood_cd = %(nb)s
+              AND  {_peer_match}
+              AND  pty.market_value BETWEEN %(lo)s AND %(hi)s
+              AND  p.geo_id NOT LIKE 'AJR%%'
+              AND  p.geo_id != %(geo_id)s
+              AND  pty.market_value > 0
+        )
         SELECT
-            p.geo_id,
-            pty.market_value,
-            pty.assessed_value,
+            c.geo_id,
+            c.market_value,
+            c.assessed_value,
             tb.total_tax,
             tbe.entity_tax_sum
-        FROM   parcel p
-        JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
-        LEFT JOIN tax_billing  tb  ON tb.geo_id  = p.geo_id AND tb.tax_year  = 2025
+        FROM   candidates c
+        LEFT JOIN tax_billing  tb  ON tb.geo_id  = c.geo_id AND tb.tax_year  = 2025
         LEFT JOIN (
             SELECT geo_id, SUM(amount_due) AS entity_tax_sum
             FROM   tax_billing_entity
             WHERE  tax_year = 2025
+              AND  geo_id IN (SELECT geo_id FROM candidates)
             GROUP  BY geo_id
-        ) tbe ON tbe.geo_id = p.geo_id
-        WHERE  p.neighborhood_cd = %(nb)s
-          AND  {_peer_match}
-          AND  pty.market_value BETWEEN %(lo)s AND %(hi)s
-          AND  p.geo_id NOT LIKE 'AJR%%'
-          AND  p.geo_id != %(geo_id)s
-          AND  pty.market_value > 0
-        ORDER  BY pty.market_value
+        ) tbe ON tbe.geo_id = c.geo_id
+        ORDER  BY c.market_value
     """, {"nb": neighborhood, "sc1": state_cd1, "lo": mv_lo, "hi": mv_hi, "geo_id": geo_id})
 
     n = len(peers)
     if n < 3:
-        # Fallback: relax to neighborhood + type only, drop MV band
+        # Fallback: relax to neighborhood + type only, drop MV band. Same
+        # Task M6-PEER-QUERY-PERF rewrite applied here — this branch can run
+        # against an even LARGER candidate set than the primary query (no MV
+        # band restriction), so it needed the identical fix, not just the
+        # primary query above.
         peers = query(f"""
-            SELECT p.geo_id, pty.market_value, pty.assessed_value,
+            WITH candidates AS (
+                SELECT p.geo_id, pty.market_value, pty.assessed_value
+                FROM   parcel p
+                JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+                WHERE  p.neighborhood_cd = %(nb)s
+                  AND  {_peer_match}
+                  AND  p.geo_id NOT LIKE 'AJR%%'
+                  AND  p.geo_id != %(geo_id)s
+                  AND  pty.market_value > 0
+            )
+            SELECT c.geo_id, c.market_value, c.assessed_value,
                    tb.total_tax, tbe.entity_tax_sum
-            FROM   parcel p
-            JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
-            LEFT JOIN tax_billing  tb  ON tb.geo_id  = p.geo_id AND tb.tax_year  = 2025
+            FROM   candidates c
+            LEFT JOIN tax_billing  tb  ON tb.geo_id  = c.geo_id AND tb.tax_year  = 2025
             LEFT JOIN (
                 SELECT geo_id, SUM(amount_due) AS entity_tax_sum
                 FROM   tax_billing_entity
                 WHERE  tax_year = 2025
+                  AND  geo_id IN (SELECT geo_id FROM candidates)
                 GROUP  BY geo_id
-            ) tbe ON tbe.geo_id = p.geo_id
-            WHERE  p.neighborhood_cd = %(nb)s
-              AND  {_peer_match}
-              AND  p.geo_id NOT LIKE 'AJR%%'
-              AND  p.geo_id != %(geo_id)s
-              AND  pty.market_value > 0
-            ORDER  BY pty.market_value
+            ) tbe ON tbe.geo_id = c.geo_id
+            ORDER  BY c.market_value
         """, {"nb": neighborhood, "sc1": state_cd1, "geo_id": geo_id})
         n = len(peers)
         band_note = "Size band relaxed (neighborhood + type only — fewer than 3 ±50% MV peers)"
