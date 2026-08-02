@@ -95,6 +95,66 @@ CANONICAL_PARCEL_EXCL = (
 # way the original four independent copies did.
 CANONICAL_PARCEL_EXCL_BARE = CANONICAL_PARCEL_EXCL[len("AND "):]
 
+# ── L-class (Business Personal Property) gap — Task AGGPRECOMP-1-FIX (Aug
+# 2026) ──────────────────────────────────────────────────────────────────
+# Found via live testing: `group_stats` (Task AGGPRECOMP-1) produced 68,452
+# rows, with the 5 LARGEST groups all `state_cd1_class='L'` carrying real
+# dollar values in the hundreds of millions to billions per tax year. `L` is
+# the Texas Comptroller's code for Business Personal Property (equipment,
+# inventory, etc.) — not real estate — and a REAL, well-populated class:
+# 42,563 Travis County parcels as of June 2026 (KNOWN_LIMITATIONS.md's
+# state_cd1 table), not a placeholder/synthetic row the way AJR-prefixed
+# geo_ids are.
+#
+# Investigated before adding this: CANONICAL_PARCEL_EXCL's own module
+# docstring (top of this file) claims "non-personal-property" scope, but
+# its ACTUAL implementation only excludes 'X' (tax-exempt), 'N' (personal
+# property — but only 3 parcels, a different Comptroller code than 'L'),
+# and AJR-prefixed geo_ids. It does NOT exclude 'L' — a real gap between
+# what this constant's docstring claims and what it does. Every existing
+# consumer of CANONICAL_PARCEL_EXCL that currently "looks safe" from L
+# contamination is safe only INCIDENTALLY, via a separate classification
+# step that happens to never map 'L' to a real output category (e.g.
+# loaders/compute_metrics.py's county_benchmark, via label_case_sql()'s 5
+# canonical categories) — not because CANONICAL_PARCEL_EXCL itself excludes
+# it. A query that groups/aggregates by RAW state_cd1/classi_cd instead of
+# a category-label taxonomy (like group_stats) has no such incidental
+# protection. (Live-confirmed second instance found during this same
+# investigation: app.py's _compute_snapshot_data(), whose newer 9-way
+# Market Snapshot taxonomy explicitly routes unmatched 'L' rows to its
+# "Other" tab rather than excluding them — see this task's final report.)
+#
+# Deliberately NOT folded into CANONICAL_PARCEL_EXCL itself here — that
+# constant is live in _compute_snapshot_data(), /api/benchmark, /parcels,
+# and loaders/compute_metrics.py today, and changing its behavior would
+# change those endpoints' live results without being asked to, well outside
+# this task's stated scope (group_stats only). Flagged as a separate,
+# explicit finding in this task's report instead. This tuple is named as
+# "the gap" (not "personal property classes" generally) so a future
+# discovery of a THIRD such gap class has an obvious, named place to grow —
+# preventing a third recurrence, per this task's own brief.
+NON_REAL_PROPERTY_GAP_CLASSES = ("L",)
+
+
+def exclude_non_real_property_gap_sql(column="p.state_cd1"):
+    """
+    NULL-safe exclusion of state_cd1 classes in NON_REAL_PROPERTY_GAP_CLASSES
+    above — the classes CANONICAL_PARCEL_EXCL does NOT already cover for a
+    RAW-grain (not category-label) query. Use ALONGSIDE
+    CANONICAL_PARCEL_EXCL / CANONICAL_PARCEL_EXCL_BARE, not instead of it —
+    this covers only the gap between what CANONICAL_PARCEL_EXCL's docstring
+    claims and what it actually excludes; it does not duplicate the X/N/AJR
+    exclusions CANONICAL_PARCEL_EXCL already handles correctly.
+
+    Returns a bare boolean expression (no leading "AND"), same convention as
+    CANONICAL_PARCEL_EXCL_BARE.
+
+        from parcel_filters import exclude_non_real_property_gap_sql
+        f"WHERE ... AND ({exclude_non_real_property_gap_sql('p.state_cd1')})"
+    """
+    classes = ", ".join(f"'{c}'" for c in NON_REAL_PROPERTY_GAP_CLASSES)
+    return f"LEFT(UPPER(COALESCE({column}, '')), 1) NOT IN ({classes})"
+
 
 def peer_state_cd1_match_sql(column="p.state_cd1", param="%(sc1)s", upper=False):
     """
@@ -126,3 +186,36 @@ def peer_state_cd1_match_sql(column="p.state_cd1", param="%(sc1)s", upper=False)
     """
     expr = f"UPPER(COALESCE({column}, ''))" if upper else f"COALESCE({column}, '')"
     return f"LEFT({expr}, 1) = {param}"
+
+
+def state_cd1_class_sql(column="p.state_cd1"):
+    """
+    Raw single-character state_cd1 class, as a bare SQL value expression —
+    e.g. for a GROUP BY key — rather than a comparison. NOT the same thing
+    as peer_state_cd1_match_sql() above (which returns a `... = param`
+    comparison for matching a candidate against one known subject value) or
+    tax_logic/classify.py's label_case_sql() (which maps this same
+    first-character down to a broader 5-category display label like
+    'Residential'/'Commercial'). Neither of those exposes the raw class
+    value itself as something a caller can put in a SELECT list or GROUP BY
+    clause, which is what group_stats (Task AGGPRECOMP-1) needs to define
+    its grain.
+
+    Deliberately added as a NEW companion function rather than refactoring
+    peer_state_cd1_match_sql() to expose its inner `expr` — that function is
+    already tested (verify_parcel_filters_coverage.py asserts its exact
+    `def peer_state_cd1_match_sql(` signature) and used on several live,
+    just-fixed peer-query code paths; changing it carries real regression
+    risk for no benefit when a small addition does the same job more safely.
+
+    Reuses the same NULL-safe COALESCE+UPPER+LEFT convention as
+    peer_state_cd1_match_sql(upper=True) — chosen as canonical here since
+    it's the safer/more-inclusive of that function's two conventions (a
+    NULL state_cd1 groups into its own explicit '' class instead of being
+    silently dropped, the same NULL-safety principle documented at the top
+    of this module).
+
+        from parcel_filters import state_cd1_class_sql
+        state_cd1_class_sql("p.state_cd1")  # -> "LEFT(UPPER(COALESCE(p.state_cd1, '')), 1)"
+    """
+    return f"LEFT(UPPER(COALESCE({column}, '')), 1)"

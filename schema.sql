@@ -627,3 +627,139 @@ CREATE TABLE IF NOT EXISTS parcel_2026_preliminary_snapshot (
     unit_count      SMALLINT,
     snapshotted_at  TIMESTAMP    DEFAULT NOW()
 );
+
+-- ── load_batch (Task AGGPRECOMP-1, Aug 2026) ───────────────────────────────
+-- Real gap closed here, not a spec-invented concept: investigated whether any
+-- per-load-run identifier already existed anywhere in this codebase before
+-- building this table (ingest_audit.id is per-CHECK-ROW, not per-load-run --
+-- one load calls gather_and_run() with several G1-G6 checks, each getting
+-- its OWN ingest_audit.id and its OWN run_at timestamp, with no single
+-- shared value tying them together as "one load"). parcel_rollup.py's
+-- run() and ingest_gate.py's gather_and_run() both take no batch/run
+-- parameter today either. SPEC_AGGREGATE_PRECOMPUTATION.md requires every
+-- Tier 1/3 summary row to carry a real source_import_batch_id -- this table
+-- is the minimal addition that makes that concept real instead of inventing
+-- an incompatible parallel identifier inside refresh_group_stats.py alone.
+--
+-- NOT yet wired into the real load pipeline (parcel_rollup.py / run_all.py)
+-- -- that wiring is a separate, later step (explicitly out of scope for this
+-- brief). Until it is, the ONLY writer of this table is
+-- loaders/refresh_group_stats.py itself when run standalone, which means the
+-- staleness assertion below is trivially satisfied by construction in that
+-- mode -- see this task's final report for the honest disclosure of what
+-- that does and does not prove.
+CREATE TABLE IF NOT EXISTS load_batch (
+    batch_id     BIGSERIAL    PRIMARY KEY,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    note         TEXT                                  -- e.g. 'refresh_group_stats.py standalone run'
+);
+
+-- ── group_stats (Task AGGPRECOMP-1, Step 1 of SPEC_AGGREGATE_PRECOMPUTATION.md) ──
+-- Tier 3 precomputed group-percentile table. One row per distinct
+-- (neighborhood_cd, state_cd1_class, classi_cd, tax_year) combination found
+-- in parcel/parcel_tax_year -- the same grain Peer Set / $/SF Benchmark
+-- queries already filter on (see api_peer_set, api_peer_benchmark_local).
+--
+-- Grain-key normalization matches EXISTING, already-indexed conventions in
+-- this codebase exactly, rather than inventing new ones:
+--   neighborhood_cd_key  -- COALESCE(neighborhood_cd, '') -- same NULL-safe
+--                           convention as CANONICAL_PARCEL_EXCL /
+--                           peer_state_cd1_match_sql (parcel_filters.py).
+--   state_cd1_class      -- parcel_filters.py's new state_cd1_class_sql()
+--                           helper: LEFT(UPPER(COALESCE(state_cd1,'')),1).
+--   classi_cd_key         -- UPPER(TRIM(COALESCE(classi_cd,''))) -- matches
+--                           idx_parcel_use_code_exact's existing expression
+--                           (UPPER(TRIM(classi_cd)), see above) and
+--                           api_peer_set's own filter shape, just made
+--                           NULL-safe via COALESCE the same way the other
+--                           two grain columns are.
+-- All three grain-key columns are COALESCE'd to '' specifically so this
+-- table can carry a composite NOT NULL primary key (Postgres composite
+-- PRIMARY KEYs require every column NOT NULL) without silently dropping any
+-- parcel whose real column value happens to be NULL -- an unknown
+-- neighborhood/class/use-code is still a real, countable group ('') rather
+-- than a row this table can't represent.
+--
+-- total_tax metric (market_value/assessed_value's natural third companion,
+-- per the spec's "total_tax or the entity-tax-sum equivalent" language) --
+-- investigated before deciding to include it: api_peer_benchmark_local's
+-- `_effective_tax()` (tb.total_tax when it's a real nonzero figure, else
+-- tbe.entity_tax_sum -- see app.py, ~line 5435) is a per-parcel DOLLAR
+-- total, the same grain/kind of quantity as market_value/assessed_value.
+-- api_peer_set's `total_tax_rate` (SUM(ctr.rate) from county_tax_rate,
+-- ~app.py line 5904) is a fundamentally DIFFERENT quantity -- a sum of
+-- RATES, not a dollar total, driven by which taxing entities happen to
+-- overlap a given parcel rather than the parcel's own value. Percentile-
+-- banding a rate answers a different question than percentile-banding a
+-- dollar figure, and the spec's own metric list never mentions rate
+-- percentiles. Decision: this table's tax metric is total_tax (the
+-- effective-tax dollar figure, via the identical fallback logic already
+-- proven in api_peer_benchmark_local), NOT total_tax_rate. If a future
+-- brief wants group-level rate percentiles specifically, that should be a
+-- deliberate, separate addition -- not folded in here speculatively.
+-- count_total_tax is tracked SEPARATELY from count (the group's overall
+-- parcel count) because not every parcel in a group has a resolvable
+-- effective tax figure (no total_tax AND no entity billing -- genuinely no
+-- 2025 billing data, excluded from the tax stat, exactly the same
+-- distinction api_peer_set's own `peer_tax_n` already draws from `n`).
+--
+-- source_import_batch_id / refreshed_at: non-negotiable per the spec's Tier
+-- 1/3 properties -- every row's provenance must be checkable, never
+-- silently trusted (see the staleness assertion in
+-- loaders/refresh_group_stats.py, modeled on loaders/db.py's
+-- is_valid_tax_year()).
+--
+-- Refresh mechanism (shadow-table-then-atomic-swap, per spec): built by
+-- loaders/refresh_group_stats.py into group_stats_shadow (identical
+-- structure, defined below), then an atomic
+-- `ALTER TABLE group_stats RENAME TO group_stats_old;
+--  ALTER TABLE group_stats_shadow RENAME TO group_stats;
+--  DROP TABLE group_stats_old;` swap inside one transaction -- readers only
+-- ever see either the fully-old or fully-new table, never a half-refreshed
+-- one. CREATE TABLE IF NOT EXISTS below defines the steady-state shape both
+-- group_stats and group_stats_shadow share.
+CREATE TABLE IF NOT EXISTS group_stats (
+    neighborhood_cd_key      VARCHAR(20)  NOT NULL DEFAULT '',
+    state_cd1_class          VARCHAR(1)   NOT NULL DEFAULT '',
+    classi_cd_key            VARCHAR(10)  NOT NULL DEFAULT '',
+    tax_year                 SMALLINT     NOT NULL,
+
+    count                    INTEGER      NOT NULL DEFAULT 0,   -- parcels in this group (market_value > 0)
+    min_market_value         BIGINT,
+    p25_market_value         BIGINT,
+    median_market_value      BIGINT,
+    p75_market_value         BIGINT,
+    max_market_value         BIGINT,
+
+    min_assessed_value       BIGINT,
+    p25_assessed_value       BIGINT,
+    median_assessed_value    BIGINT,
+    p75_assessed_value       BIGINT,
+    max_assessed_value       BIGINT,
+
+    count_total_tax          INTEGER      NOT NULL DEFAULT 0,   -- may be < count; see note above
+    min_total_tax            NUMERIC(14,2),
+    p25_total_tax            NUMERIC(14,2),
+    median_total_tax         NUMERIC(14,2),
+    p75_total_tax            NUMERIC(14,2),
+    max_total_tax            NUMERIC(14,2),
+
+    source_import_batch_id   BIGINT       NOT NULL,             -- REFERENCES load_batch(batch_id), enforced
+                                                                 -- at refresh time, not as an FK constraint
+                                                                 -- (shadow-swap drops/recreates this table;
+                                                                 -- an FK would have to be re-added every
+                                                                 -- refresh for no real safety benefit here).
+    refreshed_at             TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (neighborhood_cd_key, state_cd1_class, classi_cd_key, tax_year)
+);
+
+-- group_stats_shadow: identical shape, built fresh by every refresh run and
+-- swapped in atomically. Kept as a real CREATE TABLE (not just "the same
+-- DDL run twice in the loader") so schema.sql alone fully describes both
+-- tables' steady-state shape; loaders/refresh_group_stats.py DROPs and
+-- rebuilds this one on every run rather than relying on this initial DDL
+-- after the first refresh.
+CREATE TABLE IF NOT EXISTS group_stats_shadow (
+    LIKE group_stats INCLUDING ALL
+);
