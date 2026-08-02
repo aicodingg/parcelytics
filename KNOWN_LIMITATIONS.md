@@ -594,3 +594,51 @@ run the zero-match check against `prop_unit` first (as done in this and the prio
 session) — do not assume "AJR-prefixed" alone means "safe to delete." Only rows with
 zero match anywhere in `prop_unit` are genuinely orphaned; a nonzero match means the
 placeholder is still actively in use as an honest unknown-account marker.
+
+### 2026-07-31: M5-PERYEAR-GEOID — permanent fix for the account-tracking
+granularity gap (item 3, above) — RESOLVED, with one new small finding
+
+The "latest-known account" gap documented above (item 3) has been permanently
+fixed. `prop_unit_tax_year` now has its own real `geo_id` column, populated by
+every loader at write time and backfilled for all pre-existing rows by re-scanning
+each year's original PROP.TXT source file (2021 is a documented exception — see
+below). `parcel_rollup.py`'s `ROLLUP_SQL` now groups by
+`COALESCE(y.geo_id, u.geo_id)` — the row's own real, as-of-that-year value, falling
+back to `prop_unit`'s latest-known value only for rows not yet backfilled.
+
+**Confirmed real-world impact (production and local, verified 2026-07-31):** G4
+(rollup integrity) mismatches for 2022-2024 dropped from ~1,380-1,442/year
+(~4,250 total) to 385 (2022), 313 (2023), and 25 (2024) — a 75-98% reduction,
+tracing the exact mechanism the fix targeted (properties whose account number was
+reissued/replatted between an old year and 2026 no longer get silently rolled up
+under the wrong, later account number).
+
+**2021 exception, documented not silently resolved:** 2021's AJR source format has
+no real per-year `geo_id` field at all (`load_ajr.py`'s own module docstring
+confirms this — field position 6 holds `prop_id`, not `geo_id`, for the 2021
+format specifically). The backfill script resolves 2021 using the same
+best-available method `load_ajr.py` already uses going forward
+(`build_pid_lookup()` against `prop_unit` + `AJR{prop_id}` fallback) rather than a
+true source re-derivation, since no such source value exists to re-derive. This is
+a real, permanent limitation of the 2021 source data itself, not a gap in this fix.
+
+**New finding surfaced by this investigation: a small number of TCAD account
+numbers use an inconsistent, non-standard format.** Most accounts are a plain
+10-digit string (e.g. `0007810000`); a small number use a dash-separated format
+(e.g. `2-000781-0`) representing the same underlying property. Confirmed example:
+prop_id 487705 is `0007810000` in 2022's real source data but `2-000781-0` in
+current (2026) data — same property, reformatted account number, not a real
+reissue. Since the system treats these as two unrelated strings, this contributes
+to residual G4 mismatches: 34 of 2022's 385, 25 of 2023's 313, and 19 of 2024's 25
+remaining mismatches are dash-format geo_ids. Not yet normalized/fixed — a real,
+low-priority future item, not urgent, not blocking. The remaining, larger share of
+each year's residual (e.g. 351 of 2022's 385) is not yet explained by this or any
+other known cause — flagged as a genuine open item, smaller in scale than the
+original bug, worth investigating if it ever becomes product-relevant, not chased
+further as of this writing given diminishing returns relative to the size of the
+original problem this fix solved.
+
+**Verification:** fixture tests prove the core mechanism directly (a simulated
+account reissue between two years correctly resolves to each year's own real
+value, not a cross-contaminated one). Live-verified via `ingest_gate.py` on both
+local and production databases, before/after numbers as stated above.

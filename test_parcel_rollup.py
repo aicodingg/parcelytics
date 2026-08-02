@@ -136,6 +136,75 @@ def test_rollup_idempotent():
     check("rollup idempotent: identical output on re-run", out1 == out2, (out1, out2))
 
 
+def test_m5_reissue_2022_uses_own_geo_id_not_2026s():
+    """
+    Task M5-PERYEAR-GEOID core fix proof, per the brief's exact scenario:
+    prop_id X has geo_id 'A' in year 2022's real source and geo_id 'B' in
+    year 2026's real source (a simulated TCAD reissue/replat between the
+    two years). Before this fix, parcel_rollup.py joined every year's
+    rollup through prop_unit.geo_id (the single latest-known value —
+    'B' in this scenario), so 2022's rollup would have incorrectly
+    grouped X's 2022 dollar values under account 'B', the wrong,
+    LATER account number. After this fix, each prop_unit_tax_year row
+    carries its own real per-year geo_id, so 2022's rollup must group X
+    under 'A' — what was actually true in 2022 — regardless of what
+    prop_unit.geo_id says today.
+    """
+    rows = [
+        {"prop_id": 555, "tax_year": 2022, "geo_id": "A",
+         "market_value": 100_000, "assessed_value": 90_000, "taxable_value": 90_000,
+         "hs_cap_loss": None, "land_value": None, "imprv_value": None,
+         "exemption_codes": None, "data_source": "cert_2022"},
+        {"prop_id": 555, "tax_year": 2026, "geo_id": "B",
+         "market_value": 200_000, "assessed_value": 180_000, "taxable_value": 180_000,
+         "hs_cap_loss": None, "land_value": None, "imprv_value": None,
+         "exemption_codes": None, "data_source": "cert_2026"},
+    ]
+    out_2022 = compute_rollup(rows, 2022)
+    out_2026 = compute_rollup(rows, 2026)
+    check("M5 reissue fixture: 2022 rollup produces exactly one row", len(out_2022) == 1, out_2022)
+    check("M5 reissue fixture: 2022 rollup groups under 2022's REAL geo_id 'A', not 2026's 'B'",
+          out_2022[0]["geo_id"] == "A", out_2022)
+    check("M5 reissue fixture: 2022 rollup carries 2022's own dollar values",
+          out_2022[0]["market_value"] == 100_000, out_2022)
+    check("M5 reissue fixture: 2026 rollup (same prop_id) independently groups under 2026's own geo_id 'B'",
+          out_2026[0]["geo_id"] == "B", out_2026)
+
+
+def test_m5_null_geoid_falls_back_to_prop_unit_geoid():
+    """
+    NULL-fallback path (the brief's explicit open question, resolved in
+    parcel_rollup.py's ROLLUP_SQL comment: fall back to prop_unit.geo_id
+    for safety). A legacy row not yet backfilled (geo_id IS NULL) still
+    resolves via prop_unit_geo_id — intentional, and only relevant during
+    the migration window before loaders/backfill_prop_unit_tax_year_geoid.py
+    has run for that row.
+    """
+    rows = [
+        {"prop_id": 777, "tax_year": 2022, "geo_id": None, "prop_unit_geo_id": "C",
+         "market_value": 50_000, "assessed_value": 45_000, "taxable_value": 45_000,
+         "hs_cap_loss": None, "land_value": None, "imprv_value": None,
+         "exemption_codes": None, "data_source": "cert_2022"},
+    ]
+    out = compute_rollup(rows, 2022)
+    check("M5 NULL-fallback: falls back to prop_unit_geo_id when geo_id is NULL",
+          out[0]["geo_id"] == "C", out)
+
+
+def test_m5_both_geoid_sources_null_excluded():
+    """A row with neither a per-year geo_id nor a prop_unit fallback
+    resolvable is excluded from the rollup entirely — never silently
+    grouped together with unrelated rows under one bogus NULL key."""
+    rows = [
+        {"prop_id": 999, "tax_year": 2022, "geo_id": None, "prop_unit_geo_id": None,
+         "market_value": 100, "assessed_value": 100, "taxable_value": 100,
+         "hs_cap_loss": None, "land_value": None, "imprv_value": None,
+         "exemption_codes": None, "data_source": "cert_2022"},
+    ]
+    out = compute_rollup(rows, 2022)
+    check("M5 both-NULL geo_id: row excluded from rollup entirely", len(out) == 0, out)
+
+
 def test_prop_id_repair_min_representative():
     units = [
         {"prop_id": 500, "geo_id": "G1"},

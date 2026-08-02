@@ -94,12 +94,19 @@ def load_prop_txt(conn):
     parcel_rows = []
     unit_rows = []
     total = 0
+    # Task M5-PERYEAR-GEOID: built as a side-effect of this same PROP.TXT
+    # read (no second file read) -- this IS the 2026 real, as-of-2026
+    # account assignment for every prop_id, needed by load_prop_ent_txt()
+    # below since PROP_ENT.TXT itself carries no geo_id field at all.
+    pid_to_geo = {}
 
     for rec in ears_format.iter_prop_records(path):
         parcel_rows.append((rec["geo_id"], rec["prop_id"], rec["prop_type_cd"],
                              rec["owner_id"], rec["owner_name"]))
         unit_rows.append((rec["prop_id"], rec["geo_id"], rec["prop_type_cd"], None,
                            rec["owner_id"], rec["owner_name"], TAX_YEAR, TAX_YEAR))
+        if rec["prop_id"] and rec["geo_id"]:
+            pid_to_geo[rec["prop_id"]] = rec["geo_id"]
 
         if len(parcel_rows) >= 5000:
             _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows)
@@ -111,7 +118,7 @@ def load_prop_txt(conn):
         total += len(parcel_rows)
 
     print(f"    → {total:,} parcel/unit rows upserted in {time.time()-t0:.1f}s")
-    return total
+    return total, pid_to_geo
 
 
 def _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows):
@@ -122,7 +129,7 @@ def _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows):
 
 
 # ── Step 2: PROP_ENT.TXT → prop_unit_tax_year for 2026 ──────────────────────
-def load_prop_ent_txt(conn):
+def load_prop_ent_txt(conn, pid_to_geo):
     path = os.path.join(PRELIM_DIR, "PROP_ENT.TXT")
     if not os.path.exists(path):
         print(f"  ERROR: {path} not found"); return 0
@@ -131,10 +138,17 @@ def load_prop_ent_txt(conn):
 
     rows_to_insert = []
     total = 0
+    n_no_geo = 0
 
     for agg in ears_format.iter_prop_ent_aggregates(path):
+        # Task M5-PERYEAR-GEOID: PROP_ENT.TXT has no geo_id field -- pid_to_geo
+        # (built from this same year's PROP.TXT in load_prop_txt(), above) is
+        # the real, as-of-2026 value.
+        geo_id = pid_to_geo.get(agg["prop_id"])
+        if geo_id is None:
+            n_no_geo += 1
         rows_to_insert.append((
-            agg["prop_id"], TAX_YEAR,
+            agg["prop_id"], TAX_YEAR, geo_id,
             agg["market_value"], agg["assessed_value"], agg["taxable_value"],
             None, None, None,
             agg["exemption_codes"], DATA_SRC,
@@ -148,7 +162,8 @@ def load_prop_ent_txt(conn):
         _flush_pty(conn, rows_to_insert)
         total += len(rows_to_insert)
 
-    print(f"    → {total:,} unit-year rows for 2026 in {time.time()-t0:.1f}s")
+    print(f"    → {total:,} unit-year rows for 2026 in {time.time()-t0:.1f}s "
+          f"({n_no_geo:,} with no resolvable geo_id)")
     return total
 
 
@@ -432,8 +447,8 @@ def load(conn, skip_qa=False):
     print(f"  Tax year: {TAX_YEAR}, data_source: '{DATA_SRC}'")
     print(f"{'='*72}\n")
 
-    load_prop_txt(conn)
-    load_prop_ent_txt(conn)
+    _, pid_to_geo = load_prop_txt(conn)
+    load_prop_ent_txt(conn, pid_to_geo)
     load_land_and_imprv(conn)
     load_sb12(conn)
 

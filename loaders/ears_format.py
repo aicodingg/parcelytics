@@ -409,11 +409,12 @@ def resolve_prop_unit_conflict(existing, incoming):
 
 PROP_UNIT_TAX_YEAR_UPSERT_SQL = """
     INSERT INTO prop_unit_tax_year
-        (prop_id, tax_year, market_value, assessed_value, taxable_value,
+        (prop_id, tax_year, geo_id, market_value, assessed_value, taxable_value,
          hs_cap_loss, land_value, imprv_value, exemption_codes, data_source)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (prop_id, tax_year) DO UPDATE
-        SET market_value    = EXCLUDED.market_value,
+        SET geo_id          = EXCLUDED.geo_id,
+            market_value    = EXCLUDED.market_value,
             assessed_value  = EXCLUDED.assessed_value,
             taxable_value   = EXCLUDED.taxable_value,
             hs_cap_loss     = EXCLUDED.hs_cap_loss,
@@ -422,6 +423,19 @@ PROP_UNIT_TAX_YEAR_UPSERT_SQL = """
             exemption_codes = EXCLUDED.exemption_codes,
             data_source     = EXCLUDED.data_source
 """
+# geo_id (Task M5-PERYEAR-GEOID, July 2026): the year's REAL, as-of-that-
+# year account assignment -- every caller of this SQL now passes it as the
+# 3rd tuple element (right after prop_id, tax_year), sourced from that same
+# year's own PROP.TXT/AJR row, NOT from prop_unit.geo_id (see this column's
+# own comment in schema.sql for why those are different values). Unlike
+# PROP_UNIT_UPSERT_SQL's geo_id (which is guarded by a LEAST/GREATEST-style
+# CASE so only the most-recent-year's load may overwrite it), this SQL's
+# geo_id is unconditionally overwritten on every upsert -- correct here,
+# unlike that guard's context, because this row is scoped to ONE specific
+# (prop_id, tax_year), so "the value for this exact year" has no
+# cross-year ordering ambiguity to guard against; a re-run of the same
+# year's file re-derives the identical value, same reasoning already
+# documented on this file's DO UPDATE semantics elsewhere.
 
 
 # ── Internal ──────────────────────────────────────────────────────────────

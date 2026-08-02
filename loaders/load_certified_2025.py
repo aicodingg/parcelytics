@@ -84,12 +84,19 @@ def load_prop_txt(conn, cert_dir):
     parcel_rows = []
     unit_rows = []
     total = 0
+    # Task M5-PERYEAR-GEOID: built as a side-effect of this same PROP.TXT
+    # read (no second file read) -- this IS the 2025 real, as-of-2025
+    # account assignment for every prop_id, needed by load_prop_ent_txt()
+    # below since PROP_ENT.TXT itself carries no geo_id field at all.
+    pid_to_geo = {}
 
     for rec in ears_format.iter_prop_records(path):
         parcel_rows.append((rec["geo_id"], rec["prop_id"], rec["prop_type_cd"],
                              rec["owner_id"], rec["owner_name"]))
         unit_rows.append((rec["prop_id"], rec["geo_id"], rec["prop_type_cd"], None,
                            rec["owner_id"], rec["owner_name"], TAX_YEAR, TAX_YEAR))
+        if rec["prop_id"] and rec["geo_id"]:
+            pid_to_geo[rec["prop_id"]] = rec["geo_id"]
 
         if len(parcel_rows) >= 5000:
             _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows)
@@ -101,7 +108,7 @@ def load_prop_txt(conn, cert_dir):
         total += len(parcel_rows)
 
     print(f"    → {total:,} parcels / units in {time.time()-t0:.1f}s")
-    return total
+    return total, pid_to_geo
 
 
 def _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows):
@@ -112,17 +119,28 @@ def _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows):
 
 
 # ── Step 2: PROP_ENT.TXT → prop_unit_tax_year (one row per real unit) ───────
-def load_prop_ent_txt(conn, cert_dir):
+def load_prop_ent_txt(conn, cert_dir, pid_to_geo):
     path = os.path.join(cert_dir, "PROP_ENT.TXT")
     print(f"  Loading PROP_ENT.TXT ({os.path.getsize(path)/1e9:.1f} GB)…")
     t0 = time.time()
 
     rows_to_insert = []
     total = 0
+    n_no_geo = 0
 
     for agg in ears_format.iter_prop_ent_aggregates(path):
+        # Task M5-PERYEAR-GEOID: PROP_ENT.TXT itself has no geo_id field --
+        # pid_to_geo (built from this same year's PROP.TXT in
+        # load_prop_txt(), above) is the source of the real, as-of-2025
+        # value. A prop_id present in PROP_ENT.TXT but absent from
+        # pid_to_geo (dropped/supplement-only/no-geo_id in PROP.TXT) gets
+        # geo_id=None here -- same "not every prop_id resolves" population
+        # already excluded from prop_unit itself, not a new gap.
+        geo_id = pid_to_geo.get(agg["prop_id"])
+        if geo_id is None:
+            n_no_geo += 1
         rows_to_insert.append((
-            agg["prop_id"], agg.get("year") or TAX_YEAR,
+            agg["prop_id"], agg.get("year") or TAX_YEAR, geo_id,
             agg["market_value"], agg["assessed_value"], agg["taxable_value"],
             None,  # hs_cap_loss — not derivable from PROP_ENT fields read here
             None,  # land_value — set by load_land_and_imprv()
@@ -139,7 +157,8 @@ def load_prop_ent_txt(conn, cert_dir):
         _flush_pty(conn, rows_to_insert)
         total += len(rows_to_insert)
 
-    print(f"    → {total:,} unit-year rows in {time.time()-t0:.1f}s")
+    print(f"    → {total:,} unit-year rows in {time.time()-t0:.1f}s "
+          f"({n_no_geo:,} with no resolvable geo_id)")
     return total
 
 
@@ -199,8 +218,8 @@ def load(conn):
         print(f"  WARNING: {cert_dir} not found, skipping 2025 Certified")
         return 0
 
-    load_prop_txt(conn, cert_dir)
-    load_prop_ent_txt(conn, cert_dir)
+    _, pid_to_geo = load_prop_txt(conn, cert_dir)
+    load_prop_ent_txt(conn, cert_dir, pid_to_geo)
     load_land_and_imprv(conn, cert_dir)
 
     print("  Rolling up prop_unit_tax_year → parcel_tax_year for 2025…")

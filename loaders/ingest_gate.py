@@ -331,6 +331,17 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
         # Folded the replacement COUNT(DISTINCT prop_id) into this existing
         # tax_year-scoped query (rather than firing a second one) since
         # G3 already queries prop_unit_tax_year WHERE tax_year = %s.
+        #
+        # Task M5-PERYEAR-GEOID: checked this query and G3's below against
+        # its own docstring per the brief's explicit instruction not to
+        # assume identical treatment -- NEITHER needs a change. G2 counts
+        # prop_ids (COUNT(DISTINCT prop_id)) and G3 sums market_value by
+        # prop_id/tax_year; neither one ever references geo_id at all, so
+        # the per-year-geo_id bug (old years using a later year's account
+        # number) cannot affect either check. Only G4 (which explicitly
+        # groups by geo_id, re-deriving parcel_rollup's own aggregation)
+        # and G5 (which derives its geo_id count from G4's gathered rows)
+        # are touched below.
         cur.execute(
             "SELECT SUM(market_value), COUNT(DISTINCT prop_id) "
             "FROM prop_unit_tax_year WHERE tax_year = %s",
@@ -342,12 +353,28 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
 
         # G4 inputs: independently re-derive the rollup from prop_unit_tax_year
         # and diff it against what's actually stored in parcel_tax_year.
+        #
+        # Task M5-PERYEAR-GEOID: this used to JOIN prop_unit u ON u.prop_id =
+        # y.prop_id and select ONLY u.geo_id (prop_unit's latest-known
+        # assignment) -- matching the OLD parcel_rollup.py's ROLLUP_SQL,
+        # which is exactly the mechanism this task fixes (old years' rollups
+        # silently using a LATER year's account number). Now that
+        # parcel_rollup.py itself groups by COALESCE(y.geo_id, u.geo_id)
+        # (the row's own real per-year value, falling back to prop_unit only
+        # when that's still NULL -- see parcel_rollup.py's ROLLUP_SQL comment
+        # for the full NULL-fallback rationale), G4 must gather the SAME two
+        # values and let parcel_rollup.compute_rollup() do the identical
+        # COALESCE, so this independent re-derivation actually re-derives
+        # what parcel_rollup.py now computes, not what it used to compute.
+        # LEFT JOIN (not INNER) so a row with its own y.geo_id populated is
+        # never dropped just because its prop_id has no prop_unit match.
         cur.execute("""
-            SELECT y.prop_id, u.geo_id, y.tax_year, y.market_value, y.assessed_value,
+            SELECT y.prop_id, y.geo_id AS geo_id, u.geo_id AS prop_unit_geo_id,
+                   y.tax_year, y.market_value, y.assessed_value,
                    y.taxable_value, y.hs_cap_loss, y.land_value, y.imprv_value,
                    y.exemption_codes, y.data_source
             FROM prop_unit_tax_year y
-            JOIN prop_unit u ON u.prop_id = y.prop_id
+            LEFT JOIN prop_unit u ON u.prop_id = y.prop_id
             WHERE y.tax_year = %s
         """, (tax_year,))
         g4_cols = [d[0] for d in cur.description]
@@ -372,17 +399,29 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
         # year entirely. Fixed by deriving both sides from the SAME
         # tax_year-scoped result sets G4 already fetched above, in Python,
         # rather than firing two more near-identical queries:
-        #   - distinct_geo_ids: distinct u.geo_id values across this
-        #     year's prop_unit_tax_year JOIN prop_unit rows (g4_unit_rows)
-        #     -- equivalent to `SELECT COUNT(DISTINCT u.geo_id) FROM
-        #     prop_unit_tax_year y JOIN prop_unit u ON u.prop_id=y.prop_id
-        #     WHERE y.tax_year = %s`.
+        #   - distinct_geo_ids: distinct EFFECTIVE geo_id values (this
+        #     year's own prop_unit_tax_year.geo_id, falling back to
+        #     prop_unit.geo_id only when that's NULL) across g4_unit_rows.
+        #     Task M5-PERYEAR-GEOID: updated to use the same
+        #     COALESCE(y.geo_id, u.geo_id) effective value G4/ROLLUP_SQL
+        #     now use, rather than the raw prop_unit-joined geo_id alone --
+        #     using the un-coalesced y.geo_id here would incorrectly count
+        #     legacy NULL (not-yet-backfilled) rows as "no geo_id" even
+        #     though they resolve to a real one via the fallback, and would
+        #     disagree with what G4 just verified against parcel_tax_year.
+        #     Rows where BOTH are None are excluded entirely, matching
+        #     ROLLUP_SQL's WHERE ... IS NOT NULL filter (they never make it
+        #     into parcel_tax_year, so they shouldn't count here either).
         #   - parcel_count: g4_parcel_rows is already a {geo_id: row} dict
         #     built from `parcel_tax_year WHERE tax_year = %s` -- its
         #     length is exactly `SELECT COUNT(*) FROM parcel_tax_year
         #     WHERE tax_year = %s` (one row per geo_id per year, the same
         #     one-row-per-geo_id-per-year assumption G4 already relies on).
-        distinct_geo_ids = len({row["geo_id"] for row in g4_unit_rows})
+        distinct_geo_ids = len({
+            (row["geo_id"] if row["geo_id"] is not None else row["prop_unit_geo_id"])
+            for row in g4_unit_rows
+            if row["geo_id"] is not None or row["prop_unit_geo_id"] is not None
+        })
         parcel_count = len(g4_parcel_rows)
 
     if prop_path:

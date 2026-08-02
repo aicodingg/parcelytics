@@ -154,7 +154,12 @@ def load_year(conn, year, filepath, pid_lookup):
             parcel_rows.append((geo_id, prop_id, address, legal,
                                 nbhd, state_cd1, state_cd2, owner_id))
             unit_rows.append((prop_id, geo_id, None, address, owner_id, None, year, year))
-            pty_rows.append((prop_id, year, market_val, assessed_val, None,
+            # Task M5-PERYEAR-GEOID: geo_id is already resolved above (either
+            # directly from this row's own field[6], or via pid_lookup for
+            # the 2021 no-geo_id format) -- this IS this year's real,
+            # as-of-that-year account assignment, so it's the correct value
+            # for prop_unit_tax_year.geo_id too, no separate lookup needed.
+            pty_rows.append((prop_id, year, geo_id, market_val, assessed_val, None,
                               hs_cap, None, None, None, f"ajr_{year}"))
             n_rows += 1
 

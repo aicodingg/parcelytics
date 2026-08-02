@@ -56,36 +56,31 @@ CERT_DIRS = {
 }
 
 
-# ── Step 1: PROP.TXT → prop_id → geo_id map (no `parcel` write) + prop_unit ──
-def build_pid_geo_map(cert_dir, year):
-    """
-    Read PROP.TXT and return {prop_id: geo_id} for accepted (sup_num=0,
-    has geo_id) rows via ears_format.iter_prop_records() — the shared
-    parser, not a locally re-typed copy.
-    """
-    path = os.path.join(cert_dir, "PROP.TXT")
-    print(f"  Reading PROP.TXT ({os.path.getsize(path)/1e9:.2f} GB)…")
-    t0 = time.time()
-    pid_to_geo = {}
-    for rec in ears_format.iter_prop_records(path):
-        if rec["prop_id"] and rec["geo_id"]:
-            pid_to_geo[rec["prop_id"]] = rec["geo_id"]
-    print(f"    {len(pid_to_geo):,} prop_id→geo_id mappings  [{time.time()-t0:.1f}s]")
-    return pid_to_geo
-
-
+# ── Step 1: PROP.TXT → prop_unit (+ prop_id → geo_id map, side-effect) ──────
 def load_prop_unit(conn, cert_dir, year):
     """
     Upsert prop_unit for every unit seen in this year's PROP.TXT — extends
     first_seen_year/last_seen_year via the shared PROP_UNIT_UPSERT_SQL's
     LEAST()/GREATEST(). Does NOT touch the `parcel` table.
+
+    Task M5-PERYEAR-GEOID: also builds and returns {prop_id: geo_id} for
+    every accepted row in this same PROP.TXT read (no second file read) —
+    this IS this year's real, as-of-that-year account assignment, needed
+    by load_prop_ent() below since PROP_ENT.TXT itself carries no geo_id
+    field at all. This supersedes the old build_pid_geo_map() function,
+    which was dead code (never called) that would have done a wasteful
+    SECOND full read of PROP.TXT (up to ~9.65 GB) to get the same map —
+    now deleted.
     """
     path = os.path.join(cert_dir, "PROP.TXT")
     unit_rows = []
     total = 0
+    pid_to_geo = {}
     for rec in ears_format.iter_prop_records(path):
         unit_rows.append((rec["prop_id"], rec["geo_id"], rec["prop_type_cd"], None,
                            rec["owner_id"], rec["owner_name"], year, year))
+        if rec["prop_id"] and rec["geo_id"]:
+            pid_to_geo[rec["prop_id"]] = rec["geo_id"]
         if len(unit_rows) >= BATCH_SIZE:
             with conn.cursor() as cur:
                 psycopg2.extras.execute_batch(cur, ears_format.PROP_UNIT_UPSERT_SQL, unit_rows, page_size=2000)
@@ -98,17 +93,18 @@ def load_prop_unit(conn, cert_dir, year):
         conn.commit()
         total += len(unit_rows)
     print(f"    → {total:,} prop_unit rows upserted for {year}")
-    return total
+    return total, pid_to_geo
 
 
 # ── Step 2: PROP_ENT.TXT → prop_unit_tax_year ────────────────────────────────
-def load_prop_ent(conn, cert_dir, year, data_source):
+def load_prop_ent(conn, cert_dir, year, data_source, pid_to_geo):
     path = os.path.join(cert_dir, "PROP_ENT.TXT")
     print(f"  Loading PROP_ENT.TXT ({os.path.getsize(path)/1e9:.2f} GB)…")
     t0 = time.time()
 
     rows_to_insert = []
     total = 0
+    n_no_geo = 0
 
     def commit_batch():
         nonlocal total
@@ -119,8 +115,14 @@ def load_prop_ent(conn, cert_dir, year, data_source):
         rows_to_insert.clear()
 
     for agg in ears_format.iter_prop_ent_aggregates(path):
+        # Task M5-PERYEAR-GEOID: PROP_ENT.TXT has no geo_id field -- pid_to_geo
+        # (built from this same year's PROP.TXT in load_prop_unit(), above)
+        # is the real, as-of-that-year value.
+        geo_id = pid_to_geo.get(agg["prop_id"])
+        if geo_id is None:
+            n_no_geo += 1
         rows_to_insert.append((
-            agg["prop_id"], agg.get("year") or year,
+            agg["prop_id"], agg.get("year") or year, geo_id,
             agg["market_value"], agg["assessed_value"], agg["taxable_value"],
             None, None, None,
             agg["exemption_codes"], data_source,
@@ -133,7 +135,8 @@ def load_prop_ent(conn, cert_dir, year, data_source):
     if rows_to_insert:
         commit_batch()
 
-    print(f"    → {total:,} unit-year rows upserted  [{time.time()-t0:.1f}s]")
+    print(f"    → {total:,} unit-year rows upserted  [{time.time()-t0:.1f}s] "
+          f"({n_no_geo:,} with no resolvable geo_id)")
     return total
 
 
@@ -265,8 +268,8 @@ def main():
 
     t_total = time.time()
 
-    load_prop_unit(conn, cert_dir, year)
-    load_prop_ent(conn, cert_dir, year, data_source)
+    _, pid_to_geo = load_prop_unit(conn, cert_dir, year)
+    load_prop_ent(conn, cert_dir, year, data_source, pid_to_geo)
     load_land_imprv(conn, cert_dir, year)
 
     print(f"  Rolling up prop_unit_tax_year → parcel_tax_year for {year}…")

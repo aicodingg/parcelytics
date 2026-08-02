@@ -54,9 +54,54 @@ import config  # noqa: E402  (repo-root import, same pattern as parcel_filters.p
 #    docstring for the AC8 disclosure on why, and compute_rollup() /
 #    compute_prop_id_repair() below for the hand-verified pure-Python
 #    mirror of this same logic that IS fixture-tested). ──────────────────
+#
+# Task M5-PERYEAR-GEOID: this used to GROUP BY u.geo_id (prop_unit's
+# single "latest-known" account assignment, via an inner JOIN), which
+# meant every year's rollup — including old years like 2022 — used
+# whatever geo_id was true as of the MOST RECENT year ever loaded for
+# that prop_id, not the geo_id that was actually true for the year being
+# rolled up. When TCAD reissues/replats an account between an old year
+# and now, the old year's rollup silently grouped under the wrong,
+# LATER account number. Confirmed production scale: ~1,380-1,442
+# properties/year for 2022-2024 (~4,250 total).
+#
+# Fix: GROUP BY COALESCE(y.geo_id, u.geo_id) — y.geo_id is the new,
+# real, as-of-that-year column on prop_unit_tax_year itself (populated
+# by every loader now, per this same task's Step 2). u.geo_id is kept
+# ONLY as a fallback for rows where y.geo_id is still NULL.
+#
+# NULL-fallback design decision (brief's explicit open question):
+# Fall back to prop_unit.geo_id (current behavior) rather than exclude
+# NULL-geo_id rows from the rollup entirely. Reasoning: this column is
+# being added additively (Step 1) and is only populated going forward
+# by loaders (Step 2) plus a one-time historical backfill (Step 5) that
+# runs AFTER this code ships, not atomically with it — there WILL be a
+# window, per environment, where existing prop_unit_tax_year rows have
+# geo_id = NULL until the backfill script runs. Excluding those rows
+# from the rollup during that window would make real parcels vanish
+# from parcel_tax_year (and immediately fail G1's source-conservation
+# check) the moment this code deploys, before the backfill has had a
+# chance to run — a strictly worse, more sudden regression than the
+# "old years use a possibly-later geo_id" bug being fixed here, which
+# has been silently present all along. The fallback path reintroduces
+# that exact same latest-known-geo_id behavior for a row until the
+# backfill sets its real value, then never applies again for that row
+# (the NULL only exists until it's backfilled) — a transient migration
+# safety net, not a permanent second code path.
+#
+# The join is LEFT JOIN (not INNER, as it was before) so a
+# prop_unit_tax_year row whose geo_id is already populated directly
+# (the normal case, post-backfill) is never dropped merely because its
+# prop_id happens to have no matching prop_unit row — COALESCE only
+# needs u.geo_id when y.geo_id is NULL, so a missing prop_unit row is
+# harmless once y.geo_id is real. Rows where COALESCE is still NULL
+# (no per-year value AND no prop_unit fallback) are excluded via the
+# WHERE clause — grouping them together under a NULL geo_id key would
+# silently merge unrelated properties into one bogus "NULL" parcel_tax_year
+# row, which is worse than omitting them.
 ROLLUP_SQL = """
     WITH base AS (
-        SELECT u.geo_id, y.tax_year,
+        SELECT COALESCE(y.geo_id, u.geo_id) AS geo_id, y.tax_year,
                SUM(y.market_value)   AS market_value,
                SUM(y.assessed_value) AS assessed_value,
                SUM(y.taxable_value)  AS taxable_value,
@@ -66,18 +111,20 @@ ROLLUP_SQL = """
                MIN(y.data_source)    AS data_source,
                COUNT(*)              AS unit_count
         FROM prop_unit_tax_year y
-        JOIN prop_unit u ON u.prop_id = y.prop_id
+        LEFT JOIN prop_unit u ON u.prop_id = y.prop_id
         WHERE y.tax_year = %(tax_year)s
-        GROUP BY u.geo_id, y.tax_year
+          AND COALESCE(y.geo_id, u.geo_id) IS NOT NULL
+        GROUP BY COALESCE(y.geo_id, u.geo_id), y.tax_year
     ),
     codes AS (
-        SELECT u.geo_id, y.tax_year,
+        SELECT COALESCE(y.geo_id, u.geo_id) AS geo_id, y.tax_year,
                string_agg(DISTINCT code, ',' ORDER BY code) AS exemption_codes
         FROM prop_unit_tax_year y
-        JOIN prop_unit u ON u.prop_id = y.prop_id
+        LEFT JOIN prop_unit u ON u.prop_id = y.prop_id
         LEFT JOIN LATERAL unnest(string_to_array(y.exemption_codes, ',')) AS code ON TRUE
         WHERE y.tax_year = %(tax_year)s
-        GROUP BY u.geo_id, y.tax_year
+          AND COALESCE(y.geo_id, u.geo_id) IS NOT NULL
+        GROUP BY COALESCE(y.geo_id, u.geo_id), y.tax_year
     )
     INSERT INTO parcel_tax_year
         (geo_id, tax_year, market_value, assessed_value, taxable_value,
@@ -173,10 +220,27 @@ def run(conn, tax_year=None):
 #    one must be mirrored in the other. ────────────────────────────────
 def compute_rollup(unit_rows, tax_year):
     """
-    unit_rows: iterable of dicts, each a prop_unit_tax_year row joined to
-    its prop_unit's geo_id — keys: prop_id, geo_id, tax_year, market_value,
-    assessed_value, taxable_value, hs_cap_loss, land_value, imprv_value,
-    exemption_codes, data_source.
+    unit_rows: iterable of dicts, each a prop_unit_tax_year row — keys:
+    prop_id, tax_year, geo_id, market_value, assessed_value,
+    taxable_value, hs_cap_loss, land_value, imprv_value, exemption_codes,
+    data_source, and OPTIONALLY prop_unit_geo_id.
+
+    Task M5-PERYEAR-GEOID: `geo_id` here is meant to be the row's own
+    real, as-of-that-year prop_unit_tax_year.geo_id (may be None for
+    legacy rows not yet backfilled — see ROLLUP_SQL's comment above for
+    the full NULL-fallback rationale). `prop_unit_geo_id`, if present, is
+    prop_unit's latest-known geo_id for that prop_id, used ONLY as a
+    fallback when `geo_id` is None — mirrors ROLLUP_SQL's
+    COALESCE(y.geo_id, u.geo_id). Callers with no prop_unit backing at
+    all (e.g. snapshot_2026_preliminary.py, which resolves geo_id itself
+    directly from that year's own PROP.TXT before calling this function)
+    simply omit prop_unit_geo_id — old callers unmodified need no change,
+    since `row.get(...)` is None when the key is absent, and `geo_id` is
+    already non-None for that caller's rows.
+
+    A row where BOTH geo_id and prop_unit_geo_id are None/absent is
+    excluded entirely (mirrors ROLLUP_SQL's WHERE ... IS NOT NULL filter)
+    rather than being silently grouped together under one bogus NULL key.
 
     Returns a list of dicts (one per geo_id present for `tax_year`),
     matching exactly what ROLLUP_SQL would INSERT: geo_id, tax_year,
@@ -187,7 +251,12 @@ def compute_rollup(unit_rows, tax_year):
     for row in unit_rows:
         if row["tax_year"] != tax_year:
             continue
-        groups.setdefault(row["geo_id"], []).append(row)
+        effective_geo_id = row.get("geo_id")
+        if effective_geo_id is None:
+            effective_geo_id = row.get("prop_unit_geo_id")
+        if effective_geo_id is None:
+            continue
+        groups.setdefault(effective_geo_id, []).append(row)
 
     out = []
     for geo_id, rows in groups.items():

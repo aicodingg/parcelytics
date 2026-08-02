@@ -441,9 +441,38 @@ CREATE INDEX IF NOT EXISTS idx_prop_unit_geo_id ON prop_unit(geo_id);
 -- FROM this table (SUM by geo_id) by parcel_rollup.py; nothing else may
 -- write parcel_tax_year's value columns (enforced by
 -- verify_rollup_canonical.py, §4.3 / AC5).
+--
+-- geo_id (Task M5-PERYEAR-GEOID, July 2026): this year's REAL, as-of-that-
+-- year account assignment, straight from that year's own source file --
+-- NOT prop_unit.geo_id (which is deliberately a single, latest-known
+-- value across every year a prop_id has ever been seen, guarded by
+-- PROP_UNIT_UPSERT_SQL's LEAST/GREATEST logic -- see M3-GEOID-CORRUPTION-
+-- FIX, 2026-07-29). Before this column existed, parcel_rollup.py joined
+-- prop_unit_tax_year to prop_unit to get a geo_id, which meant every
+-- year's rollup -- including old years like 2022 -- used 2026's account
+-- assignment. When TCAD reissues/replats an account between years, the
+-- old year's rollup silently grouped under the WRONG, later account
+-- number. Confirmed in production (2026-07-31): ~1,380-1,442
+-- 2022-2024 rollup rows affected per year (~4,250 total) vs. 4 for 2025
+-- and 47 for 2026 (newer years have had less time to accumulate
+-- reissues) -- not corruption (G1 source-conservation passes clean every
+-- year), just the rollup reflecting the wrong point in time's account
+-- structure.
+--
+-- Nullable, additive: existing rows (loaded before this fix) have NULL
+-- here until loaders/backfill_prop_unit_tax_year_geoid.py re-derives them
+-- from each year's real source file. parcel_rollup.py's ROLLUP_SQL falls
+-- back to prop_unit.geo_id when this column is NULL for a row (see that
+-- file's own comment for the reasoning), so this column being unbackfilled
+-- for some rows is safe, not a correctness cliff.
+--
+-- Same VARCHAR(20) width/type as prop_unit.geo_id and parcel.geo_id
+-- above -- checked schema.sql before adding this, per the brief's own
+-- instruction not to assume.
 CREATE TABLE IF NOT EXISTS prop_unit_tax_year (
     prop_id         BIGINT       NOT NULL,
     tax_year        SMALLINT     NOT NULL,
+    geo_id          VARCHAR(20),
     market_value    BIGINT,
     assessed_value  BIGINT,
     taxable_value   BIGINT,
@@ -456,6 +485,19 @@ CREATE TABLE IF NOT EXISTS prop_unit_tax_year (
 );
 
 CREATE INDEX IF NOT EXISTS idx_put_year ON prop_unit_tax_year(tax_year);
+
+-- Task M5-PERYEAR-GEOID: this table already exists in both local and
+-- production databases (loaded all week), and Postgres's CREATE TABLE IF
+-- NOT EXISTS above is a no-op against an existing table -- it does NOT
+-- reconcile column differences. This explicit ALTER TABLE is what actually
+-- adds the column to an already-existing prop_unit_tax_year when this
+-- schema.sql is re-applied (execute_schema() / loaders/db.py), matching
+-- the same pattern already used for parcel_tax_year.unit_count above.
+-- Idempotent (IF NOT EXISTS): safe to run any number of times.
+ALTER TABLE prop_unit_tax_year ADD COLUMN IF NOT EXISTS geo_id VARCHAR(20);
+-- Supports both parcel_rollup.py's new GROUP BY prop_unit_tax_year.geo_id
+-- and the backfill script's per-year UPDATE scans.
+CREATE INDEX IF NOT EXISTS idx_put_geoid_year ON prop_unit_tax_year(geo_id, tax_year);
 
 -- ingest_audit: one row per (source_tag, tax_year) loader run, written by
 -- loaders/ingest_gate.py's G1-G6 checks (§4.2). Append-only audit trail —
