@@ -417,6 +417,31 @@ CREATE INDEX IF NOT EXISTS idx_parcel_use_code_exact
 CREATE INDEX IF NOT EXISTS idx_parcel_classi_state_expr
     ON parcel (UPPER(TRIM(classi_cd)), (LEFT(UPPER(COALESCE(state_cd1, '')), 1)));
 
+-- county_snapshot() / _compute_snapshot_data() covering index (Task
+-- SNAPSHOT-PERF-1, Aug 2026). Sentry PYTHON-FLASK-7: this page's Part-4
+-- aggregate query (n_new_construction/n_risk_flagged) was timing out at
+-- 8s even with query_no_nestloop() already applied (confirmed via
+-- production EXPLAIN ANALYZE: the join plan itself was correct, all Hash
+-- Joins, no Nested Loop misjudgment -- this was a genuine I/O cost
+-- problem, not a bad-plan problem). Root cause: the query only needs
+-- geo_id and risk_large_value_jump from parcel_metrics for tax_year=2026,
+-- but no index covered that combination, forcing a full heap fetch for
+-- every matching row (Parallel Bitmap Heap Scan, confirmed via EXPLAIN
+-- ANALYZE to be 8.3s of the query's 15.2s total -- over half). This
+-- covering index lets that specific scan become an Index Only Scan
+-- (Heap Fetches: 0, confirmed), dropping that one scan from 8.3s to
+-- ~50-60ms and the whole query from 15.2s to ~6.3-6.6s (confirmed via
+-- two separate live runs). A separate partial index on `parcel` (for
+-- CANONICAL_PARCEL_EXCL's exclusion filter) was also tested and found to
+-- NOT help -- only ~8% of parcel rows are excluded by that filter, too
+-- small a fraction for a partial index to pay off -- built, measured, and
+-- dropped; not included here. Remaining query time is a genuine full scan
+-- of the parcel table (~517K rows) to build the join; ~1.4-1.7s of real
+-- margin remains under the 8s timeout, not further reduced as of this
+-- writing.
+CREATE INDEX IF NOT EXISTS idx_parcel_metrics_year_risk_covering
+    ON parcel_metrics (tax_year) INCLUDE (geo_id, risk_large_value_jump);
+
 -- Task PEER-SET-PERF-2 (Aug 2026): round-2 fix for api_peer_set's Tier 2/3
 -- QueryCanceled bug (Sentry PYTHON-FLASK-6). Round 1's confirmed-live
 -- regression (a MATERIALIZED CTE rewrite that measured 16.4s -- WORSE than
