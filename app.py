@@ -995,6 +995,52 @@ def build_document_sources(parcel, history, current, entity_detail, delinquent):
             "link": None, "link_label": None,
         })
 
+    # Task JOHNNY-FEEDBACK-1 (Aug 2026) -- two external, county-run tools
+    # Johnny (real user, Instagram DM 2026-07-24) asked for, added here
+    # rather than as new UI elements: this panel is the existing pattern
+    # for "external, county-sourced link" on this page. Both are general,
+    # unconditional TOOLS (not per-parcel DATA this page's own numbers came
+    # from), so badge/badge_label are None -- same convention already used
+    # above for satellite imagery, the one existing row that's also a tool
+    # rather than a data feed.
+    #
+    # Both URLs verified live before adding (2026-08-02):
+    #   - CAD map: confirmed loading, and confirmed NOT to support
+    #     parcel-specific deep-linking -- it's a pure client-side SPA whose
+    #     URL never changes regardless of what's searched inside it (no
+    #     query params, no hash routing). Copy below says exactly that,
+    #     rather than implying a direct link to this parcel.
+    #   - Deed portal: confirmed loading (real "Official Records Search"
+    #     page, Travis County Clerk). Investigated whether its Quick
+    #     Search supports a URL parameter that pre-fills the owner-name
+    #     search (repeated live attempts: typed input, native-setter +
+    #     dispatched input/change events, ref-based and coordinate-based
+    #     clicks, Enter-key submission, and direct network-request
+    #     inspection for any XHR/fetch call the form might issue) --
+    #     COULD NOT get the live Quick Search form to execute a search at
+    #     all in this session (zero network requests fired on submit, URL
+    #     never changed), so no prefill parameter could be confirmed
+    #     working. Per this task's own explicit instruction not to guess at
+    #     a URL parameter without confirming it live, this falls back to
+    #     the plain search portal link -- copy below is explicit that this
+    #     is a general search tool the user completes themselves.
+    sources.append({
+        "name": "Open County Interactive Map",
+        "provides": "TCAD's own interactive parcel map — search by address, owner name, Property ID, or Geo ID once there",
+        "coverage": "Opens the county's map tool itself, not this specific parcel — confirmed live that the map has no way to link directly to one parcel; you'll need to search once you're there",
+        "badge": None, "badge_label": None,
+        "link": "https://travis.prodigycad.com/maps",
+        "link_label": "Travis Central Appraisal District — Interactive Map (opens in a new tab)",
+    })
+    sources.append({
+        "name": "Search Deed History (Travis County Clerk)",
+        "provides": "Free, official search of recorded documents — deeds, liens, and other land records",
+        "coverage": "General search tool, not indexed by parcel — deed records are indexed by grantor/grantee name and document number, not by geo_id, so search using this parcel's owner name shown above",
+        "badge": None, "badge_label": None,
+        "link": "https://travis.tx.publicsearch.us",
+        "link_label": "Travis County Clerk — Official Records Search (opens in a new tab)",
+    })
+
     return sources
 
 
