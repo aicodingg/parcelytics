@@ -25,7 +25,7 @@ from tax_logic.texas import estimate_homestead_savings as _tx_hs_savings
 from tax_logic.texas import derive_2026_baseline as _derive_2026_baseline
 from tax_logic.classify import property_type_label, label_case_sql, label_sort_case_sql
 from loaders.scrape_billing_history import fetch_html, parse_receipts, upsert_billing_rows, HTTP_OK
-from parcel_filters import CANONICAL_PARCEL_EXCL, peer_state_cd1_match_sql
+from parcel_filters import CANONICAL_PARCEL_EXCL, peer_state_cd1_match_sql, exclude_non_real_property_gap_sql
 import search_logic
 
 _BILLING_TARGET_YEARS  = {2021, 2022, 2023, 2024}
@@ -3956,9 +3956,39 @@ def _compute_snapshot_data(view):
     # CANONICAL_PARCEL_EXCL (see its docstring above), so snapshot_neighborhood()
     # reuses the exact same constant rather than a second copy of this
     # literal. Applied uniformly below to every query in this function —
-    # the rows/totals merge, the Part 4 aggregate query, and the
-    # neighborhoods query.
-    canonical_excl = CANONICAL_PARCEL_EXCL
+    # confirmed directly (Task SNAPSHOT-CORRECTNESS-1, Aug 2026), not
+    # assumed from this comment alone: the breakdown query, BOTH
+    # _single_year_mv_totals() calls (2025 and 2026), the Part 4 aggregate,
+    # the status_2026/cert_agg query, and the neighborhoods query all
+    # reference this one `canonical_excl` variable — five distinct query
+    # bodies, not the three this comment names (a separate, pre-existing
+    # inaccuracy in this comment, left as-is — not this task's scope to
+    # correct).
+    #
+    # L-class (Business Personal Property) fix (Task SNAPSHOT-CORRECTNESS-1,
+    # Aug 2026): measured live, 2025 county-wide total included 205
+    # state_cd1='L' parcels worth $9,969,617,448 (2.52% of the computed
+    # total) — CANONICAL_PARCEL_EXCL does not exclude 'L' (see
+    # parcel_filters.py's NON_REAL_PROPERTY_GAP_CLASSES comment for the full
+    # investigation, from Task AGGPRECOMP-1-FIX), and this function's own
+    # _snapshot_taxonomy_sql() has no bucket for state_cd1='L' rows whose
+    # classi_cd doesn't land in Retail/Industrial/Office/Hotel — they fall
+    # through to 'Other' and get counted in the GROUPING SETS grand total
+    # via this same WHERE clause. Fixed here, at this one assignment point,
+    # by combining CANONICAL_PARCEL_EXCL with the already-built-and-tested
+    # exclude_non_real_property_gap_sql() helper (parcel_filters.py) —
+    # deliberately NOT folded into CANONICAL_PARCEL_EXCL itself, which
+    # would silently change /api/benchmark's and /parcels's live results
+    # too, without being asked (same reasoning as Task AGGPRECOMP-1-FIX's
+    # own report). Scoped to this function only.
+    #
+    # NOTE (flagged, not fixed here — out of this task's stated scope):
+    # snapshot_neighborhood() (below) does NOT go through this variable —
+    # it references CANONICAL_PARCEL_EXCL directly (see its own query,
+    # "{CANONICAL_PARCEL_EXCL}"), so it still has this same L-class
+    # contamination in its neighborhood drill-down listing/pagination.
+    # Diego should decide whether that's a follow-up task.
+    canonical_excl = CANONICAL_PARCEL_EXCL + f" AND ({exclude_non_real_property_gap_sql('p.state_cd1')})"
 
     # Part 1 performance fix — full history, corrected as later rounds
     # falsified earlier hypotheses:
