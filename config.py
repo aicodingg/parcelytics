@@ -53,6 +53,16 @@ CERT_DIR_2023 = os.path.join(DATA_DIR, "2023_Certified_Export")
 CERT_DIR_2024 = os.path.join(DATA_DIR, "2024_Certified_Export")
 CERT_DIR_2026 = os.path.join(DATA_DIR, "2026_Certified_Export")
 PRELIM_2026_DIR = os.path.join(DATA_DIR, "2026 Preliminary Appraisal Export Supp 0_06092026 (1)")
+
+# ── Raw Vault (DATA_LIFECYCLE.md Stage 0 / Phase 1 backfill, Aug 2026) ──────
+# vault/{county}/{year}/{source}/{date}/ per the lifecycle doc's own
+# convention. Colocated with DATA_DIR (same disk as the source files today)
+# rather than inside the parcel_app git repo -- see vault_backfill.py's
+# module docstring for why raw, multi-GB source exports do not belong in a
+# git-tracked source repo. Meant to eventually also live at an offsite
+# backup location (DATA_LIFECYCLE.md Stage 0: "local plus the offsite
+# backup location") -- that second copy is not built by this brief.
+VAULT_DIR = os.path.join(DATA_DIR, "vault")
 TAX_CUR_CSV  = os.path.join(DATA_DIR, "TaxCurOpenData (1).csv")
 TAX_DELQ_CSV = os.path.join(DATA_DIR, "TaxDelqOpenData.csv")
 TAX_RATES_XL = os.path.join(DATA_DIR, "2025RatesHistory1990-2025.xlsx")
