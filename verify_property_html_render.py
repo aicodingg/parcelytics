@@ -211,10 +211,9 @@ def build_bill_waterfall_mock(reset=False):
 
 def _load_real_app_functions():
     """
-    Extract build_tax_calendar(), build_document_sources(),
-    combine_confidence_tiers(), CERTIFIED_TIER_DATA_SOURCES, and
-    _row_confidence() straight from app.py's own source (July 2026 Cowork
-    briefs: Tax Calendar/Documents & Sources panel, and the AJR/historical-
+    Extract build_tax_calendar(), combine_confidence_tiers(),
+    CERTIFIED_TIER_DATA_SOURCES, and _row_confidence() straight from app.py's
+    own source (July 2026 Cowork briefs: Tax Calendar, and the AJR/historical-
     year confidence-tiering fix) via the same slice-and-exec technique
     already used to isolate-test them this session -- app.py can't be
     imported directly here (Flask/psycopg2 aren't installed in this
@@ -222,15 +221,14 @@ def _load_real_app_functions():
     exercises the REAL function bodies rather than hand-typed mocks that
     could silently drift from what app.py actually returns.
 
-    build_document_sources() now calls _row_confidence() and
-    combine_confidence_tiers() internally (July 2026 fix) -- both are
-    defined much later in app.py (~line 3894/3991, well after
-    build_document_sources' own ~line 566) but that's fine: exec'd function
-    bodies resolve free variables against `ns` (their __globals__) at CALL
-    time, not def time, so as long as all three names are in `ns` before
-    _build_document_sources() is actually invoked, order-of-definition
-    within this loader doesn't matter -- only order-of-slicing to find each
-    def's own end boundary does.
+    JOHNNY-FEEDBACK-2 Part 2: build_document_sources() and the Documents &
+    Sources panel it fed were removed from app.py and property.html this
+    round (Diego's decluttering pass) -- this loader no longer slices or
+    execs that function; the old ("\ndef build_tax_calendar",
+    "\ndef build_document_sources") / ("\ndef build_document_sources",
+    "\ndef generate_property_narrative") marker pair collapsed into one
+    ("\ndef build_tax_calendar", "\ndef generate_property_narrative") slice
+    covering the same real source range minus the deleted function.
     """
     src = open(os.path.join(os.path.dirname(__file__), "app.py")).read()
     from tax_logic.classify import property_type_label, label_case_sql, label_sort_case_sql
@@ -255,8 +253,7 @@ def _load_real_app_functions():
         ("\ndef build_insights", "\ndef build_bill_waterfall"),
         ("\ndef build_projections", "\ndef build_tax_calendar"),
         ("\nTAX_DELQ_EXPORT_DATE = date(", "\ndef build_insights"),
-        ("\ndef build_tax_calendar", "\ndef build_document_sources"),
-        ("\ndef build_document_sources", "\ndef generate_property_narrative"),
+        ("\ndef build_tax_calendar", "\ndef generate_property_narrative"),
         ("\ndef combine_confidence_tiers", "\nCERTIFIED_TIER_DATA_SOURCES = frozenset("),
         ("\nCERTIFIED_TIER_DATA_SOURCES = frozenset(", "\ndef _row_confidence"),
         ("\ndef _row_confidence", "\n@app.route(\"/api/search_filter\")"),
@@ -264,11 +261,11 @@ def _load_real_app_functions():
         start = src.index(start_marker)
         end = src.index(next_marker, start)
         exec(src[start:end], ns)
-    return (ns["build_tax_calendar"], ns["build_document_sources"], ns["_row_confidence"],
+    return (ns["build_tax_calendar"], ns["_row_confidence"],
             ns["TAX_DELQ_EXPORT_DATE"], ns["build_projections"], ns["build_insights"])
 
 
-(_build_tax_calendar, _build_document_sources, _row_confidence, _TAX_DELQ_EXPORT_DATE,
+(_build_tax_calendar, _row_confidence, _TAX_DELQ_EXPORT_DATE,
  _build_projections, _build_insights) = _load_real_app_functions()
 
 
@@ -453,7 +450,6 @@ def base_context(mode="homeowner", with_waterfall=True, residential=True, waterf
     # confirmed earlier this session (July 16, 2026).
     _today = __import__("datetime").date(2026, 7, 16)
     tax_calendar = _build_tax_calendar(_today, current_2026, delinquent)
-    doc_sources = _build_document_sources(parcel, history, current, entity_detail, delinquent)
 
     return dict(
         parcel=parcel,
@@ -469,7 +465,6 @@ def base_context(mode="homeowner", with_waterfall=True, residential=True, waterf
         current=current,
         current_2026=current_2026,
         tax_calendar=tax_calendar,
-        doc_sources=doc_sources,
         entity_detail=entity_detail,
         delinquent=delinquent,
         delinquent_export_date=_TAX_DELQ_EXPORT_DATE,
@@ -542,19 +537,21 @@ def confidence_tier_context(mode, source_prefix, anomaly_year=None):
     CERTIFIED_TIER_DATA_SOURCES, app.py). The 2025 "current" row is also
     set to the real "certified" data_source (base_context()'s default
     doesn't cover this either) so the top "Property-level confidence
-    badges" block's own certified-tier branch gets exercised too, alongside
-    doc_sources' AJR row -- confirming the anomaly check stays scoped to
-    the specific year it applies to and doesn't leak into 2025's separate
-    badge.
+    badges" block's own certified-tier branch gets exercised too.
 
     anomaly_year: if given (2021-2024), that single year's assessed_value
     is pushed $5,000 above its own market_value -- the real per-record
     AV>MV signal _row_confidence() now checks -- while every other year
     stays clean, so the resulting scenario isolates exactly one flagged
-    year against three clean ones (matching combine_confidence_tiers()'s
-    weakest-link behavior: one Partial year should demote the whole
-    doc_sources AJR row to Partial, but must NOT touch the 2025 badge or
-    the OTHER three years' own anomaly icons).
+    year against three clean ones. Checked via the Value History table's
+    per-row "!" anomaly icon (check_value_history_anomaly_icons) --
+    JOHNNY-FEEDBACK-2 Part 2 removed the Documents & Sources panel this
+    scenario used to also check (its AJR row's own combined-tier badge,
+    via the now-removed check_doc_sources_ajr_badge()); that surface no
+    longer exists anywhere on the page after that removal -- see this
+    round's final report for the honest disclosure of what that means for
+    AJR confidence visibility (the per-row icon, Investor-mode-only, is now
+    the only surviving surface for this signal; Homeowner mode has none).
     """
     ctx = base_context(mode, with_waterfall=True, residential=True)
     ctx["current"]["data_source"] = "certified"
@@ -563,12 +560,6 @@ def confidence_tier_context(mode, source_prefix, anomaly_year=None):
             r["data_source"] = f"{source_prefix}_{r['tax_year']}"
             if r["tax_year"] == anomaly_year:
                 r["assessed_value"] = r["market_value"] + 5000
-    # doc_sources was already built once inside base_context(), off the
-    # unmodified history -- rebuild it for real off the now-overridden
-    # rows, same call signature property_detail() (app.py) uses.
-    ctx["doc_sources"] = _build_document_sources(
-        ctx["parcel"], ctx["history"], ctx["current"], ctx["entity_detail"], ctx["delinquent"]
-    )
     return ctx
 
 
@@ -636,39 +627,81 @@ def check_top_appraisal_badge(html, label, expect_text):
     return True
 
 
-def check_doc_sources_ajr_badge(html, label, expect_badge_label, expect_coverage_substr=None):
+def check_helpful_links(html, label, mode):
     """
-    Confidence-tiering fix (July 2026) regression guard: the Documents &
-    Sources panel's AJR row (build_document_sources(), app.py) now computes
-    a real per-year combined tier instead of a hardcoded "Partial" -- checks
-    the rendered badge text in that row matches what this scenario's
-    data_source/anomaly setup should produce, and (optionally) that the
-    coverage cell's flagged-year annotation is present/absent as expected.
+    JOHNNY-FEEDBACK-2 Part 1 regression guard: the county GIS map link must
+    be present in Helpful Links for BOTH modes (Homeowner's existing card,
+    Investor's new one). The deed-search link (travis.tx.publicsearch.us)
+    was removed from Investor's card in round 2 of this brief (per Diego:
+    deed info is reachable via the "View this property on TCAD" deep link
+    already in the same card, so a separate deed-search tool isn't needed)
+    -- must be absent in BOTH modes now, not just never-added in Homeowner.
+
+    Round 3 (per Diego): Protest your property value / Pay your property
+    taxes / Contact TCAD must be present in BOTH modes -- Homeowner already
+    had all three; Investor's card gained them in this round, reusing the
+    exact same URLs verbatim. Homeowner's fourth link ("Apply for a
+    homestead exemption") is deliberately excluded from this check since
+    it's gated on is_residential in Homeowner and was never added to
+    Investor (no equivalent gate there, not requested) -- checking for it
+    unconditionally in both modes would be wrong.
     """
-    # "Annual Jurisdiction Roll (AJR)" alone is NOT a safe anchor -- it also
-    # appears in the Value History card's static footer prose ("2021–2024
-    # values — Texas Comptroller Annual Jurisdiction Roll (AJR)."), which
-    # renders BEFORE this panel and has no badge of its own; html.find()
-    # would latch onto that first occurrence and silently check the wrong
-    # spot. Anchor on the Documents & Sources card header first, then search
-    # for the AJR row within that panel only.
-    panel_idx = html.find("Documents &amp; Sources")
-    if panel_idx == -1:
-        print(f"FAIL [{label}] Documents & Sources panel not found in rendered output")
-        return False
-    marker = "Annual Jurisdiction Roll (AJR)"
-    idx = html.find(marker, panel_idx)
-    if idx == -1:
-        print(f"FAIL [{label}] Documents & Sources AJR row not found within the panel")
-        return False
-    window = html[idx:idx + 700]
-    if f">{expect_badge_label}<" not in window:
-        print(f"FAIL [{label}] Documents & Sources AJR badge does not show expected {expect_badge_label!r}")
-        return False
-    if expect_coverage_substr is not None and expect_coverage_substr not in window:
-        print(f"FAIL [{label}] Documents & Sources AJR coverage text missing expected substring {expect_coverage_substr!r}")
-        return False
-    return True
+    ok = True
+    if "https://travis.prodigycad.com/maps" not in html:
+        print(f"FAIL [{label}] Helpful Links: county GIS map URL not found")
+        ok = False
+    if "https://travis.tx.publicsearch.us" in html:
+        print(f"FAIL [{label}] Helpful Links: deed search URL unexpectedly present -- "
+              f"removed from Helpful Links in JOHNNY-FEEDBACK-2 round 2 (per Diego)")
+        ok = False
+    for url, name in (
+        ("https://traviscad.org/protests", "Protest your property value"),
+        ("https://tax-office.traviscountytx.gov", "Pay your property taxes"),
+        ("https://traviscad.org/contact", "Contact TCAD"),
+    ):
+        if url not in html:
+            print(f"FAIL [{label}] Helpful Links: '{name}' URL ({url}) not found")
+            ok = False
+    return ok
+
+
+def check_prelim_cert_comparison_card(html, label, mode, snapshot_present,
+                                       expect_market_prelim=None, expect_market_cert=None):
+    """
+    JOHNNY-FEEDBACK-2 Part 4 regression guard: the "2026: Preliminary ->
+    Certified" comparison card. Investor mode's version already existed
+    (M4-2026-PRELIM-SNAPSHOT Part 3); this checks Homeowner mode's new
+    counterpart renders with its plain-language header, and that BOTH
+    modes' cards correctly branch between the real comparison table
+    (snapshot row exists) and the honest "not available" fallback (no
+    snapshot row) -- the same data-honesty requirement in both modes.
+    """
+    ok = True
+    header = "Your 2026 Value: Preliminary" if mode == "homeowner" else "2026: Preliminary"
+    if header not in html:
+        print(f"FAIL [{label}] expected comparison card header containing {header!r} not found")
+        ok = False
+    if snapshot_present:
+        if "2026 Preliminary" not in html or "2026 Certified" not in html:
+            print(f"FAIL [{label}] expected comparison table column headers not found")
+            ok = False
+        if expect_market_prelim is not None:
+            v = "${:,.0f}".format(expect_market_prelim)
+            if v not in html:
+                print(f"FAIL [{label}] expected preliminary market value {v!r} not found")
+                ok = False
+        if expect_market_cert is not None:
+            v = "${:,.0f}".format(expect_market_cert)
+            if v not in html:
+                print(f"FAIL [{label}] expected certified market value {v!r} not found")
+                ok = False
+    else:
+        fallback = ("Preliminary value not available for your home" if mode == "homeowner"
+                     else "Preliminary value not available for this parcel")
+        if fallback not in html:
+            print(f"FAIL [{label}] expected fallback text {fallback!r} not found")
+            ok = False
+    return ok
 
 
 def check_value_history_anomaly_icons(html, label, expect_years_with_icon):
@@ -949,6 +982,10 @@ def run():
             _bl = ctx.get("bench_label")
             _is_res = (not _bl) or _bl == "Residential"
             ok = check_possessive_voice(html, label, _is_res) and ok
+        # JOHNNY-FEEDBACK-2 Part 1: every scenario here already covers both
+        # modes, so reuse this loop for the Helpful Links check too rather
+        # than a separate scenario list.
+        ok = check_helpful_links(html, label, ctx.get("mode")) and ok
 
         if ok:
             print(f"PASS [{label}]")
@@ -1540,15 +1577,15 @@ def run():
     confidence_scenarios = [
         ("confidence: cert_202x, no anomaly (investor)",
          confidence_tier_context("investor", "cert", anomaly_year=None),
-         "Appraisal: 2025 Certified", "Verified", None, set()),
+         "Appraisal: 2025 Certified", set()),
         ("confidence: ajr_202x, no anomaly (homeowner)",
          confidence_tier_context("homeowner", "ajr", anomaly_year=None),
-         None, "Verified", None, None),
+         None, None),
         ("confidence: cert_202x, 2023 trips AV>MV (investor)",
          confidence_tier_context("investor", "cert", anomaly_year=2023),
-         "Appraisal: 2025 Certified", "Partial", "2023 flagged", {2023}),
+         "Appraisal: 2025 Certified", {2023}),
     ]
-    for label, ctx, expect_top, expect_ajr_badge, expect_coverage_substr, expect_anomaly_years in confidence_scenarios:
+    for label, ctx, expect_top, expect_anomaly_years in confidence_scenarios:
         try:
             html = tmpl.render(**ctx)
         except Exception as e:
@@ -1559,7 +1596,6 @@ def run():
         ok = check_no_leaked_delimiters(html, label)
         if expect_top is not None:
             ok = check_top_appraisal_badge(html, label, expect_top) and ok
-        ok = check_doc_sources_ajr_badge(html, label, expect_ajr_badge, expect_coverage_substr) and ok
         if expect_anomaly_years is not None:
             ok = check_value_history_anomaly_icons(html, label, expect_anomaly_years) and ok
 
@@ -1998,6 +2034,50 @@ def run():
     except Exception as e:
         print(f"FAIL [{single_label}] render raised {type(e).__name__}: {e}")
         all_ok = False
+
+    # ── JOHNNY-FEEDBACK-2 Part 4: 2026 Preliminary -> Certified comparison
+    # card, now in Homeowner mode too ────────────────────────────────────
+    # Verified generic before building this: prelim_2026_snapshot and
+    # is_2026_certified are both computed once in property_detail()
+    # (app.py), unconditional on mode -- confirmed by reading that function
+    # directly, not assumed. base_context()'s default fixture has
+    # is_2026_certified=False (2026 row's data_source is the placeholder
+    # "taxcur_current", not a real certified-tier value) and
+    # prelim_2026_snapshot=None, so both need overriding here to exercise
+    # the card at all.
+    print()
+    print("── JOHNNY-FEEDBACK-2 Part 4: 2026 Preliminary -> Certified comparison card ──")
+
+    def _prelim_cert_ctx(mode, with_snapshot):
+        ctx = base_context(mode, with_waterfall=True, residential=True)
+        ctx["current_2026"]["data_source"] = "cert_2026"  # real CERTIFIED_TIER_DATA_SOURCES member
+        ctx["is_2026_certified"] = True
+        ctx["prelim_2026_snapshot"] = (
+            {"market_value": 480000, "assessed_value": 452000, "taxable_value": 452000,
+             "land_value": 144000, "imprv_value": 336000, "exemption_codes": None, "unit_count": 1}
+            if with_snapshot else None
+        )
+        return ctx
+
+    # base_context()'s default 2026 market_value fixture is 505000 -- used
+    # as the "certified" figure below since these scenarios don't override it.
+    prelim_cert_scenarios = [
+        ("prelim->cert: homeowner, snapshot present", _prelim_cert_ctx("homeowner", True), "homeowner", True, 480000, 505000),
+        ("prelim->cert: investor, snapshot present", _prelim_cert_ctx("investor", True), "investor", True, 480000, 505000),
+        ("prelim->cert: homeowner, snapshot absent (fallback)", _prelim_cert_ctx("homeowner", False), "homeowner", False, None, None),
+        ("prelim->cert: investor, snapshot absent (fallback)", _prelim_cert_ctx("investor", False), "investor", False, None, None),
+    ]
+    for label, ctx, mode, snap_present, exp_prelim, exp_cert in prelim_cert_scenarios:
+        try:
+            html = tmpl.render(**ctx)
+        except Exception as e:
+            print(f"FAIL [{label}] render raised {type(e).__name__}: {e}")
+            all_ok = False
+            continue
+        ok = check_no_leaked_delimiters(html, label)
+        ok = check_prelim_cert_comparison_card(html, label, mode, snap_present, exp_prelim, exp_cert) and ok
+        print(f"{'PASS' if ok else 'FAIL'} [{label}]")
+        all_ok = all_ok and ok
 
     return all_ok
 

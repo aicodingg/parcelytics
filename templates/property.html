@@ -277,70 +277,6 @@
     {% endif %}
     {% endfor %}
   </div>
-  <div class="card-footer text-muted small">
-    Statutory Travis County annual property-tax calendar — Tax Code §23.01 (valuation), §41.44 (protest deadline);
-    see TCAD's <a href="https://traviscad.org/propertytaxsystem/" target="_blank" rel="noopener noreferrer">Property Tax System ↗</a>
-    and the Travis County Tax Office's <a href="https://tax-office.traviscountytx.gov/properties/taxes/truth-in-taxation-summary" target="_blank" rel="noopener noreferrer">Truth in Taxation Summary ↗</a>
-    for full citations (also on the <a href="/info">Info</a> page). "Notices Mailed" and "Protest Deadline" show the
-    general statutory window — this parcel's own notice-mailed date isn't in Parcelytics' dataset, so it isn't shown as if it were.
-  </div>
-</div>
-{% endif %}
-{% endmacro %}
-
-{# ── Documents & Sources audit-trail panel — shared macro (July 2026 Cowork
-   brief, item 3) ────────────────────────────────────────────────────────
-   Structural template reused, not redesigned: About page's existing
-   "Two government sources. Zero aggregators." table (templates/about.html,
-   Source / What it provides / Coverage columns, same badge-verified /
-   badge-preliminary / badge-partial classes). This is the per-parcel
-   version of that same table -- doc_sources (app.py, build_document_sources())
-   only lists sources genuinely used for THIS geo_id, so the row count and
-   coverage years vary parcel to parcel rather than repeating the same
-   static list every time. Defined here (before the mode split, same
-   reasoning as tax_calendar_strip() above), called from both modes near
-   the bottom of the page (an audit trail reads naturally as a closing
-   section, not a top-of-page element competing with the Tax Calendar/KPI
-   cards for attention) -- see each call site's own comment. #}
-{% macro document_sources_panel(doc_sources) %}
-{% if doc_sources %}
-<div class="card mb-4">
-  <div class="card-header">Documents &amp; Sources</div>
-  <div class="card-body p-0">
-    <div class="table-responsive">
-      <table class="table table-stack mb-0">
-        <thead class="table-light small text-muted text-uppercase">
-          <tr>
-            <th style="width:30%">Source</th>
-            <th style="width:38%">What it provides</th>
-            <th style="width:20%">Coverage for this parcel</th>
-            <th style="width:12%">Confidence</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for s in doc_sources %}
-          <tr>
-            <td data-label="Source" class="fw-semibold">
-              {% if s.link %}<a href="{{ s.link }}" target="_blank" rel="noopener noreferrer" title="{{ s.link_label }}">{{ s.name }} ↗</a>{% else %}{{ s.name }}{% endif %}
-            </td>
-            <td data-label="What it provides">{{ s.provides }}</td>
-            <td data-label="Coverage for this parcel">{{ s.coverage }}</td>
-            <td data-label="Confidence">
-              {% if s.badge == 'verified' %}<span class="badge-verified">{{ s.badge_label }}</span>
-              {% elif s.badge == 'partial' %}<span class="badge-partial">{{ s.badge_label }}</span>
-              {% elif s.badge == 'preliminary' %}<span class="badge-preliminary">{{ s.badge_label }}</span>
-              {% elif s.badge == 'estimated' %}<span class="badge-estimated">{{ s.badge_label }}</span>
-              {% else %}<span class="text-muted" style="font-size:11px;">—</span>{% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <div class="card-footer text-muted small">
-    Every data row above is a real source that fed this specific parcel's page — not a static list; sources that don't apply to this parcel (e.g. no delinquency on file) are simply omitted rather than shown empty. The county tool links (interactive map, deed search) are the same for every parcel — general research tools, not this parcel's own data sources. See the <a href="/about">About page</a> for the site-wide summary of these same sources.
-  </div>
 </div>
 {% endif %}
 {% endmacro %}
@@ -371,11 +307,11 @@
    chart visualizes -- only exists in Investor mode). Diego asked for the
    identical chart/threshold in Homeowner mode too, same round, with only
    the framing changed. Converted to a shared macro here -- same pattern as
-   tax_calendar_strip()/document_sources_panel() above, and for the same
-   reason: this must be defined before line 277's mode split, not inside
-   either branch, or a call site in the OTHER branch (or one earlier in the
-   same branch) hits Jinja's document-order execution issue already found
-   and fixed for those two macros.
+   tax_calendar_strip() above, and for the same reason: this must be
+   defined before line 277's mode split, not inside either branch, or a
+   call site in the OTHER branch (or one earlier in the same branch) hits
+   Jinja's document-order execution issue already found and fixed for that
+   macro.
 
    `is_residential` isn't in scope here (it's a Homeowner-branch-only
    `{% set %}`, never computed in Investor mode), so it's passed in
@@ -940,6 +876,109 @@
   </div>
 </div>
 
+{# ── 2026: Preliminary → Certified comparison (JOHNNY-FEEDBACK-2 Part 4,
+   July 2026) ─────────────────────────────────────────────────────────────
+   Homeowner-mode counterpart to Investor mode's "2026: Preliminary →
+   Certified" card (M4-2026-PRELIM-SNAPSHOT Part 3, Investor branch below --
+   see that card's own comment for the original data-honesty writeup). Same
+   underlying data, same gating, no new query:
+     - prelim_2026_snapshot and is_2026_certified are both computed once in
+       property_detail() (app.py), unconditional on mode, and were already
+       being passed into this branch's render_template() call before this
+       card existed -- confirmed by reading property_detail() directly, not
+       assumed. No Homeowner-specific data gap.
+     - Same gating as Investor's card (is_2026_certified and current_2026):
+       nothing to compare while this parcel's live 2026 row is still itself
+       the preliminary value.
+     - Same data-honesty requirement: a real labeled gap when this parcel
+       has no snapshot row, never a blank/zero/assumed value.
+   Placed right after the 2025/2026 KPI card row closes, before the
+   Bill-Change Waterfall -- the natural "how did my 2026 number move"
+   follow-up to the KPI cards just above, same relationship Investor mode's
+   card has to ITS "Current & Preliminary Values" table just above it.
+   Copy reframed into Homeowner mode's plain-language, second-person voice
+   (is_residential swap, same convention as the KPI cards above) rather than
+   reusing Investor's denser table labels verbatim -- content, fields, and
+   gating are otherwise unchanged from Investor's version. #}
+{% if is_2026_certified and current_2026 %}
+<div class="card mb-4">
+  <div class="card-header">
+    {% if is_residential %}Your 2026 Value: Preliminary → Certified{% else %}This Property's 2026 Value: Preliminary → Certified{% endif %}
+    <span class="text-muted" style="font-size:11px; font-weight:400;">how {% if is_residential %}your{% else %}this property's{% endif %} 2026 value moved since the June 9, 2026 preliminary notice</span>
+  </div>
+  {% if prelim_2026_snapshot %}
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead class="table-light small text-muted text-uppercase">
+          <tr>
+            <th style="width:22%"></th>
+            <th class="text-end" style="width:26%;">
+              2026 Preliminary
+              <span class="badge-preliminary ms-1" style="font-size:9.5px;">Preliminary</span>
+            </th>
+            <th class="text-end" style="width:26%;">
+              2026 Certified
+              <span class="badge-verified ms-1" style="font-size:9.5px;">Certified</span>
+            </th>
+            <th class="text-end" style="width:26%;">Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th class="text-muted fw-normal small ps-3">{% if is_residential %}What your home is worth{% else %}What this property is worth{% endif %}</th>
+            <td class="text-end">
+              {% if prelim_2026_snapshot.market_value %}${{ "{:,.0f}".format(prelim_2026_snapshot.market_value) }}
+              {% else %}<span class="na-cell">—</span>{% endif %}
+            </td>
+            <td class="text-end">
+              {% if current_2026.market_value %}<span class="primary-value">${{ "{:,.0f}".format(current_2026.market_value) }}</span>
+              {% else %}<span class="na-cell">—</span>{% endif %}
+            </td>
+            <td class="text-end">
+              {% if prelim_2026_snapshot.market_value and current_2026.market_value %}
+                {% set _d = current_2026.market_value - prelim_2026_snapshot.market_value %}
+                {% set _dp = (_d / prelim_2026_snapshot.market_value * 100) if prelim_2026_snapshot.market_value else none %}
+                <span class="fw-semibold" style="color:var(--accent);">{{ "{:+,.0f}".format(_d) }}{% if _dp is not none %} ({{ "{:+.1f}%".format(_dp) }}){% endif %}</span>
+              {% else %}<span class="na-cell">—</span>{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th class="text-muted fw-normal small ps-3">{% if is_residential %}What your home will be taxed on{% else %}What this property will be taxed on{% endif %}</th>
+            <td class="text-end">
+              {% if prelim_2026_snapshot.taxable_value %}${{ "{:,.0f}".format(prelim_2026_snapshot.taxable_value) }}
+              {% else %}<span class="na-cell">—</span>{% endif %}
+            </td>
+            <td class="text-end">
+              {% if current_2026.est_taxable_2026 %}<span class="primary-value">${{ "{:,.0f}".format(current_2026.est_taxable_2026) }}</span>
+              {% else %}<span class="na-cell">—</span>{% endif %}
+            </td>
+            <td class="text-end">
+              {% if prelim_2026_snapshot.taxable_value and current_2026.est_taxable_2026 %}
+                {% set _dt = current_2026.est_taxable_2026 - prelim_2026_snapshot.taxable_value %}
+                {% set _dtp = (_dt / prelim_2026_snapshot.taxable_value * 100) if prelim_2026_snapshot.taxable_value else none %}
+                <span class="fw-semibold" style="color:var(--accent);">{{ "{:+,.0f}".format(_dt) }}{% if _dtp is not none %} ({{ "{:+.1f}%".format(_dtp) }}){% endif %}</span>
+              {% else %}<span class="na-cell">—</span>{% endif %}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card-footer text-muted small">
+    Preliminary from TCAD's June 9, 2026 export; certified from TCAD's July 25, 2026 certified appraisal roll — final, not subject to change.
+    Taxable-value comparison uses the same homestead-cap-aware figure shown elsewhere on this page, not TCAD's raw preliminary/certified export value.
+  </div>
+  {% else %}
+  <div class="card-body">
+    <p class="text-muted small mb-0">
+      Preliminary value not available for {% if is_residential %}your home{% else %}this property{% endif %}. {% if is_residential %}Your home{% else %}This property{% endif %} may not have existed yet as of the June 9, 2026 preliminary export, or its preliminary snapshot hasn't been loaded — the certified value above is still accurate.
+    </p>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 {# ── Bill-Change Waterfall: MOVED (July 2026, per Diego's "Property Page
    Polish Round" item 6) — Homeowner mode has no literal "Property Details"
    card (that's Investor-mode-only markup), so this was relocated to the
@@ -1013,7 +1052,15 @@
        available: https://travis.prodigycad.com/property-detail/<prop_id>/<year>.
        Mapping confirmed by live-navigating the actual TCAD portal for 3 known
        parcels (see Property Info card comment for full mapping detail).
-       Falls back to the generic property-search page when prop_id is missing. #}
+       Falls back to the generic property-search page when prop_id is missing.
+       Open County Interactive Map (JOHNNY-FEEDBACK-2 Part 1a, relocated from
+       the now-removed Documents & Sources panel -- JOHNNY-FEEDBACK-1's
+       original placement, commit 37735a3): same honest copy (confirmed live
+       this round: travis.prodigycad.com/maps is a client-side SPA with no
+       parcel-specific deep-linking), added as a second line in this same
+       bordered footer rather than a new UI element, right below the
+       parcel-specific TCAD deep link above -- both are "go look at TCAD"
+       links, this one just isn't scoped to this one parcel. #}
     <div class="mt-2 pt-2" style="font-size:12px; border-top:1px solid var(--border, #e5e7eb);">
       {% if parcel.prop_id %}
       <a href="https://travis.prodigycad.com/property-detail/{{ parcel.prop_id }}/2026"
@@ -1024,6 +1071,10 @@
          target="_blank" rel="noopener noreferrer"
          style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on TCAD ↗</a>
       {% endif %}
+      <br>
+      <a href="https://travis.prodigycad.com/maps" target="_blank" rel="noopener noreferrer"
+         title="Opens the county's map tool itself, not this specific parcel — the map has no way to link directly to one parcel"
+         style="color:var(--accent, #94B0DA); text-decoration:none;">Open County Interactive Map ↗</a>
     </div>
   </div>
 </div>
@@ -1568,8 +1619,6 @@
     Headlines via Google News. Links open the original source in a new tab.
   </div>
 </div>
-
-{{ document_sources_panel(doc_sources) }}
 
 {% else %}
 {# ── Back link ───────────────────────────────────────────────────────── #}
@@ -2157,29 +2206,14 @@
               <td>{{ parcel.neighborhood_cd or "—" }}</td></tr>
         </tbody>
       </table>
-      {# Direct TCAD property-detail link — shown on every parcel page, both modes.
-         Deep-links via parcel.prop_id (TCAD's internal short numeric ID) when
-         available: https://travis.prodigycad.com/property-detail/<prop_id>/<year>.
-         Mapping confirmed by live-navigating the actual TCAD portal for 3 known
-         parcels: prop_id 100008 → geo_id 0100030105 (1201 S Lamar Blvd), prop_id
-         100012 → geo_id 0100030109 (1219 S Lamar Blvd), prop_id 961801 → geo_id
-         0284460113 (19365 Wilke Ln) — all three matched exactly on the portal's
-         displayed "Geographic ID" field. The year segment does not need to match
-         any specific year shown elsewhere on this page: /2026 and /2025 against
-         the same prop_id returned the identical full Value History table, only
-         the page's Status label changed — so a fixed current year is safe here.
-         Falls back to the generic property-search page when prop_id is missing. #}
-      <div class="mt-2" style="font-size:12px;">
-        {% if parcel.prop_id %}
-        <a href="https://travis.prodigycad.com/property-detail/{{ parcel.prop_id }}/2026"
-           target="_blank" rel="noopener noreferrer"
-           style="color:var(--accent, #94B0DA); text-decoration:none;">View this property on TCAD ↗</a>
-        {% else %}
-        <a href="https://traviscad.org/propertysearch/"
-           target="_blank" rel="noopener noreferrer"
-           style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on TCAD ↗</a>
-        {% endif %}
-      </div>
+      {# Direct TCAD property-detail link — MOVED (JOHNNY-FEEDBACK-2 Part 1b,
+         Diego's decluttering pass) into the new Helpful Links card at the
+         bottom of this column, alongside the county GIS map and deed-search
+         links -- this table is parcel attribute data, not a link hub, and
+         Homeowner mode already treats this same link as a "helpful link,"
+         not a property attribute. See that card's own comment for the full
+         mapping-verification writeup (prop_id -> geo_id, 3 known parcels)
+         and the reasoning for moving rather than duplicating this link. #}
     </div>
   </div>
 
@@ -2349,6 +2383,69 @@
            style="flex:1 1 auto; min-height:320px; width:100%; padding:20px; border-radius:0 0 8px 8px;">
         <div style="font-size:14px; font-weight:600; margin-bottom:4px;">Satellite image not available</div>
         <div style="font-size:12px; max-width:280px;">We couldn't locate this property on the map — this can happen for parcels whose address our geocoder can't confidently match.</div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Helpful Links (JOHNNY-FEEDBACK-2 Part 1b, July 2026) ─────────────────
+     New card, Investor mode — no equivalent existed here before (Homeowner
+     mode has had one since earlier this project). Two general county tool
+     links added per Johnny's (real user) feedback, same honest copy already
+     verified live and shipped to Homeowner mode's own Helpful Links card
+     (see that card's own comment, Homeowner branch above, for the full
+     live-verification writeup behind both URLs -- not re-verified twice,
+     same two URLs, same session).
+     Also surfaces the property-detail deep link (parcel.prop_id -> TCAD's
+     property-detail page) that used to live ONLY inside the Property Info
+     card just above, buried at the bottom of an attributes table -- MOVED
+     here, not duplicated, now that this card exists to hold it. Judgment
+     call, disclosed per the brief's own open question: Homeowner mode
+     already treats this identical link as a "helpful link," not a property
+     attribute, so for parity (and because this whole brief is about
+     decluttering, not adding a second copy of the same link in two places)
+     it's moved rather than left in both spots.
+     Placed at the end of this column (after Satellite View) rather than
+     competing for space higher up: this column has 3-4 cards total against
+     the right column's much longer stack (Insight Report, News, Improvement
+     Detail, Bill Changed, Estimator), so one more compact card here narrows
+     that height gap instead of creating blank space -- checked this
+     column's real content before picking a spot, not guessed.
+     Round 3 (per Diego): added Protest your property value / Pay your
+     property taxes / Contact TCAD -- the same three general-action links
+     Homeowner mode's own Helpful Links card has always had (see that
+     card's markup, Homeowner branch above, for the identical URLs/copy;
+     reused verbatim, not re-verified twice). Deliberately NOT adding
+     Homeowner's fourth link, "Apply for a homestead exemption" -- that one
+     is gated on is_residential there because a homestead exemption can't
+     legally apply to non-residential property, and Investor mode has no
+     is_residential concept to gate it on (Diego didn't ask for it either;
+     flagging the omission here rather than silently deciding either way). #}
+  <div class="card mb-4"><div class="card-header">Helpful Links</div>
+    <div class="card-body">
+      {# Deed search link removed (per Diego, round 2 of this brief): deed
+         info is available via the "View this property on TCAD" deep link
+         just below, so a separate deed-search tool isn't needed here. #}
+      <div class="row" style="font-size:14px; line-height:2;">
+        <div class="col-sm-6">
+          <a href="https://traviscad.org/protests" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a><br>
+          <a href="https://travis.prodigycad.com/maps" target="_blank" rel="noopener noreferrer"
+             title="Opens the county's map tool itself, not this specific parcel — the map has no way to link directly to one parcel">Open County Interactive Map ↗</a>
+        </div>
+        <div class="col-sm-6">
+          <a href="https://tax-office.traviscountytx.gov" target="_blank" rel="noopener noreferrer">Pay your property taxes ↗</a><br>
+          <a href="https://traviscad.org/contact" target="_blank" rel="noopener noreferrer">Contact TCAD ↗</a>
+        </div>
+      </div>
+      <div class="mt-2 pt-2" style="font-size:12px; border-top:1px solid var(--border, #e5e7eb);">
+        {% if parcel.prop_id %}
+        <a href="https://travis.prodigycad.com/property-detail/{{ parcel.prop_id }}/2026"
+           target="_blank" rel="noopener noreferrer"
+           style="color:var(--accent, #94B0DA); text-decoration:none;">View this property on TCAD ↗</a>
+        {% else %}
+        <a href="https://traviscad.org/propertysearch/"
+           target="_blank" rel="noopener noreferrer"
+           style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on TCAD ↗</a>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -2873,11 +2970,6 @@
           <div style="font-weight:700;">{% if parcel.year_built %}{{ parcel.year_built }}{% else %}<span class="na-cell">Not Available</span>{% endif %}</div>
         </div>
       </div>
-      <div class="text-muted mb-1" style="font-size:10.5px; line-height:1.5;">
-        TCAD's page also shows Class CD, Exterior Wall, Number of Units, and EFF Year Built per component, plus an
-        "Improvement Features" block (Foundation, Roof Style, Roof Covering, etc.) — not in Parcelytics' current
-        dataset (see footer), so left out here rather than guessed.
-      </div>
 
       {# Default-expand fix (July 2026, per Diego — confirmed live): this table
          used to load collapsed, requiring a click to reveal — which also made
@@ -2928,12 +3020,6 @@
           </table>
         </div>
       </details>
-    </div>
-    <div class="card-footer text-muted" style="font-size:10.5px;">
-      Source: TCAD Improvement Detail Records. ✓ included in Gross Building Area · ✗ excluded
-      (site improvement, SF-measured attribute, or unconfirmed "Sketch Only"). Component list is aggregated by
-      component code across the whole parcel — TCAD's own per-improvement (imp_id) grouping and wall/roof/
-      foundation attribute data are not captured by Parcelytics' current loader.
     </div>
   </div>
   <style>
@@ -3933,39 +4019,6 @@
         </table>
       </div>
     </div>
-    <div class="card-footer text-muted small">
-      {# Coherence fix (July 2026, per Fable review finding 4, wave 2): "(Verified)"
-         here described the APPRAISAL export only, but sits directly under a table
-         whose own Source column uses "Verified"/"Partial" to mean BILLING
-         confidence — the same word, two different domains, right next to each
-         other. Reworded to "(Appraisal: Certified)" so it can't be misread as a
-         billing claim; each row's own Source column is still the place to check
-         that row's billing confidence. #}
-      <strong>Data sources:</strong>
-      2025 — TCAD Certified Appraisal Export (Appraisal: Certified — this describes property value data, not tax billing; see each row's Source column above for billing confidence).
-      2021–2024 values — Texas Comptroller Annual Jurisdiction Roll (AJR).
-      2021–2024 tax — sourced directly from Travis County Tax Office billing records (Verified); this is a comprehensive countywide billing load, not a rate-based estimate or portal receipt. See the "2021–24 billing" badge above for this specific parcel's coverage.
-      {% if _has_2026 %}{% if is_2026_certified %}2026 — TCAD Certified Appraisal Export (Certified — final, not subject to change).{% else %}2026 — TCAD Preliminary Export, June 9, 2026 (Preliminary — subject to change until July 25, 2026 certification).{% endif %}{% endif %}
-      {# Ambiguity fix (July 2026, per Fable review P0-2): "Billing detail is
-         only available for 2025" sat directly under a sentence saying
-         2021-2024 billing is Verified -- reading as a flat contradiction.
-         Checked before rewording (not guessed): tax_billing_entity genuinely
-         HAS per-entity 2021-2024 rows in the database (confirmed in app.py,
-         property_detail()'s entity_detail_prev query comment -- real data
-         from this session's PIR loader work), so "entity-level billing
-         detail available 2025 only" would overclaim in the wrong direction
-         if read as a data-availability statement. What's actually true and
-         intended: the 2021-2024 TOTALS are Verified (stated just above);
-         this PAGE's per-entity breakdown table is a 2025-only display
-         feature, not a reflection of what data exists. Worded as a display
-         statement ("shown ... for 2025"), not a data-availability claim, to
-         stay accurate either way. #}
-      The totals above are what's Verified for 2021–2024. This page's per-entity billing breakdown (the "2025 Tax by Entity" table) is shown for 2025 only.
-      <span class="badge-data-anomaly" title="AV > MV flag" style="margin-left:6px;">!</span> = assessed value exceeds market value in source data — known AJR data quality issue.
-      "Value Limitation Adj" is the same homestead-cap deduction shown in the Current Values panel, computed per
-      year as Market − Assessed. TCAD's own page also shows "Special Use Land Market" and "Special Use Exclusion" —
-      not in Parcelytics' dataset, so they're omitted here rather than shown as $0 (see Current Values panel note).
-    </div>
   </div>
 
   {# ── Value Trend chart RELOCATED (July 2026, Small Polish Batch item 5a,
@@ -4465,32 +4518,6 @@
         </table>
       </div>
     </div>
-    <div class="card-footer text-muted small">
-      <strong>These are illustrative scenarios, not statistical confidence ranges.</strong>
-      ¹ {{ proj_baseline or "Based on 2021–2025 certified trend" }}.
-      {# Window disclosure fix (July 2026, per Fable review P1-10): "rate
-         trend" named WHAT feeds the Base/High bands' rate assumption but not
-         WHAT WINDOW it's computed over -- unlike the value CAGR just above,
-         whose window is stated via proj_baseline. avg_rate_change (app.py,
-         build_projections()) is computed from rate_history, which is always
-         queried BETWEEN 2021 AND 2025 (a fixed 5-year window, confirmed in
-         that query) -- not tunable per parcel, so this can be stated as a
-         constant rather than a template variable. #}
-      <strong>Low</strong>: CAGR −2 pp, rates flat.
-      <strong>Base</strong>: historical CAGR + rate trend (avg YoY change, 2021–2025).
-      <strong>High</strong>: CAGR +2 pp, rates trend ×1.5.
-      Actual values set by TCAD appraisal and taxing budgets each year.
-      {# Literal formula (July 2026, item 5) -- see the ⓘ next to the card
-         title above for the same text as a hover tooltip; kept here too as
-         the primary, always-visible copy. #}
-      <br><strong>Formula</strong> (per year <em>i</em> = 1–5 years ahead of the baseline year above):
-      Market Value = Base Market × (1 + CAGR)<sup>i</sup>.
-      Assessed Value = min(Base Assessed × 1.10<sup>i</sup>, Market Value) if this parcel carries a homestead cap, else = Market Value.
-      Rate = max(0%, Current Combined Rate + Avg. Annual Rate Change × band multiplier × i).
-      Est. Tax = Assessed Value × Rate ÷ 100.
-      Band multiplier: Low = 0 (flat rates), Base = 1.0, High = 1.5.
-      CAGR: Base = observed value CAGR over the baseline window; Low = max(−5%, Base − 2 pp); High = Base + 2 pp.
-    </div>
   </div>
   {% endif %}
 
@@ -4662,27 +4689,6 @@
         </table>
       </div>
     </div>
-    <div class="card-footer text-muted small">
-      Benchmark figures for the <span id="benchFooterType">{{ bench_label }}</span> group.
-      Bottom 25% / Median / Top 25% = 25th, 50th, 75th percentiles of county market values.
-      Use Code filter runs a live query — count shown reflects actual records for the selected group.
-      {# Coherence fix (July 2026, per Fable review finding 4, wave 2): "Verified"
-         without qualification, on a page that also uses "Verified" to mean
-         billing confidence elsewhere, invites misreading -- this entire card is
-         appraisal/value data only (no billing content), so it's labeled
-         explicitly as such. #}
-      {# Confidence-tier fix (July 2026, per Diego's "Fix AJR/Historical-Year
-         Confidence Tiering" brief): this line used to assert AJR 2021-2024
-         data is uniformly "Partial confidence" -- a blanket claim that
-         predates, and now contradicts, the real per-record tiering
-         _row_confidence() computes (96.35% of 2021-2024 parcel-years have
-         no AV>MV anomaly and are genuinely Verified; see this brief's own
-         investigation phase for the count). Found during this round's call-
-         site sweep -- Diego didn't name this line directly, but it's the
-         same class of independent hardcoded copy the brief asked to find.
-         Reworded to state the real rule instead of a fixed outcome. #}
-      2021–2024 values from the Texas Comptroller Annual Jurisdiction Roll (AJR) — TCAD's own certified data (Appraisal: Verified, unless a specific year's assessed value exceeds market value, in which case that year shows Partial; see the Value &amp; Tax History table above for any flagged years). 2025 from Certified Export (Appraisal: Certified).
-    </div>
   </div>
   {% endif %}
 
@@ -4792,8 +4798,6 @@
 </div>{# /col-12 full-width tables #}
 </div>{# /row full-width #}
 
-{{ document_sources_panel(doc_sources) }}
-
 {% endif %}{# /mode == investor #}
 
 {% endblock %}
@@ -4809,10 +4813,9 @@
    same runtime-null-check pattern already used for the Satellite View
    script just below. Placed in the shared/unconditional area (not inside
    either mode's own `{% if %}` scripts branch) for the same reason
-   tax_calendar_strip()/document_sources_panel() had to move to the shared
-   markup area: a script written inside one mode's branch isn't available
-   when the OTHER mode's page renders, and this chart can now appear on
-   either. Declares its own local `_gapHistory` from `history` rather than
+   tax_calendar_strip() had to move to the shared markup area: a script
+   written inside one mode's branch isn't available when the OTHER mode's
+   page renders, and this chart can now appear on either. Declares its own local `_gapHistory` from `history` rather than
    reusing the page-wide `historyData` name Investor mode's other charts
    declare further down in their own `{% if %}` branch -- avoids any
    collision between this unconditional declaration and that branch's own,
