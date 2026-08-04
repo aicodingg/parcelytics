@@ -763,3 +763,125 @@ CREATE TABLE IF NOT EXISTS group_stats (
 CREATE TABLE IF NOT EXISTS group_stats_shadow (
     LIKE group_stats INCLUDING ALL
 );
+
+-- ── Tier 1 summary tables (Task AGGPRECOMP-2, Step 2 of
+-- SPEC_AGGREGATE_PRECOMPUTATION.md) ─────────────────────────────────────────
+-- Every real, distinct computation _compute_snapshot_data() (app.py) used to
+-- run LIVE on every /snapshot request, now precomputed here by
+-- loaders/refresh_snapshot_summary.py and swapped in the same shadow-table-
+-- then-atomic-swap pattern group_stats already established (Step 1). Same
+-- three non-negotiable properties from the spec: provenance-stamped
+-- (source_import_batch_id, refreshed_at, both referencing load_batch --
+-- see AGGPRECOMP-1 above), a real staleness assertion
+-- (assert_snapshot_summary_fresh() in the refresh script), and no live
+-- fallback -- if these tables are missing/stale, the route shows an honest
+-- "data temporarily unavailable" state instead of ever falling back to the
+-- old live queries (which is exactly the timeout class this migration
+-- exists to retire).
+--
+-- Grain: `view` is one of the 11 real /snapshot ?view= values (see
+-- snapshot_taxonomy.py's _SNAPSHOT_VALID_VIEWS -- "overall", the 8 new
+-- sector tabs, "other", and the legacy "commercial" deep link). Refreshed
+-- for ALL 11 views on every run, not just whichever ones happen to be
+-- requested live -- the whole point of Tier 1 is that "which view a user
+-- clicks" no longer decides whether a query runs.
+
+-- snapshot_breakdown: one row per (view, ptype) -- the per-property-type/
+-- subtype breakdown _compute_snapshot_data()'s `rows` used to hold. Stored
+-- UNCAPPED (every real ptype the GROUP BY produced) -- the top-N-plus-
+-- rollup capping (_cap_subtype_rows() in app.py, SNAPSHOT_SUBTYPE_CAP=7)
+-- stays a READ-TIME operation over these already-small, already-precomputed
+-- rows (cheap Python sort/slice, not a live DB aggregate), same as before.
+-- total_mv25_b/total_mv26_b already reflect the INNER JOIN suppression fix
+-- (each year's dollar total computed independently, not from the paired
+-- 2025+2026 join) -- that merge is refresh-time logic now, not read-time.
+CREATE TABLE IF NOT EXISTS snapshot_breakdown (
+    view                      VARCHAR(20)  NOT NULL,
+    ptype                     VARCHAR(120) NOT NULL,
+    sort_key                  VARCHAR(10),            -- "1".."9"/"99" for overall; == ptype for other views
+
+    n_parcels                 INTEGER      NOT NULL DEFAULT 0,
+    n_up                      INTEGER      NOT NULL DEFAULT 0,
+    n_down                    INTEGER      NOT NULL DEFAULT 0,
+    n_flat                    INTEGER      NOT NULL DEFAULT 0,
+    median_pct                NUMERIC(7,2),
+    p25_pct                   NUMERIC(7,2),
+    p75_pct                   NUMERIC(7,2),
+    total_mv25_b               NUMERIC(14,3),
+    total_mv26_b               NUMERIC(14,3),
+
+    source_import_batch_id    BIGINT       NOT NULL,
+    refreshed_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (view, ptype)
+);
+
+CREATE TABLE IF NOT EXISTS snapshot_breakdown_shadow (
+    LIKE snapshot_breakdown INCLUDING ALL
+);
+
+-- snapshot_totals: one row per view -- the grand-total row (formerly the
+-- GROUPING SETS "ptype IS NULL" row), PLUS the three other one-row-per-view
+-- aggregates _compute_snapshot_data() used to compute as separate live
+-- queries (Part 4's new_construction_count/risk_flagged_count, and the
+-- cert_agg query's n_preliminary/n_total that derives status_2026). Combined
+-- into one table since they share the identical grain -- fewer tables for
+-- the same real computations, not a change in what's computed. A view with
+-- genuinely zero qualifying parcels (totals=None in the old code) simply has
+-- NO ROW here -- the read side treats "no row for this view" as the
+-- existing "no data" template branch, distinct from "table missing/stale
+-- entirely" (the new error state this migration adds). status_2026 itself
+-- ("certified"/"preliminary"/"mixed"/"none") is NOT stored -- it's a pure,
+-- trivial derivation from n_preliminary_2026/n_total_2026 (three-line
+-- if/elif, not aggregation), computed at read time same as parcel_list()'s
+-- and snapshot_neighborhood()'s own already-Python-side status_2026 derivations.
+CREATE TABLE IF NOT EXISTS snapshot_totals (
+    view                      VARCHAR(20)  NOT NULL PRIMARY KEY,
+
+    n_total                   INTEGER,
+    n_up                      INTEGER,
+    n_down                    INTEGER,
+    n_flat                    INTEGER,
+    median_pct                NUMERIC(7,2),
+    total_mv25_b               NUMERIC(14,3),
+    total_mv26_b               NUMERIC(14,3),
+
+    new_construction_count    INTEGER      NOT NULL DEFAULT 0,
+    risk_flagged_count        INTEGER      NOT NULL DEFAULT 0,
+    n_preliminary_2026        INTEGER      NOT NULL DEFAULT 0,
+    n_total_2026               INTEGER      NOT NULL DEFAULT 0,
+
+    source_import_batch_id    BIGINT       NOT NULL,
+    refreshed_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS snapshot_totals_shadow (
+    LIKE snapshot_totals INCLUDING ALL
+);
+
+-- snapshot_neighborhood_movers: one row per (view, neighborhood_cd) that
+-- clears the existing HAVING COUNT(*) >= 10 threshold (applied AT REFRESH
+-- TIME, inside the aggregation query -- a real filter on which groups are
+-- statistically meaningful enough to publish, not a read-time nicety, so it
+-- belongs in the refresh function per the spec's own "aggregation logic
+-- lives only inside refresh functions" discipline). Every qualifying
+-- neighborhood is stored, not just the eventual top/bottom 5 -- picking the
+-- top 5 by median_pct DESC and bottom 5 ASC is a cheap read-time sort/slice
+-- over what's typically a few dozen rows per view, identical to what
+-- _compute_snapshot_data() did with the live query's full result set before.
+CREATE TABLE IF NOT EXISTS snapshot_neighborhood_movers (
+    view                      VARCHAR(20)  NOT NULL,
+    neighborhood_cd           VARCHAR(20)  NOT NULL,
+
+    n_parcels                 INTEGER      NOT NULL,
+    median_pct                NUMERIC(7,2),
+
+    source_import_batch_id    BIGINT       NOT NULL,
+    refreshed_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (view, neighborhood_cd)
+);
+
+CREATE TABLE IF NOT EXISTS snapshot_neighborhood_movers_shadow (
+    LIKE snapshot_neighborhood_movers INCLUDING ALL
+);

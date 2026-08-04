@@ -26,13 +26,31 @@ dedup). The intended consumers, confirmed by tracing every real (non-
 comment) usage of CANONICAL_PARCEL_EXCL / CANONICAL_PARCEL_EXCL_BARE /
 peer_state_cd1_match_sql in the codebase:
 
+  UPDATE, Task AGGPRECOMP-2 (Aug 2026): app.py :: _compute_snapshot_data(view)
+  was REWIRED to read precomputed summary tables instead of running any live
+  query -- it no longer references CANONICAL_PARCEL_EXCL at all (removed
+  from CANONICAL_EXCL_CONSUMERS below, and this checker now explicitly
+  asserts it stays that way -- see check_snapshot_data_no_longer_duplicates_
+  exclusion_logic()). The exclusion logic that used to live inside that
+  function moved, in full, to loaders/refresh_snapshot_summary.py's five
+  SQL-builder functions (breakdown_sql, single_year_mv_sql, part4_agg_sql,
+  cert_agg_sql, neighborhoods_sql), which reference the module-level
+  CANONICAL_EXCL constant -- itself built from CANONICAL_PARCEL_EXCL +
+  exclude_non_real_property_gap_sql(), the exact same fix this task
+  originally applied. That's a one-level indirection (constant, not a
+  wrapper function call) -- see KNOWN_MODULE_CONSTANT_INDIRECTIONS below,
+  the constant-indirection sibling of KNOWN_WRAPPER_INDIRECTIONS.
+
   CANONICAL_PARCEL_EXCL family (county-wide dollar/percentile totals):
-    app.py :: _compute_snapshot_data(view)      -- /snapshot (Market Snapshot)
     app.py :: snapshot_neighborhood(code)        -- /snapshot/neighborhood/<code>
     app.py :: api_benchmark()                    -- /api/benchmark
     app.py :: parcel_list()                      -- /parcels (drill-through)
     loaders/compute_metrics.py :: compute_county_benchmarks()  -- county_benchmark loader,
         via CANONICAL_PARCEL_EXCL_BARE / _exclude_clause()
+    loaders/refresh_snapshot_summary.py :: breakdown_sql() / single_year_mv_sql() /
+        part4_agg_sql() / cert_agg_sql() / neighborhoods_sql()  -- Tier 1 summary
+        refresh for /snapshot (AGGPRECOMP-2), via the module-level CANONICAL_EXCL
+        constant
 
   peer_state_cd1_match_sql() family (property-detail peer-matching widgets):
     app.py :: api_peer_benchmark_local(geo_id)    -- /api/peer_benchmark_local/<geo_id>
@@ -77,11 +95,15 @@ SKIP_DIRS = {".git", "node_modules", "task_staging", "__pycache__", "uploads"}
 
 # ── Intended consumers (determined by direct code reading, see docstring) ──
 CANONICAL_EXCL_CONSUMERS = [
-    ("app.py", "_compute_snapshot_data", "CANONICAL_PARCEL_EXCL"),
     ("app.py", "snapshot_neighborhood", "CANONICAL_PARCEL_EXCL"),
     ("app.py", "api_benchmark", "CANONICAL_PARCEL_EXCL"),
     ("app.py", "parcel_list", "CANONICAL_PARCEL_EXCL"),
     ("loaders/compute_metrics.py", "compute_county_benchmarks", "CANONICAL_PARCEL_EXCL_BARE"),
+    ("loaders/refresh_snapshot_summary.py", "breakdown_sql", "CANONICAL_PARCEL_EXCL"),
+    ("loaders/refresh_snapshot_summary.py", "single_year_mv_sql", "CANONICAL_PARCEL_EXCL"),
+    ("loaders/refresh_snapshot_summary.py", "part4_agg_sql", "CANONICAL_PARCEL_EXCL"),
+    ("loaders/refresh_snapshot_summary.py", "cert_agg_sql", "CANONICAL_PARCEL_EXCL"),
+    ("loaders/refresh_snapshot_summary.py", "neighborhoods_sql", "CANONICAL_PARCEL_EXCL"),
 ]
 
 PEER_MATCH_CONSUMERS = [
@@ -93,7 +115,16 @@ PEER_MATCH_CONSUMERS = [
 IMPORT_REQUIREMENTS = {
     "app.py": {"CANONICAL_PARCEL_EXCL", "peer_state_cd1_match_sql"},
     "loaders/compute_metrics.py": {"CANONICAL_PARCEL_EXCL_BARE"},
+    "loaders/refresh_snapshot_summary.py": {"CANONICAL_PARCEL_EXCL"},
 }
+
+# app.py :: _compute_snapshot_data(view) is DELIBERATELY absent from
+# CANONICAL_EXCL_CONSUMERS above (Task AGGPRECOMP-2, Aug 2026) -- it no
+# longer runs any live query at all, so it has nothing to reference. This
+# constant names it explicitly so check_snapshot_data_no_longer_duplicates_
+# exclusion_logic() can assert the negative directly, rather than that
+# absence being silent/unverified.
+_MIGRATED_AWAY_FROM_LIVE_EXCLUSION = ("app.py", "_compute_snapshot_data")
 
 FAILURES = []
 
@@ -197,6 +228,24 @@ KNOWN_WRAPPER_INDIRECTIONS = {
     ("loaders/compute_metrics.py", "compute_county_benchmarks"): "_exclude_clause",
 }
 
+# Sibling of KNOWN_WRAPPER_INDIRECTIONS above, for the different shape of
+# indirection loaders/refresh_snapshot_summary.py's 5 query-builder
+# functions use (Task AGGPRECOMP-2, Aug 2026): they reference a MODULE-
+# LEVEL CONSTANT (CANONICAL_EXCL), not a wrapper FUNCTION CALL. Verified
+# real, not assumed: `python3 -c "import loaders.refresh_snapshot_summary as
+# rss; assert 'CANONICAL_PARCEL_EXCL' in ... "` during this task's own build
+# confirmed CANONICAL_EXCL's assignment line genuinely includes
+# CANONICAL_PARCEL_EXCL (see test_snapshot_correctness_1.py's
+# test_canonical_excl_assignment_includes_l_exclusion(), updated the same
+# task, for the ongoing regression check of that assignment).
+KNOWN_MODULE_CONSTANT_INDIRECTIONS = {
+    ("loaders/refresh_snapshot_summary.py", "breakdown_sql"): "CANONICAL_EXCL",
+    ("loaders/refresh_snapshot_summary.py", "single_year_mv_sql"): "CANONICAL_EXCL",
+    ("loaders/refresh_snapshot_summary.py", "part4_agg_sql"): "CANONICAL_EXCL",
+    ("loaders/refresh_snapshot_summary.py", "cert_agg_sql"): "CANONICAL_EXCL",
+    ("loaders/refresh_snapshot_summary.py", "neighborhoods_sql"): "CANONICAL_EXCL",
+}
+
 
 def check_excl_consumers_reference_canonical(files_override=None):
     problems = []
@@ -225,10 +274,46 @@ def check_excl_consumers_reference_canonical(files_override=None):
             if wrapper_body is not None and _non_comment_occurrences(wrapper_body, symbol) > 0:
                 continue  # satisfied via documented wrapper indirection
 
+        # No direct reference, no wrapper-function indirection -- check for
+        # a documented MODULE-CONSTANT indirection instead: the consumer's
+        # body references a named module-level constant, and that constant's
+        # own top-level assignment line (anywhere in the same file) actually
+        # references the canonical symbol.
+        const_name = KNOWN_MODULE_CONSTANT_INDIRECTIONS.get((relpath, func_name))
+        if const_name and _non_comment_occurrences(body, const_name) > 0:
+            const_m = re.search(rf"^{re.escape(const_name)}\s*=\s*(.+)$", src, re.MULTILINE)
+            if const_m is not None and symbol in const_m.group(1):
+                continue  # satisfied via documented module-constant indirection
+
         problems.append((relpath, func_name, f"no real-code reference to {symbol}"))
     passed = len(problems) == 0
     detail = f"{len(CANONICAL_EXCL_CONSUMERS) - len(problems)}/{len(CANONICAL_EXCL_CONSUMERS)} consumers verified"
     return passed, detail, problems
+
+
+def check_snapshot_data_no_longer_duplicates_exclusion_logic(files_override=None):
+    """
+    Task AGGPRECOMP-2's negative assertion: app.py's _compute_snapshot_data()
+    must NOT re-derive its own canonical_excl-shaped WHERE fragment now that
+    it reads precomputed summary tables -- if a future edit accidentally
+    reintroduced a live query with its own copy of this exclusion logic
+    inside this function, that would be exactly the kind of silently
+    reintroduced duplicate-implementation risk this whole checker exists to
+    catch, just inside the one function this task deliberately emptied out.
+    """
+    relpath, func_name = _MIGRATED_AWAY_FROM_LIVE_EXCLUSION
+    src = _read(relpath, files_override)
+    if src is None:
+        return False, f"{relpath} not found", [(relpath, func_name, "file not found")]
+    body = _extract_function_body(src, func_name)
+    if body is None:
+        return False, f"{func_name} not found in {relpath}", [(relpath, func_name, "function not found")]
+    if "CANONICAL_PARCEL_EXCL" in body or "canonical_excl" in body:
+        problem = [(relpath, func_name,
+                    "still references CANONICAL_PARCEL_EXCL/canonical_excl -- should read "
+                    "precomputed summary tables instead, per AGGPRECOMP-2")]
+        return False, "0/1 verified -- unexpected re-duplication found", problem
+    return True, "1/1 verified -- no live exclusion logic re-duplicated", []
 
 
 def check_peer_match_consumers_reference_canonical(files_override=None):
@@ -346,6 +431,7 @@ def main():
     checks = [
         ("Import requirements (CANONICAL_PARCEL_EXCL[_BARE], peer_state_cd1_match_sql)", check_import_requirements),
         ("CANONICAL_PARCEL_EXCL consumers reference the canonical symbol", check_excl_consumers_reference_canonical),
+        ("_compute_snapshot_data() no longer duplicates exclusion logic (AGGPRECOMP-2)", check_snapshot_data_no_longer_duplicates_exclusion_logic),
         ("peer_state_cd1_match_sql() consumers reference the canonical function", check_peer_match_consumers_reference_canonical),
         ("No retyped exclusion-fragment copy outside parcel_filters.py", check_no_retyped_exclusion_fragment),
         ("No retyped peer-match fragment outside parcel_filters.py", check_no_retyped_peer_match_fragment),

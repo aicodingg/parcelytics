@@ -22,6 +22,29 @@
   </div>
 </div>
 
+{# ── Tier 1 "no live fallback" gate (Task AGGPRECOMP-2, Aug 2026) ──────────
+   _compute_snapshot_data() (app.py) reads this page's numbers from
+   precomputed summary tables (snapshot_breakdown/snapshot_totals/
+   snapshot_neighborhood_movers), never from a live query anymore. Per
+   SPEC_AGGREGATE_PRECOMPUTATION.md's own explicit principle, if those
+   tables are missing, empty, or stale, this page must say so LOUDLY and
+   HONESTLY instead of silently falling back to a live recompute (the
+   removed query_no_nestloop() queries this migration exists to retire) or
+   rendering a half-populated page. data_unavailable_reason is a real,
+   specific sentence from _snapshot_summary_freshness() (app.py) explaining
+   exactly what's wrong -- not a generic "something went wrong". #}
+{% if data_unavailable %}
+<div class="alert alert-warning" role="alert" style="border-left:4px solid #b8860b;">
+  <strong>Market Snapshot data is temporarily unavailable.</strong>
+  <p class="mb-0 mt-1" style="font-size:13px;">
+    {{ data_unavailable_reason }}
+  </p>
+  <p class="mb-0 mt-2 text-muted" style="font-size:12px;">
+    This page only ever reads precomputed summary data — it never falls back to a slow,
+    live recalculation. Please check back shortly, or contact Diego if this persists.
+  </p>
+</div>
+{% else %}
 {# ── County filter — same combobox pattern as Search/Rate Trends/Info;
    one real option today ("Travis County, TX"), structured so a second
    county is just another entry in setOptions(), not a restructure. Not
@@ -754,6 +777,7 @@
   2026 data not yet loaded for this view. Run the 2026 loader to populate this page.
 </div>
 {% endif %}
+{% endif %}{# /data_unavailable #}
 {% endblock %}
 
 {% block scripts %}

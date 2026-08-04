@@ -27,6 +27,21 @@ from tax_logic.classify import property_type_label, label_case_sql, label_sort_c
 from loaders.scrape_billing_history import fetch_html, parse_receipts, upsert_billing_rows, HTTP_OK
 from parcel_filters import CANONICAL_PARCEL_EXCL, CANONICAL_PARCEL_EXCL_BARE, peer_state_cd1_match_sql, exclude_non_real_property_gap_sql
 import search_logic
+# AGGPRECOMP-2 (Aug 2026): Market Snapshot taxonomy + view-scoping SQL-fragment
+# builders, extracted to snapshot_taxonomy.py so loaders/refresh_snapshot_summary.py
+# can import the exact same logic without importing this Flask module -- see
+# that module's docstring for the full reasoning. Every name below is used at
+# its original app.py call sites unchanged (county_snapshot(), _compute_
+# snapshot_data(), snapshot_neighborhood(), parcel_list()'s _ptype_drill_where/
+# _use_code_expr_for_view(), api_benchmark()/api_benchmark_meta()'s
+# USE_CODE_LOOKUP reads).
+from snapshot_taxonomy import (
+    USE_CODE_LOOKUP, use_code_case_sql,
+    SNAPSHOT_LAND_SIZE_TIERS, SNAPSHOT_AG_SIZE_TIERS, _size_tier_case_sql,
+    _snapshot_taxonomy_sql, _SNAPSHOT_TAB_ORDER, _snapshot_taxonomy_sort_case_sql,
+    _SNAPSHOT_SECTOR_VIEWS, _SNAPSHOT_VALID_VIEWS, _SNAPSHOT_VIEW_PROP_TYPE_LABEL,
+    _snapshot_view_where, ptype_and_sort_case_for_view,
+)
 
 _BILLING_TARGET_YEARS  = {2021, 2022, 2023, 2024}
 _BILLING_SENTINEL_YEAR = 9999   # stored when portal returns no target-year data
@@ -1148,119 +1163,15 @@ STATE_CD_DESCRIPTIONS = {
     "ER": "Exempt — Religious",
 }
 
-# ── TCAD internal numeric use code → (description, valuation_method) ──────────
-# Source: TCAD improvement-level use codes from IMP_INFO.TXT.
-# Field position [28:38] (10 chars, left-justified).  Loaded by backfill_classi_cd.py.
-# Strategy: highest-value non-"00" improvement row per parcel is used as the
-# property-level use code.  Tuple = (description, valuation_method).
-# Loaded here for future use once that field is added to the schema.
-# Key = numeric string as it appears in the TCAD export.
-USE_CODE_LOOKUP = {
-    # Residential — single-family / duplex / townhome / condo
-    "01": ("Single-Family Residence",      "Cost"),
-    "02": ("Duplex",                        "Cost"),
-    "03": ("Triplex",                       "Income"),
-    "04": ("Fourplex",                      "Income"),
-    # Multi-family apartments
-    "05": ("Apartment 5–25 Units",         "Income"),
-    "06": ("Apartment 26–49 Units",        "Income"),
-    "07": ("Apartment 50–100 Units",       "Income"),
-    "08": ("Apartment 100+ Units",         "Income"),
-    "09": ("Special Residential (F-V)",    "Income"),
-    # Manufactured / mobile home
-    "10": ("Manufactured Commercial Bldg", "Cost"),
-    "11": ("Mobile Home — Single (PP)",    "Cost"),
-    "12": ("Mobile Home — Double (PP)",    "Cost"),
-    "13": ("Mobile Home — Single (Real)",  "Cost"),
-    "14": ("Mobile Home — Double (Real)",  "Cost"),
-    # Attached residential
-    "15": ("Condominium (Stacked)",        "Cost"),
-    "16": ("Townhome",                      "Cost"),
-    "17": ("Clubhouse",                     "Cost"),
-    "19": ("Special (No Depreciation)",    "Cost"),
-    # Small retail / garage apt
-    "20": ("Small Store (<10,000 SF)",     "Income"),
-    "21": ("Garage Apartment",             "Cost"),
-    "22": ("Hi-Rise Condo / Apartment",    "Income"),
-    # Office condos / industrial campus
-    "23": ("Small Office Condo",           "Income"),
-    "24": ("Commercial Space Condos",      "Income"),
-    "26": ("Large Office Condo",           "Income"),
-    "27": ("Major Industrial — Office",    "Cost"),
-    "28": ("Major Industrial — Eng.",      "Cost"),
-    "29": ("Major Industrial — Mfg.",      "Cost"),
-    # Retail — strip centers / restaurants / hotels
-    "30": ("Strip Center (<10,000 SF)",    "Income"),
-    "31": ("Night Club / Bar",             "Income"),
-    "32": ("Restaurant",                   "Income"),
-    "33": ("Fast Food Restaurant",         "Income"),
-    "34": ("Hotel — Full Service",         "Income"),
-    "35": ("Hotel — Limited Service",      "Income"),
-    "37": ("Motel — Extended Stay",        "Income"),
-    "39": ("Restaurant (SFR Conversion)",  "Income"),
-    # Shopping centers / big-box retail
-    "40": ("Regional Shopping Center",     "Income"),
-    "41": ("Community Shopping Center",    "Income"),
-    "42": ("Neighborhood Shopping Center", "Income"),
-    "43": ("Strip Center (>10,000 SF)",    "Income"),
-    "44": ("Grocery Store",                "Income"),
-    "45": ("Dept. Store (>25,000 SF)",     "Income"),
-    "46": ("Discount Store (>25,000 SF)",  "Income"),
-    "47": ("Retail Store",                 "Income"),
-    "48": ("Convenience Store",            "Income"),
-    "49": ("Bed & Breakfast",              "Income"),
-    # Office
-    "50": ("Office Hi-Rise (≥6 Stories)",  "Income"),
-    "51": ("Office Large (>35,000 SF)",    "Income"),
-    "52": ("Office Medium (10–35,000 SF)", "Income"),
-    "53": ("Office Small (<10,000 SF)",    "Income"),
-    "54": ("Medical Office (<10,000 SF)",  "Income"),
-    "55": ("Medical Office (>10,000 SF)",  "Income"),
-    "56": ("Bank — Office",                "Income"),
-    "57": ("Bank — Drive-Thru",            "Income"),
-    "58": ("Bank — Branch Office",         "Income"),
-    "59": ("Office / Retail (SFR Conv.)",  "Income"),
-    # Industrial / warehouse
-    "60": ("Industrial 20K+ SF (<25% FO)", "Cost"),
-    "61": ("Warehouse (<20,000 SF)",       "Cost"),
-    "63": ("Mini-Warehouse / Self-Storage","Income"),
-    "64": ("Industrial 20K+ SF (25–49%)",  "Cost"),
-    "65": ("Industrial 20K+ SF (50–74%)",  "Cost"),
-    "66": ("Industrial 20K+ SF (>75% FO)", "Cost"),
-    "67": ("Computer / Data Center",       "Income"),
-    "68": ("Transit Warehouse",            "Cost"),
-    "69": ("Mfg / Eng / Lab Industrial",   "Cost"),
-    # Institutional / special use
-    "70": ("Religious Facility",           "Cost"),
-    "72": ("Fraternity / Sorority",        "Cost"),
-    "73": ("Dormitory",                    "Cost"),
-    "74": ("Dormitory Hi-Rise",            "Cost"),
-    "76": ("Retirement Center",            "Cost"),
-    "77": ("Hospital",                     "Income"),
-    "78": ("Day Care Center",              "Income"),
-    # Auto / service
-    "80": ("Auto Dealership",              "Income"),
-    "81": ("Service Station",              "Income"),
-    "82": ("Self-Service (Car Wash Booth)","Income"),
-    "83": ("Service / Repair Garage",      "Income"),
-    "84": ("Mini-Lube / Tune-Up",          "Income"),
-    "86": ("Car Wash — Full Service",      "Income"),
-    # Misc
-    "87": ("Parking Garage",               "Income"),
-    "88": ("Treatment / Rehab Center",     "Cost"),
-    "89": ("Assisted Living Center",       "Income"),
-    "90": ("Theater",                      "Income"),
-    "91": ("Mortuary / Funeral Home",      "Income"),
-    "92": ("Country Club",                 "Income"),
-    "93": ("Bowling Center",               "Income"),
-    "94": ("Health Club",                  "Income"),
-    "95": ("Marina",                       "Income"),
-    "96": ("Classroom / School",           "Cost"),
-    "98": ("Leasehold — Exempt Property",  "N/A"),
-    "108": ("Luxury Hi-Rise Apts 100+",   "Income"),
-    "120": ("Additional Living Quarter",   "Cost"),
-    "483": ("Accessory Dwelling Unit",     "Cost"),
-}
+# USE_CODE_LOOKUP and use_code_case_sql() (the TCAD numeric use-code table and
+# the Market Snapshot taxonomy that's built from it) moved to
+# snapshot_taxonomy.py (AGGPRECOMP-2, Aug 2026) -- see that module's
+# docstring for why: loaders/refresh_snapshot_summary.py needs the exact
+# same SQL-fragment builders this route uses, and no loaders/*.py file in
+# this codebase imports app.py (Flask app creation, Sentry init, and a
+# required FLASK_SECRET at import time are not things a batch script should
+# drag in as side effects). Imported below, near this module's other
+# app-root imports.
 
 # Valuation method inferred from Texas Comptroller state_cd1 first character.
 # Used as a fallback until the TCAD numeric use code field is loaded.
@@ -1290,431 +1201,18 @@ def get_valuation_method(state_cd1: str) -> str:
     return VALUATION_METHOD_BY_CLASS.get(prefix, "Unknown")
 
 
-def use_code_case_sql(classi_col="p.classi_cd", fallback_label="Other"):
-    """SQL CASE expression mapping classi_cd -> its USE_CODE_LOOKUP
-    description (e.g. '01' -> 'Single-Family Residence'), for `fallback_label`
-    when classi_cd is NULL/unrecognized.
-
-    Built for the Market Snapshot "By Property Type" per-sector breakdown
-    (Issue B investigation, July 2026). Each sector's ptype_case used to be a
-    hand-rolled CASE assuming two-character state_cd1 sub-prefixes like
-    'A1%%'/'A2%%'/'A4%%' for Residential, 'B1%%'..'B4%%' for Multi-Family,
-    'C1%%'/'C2%%' for Land.
-
-    CORRECTION #1 (flagged by Diego): an earlier version of this comment
-    claimed those sub-codes "don't exist" in the Comptroller taxonomy --
-    that was wrong. STATE_CD_DESCRIPTIONS (above, sourced from Comptroller
-    Rule 9.4001) shows A1/A2/A3/A4/A5/A9, B1-B5, C1/C2, D1-D3, E1-E3, F1-F5
-    etc. are all real, official two-character codes. That first correction
-    reframed the open question as "are they valid" (yes) vs. "does Travis
-    County's parcel.state_cd1 column actually populate at that granularity"
-    (unknown at the time).
-
-    CORRECTION #2 (live data, per Diego's check_other_property_type_fix.py
-    Section 0 run): that second question is now settled for Commercial --
-    state_cd1 IS populated at two-character granularity there: F1 (14,660
-    parcels), F2 (472), L1 (41,310), L2 (1,194), 57,000+ real parcels with
-    genuine sub-codes. So for Commercial specifically, the old
-    state_cd1-sub-prefix approach this function replaced was never
-    "impossible" -- it would have worked, just at coarser granularity
-    (2 buckets: "Commercial Improved" / "Commercial Land or RE" instead of
-    4 real sub-codes). Residential/Multi-Family/Land/Agricultural's actual
-    granularity is still pending the same live check for those prefixes --
-    don't assume the Commercial finding generalizes without checking.
-
-    Given that, classi_cd is used here not because state_cd1 sub-codes
-    don't work, but because it's the MORE DESCRIPTIVE grouping field for
-    this specific breakdown: even where a real Comptroller sub-code exists,
-    it doesn't carry a use-code description a homeowner/investor would
-    recognize the way USE_CODE_LOOKUP does, and it wouldn't match
-    /api/benchmark/meta's use_codes_by_type (Search's Use Code filter),
-    which is the specific reuse Diego asked for.
-
-    classi_cd (the TCAD numeric use code, populated from IMP_INFO.TXT and
-    already displayed on the property-detail page) is the real subtype
-    signal that actually exists in this data -- it's exactly what
-    /api/benchmark/meta's use_codes_by_type groups by for Search's Use Code
-    filter. Reusing the same USE_CODE_LOOKUP descriptions here means a
-    sector's breakdown table and its Use Code filter can never show
-    different subtypes for the same underlying data.
-
-    Vacant land and some agricultural parcels genuinely have no improvement
-    record (classi_cd is NULL by design -- see KNOWN_LIMITATIONS.md's
-    "classi_cd source" note), so those sectors legitimately collapsing
-    toward fallback_label for a large share of parcels is expected, real
-    behavior, not a bug -- unlike Residential/Commercial/Multi-Family, which
-    have populated classi_cd for the large majority of parcels.
-    """
-    def _sql_escape(s):
-        """Escape a literal string for embedding in an f-string SQL that
-        will be passed through cur.execute(sql, params) -- even with an
-        empty/None params tuple, psycopg2 still runs %-style substitution
-        over the whole query string, so any bare '%' in embedded text (not
-        just quotes) has to be doubled to '%%' or it gets misread as a
-        format placeholder. Root-caused by Diego: four USE_CODE_LOOKUP
-        descriptions contain a literal '%' (classi_cd 60/64/65/66, e.g.
-        "Industrial 20K+ SF (25-49%)") and were crashing query_no_nestloop()
-        with "IndexError: tuple index out of range" -- psycopg2 counting
-        the stray '%' as an extra substitution slot against the empty
-        params tuple. Quotes need doubling for the same reason CASE/THEN
-        string literals always do (an embedded ' would otherwise close the
-        SQL string early)."""
-        return s.replace("'", "''").replace("%", "%%")
-
-    whens = "\n".join(
-        f"""                WHEN UPPER(TRIM(COALESCE({classi_col}, ''))) = '{code}' """
-        f"""THEN '{_sql_escape(desc)}'"""
-        for code, (desc, _method) in USE_CODE_LOOKUP.items()
-    )
-    fb = _sql_escape(fallback_label)
-    return f"""CASE
-{whens}
-                ELSE '{fb}'
-            END"""
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MARKET SNAPSHOT — SCOPED 8-SECTOR TAXONOMY (July 2026)
-#
-# THIS IS AN INTENTIONAL, SCOPED EXCEPTION — NOT AN OVERSIGHT, AND NOT THE
-# SAME "two classifiers drifted apart" BUG FOUND AND FIXED THREE TIMES THIS
-# SESSION (api_benchmark_meta()'s hand-rolled CASE, _PTYPE_SC1_FILTER's stale
-# label dict, and Issue B's assumed-but-nonexistent state_cd1 sub-prefixes).
-# Those were accidental duplicates of the SAME canonical classification that
-# silently fell out of sync. This is different: it is a SECOND, DELIBERATELY
-# SEPARATE classification system, used ONLY for Market Snapshot's own tab
-# routing and breakdown display, because Diego wants Market Snapshot to show
-# a finer split (Retail vs. Industrial vs. Office vs. Hotel) than the
-# canonical 5-category system is designed to express.
-#
-# What stays on the canonical 5-category system, UNTOUCHED by anything below:
-#   - tax_logic/classify.py (property_type_label, label_case_sql,
-#     _STATE_PREFIX_LABEL, MULTI_FAMILY_CODES, COMMERCIAL_CODES)
-#   - The global nav sector dropdown (templates/base.html)
-#   - Search's Property Type filter (templates/search.html, /api/benchmark/meta)
-#   - loaders/compute_metrics.py's county_benchmark table
-#   - property_detail()'s bench_label (property.html's Homeowner-mode gating,
-#     "How You Compare" peer group, etc.)
-# Anyone reusing the SNAPSHOT_*_CODES constants / _snapshot_taxonomy_sql()
-# outside app.py's /snapshot, /snapshot/neighborhood/<code>, and /parcels
-# routes is almost certainly reaching for the wrong function — reach for
-# classify.py's label_case_sql() / property_type_label() instead.
-#
-# Starting point: the project's original pre-5-category documentation
-# researched a classi_cd-based 4-bucket split (Multi-Family / Commercial-
-# Retail / Industrial / Hospitality-Other). That was real prior research, not
-# a guess, but (a) it was a 4-bucket split and Diego wants Commercial/Retail
-# divided into Retail vs. Office, and Hospitality/Other divided into Hotel
-# vs. Other, and (b) cross-checking it against the live USE_CODE_LOOKUP
-# descriptions below turned up real problems in the old doc, not just gaps:
-#   - codes "107", "36", "38" don't exist in USE_CODE_LOOKUP at all (typos /
-#     stale references from before the current use-code table was built) --
-#     omitted here, not guessed at.
-#   - "37" (Motel — Extended Stay) was listed in BOTH the old doc's
-#     Commercial/Retail bucket AND its Hospitality/Other bucket -- an
-#     internal contradiction in the source doc. The real description is
-#     unambiguously lodging, so it's classified Hotel here, resolving the
-#     contradiction with evidence rather than picking one arbitrarily.
-#   - Office had NO bucket at all in the old 4-way doc -- codes 23/26/50-59
-#     (the "Office condos" / "Office" comment groups in USE_CODE_LOOKUP)
-#     would have fallen through to the state_cd1 F/L "Commercial" fallback
-#     under the old scheme. Added here as their own Office bucket since
-#     that's the whole point of this round's split.
-#   - The old doc's Hospitality/Other bucket (34,35,37,92,95,96) actually
-#     splits cleanly on real evidence: 34/35/37 are genuine lodging (Hotel);
-#     92 (Country Club), 95 (Marina), 96 (Classroom/School) are not lodging
-#     at all and land in Other instead.
-#
-# Every USE_CODE_LOOKUP code (not just the ones in the old doc / today's
-# MULTI_FAMILY_CODES / COMMERCIAL_CODES) is classified below, evidence-first
-# from its real description -- leaving codes unmapped here would just
-# recreate the exact "hidden Other bucket" bug this session already found
-# and fixed once (Issue A), one level down. See the accompanying report for
-# the full code -> tab mapping table with real descriptions, for review as
-# a real classification decision.
-#
-# JUDGMENT CALLS — RESOLVED (August 2026): the two judgment calls originally
-# flagged here, plus a handful of related single-code placements, were sent
-# to Diego as a full raw USE_CODE_LOOKUP export (every code, every
-# description, no grouping) for individual manual review. Diego confirmed 9
-# explicit moves against the original proposal below; everything else in
-# this file's original proposal was confirmed correct as-is. These are now
-# reviewed, deliberate decisions, not open questions:
-#   - 02 (Duplex) stays Residential; 03 (Triplex) and 04 (Fourplex) move to
-#     Multi-Family -- Diego's own split within the old "judgment call #1"
-#     group, not a full move of all three the way the original proposal's
-#     two options framed it.
-#   - 17 (Clubhouse) moves from Multi-Family to Other.
-#   - 10 (Manufactured Commercial Bldg) moves from Retail to Other.
-#   - 24 (Commercial Space Condos) moves from Retail to Office.
-#   - Old "judgment call #2" (Auto/service codes 80-86) is resolved as:
-#     80 (Auto Dealership) and 86 (Car Wash Full Service) stay Retail
-#     (unchanged); 81 (Service Station) moves from Industrial to Other;
-#     82 (Self-Service Car Wash Booth), 83 (Service/Repair Garage), and 84
-#     (Mini-Lube/Tune-Up) move from Industrial to Retail. Industrial no
-#     longer contains any of the six Auto/service codes.
-# 09 (Special Residential, F-V), 76 (Retirement Center), 89 (Assisted
-# Living), and 78 (Day Care Center) were part of the same review and
-# confirmed to stay exactly where the original proposal had them
-# (Multi-Family/Multi-Family/Multi-Family/Retail respectively) -- reviewed
-# and confirmed, not carried forward as open questions either.
-# ═══════════════════════════════════════════════════════════════════════════
-
-SNAPSHOT_RESIDENTIAL_CODES = (
-    "01",   # Single-Family Residence
-    "02",   # Duplex -- reviewed and confirmed Residential (see note above)
-    "11", "12", "13", "14",  # Mobile Home Single/Double, PP + Real
-    "15",   # Condominium (Stacked)
-    "16",   # Townhome
-    "21",   # Garage Apartment
-    "120",  # Additional Living Quarter
-    "483",  # Accessory Dwelling Unit
-)
-
-SNAPSHOT_MULTIFAMILY_CODES = (
-    "03", "04",  # Triplex, Fourplex -- moved here from Residential per Diego's review
-    "05", "06", "07", "08",  # Apartment 5-25 / 26-49 / 50-100 / 100+ Units
-    "09",   # Special Residential (F-V) -- reviewed and confirmed
-    "22",   # Hi-Rise Condo / Apartment
-    "72", "73", "74",  # Fraternity/Sorority, Dormitory, Dormitory Hi-Rise
-    "76",   # Retirement Center -- reviewed and confirmed
-    "89",   # Assisted Living Center -- reviewed and confirmed
-    "108",  # Luxury Hi-Rise Apts 100+
-    "SYNUP",  # synthetic/aggregated multi-family upgrade (not a real TCAD code)
-)
-
-SNAPSHOT_RETAIL_CODES = (
-    "20",   # Small Store (<10,000 SF)
-    "30", "31", "32", "33", "39",  # Strip Center, Night Club/Bar, Restaurant, Fast Food, Restaurant(SFR Conv)
-    "40", "41", "42", "43", "44", "45", "46",  # Shopping centers, Grocery, Dept/Discount Store
-    "47", "48",  # Retail Store, Convenience Store
-    "78",   # Day Care Center -- reviewed and confirmed Retail
-    "80",   # Auto Dealership -- unchanged, see resolved Auto/service note above
-    "82", "83", "84",  # Car Wash Booth, Repair Garage, Mini-Lube -- moved here from Industrial per Diego's review
-    "86",   # Car Wash Full Service -- unchanged
-    "90",   # Theater
-    "91",   # Mortuary / Funeral Home
-    "93",   # Bowling Center
-    "94",   # Health Club
-    "4RS",  # synthetic retail code (not a real TCAD code)
-)
-
-SNAPSHOT_OFFICE_CODES = (
-    "23", "26",  # Small / Large Office Condo
-    "24",   # Commercial Space Condos -- moved here from Retail per Diego's review
-    "50", "51", "52", "53",  # Office Hi-Rise / Large / Medium / Small
-    "54", "55",  # Medical Office Small / Large
-    "56", "57", "58",  # Bank Office / Drive-Thru / Branch Office
-    "59",   # Office / Retail (SFR Conv.)
-)
-
-SNAPSHOT_INDUSTRIAL_CODES = (
-    "27", "28", "29",  # Major Industrial -- Office/Eng./Mfg. (see note: "Office" in the
-                        # name refers to a support building within a major industrial
-                        # property class, not a standalone office building)
-    "60", "61", "63", "64", "65", "66",  # Industrial 20K+ SF tiers, Warehouse, Mini-Warehouse/Self-Storage
-    "67",   # Computer / Data Center
-    "68",   # Transit Warehouse
-    "69",   # Mfg / Eng / Lab Industrial
-    # 81/82/83/84 (Auto/service) all moved out per Diego's review -- see
-    # resolved Auto/service note above. No Auto/service codes remain here.
-)
-
-SNAPSHOT_HOTEL_CODES = (
-    "34", "35",  # Hotel Full/Limited Service
-    "37",   # Motel Extended Stay (resolves old doc's internal contradiction, see above)
-    "49",   # Bed & Breakfast
-)
-
-# Explicit classi_cd -> Other: institutional/civic/leisure use codes that are
-# real, recognized TCAD categories but don't cleanly sort into any of the
-# other 6 classi_cd-driven buckets above. Combined with the canonical
-# unclassified state_cd1 residual (O/G/J, see classify.py) and any F/L
-# state_cd1 parcel whose classi_cd doesn't land in any bucket above, this is
-# the full "Other" tab per Diego's definition -- one tab, not split further.
-SNAPSHOT_OTHER_CODES = (
-    "10",   # Manufactured Commercial Bldg -- moved here from Retail per Diego's review
-    "17",   # Clubhouse -- moved here from Multi-Family per Diego's review
-    "19",   # Special (No Depreciation) -- too vague to sort confidently
-    "70",   # Religious Facility
-    "77",   # Hospital
-    "81",   # Service Station -- moved here from Industrial per Diego's review
-    "87",   # Parking Garage
-    "88",   # Treatment / Rehab Center
-    "92",   # Country Club
-    "95",   # Marina
-    "96",   # Classroom / School
-    "98",   # Leasehold -- Exempt Property
-)
-
-# ─── Land/Vacant + Agricultural within-sector subtype breakdown (August 2026) ───
-#
-# FINDING: Land/Vacant and Agricultural have no meaningful classi_cd subtype
-# data, and this is structural, not a data-quality gap. classi_cd is sourced
-# entirely from IMP_INFO.TXT (see loaders/backfill_classi_cd.py's own
-# docstring: "classi_cd = TCAD internal improvement use code ... Source:
-# IMP_INFO.TXT") -- it only exists for parcels that have an IMPROVEMENT (a
-# building) on file. Every one of the 91 USE_CODE_LOOKUP descriptions
-# describes a building type (Single-Family Residence, Warehouse, Hotel...);
-# there is no "vacant lot" or "open pasture" entry because IMP_INFO.TXT has
-# no row to produce one from. A vacant Land parcel, by definition, has
-# nothing built on it -- so it structurally has no classi_cd, not a missing
-# or mis-tagged one. This is exactly why use_code_case_sql() collapsed both
-# sectors to a single ELSE row identical to the grand total (confirmed by
-# Diego's live run: 24,113 / 5,763 parcels, 1 row each) -- there was never a
-# real per-code subtype signal underneath to group by for these two sectors,
-# unlike Residential/Commercial/etc. where classi_cd IS reliably populated.
-# Agricultural parcels CAN carry a classi_cd (a barn or farmhouse on ag land
-# does have an improvement row), so it may not be quite as uniformly empty
-# as Land/Vacant -- see the diagnostic script's new NULL-rate section for
-# the real live numbers; either way it's not the reliable, well-populated
-# signal it is for the other sectors.
-#
-# ALTERNATIVE, REAL DIMENSION: parcel.land_sqft. Already loaded (not new --
-# see loaders/load_parcel_attrs.py, sourced from LAND_DET.TXT, and already
-# used elsewhere in this app: the /parcels drill-through's land_min/land_max
-# filter, property.html's Land Size field), and explicitly documented by its
-# own loader as "RELIABLE ... always square feet regardless of the parcel's
-# pricing unit (SF / AC / LOT / FF)". Size (acreage) is also a genuinely
-# meaningful way land and agricultural parcels are actually discussed and
-# compared -- not a fabricated category. Used here as a size-TIER breakdown
-# in place of a use-code breakdown for these two sectors only.
-#
-# Tier boundaries are reasoned defaults (same discipline as
-# SNAPSHOT_SUBTYPE_CAP=7), not measured against the real live distribution
-# (no DB access this round either -- see Part 0 in the report). Agricultural
-# tiers are set coarser than Land/Vacant's on the reasoning that open-space
-# ag valuation (1-d-1) typically applies to larger tracts than a residential
-# vacant lot -- Diego should sanity-check both against the real per-tier
-# counts the extended diagnostic script now prints, and adjust the
-# boundaries below if the live distribution says otherwise.
-#
-# Format: ascending list of (upper_bound_sqft, label). The LAST entry's
-# upper_bound is ignored (it's the catch-all/largest tier) -- so it can be
-# None for clarity. 1 acre = 43,560 SF.
-SNAPSHOT_LAND_SIZE_TIERS = (
-    (10_890,    "Under 1/4 Acre"),        # < 0.25 ac -- typical small residential/urban lot
-    (21_780,    "1/4 - 1/2 Acre"),        # 0.25-0.5 ac
-    (43_560,    "1/2 - 1 Acre"),          # 0.5-1 ac
-    (217_800,   "1 - 5 Acres"),           # 1-5 ac
-    (871_200,   "5 - 20 Acres"),          # 5-20 ac
-    (None,      "20+ Acres"),             # catch-all
-)
-
-SNAPSHOT_AG_SIZE_TIERS = (
-    (217_800,   "Under 5 Acres"),         # < 5 ac
-    (871_200,   "5 - 20 Acres"),          # 5-20 ac
-    (2_178_000, "20 - 50 Acres"),         # 20-50 ac
-    (8_712_000, "50 - 200 Acres"),        # 50-200 ac
-    (None,      "200+ Acres"),            # catch-all
-)
-
-
-def _size_tier_case_sql(land_col, tiers):
-    """SQL CASE expression bucketing `land_col` (a land_sqft-style numeric
-    column) into the ascending (upper_bound_sqft, label) tiers above.
-    NULL land_sqft (no LAND_DET.TXT row for this parcel) gets its own
-    honest 'Size Not Available' label rather than being silently dropped
-    into whichever tier a NULL comparison happens to fall through to."""
-    whens = "\n                ".join(
-        f"WHEN {land_col} < {upper} THEN '{label}'"
-        for upper, label in tiers if upper is not None
-    )
-    catch_all_label = tiers[-1][1]
-    return f"""CASE
-                WHEN {land_col} IS NULL THEN 'Size Not Available'
-                {whens}
-                ELSE '{catch_all_label}'
-            END"""
-
-
-def _snapshot_taxonomy_sql(classi_col="p.classi_cd", state_col="p.state_cd1"):
-    """SQL CASE expression for Market Snapshot's scoped 8-tab-plus-Other
-    taxonomy (see the SNAPSHOT_*_CODES constants and the large comment block
-    above). classi_cd overrides first (evidence-based sector assignment),
-    then state_cd1 fallback for parcels with no recognized classi_cd
-    override, matching the same fallback structure classify.py uses for the
-    canonical 5-category system -- but this is NOT classify.py's
-    label_case_sql(); the two are deliberately separate and can legitimately
-    disagree about a given parcel's bucket (e.g. a stacked condo with
-    classi_cd='15' lands in Residential here regardless of state_cd1, where
-    it might land in Commercial under the canonical system if its state_cd1
-    happens to be 'F'/'L' and it has no MULTI_FAMILY_CODES/COMMERCIAL_CODES
-    override there). That divergence is expected and scoped to Market
-    Snapshot's own display -- it does not change property_type_label() or
-    any other canonical-classifier consumer.
-
-    F/L (Commercial-by-state_cd1) parcels whose classi_cd doesn't land in
-    Retail/Industrial/Office/Hotel above fall through to 'Other' here --
-    there is no "generic Commercial" tab in this taxonomy to catch them, and
-    guessing which of the 4 they are without a real classi_cd would be
-    exactly the kind of invented-fact this session's discipline is against.
-    """
-    def _in_list(codes):
-        return ", ".join(f"'{c}'" for c in codes)
-
-    return f"""CASE
-                WHEN UPPER(TRIM(COALESCE({classi_col}, ''))) IN ({_in_list(SNAPSHOT_RESIDENTIAL_CODES)}) THEN 'Residential'
-                WHEN UPPER(TRIM(COALESCE({classi_col}, ''))) IN ({_in_list(SNAPSHOT_MULTIFAMILY_CODES)}) THEN 'Multi-Family'
-                WHEN UPPER(TRIM(COALESCE({classi_col}, ''))) IN ({_in_list(SNAPSHOT_RETAIL_CODES)}) THEN 'Retail'
-                WHEN UPPER(TRIM(COALESCE({classi_col}, ''))) IN ({_in_list(SNAPSHOT_OFFICE_CODES)}) THEN 'Office'
-                WHEN UPPER(TRIM(COALESCE({classi_col}, ''))) IN ({_in_list(SNAPSHOT_INDUSTRIAL_CODES)}) THEN 'Industrial'
-                WHEN UPPER(TRIM(COALESCE({classi_col}, ''))) IN ({_in_list(SNAPSHOT_HOTEL_CODES)}) THEN 'Hotel'
-                WHEN UPPER(TRIM(COALESCE({classi_col}, ''))) IN ({_in_list(SNAPSHOT_OTHER_CODES)}) THEN 'Other'
-                WHEN LEFT(UPPER({state_col}), 1) IN ('A', 'M') THEN 'Residential'
-                WHEN LEFT(UPPER({state_col}), 1) = 'B'          THEN 'Multi-Family'
-                WHEN LEFT(UPPER({state_col}), 1) = 'C'          THEN 'Land/Vacant'
-                WHEN LEFT(UPPER({state_col}), 1) IN ('D', 'E')  THEN 'Agricultural'
-                ELSE 'Other'
-            END"""
-
-
-_SNAPSHOT_TAB_ORDER = (
-    "Residential", "Multi-Family", "Retail", "Industrial", "Office", "Hotel",
-    "Land/Vacant", "Agricultural", "Other",
-)
-
-
-def _snapshot_taxonomy_sort_case_sql(label_expr):
-    """Sort-order CASE for the Overall tab's own breakdown table, using the
-    same fixed sector order as the new tab bar (_SNAPSHOT_TAB_ORDER).
-    Mirrors classify.py's label_sort_case_sql() pattern, but for this
-    module's separate 9-way Market Snapshot taxonomy -- not a duplicate of
-    that function, a parallel one scoped to this taxonomy."""
-    whens = "\n".join(
-        f"            WHEN ({label_expr}) = '{lbl}' THEN {i + 1}"
-        for i, lbl in enumerate(_SNAPSHOT_TAB_ORDER)
-    )
-    return f"CASE\n{whens}\n            ELSE 99\n        END"
-
-
-# The 8 new Market-Snapshot-only sector tabs (Overall + these 8 + Other = the
-# 10 tabs on the page). Deliberately a SEPARATE dict from
-# _SNAPSHOT_VIEW_PROP_TYPE_LABEL (canonical 5-category, kept below unchanged)
-# -- that dict, and the "commercial" view value it still recognizes, stay
-# fully intact so the untouched nav sector dropdown (templates/base.html,
-# links to /snapshot?view=commercial) and Search's canonical Property Type
-# -> Snapshot link (search.html's SNAPSHOT_VIEW_BY_LABEL) keep working
-# exactly as before, even though the new tab bar itself no longer shows a
-# "Commercial" button (superseded by Retail/Industrial/Office/Hotel).
-_SNAPSHOT_SECTOR_VIEWS = {
-    "residential":  "Residential",
-    "multifamily":  "Multi-Family",
-    "retail":       "Retail",
-    "industrial":   "Industrial",
-    "office":       "Office",
-    "hotel":        "Hotel",
-    "land":         "Land/Vacant",
-    "agricultural": "Agricultural",
-    "other":        "Other",
-}
-
-# Full set of valid /snapshot ?view= values: "overall" + the 8 new tabs +
-# "other" (all via _SNAPSHOT_SECTOR_VIEWS) + the legacy "commercial" view
-# (old deep links only, see _snapshot_view_where()'s docstring). Shared by
-# county_snapshot() and snapshot_neighborhood() so the two routes can never
-# disagree about which view values are valid.
-_SNAPSHOT_VALID_VIEWS = {"overall", "commercial"} | set(_SNAPSHOT_SECTOR_VIEWS)
+# The Market Snapshot taxonomy (SNAPSHOT_*_CODES, SNAPSHOT_LAND_SIZE_TIERS/
+# SNAPSHOT_AG_SIZE_TIERS, _size_tier_case_sql(), _snapshot_taxonomy_sql(),
+# _SNAPSHOT_TAB_ORDER, _snapshot_taxonomy_sort_case_sql(),
+# _SNAPSHOT_SECTOR_VIEWS, _SNAPSHOT_VALID_VIEWS, _SNAPSHOT_VIEW_PROP_TYPE_LABEL,
+# _snapshot_view_where(), ptype_and_sort_case_for_view()) moved to
+# snapshot_taxonomy.py (AGGPRECOMP-2, Aug 2026) -- same reasoning as
+# USE_CODE_LOOKUP's move above. SNAPSHOT_SUBTYPE_CAP and _cap_subtype_rows()
+# below stay here: that capping happens at READ TIME over already-small,
+# already-precomputed rows (cheap, and not something the refresh script
+# needs), unlike everything that moved, which builds the SQL queries
+# themselves -- the actual aggregation logic the spec's own principle says
+# must live only inside refresh functions.
 
 # Part 2 — cap: within a sector tab's "By Property Type" subtype breakdown,
 # show only the top N real use-code subtypes by parcel count; roll the rest
@@ -2011,16 +1509,18 @@ def persist_mode(resp):
 # ── DB helper ─────────────────────────────────────────────────────────────────
 # statement_timeout safety net (July 2026, per Cowork's "confirm root cause and
 # propose fix" investigation into the WORKER TIMEOUT/SIGKILL Sentry incidents):
-# every connection this app opens goes through get_db() -- query() and
-# query_no_nestloop() both call it, and the two routes that manage their own
-# cursor (api_geocode(), api_billing()) call it directly too (confirmed via
-# grep: no other psycopg2.connect() call exists anywhere in app.py) -- so
-# setting statement_timeout here, once, at connection time covers every query
-# this web app runs with no per-call-site duplication.
+# every connection this app opens goes through get_db() -- query() calls it,
+# and the two routes that manage their own cursor (api_geocode(),
+# api_billing()) call it directly too (confirmed via grep: no other
+# psycopg2.connect() call exists anywhere in app.py) -- so setting
+# statement_timeout here, once, at connection time covers every query this
+# web app runs with no per-call-site duplication. (query_no_nestloop() also
+# called it, historically -- retired, Task AGGPRECOMP-2, see the comment
+# where it used to be defined, just above normalize_parcel_id().)
 #
 # 8000ms (8s): comfortably above the worst FIXED query time already measured
 # in this codebase (the Market Snapshot neighborhoods query, 2393ms post-
-# query_no_nestloop()-fix -- see that helper's own docstring for the full
+# query_no_nestloop()-fix, back when that query still ran live -- see
 # on/off measurement history), and well under gunicorn's 30s worker timeout
 # (Start Command is `gunicorn app:app`, no --timeout flag, confirmed against
 # Render's dashboard directly -- the plain default is in effect). This is a
@@ -2063,48 +1563,26 @@ def query(sql, params=None, one=False):
         conn.close()
 
 
-def query_no_nestloop(sql, params=None, one=False):
-    """
-    Like query(), but disables Nested Loop plans for this one query via a
-    transaction-scoped `SET LOCAL enable_nestloop = off`.
-
-    Reserved ONLY for the three Market Snapshot queries in
-    _compute_snapshot_data() (breakdown, Part 4 aggregate, neighborhoods)
-    that each join parcel_tax_year twice — once for tax_year=2025, once for
-    tax_year=2026. On this deployment (Postgres 15), the planner
-    consistently mis-chooses a Nested Loop doing ~407,000 individual
-    per-row index probes against parcel_tax_year_pkey for that second join,
-    instead of a Hash/Merge Join — confirmed NOT to be a cache-timing
-    illusion by running each query 4x (on/off/on/off) via
-    task_staging/snapshot_perf/check_snapshot_nestloop_off.command: forcing
-    the join off beat the planner's own choice every single time, at every
-    position in the run order:
-        breakdown:      480-1489ms (off)  vs 3008-9644ms (on, planner default)
-        Part 4 aggregate: 299-535ms (off) vs  974-2491ms (on)
-        neighborhoods:    361-362ms (off) vs 2382-2393ms (on) — this one
-            especially clean: the "on" plan was rock-steady ~2.4s on both
-            of its runs, so there's no cache-order ambiguity to explain away.
-    This is NOT a blanket "nested loop is always bad" opinion, and it must
-    not be copy-pasted onto other queries without the same on/off
-    measurement — for a query where Postgres's own Nested Loop choice is
-    actually correct, this override would make things slower, not faster.
-    It is intentionally scoped two ways so it can't leak beyond its
-    purpose: (1) SET LOCAL only affects the current transaction, never the
-    session or server; (2) this helper opens its own connection and is
-    never committed — the connection is closed (implicit rollback) right
-    after fetching results, so nothing persists beyond this one query call.
-    Do not "clean this up" into a session-wide `SET enable_nestloop = off`
-    or apply it to query() generally — see the investigation history above
-    before touching this.
-    """
-    conn = get_db()
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SET LOCAL enable_nestloop = off")
-            cur.execute(sql, params or ())
-            return cur.fetchone() if one else cur.fetchall()
-    finally:
-        conn.close()
+# query_no_nestloop() -- RETIRED (Task AGGPRECOMP-2, Aug 2026). Used to live
+# here: a query() variant applying a transaction-scoped `SET LOCAL
+# enable_nestloop = off` to the three/four Market Snapshot queries in
+# _compute_snapshot_data() that each joined parcel_tax_year twice (2025 +
+# 2026) and hit a specific, measured Postgres 15 planner misjudgment on that
+# second join (see task_staging/snapshot_perf/check_snapshot_nestloop_off.command
+# for the full on/off EXPLAIN ANALYZE evidence that justified it at the
+# time: breakdown 480-1489ms off vs 3008-9644ms on; Part 4 aggregate
+# 299-535ms off vs 974-2491ms on; neighborhoods 361-362ms off vs 2382-2393ms
+# on). Removed as dead code per SPEC_AGGREGATE_PRECOMPUTATION.md's own
+# explicit retirement instruction ("each query migrated into Tier 1 or
+# Tier 3 should have its query_no_nestloop() call site removed as part of
+# that migration") once _compute_snapshot_data() was rewired to read
+# loaders/refresh_snapshot_summary.py's precomputed summary tables instead
+# of running these queries live -- confirmed via grep, at the time of
+# removal, that its 4 real call sites were ALL inside that one function,
+# and all 4 were removed by that same rewire, leaving zero callers. The
+# override itself still runs, just once per refresh (~10x/year) inside
+# loaders/refresh_snapshot_summary.py's own _compute_one_view(), not once
+# per live request -- see that function's docstring for the reapplication.
 
 
 # ── Search normalisation ──────────────────────────────────────────────────────
@@ -3641,391 +3119,205 @@ def county_snapshot():
     return render_template("snapshot.html", view=view, **payload)
 
 
+def _snapshot_summary_freshness():
+    """
+    Tier 1 "no live fallback, ever" gate for /snapshot (SPEC_AGGREGATE_
+    PRECOMPUTATION.md's own explicit principle). Returns (is_fresh: bool,
+    reason: str|None) -- reason is a short, honest, user-facing sentence
+    explaining WHY the data isn't available when is_fresh is False, None
+    when it is.
+
+    Same 3-table-agree-with-each-other + agree-with-the-latest-load_batch
+    logic as loaders/refresh_snapshot_summary.assert_snapshot_summary_fresh()
+    -- reimplemented here directly against this file's own query() helper
+    rather than cross-imported from loaders/, to keep app.py and loaders/
+    mutually independent (matching this codebase's existing module-boundary
+    discipline -- see snapshot_taxonomy.py's own docstring for why loaders/
+    scripts never import app.py; this is the same discipline in the other
+    direction, and the check itself is small enough that duplicating it
+    once here is cheaper and safer than adding a novel app.py -> loaders/
+    dependency edge for a single function).
+    """
+    tables = ("snapshot_breakdown", "snapshot_totals", "snapshot_neighborhood_movers")
+    batch_ids_by_table = {}
+    for tbl in tables:
+        rows = query(f"SELECT DISTINCT source_import_batch_id FROM {tbl}")
+        batch_ids_by_table[tbl] = {r["source_import_batch_id"] for r in rows}
+
+    latest_row = query("SELECT MAX(batch_id) AS latest FROM load_batch", one=True)
+    latest_batch_id = latest_row["latest"] if latest_row else None
+
+    for tbl in tables:
+        if not batch_ids_by_table[tbl]:
+            return False, (
+                "Market Snapshot summary data has not been generated yet "
+                f"({tbl} is empty). This page reads only precomputed data -- "
+                "run loaders/refresh_snapshot_summary.py to populate it."
+            )
+        if len(batch_ids_by_table[tbl]) > 1:
+            return False, (
+                f"Market Snapshot data is in an inconsistent state ({tbl} reflects "
+                "more than one data batch, indicating a partial or failed refresh). "
+                "Re-run loaders/refresh_snapshot_summary.py."
+            )
+
+    if latest_batch_id is None:
+        return False, (
+            "No data load has been recorded yet -- Market Snapshot summary data "
+            "has not been generated."
+        )
+
+    table_batch_ids = {tbl: next(iter(batch_ids_by_table[tbl])) for tbl in tables}
+    if len(set(table_batch_ids.values())) > 1:
+        return False, (
+            "Market Snapshot summary tables are out of sync with each other -- "
+            "a refresh did not complete atomically. Re-run "
+            "loaders/refresh_snapshot_summary.py."
+        )
+
+    common_batch_id = next(iter(set(table_batch_ids.values())))
+    if common_batch_id != latest_batch_id:
+        return False, (
+            "Market Snapshot data is stale -- a newer data load has not yet been "
+            "reflected here. Run loaders/refresh_snapshot_summary.py to refresh it."
+        )
+
+    return True, None
+
+
 def _compute_snapshot_data(view):
     """
-    Runs the Market Snapshot queries for one sector view. Split out from
-    county_snapshot() so the route can short-circuit via the cache above
-    without duplicating this logic.
+    Reads the Market Snapshot data for one sector view from the Tier 1
+    summary tables (snapshot_breakdown / snapshot_totals /
+    snapshot_neighborhood_movers -- see schema.sql's own comments, and
+    loaders/refresh_snapshot_summary.py) -- Task AGGPRECOMP-2, Aug 2026 --
+    instead of running the live aggregation queries this function used to
+    run on every request.
 
-    Part 1 performance fix: `rows` (per-property-type breakdown) and
-    `totals` (the grand-total row) used to be two separate, near-duplicate
-    queries, each independently JOINing parcel_tax_year's 2025 and 2026
-    rows for the whole sector — the same expensive join computed twice per
-    request. Confirmed via check_snapshot_perf.command: TOTALS alone took
-    ~840ms on a Nested Loop plan (407,967 loops) while ROWS used an
-    efficient Hash Join for the same shape of work. They're now ONE query
-    using GROUP BY GROUPING SETS ((ptype, sort_key), ()) — one pass over
-    the joined data produces both the per-sector breakdown AND the single
-    grand-total row (ptype IS NULL marks the total row; split out below).
+    THIS IS THE ACTUAL FIX for /snapshot's real, live 500 errors -- not a
+    query optimization. The prior four rounds of performance work (see git
+    history: GROUPING SETS merge, the flattened-CTE no-op, and finally
+    query_no_nestloop()'s SET LOCAL enable_nestloop=off override) reduced
+    but never eliminated the live cost, because the queries were still
+    running once per request against the full parcel/parcel_tax_year join.
+    This migration removes that live aggregation from the request path
+    entirely: the breakdown/totals/neighborhoods numbers are now precomputed
+    ONCE per data load by loaders/refresh_snapshot_summary.py, and this
+    function does nothing but SELECT a handful of already-small rows out of
+    three summary tables. query_no_nestloop() itself (and its 4 real call
+    sites, all of which lived in this function) has been REMOVED from
+    app.py as dead code -- it has zero remaining callers now that the
+    queries it wrapped no longer run live. See that function's former
+    docstring (git history) for the full on/off measurement evidence that
+    justified it while it was still needed.
 
-    Investigating the merge surfaced a second, real bug, not just a
-    performance one: the two queries' parcel-eligibility filters weren't
-    actually identical. ROWS excluded only state_cd1 X* (plus N* only for
-    the "overall" view, via the old view_where special-case) and filtered
-    AJR* on the parcel table; TOTALS hardcoded X* + N* and filtered AJR* on
-    the tax_year table instead. They happened to produce the same row count
-    in the check_snapshot_perf.command run — by coincidence of current data
-    (no N*-prefix parcel fell in the tested view), not by logical
-    equivalence. For the 5 non-"overall" sector views, ROWS was NOT
-    excluding the 3 known N*-prefix personal-property accounts that TOTALS
-    was, meaning the per-sector breakdown and the grand total could
-    silently disagree by those parcels whenever one fell in-sector.
+    NO LIVE FALLBACK, EVER -- per SPEC_AGGREGATE_PRECOMPUTATION.md's own
+    explicit Tier 1 principle. If the summary tables are missing, empty, or
+    stale (see _snapshot_summary_freshness() below), this function returns
+    data_unavailable=True with a real, honest reason string. It does NOT
+    silently recompute live -- that would just resurrect the exact timeout
+    class this migration exists to retire. templates/snapshot.html renders
+    a loud, visible "data temporarily unavailable" state for this case (see
+    that template's data_unavailable block) instead of a half-populated or
+    broken page.
 
-    The correct, canonical filter — confirmed against the actual source of
-    truth rather than picked ad hoc between the two ad hoc versions — is
-    loaders/compute_metrics.py's BENCHMARK_EXCLUDE_PREFIXES = ["X", "N"]
-    (the exact set compute_county_benchmarks() uses to build
-    county_benchmark itself, with documented parcel counts and reasoning
-    per prefix) plus its own "AND p.geo_id NOT LIKE 'AJR%%'". This is also
-    exactly what /api/benchmark's excl_filter already uses, commented there
-    as "mirrors compute_metrics.py" — so this brings /snapshot in line with
-    both. Applied unconditionally below (canonical_excl), not per-view, so
-    "overall" no longer needs its own N-exclusion special-case in
-    view_where.
+    bench_trends (the Annual Trends chart) is NOT part of this migration --
+    it already reads a separate, small, pre-existing table (county_benchmark,
+    populated independently by compute_metrics.py), was never one of the
+    slow query_no_nestloop() call sites, and is explicitly out of this
+    task's scope (AGGPRECOMP-2 brief). Stays a plain, unchanged query()
+    against county_benchmark, gated on the same bench_labels mapping as
+    before -- now sourced from snapshot_taxonomy.ptype_and_sort_case_for_view()
+    rather than a local if/elif, so this is still exactly one place that
+    mapping is defined, not two.
+
+    subtype capping (_cap_subtype_rows(), SNAPSHOT_SUBTYPE_CAP) and the
+    top-5/bottom-5 neighborhood-mover slicing both stay READ-TIME operations
+    here, unchanged in behavior -- see schema.sql's snapshot_breakdown /
+    snapshot_neighborhood_movers comments for why: both operate over
+    already-small, already-precomputed rows (cheap Python sort/slice), not
+    a live DB aggregate, so neither belongs in the refresh script per the
+    spec's own "aggregation logic lives only inside refresh functions"
+    principle -- capping/slicing isn't aggregation, it's display shaping.
     """
-    # classi_cd-first membership (Task 1): a parcel is placed by its actual
-    # improvement use (apartments -> Multi-Family) before its state_cd1 prefix.
-    # NOTE: ptype_case/sort_case below reference "p." (the parcel table
-    # alias used directly in the flattened breakdown query, Part 1 round 3
-    # fix). They previously referenced "y25." back when this data came
-    # through an intermediate y25 CTE; p.state_cd1/p.classi_cd are the same
-    # columns the old y25 CTE passed through unchanged, so this is a
-    # rename only, not a logic change.
-    #
-    # view_where is now computed once via the shared _snapshot_view_where()
-    # helper (module-level, near CANONICAL_PARCEL_EXCL above) rather than
-    # per-branch below, so snapshot_neighborhood()'s route can reuse the
-    # exact same view -> property-type scoping instead of re-deriving it.
-    view_where = _snapshot_view_where(view)
-    # Issue B fix (July 2026): the five sector branches below used to be
-    # hand-rolled CASEs assuming two-character state_cd1 sub-prefixes
-    # (A1/A2/A4, B1-B4, C1/C2, ...).
-    #
-    # CORRECTION (Diego caught this via check_other_property_type_fix.py's
-    # Section 0 live output): an earlier version of this comment claimed
-    # those sub-prefixes "don't exist in the real data" -- that's factually
-    # wrong for Commercial specifically. state_cd1 IS populated at
-    # two-character granularity there: F1 (14,660 parcels), F2 (472), L1
-    # (41,310), L2 (1,194) -- over 57,000 real parcels with genuine,
-    # populated sub-codes. The old Commercial branch (LEFT(state_cd1,1)='F'
-    # / 'L') would in fact have worked fine at the 1-character level it
-    # checked; it just collapsed F1/F2 and L1/L2 into two coarse buckets
-    # ("Commercial Improved" / "Commercial Land / RE") instead of the four
-    # real sub-codes. (Residential/Multi-Family/Land/Agricultural's actual
-    # granularity is still pending the same live check -- don't assume the
-    # Commercial finding generalizes to them without checking.)
-    #
-    # So the justification for switching to classi_cd here is NOT "the old
-    # approach was impossible" -- for Commercial it plainly wasn't. It's
-    # that the real TCAD use code (classi_cd) is a MORE DESCRIPTIVE
-    # breakdown than state_cd1 sub-codes would be even where those exist:
-    # classi_cd is what /api/benchmark/meta's use_codes_by_type already
-    # groups by for Search's Use Code filter (specific use descriptions like
-    # "Office Small (<10,000 SF)", not just "Commercial Improved"), so
-    # reusing it here means a sector's breakdown table and its Use Code
-    # filter show the same subtypes for the same data, and every sector
-    # (not just the ones with populated state_cd1 sub-codes) gets a
-    # consistent, genuinely descriptive breakdown -- vacant land and some
-    # agricultural parcels have no classi_cd at all (see
-    # use_code_case_sql()'s docstring), so state_cd1 sub-codes may still be
-    # the better signal for those specific sectors once Section 0's numbers
-    # are in; flagging that as worth a follow-up look, not deciding it here.
-    #
-    # sort_case reuses ptype_case itself (not a numeric placeholder) for
-    # these dynamically-discovered-subtype views, since there's no fixed
-    # canonical order the way the 5-category "overall" branch has one.
-    # IMPORTANT: do not replace this with a bare integer literal like "0" --
-    # Postgres treats a bare integer constant inside GROUP BY / GROUPING
-    # SETS as an ordinal reference to a SELECT-list column position (see
-    # https://www.postgresql.org/docs/current/queries-table-expressions.html:
-    # "the name or ordinal number of an output column ... or an arbitrary
-    # expression"), and "0" isn't a valid position (1-based), which is
-    # exactly what crashed this query with "GROUP BY position 0 is not in
-    # select list" -- confirmed against the Postgres docs and a matching
-    # failure report in another ORM (linq2db#4349, same class of bug: "const
-    # is part of grouping" hitting ordinal-position parsing). Reusing
-    # ptype_case is a real expression, never an integer literal, so it can
-    # never be misparsed as a position reference -- and since it's the exact
-    # same expression already in the grouping tuple, grouping by
-    # (ptype_case, ptype_case) is identical in effect to grouping by
-    # (ptype_case) alone; no behavior change beyond fixing the crash. These
-    # views sort by parcel count instead of sort_key, see order_by_expr
-    # below.
-    order_by_expr = "sort_key NULLS LAST"
-    # Part 1 (this round): the 8 new Market-Snapshot-scoped sector tabs, plus
-    # "Other", replace the old 5-branch if/elif below. "commercial" is kept
-    # as its own legacy branch (byte-identical to before this round) for old
-    # deep links -- see _snapshot_view_where()'s docstring. "overall" now
-    # groups by the new taxonomy too, for consistency with the tab bar it
-    # sits above (see that branch's own comment).
-    if view in _SNAPSHOT_SECTOR_VIEWS:
-        sector_label = _SNAPSHOT_SECTOR_VIEWS[view]
-        fallback = "Uncategorized" if sector_label == "Other" else f"Other {sector_label}"
-        # bench_trends source: county_benchmark (compute_metrics.py,
-        # untouched) only has the canonical 5-category labels. Retail/
-        # Industrial/Office/Hotel all borrow the canonical "Commercial"
-        # trend -- the real historical data available at that granularity
-        # covers the whole Commercial category, not this specific sub-tab;
-        # the template must caveat this explicitly, not present it as
-        # sub-tab-specific history. "Other" has no canonical equivalent at
-        # all (a residual across several canonical categories, not one of
-        # them) -- no trend shown, honestly, rather than guessing which
-        # canonical bucket to borrow from.
-        bench_labels = {
-            "Residential":  ["Residential"],
-            "Multi-Family": ["Multi-Family"],
-            "Retail":       ["Commercial"],
-            "Industrial":   ["Commercial"],
-            "Office":       ["Commercial"],
-            "Hotel":        ["Commercial"],
-            "Land/Vacant":  ["Land/Vacant"],
-            "Agricultural": ["Agricultural"],
-            "Other":        [],
-        }[sector_label]
-        # Land/Ag fix (August 2026): classi_cd is structurally absent for
-        # vacant land (it's sourced entirely from IMP_INFO.TXT -- only
-        # parcels WITH a building improvement get one; see the big comment
-        # above SNAPSHOT_LAND_SIZE_TIERS for the full evidence). use_code_
-        # case_sql() collapsed both sectors to one ELSE row identical to the
-        # grand total for exactly that reason. These two sectors use
-        # land_sqft size tiers instead of a use-code breakdown; every other
-        # sector is unaffected.
-        if view == "land":
-            ptype_case = _size_tier_case_sql("p.land_sqft", SNAPSHOT_LAND_SIZE_TIERS)
-        elif view == "agricultural":
-            ptype_case = _size_tier_case_sql("p.land_sqft", SNAPSHOT_AG_SIZE_TIERS)
-        else:
-            ptype_case = use_code_case_sql("p.classi_cd", fallback)
-        sort_case = ptype_case
-        order_by_expr = "n_parcels DESC NULLS LAST"
-    elif view == "commercial":
-        # Legacy view -- unchanged from before this round, kept working for
-        # old deep links (nav dropdown, Search's canonical Property Type
-        # filter). Not one of the 10 tabs on the page. Still subject to the
-        # same Part 2 subtype cap applied below (after the query), so a user
-        # who does reach it via an old link doesn't see the ~40-row wall of
-        # subtypes this session already fixed once for the new tabs.
-        bench_labels  = ["Commercial"]
-        ptype_case = use_code_case_sql("p.classi_cd", "Other Commercial")
-        sort_case = ptype_case
-        order_by_expr = "n_parcels DESC NULLS LAST"
-    else:  # overall
-        # view_where is already "" for "overall" via _snapshot_view_where()
-        # above (N* exclusion lives in canonical_excl instead, applied
-        # unconditionally to every view).
-        #
-        # Part 1 (this round): Overall's own "By Property Type" breakdown now
-        # uses the SAME new 9-way Market Snapshot taxonomy as the 8 sector
-        # tabs beneath it, not the old 5-category canonical split. Kept
-        # consistent deliberately -- showing Overall in the old 5-category
-        # scheme right next to a tab bar of 9 different sectors would
-        # reproduce the exact "two classifiers disagree" confusion this
-        # session has spent all day finding and fixing, one level up.
-        # bench_trends below still pulls the full canonical 5-category set --
-        # that's a different chart (the multi-year county trend), and the
-        # canonical categories are still the right granularity for a
-        # multi-year historical comparison; only THIS breakdown table
-        # switched taxonomies.
-        bench_labels  = ["Residential", "Multi-Family", "Commercial", "Land/Vacant", "Agricultural"]
-        _ov_tax = _snapshot_taxonomy_sql("p.classi_cd", "p.state_cd1")
-        ptype_case = _ov_tax
-        sort_case  = _snapshot_taxonomy_sort_case_sql(_ov_tax)
-
-    # Canonical parcel-eligibility filter — now the module-level
-    # CANONICAL_PARCEL_EXCL (see its docstring above), so snapshot_neighborhood()
-    # reuses the exact same constant rather than a second copy of this
-    # literal. Applied uniformly below to every query in this function —
-    # confirmed directly (Task SNAPSHOT-CORRECTNESS-1, Aug 2026), not
-    # assumed from this comment alone: the breakdown query, BOTH
-    # _single_year_mv_totals() calls (2025 and 2026), the Part 4 aggregate,
-    # the status_2026/cert_agg query, and the neighborhoods query all
-    # reference this one `canonical_excl` variable — five distinct query
-    # bodies, not the three this comment names (a separate, pre-existing
-    # inaccuracy in this comment, left as-is — not this task's scope to
-    # correct).
-    #
-    # L-class (Business Personal Property) fix (Task SNAPSHOT-CORRECTNESS-1,
-    # Aug 2026): measured live, 2025 county-wide total included 205
-    # state_cd1='L' parcels worth $9,969,617,448 (2.52% of the computed
-    # total) — CANONICAL_PARCEL_EXCL does not exclude 'L' (see
-    # parcel_filters.py's NON_REAL_PROPERTY_GAP_CLASSES comment for the full
-    # investigation, from Task AGGPRECOMP-1-FIX), and this function's own
-    # _snapshot_taxonomy_sql() has no bucket for state_cd1='L' rows whose
-    # classi_cd doesn't land in Retail/Industrial/Office/Hotel — they fall
-    # through to 'Other' and get counted in the GROUPING SETS grand total
-    # via this same WHERE clause. Fixed here, at this one assignment point,
-    # by combining CANONICAL_PARCEL_EXCL with the already-built-and-tested
-    # exclude_non_real_property_gap_sql() helper (parcel_filters.py) —
-    # deliberately NOT folded into CANONICAL_PARCEL_EXCL itself, which
-    # would silently change /api/benchmark's and /parcels's live results
-    # too, without being asked (same reasoning as Task AGGPRECOMP-1-FIX's
-    # own report). Scoped to this function only.
-    #
-    # NOTE (flagged, not fixed here — out of this task's stated scope):
-    # snapshot_neighborhood() (below) does NOT go through this variable —
-    # it references CANONICAL_PARCEL_EXCL directly (see its own query,
-    # "{CANONICAL_PARCEL_EXCL}"), so it still has this same L-class
-    # contamination in its neighborhood drill-down listing/pagination.
-    # Diego should decide whether that's a follow-up task.
-    canonical_excl = CANONICAL_PARCEL_EXCL + f" AND ({exclude_non_real_property_gap_sql('p.state_cd1')})"
-
-    # Part 1 performance fix — full history, corrected as later rounds
-    # falsified earlier hypotheses:
-    #   - Round 2: merged rows+totals into one query via GROUPING SETS.
-    #     Real fix, held up.
-    #   - Round 3: hypothesized the CTE structure itself was the problem
-    #     and flattened it to a plain FROM/JOIN ("Variant B"). This turned
-    #     out to be a NO-OP: Postgres 15 auto-inlines non-recursive,
-    #     singly-referenced CTEs by default, so the CTE and flat forms are
-    #     byte-identical in plan cost. The apparent "35-45% win" was a
-    #     cache-warming artifact from running EXPLAIN ANALYZE variants
-    #     back-to-back in one session — confirmed wrong when a fresh,
-    #     standalone run reproduced the original slow timings exactly.
-    #   - Round 4: identified the REAL bottleneck — Postgres's planner
-    #     consistently chooses a Nested Loop with ~407,000 individual
-    #     per-row index probes against parcel_tax_year_pkey for the second
-    #     (tax_year=2026) join, instead of a Hash/Merge Join. Confirmed via
-    #     task_staging/snapshot_perf/check_snapshot_nestloop_off.command:
-    #     each query run 4x (on/off/on/off) to rule out cache-order bias.
-    #     Forcing the join off beat the planner's own choice every time:
-    #     breakdown 480-1489ms (off) vs 3008-9644ms (on); Part 4 aggregate
-    #     299-535ms (off) vs 974-2491ms (on); neighborhoods 361-362ms (off)
-    #     vs 2382-2393ms (on, rock-steady both runs — no cache ambiguity).
-    #     Fix: query_no_nestloop() (defined near query(), see its docstring
-    #     for the full scoping rationale) applies a transaction-scoped
-    #     SET LOCAL enable_nestloop = off to exactly these three queries —
-    #     not a session- or server-wide change, and not to be copied onto
-    #     other queries without the same on/off verification.
-    # rows (per-property-type breakdown) and totals (grand-total row) stay
-    # merged via GROUPING SETS ((ptype, sort_key), ()) — one pass over the
-    # join produces both; that part of the round-2 fix held up throughout.
-    # A real ptype value is never NULL (every ptype_case branch above has
-    # an ELSE / COALESCE), so "ptype IS NULL" unambiguously identifies the
-    # total row below.
-    breakdown = query_no_nestloop(f"""
-        SELECT
-            ({ptype_case})                                                                  AS ptype,
-            ({sort_case})                                                                    AS sort_key,
-            COUNT(*)                                                                        AS n_parcels,
-            SUM(CASE WHEN t26.market_value > t25.market_value THEN 1 ELSE 0 END)            AS n_up,
-            SUM(CASE WHEN t26.market_value < t25.market_value THEN 1 ELSE 0 END)            AS n_down,
-            SUM(CASE WHEN t26.market_value = t25.market_value THEN 1 ELSE 0 END)            AS n_flat,
-            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
-                ORDER BY (t26.market_value - t25.market_value)::FLOAT / t25.market_value
-            )::NUMERIC * 100, 2)                                                            AS median_pct,
-            ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (
-                ORDER BY (t26.market_value - t25.market_value)::FLOAT / t25.market_value
-            )::NUMERIC * 100, 2)                                                            AS p25_pct,
-            ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (
-                ORDER BY (t26.market_value - t25.market_value)::FLOAT / t25.market_value
-            )::NUMERIC * 100, 2)                                                            AS p75_pct,
-            ROUND(SUM(t25.market_value)::NUMERIC / 1e9, 3)                                  AS total_mv25_b,
-            ROUND(SUM(t26.market_value)::NUMERIC / 1e9, 3)                                  AS total_mv26_b
-        FROM parcel p
-        JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
-        JOIN parcel_tax_year t26 ON t26.geo_id = p.geo_id AND t26.tax_year = 2026
-        WHERE t25.market_value > 0
-          AND t26.market_value > 0
-          {canonical_excl}
-          {view_where}
-        GROUP BY GROUPING SETS ((({ptype_case}), ({sort_case})), ())
-        ORDER BY {order_by_expr}
-    """)
-
-    rows = [r for r in breakdown if r["ptype"] is not None]
-
-    # INNER JOIN suppression fix (July 2026, "Fix parcel-exclusion
-    # filtering" brief, item 5): the breakdown query above requires BOTH a
-    # 2025 AND a 2026 row to exist for a parcel before it counts at all
-    # (t25/t26 are both plain JOINs). That's the correct requirement for
-    # n_up/n_down/n_flat/median_pct/p25_pct/p75_pct -- a "% change" is only
-    # meaningful for a parcel present in both years, so those fields are
-    # untouched. It is NOT correct for total_mv25_b/total_mv26_b: a parcel
-    # loaded for 2025 but not yet present in the 2026 preliminary batch (or
-    # vice versa) was being silently dropped from BOTH years' dollar totals
-    # by the paired JOIN, not just the year it's actually missing from --
-    # part of what produced this investigation's ~20% county-total
-    # undercount (alongside the NULL-state_cd1 bug fixed in
-    # parcel_filters.py).
-    #
-    # Fixed by computing each year's dollar total independently, with its
-    # OWN single-year query that has no dependency on the other year's join
-    # succeeding, then overwriting (not merging with) the paired query's
-    # total_mv25_b/total_mv26_b values below -- both per-ptype (so section
-    # subtotals are correct too) and for the grand total row. ptype_case
-    # only ever references p.classi_cd/p.state_cd1 (confirmed: it's a
-    # year-independent classification of the PARCEL, not of either year's
-    # market_value row), so it's safe to reuse verbatim against a
-    # single-year join aliased just `t`.
-    #
-    # Uses plain query(), NOT query_no_nestloop(): that helper's own
-    # docstring reserves it for the three queries in this function that
-    # join parcel_tax_year TWICE (once per year) and were EMPIRICALLY
-    # confirmed, via repeated on/off EXPLAIN ANALYZE runs, to hit a specific
-    # planner misjudgment on that second join. A single-year query here has
-    # only one parcel_tax_year join -- a structurally different shape with
-    # no evidence it shares that problem. Reaching for query_no_nestloop()
-    # here anyway, without measurement, would be exactly the kind of
-    # unverified assumption this file's own perf-fix history (see the
-    # rounds 2-4 comments above) explicitly warns against.
-    def _single_year_mv_totals(year):
-        return query(f"""
-            SELECT
-                ({ptype_case})                                  AS ptype,
-                ROUND(SUM(t.market_value)::NUMERIC / 1e9, 3)     AS total_mv_b
-            FROM parcel p
-            JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = {year}
-            WHERE t.market_value > 0
-              {canonical_excl}
-              {view_where}
-            GROUP BY GROUPING SETS ((({ptype_case})), ())
-        """)
-
-    _mv25_by_ptype = {r["ptype"]: r["total_mv_b"] for r in _single_year_mv_totals(2025)}
-    _mv26_by_ptype = {r["ptype"]: r["total_mv_b"] for r in _single_year_mv_totals(2026)}
-    for r in rows:
-        r["total_mv25_b"] = _mv25_by_ptype.get(r["ptype"], r["total_mv25_b"])
-        r["total_mv26_b"] = _mv26_by_ptype.get(r["ptype"], r["total_mv26_b"])
-
-    # Part 2 fix: cap the within-tab subtype breakdown to the top
-    # SNAPSHOT_SUBTYPE_CAP rows by parcel count for sector-scoped views
-    # (the new 8 tabs, plus the legacy "commercial" view) -- see
-    # _cap_subtype_rows()'s docstring for exactly what is and isn't safe to
-    # combine across the rolled-up rows. Not applied to "overall": that
-    # breakdown is already just the 9 sector labels themselves (one row per
-    # tab), never more than SNAPSHOT_SUBTYPE_CAP+2 rows, so there's nothing
-    # to cap.
-    if view in _SNAPSHOT_SECTOR_VIEWS or view == "commercial":
-        # Land/Ag fix: their "fallback" concept is the largest size tier's
-        # own label ("20+ Acres" / "200+ Acres"), not an "Other <Sector>"
-        # use-code bucket -- matters only if the tier lists above ever grow
-        # past SNAPSHOT_SUBTYPE_CAP (currently they're 6/5 tiers + "Size Not
-        # Available" = 7/6 rows max, so capping is a no-op today either way).
-        if view == "land":
-            _fallback_label = SNAPSHOT_LAND_SIZE_TIERS[-1][1]
-        elif view == "agricultural":
-            _fallback_label = SNAPSHOT_AG_SIZE_TIERS[-1][1]
-        else:
-            _fallback_label = "Uncategorized" if view == "other" else f"Other {_SNAPSHOT_SECTOR_VIEWS.get(view) or 'Commercial'}"
-        rows = _cap_subtype_rows(rows, _fallback_label)
-    _total_row = next((r for r in breakdown if r["ptype"] is None), None)
-    totals = None
-    if _total_row:
-        totals = {
-            "n_total":      _total_row["n_parcels"],
-            "n_up":         _total_row["n_up"],
-            "n_down":       _total_row["n_down"],
-            "n_flat":       _total_row["n_flat"],
-            # INNER JOIN suppression fix (see the comment above rows'
-            # per-ptype merge): the grand total also comes from the
-            # independent single-year queries, not the paired-JOIN row.
-            "total_mv25_b": _mv25_by_ptype.get(None, _total_row["total_mv25_b"]),
-            "total_mv26_b": _mv26_by_ptype.get(None, _total_row["total_mv26_b"]),
-            "median_pct":   _total_row["median_pct"],
+    is_fresh, unavailable_reason = _snapshot_summary_freshness()
+    if not is_fresh:
+        return {
+            "data_unavailable": True,
+            "data_unavailable_reason": unavailable_reason,
+            "rows": [],
+            "totals": None,
+            "bench_trends": [],
+            "new_construction_count": 0,
+            "risk_flagged_count": 0,
+            "subtype_cap": SNAPSHOT_SUBTYPE_CAP,
+            "top_neighborhoods": [],
+            "bottom_neighborhoods": [],
+            "status_2026": "none",
         }
 
-    # ── County Benchmark Annual Trends for the selected view ─────────────────
-    # Pull from county_benchmark for the relevant property_type_label(s).
+    # bench_labels/fallback_label reused verbatim from the same shared
+    # helper the refresh script itself used to build these views' SQL --
+    # guarantees this read-time logic can never silently drift from what
+    # was actually computed at write time (see that function's docstring).
+    _, _, bench_labels, _order_by_expr, fallback_label = ptype_and_sort_case_for_view(view)
+    sector_or_commercial = view in _SNAPSHOT_SECTOR_VIEWS or view == "commercial"
+    order_sql = "ORDER BY n_parcels DESC NULLS LAST" if sector_or_commercial else "ORDER BY sort_key::int NULLS LAST"
+
+    rows = [dict(r) for r in query(f"""
+        SELECT ptype, sort_key, n_parcels, n_up, n_down, n_flat,
+               median_pct, p25_pct, p75_pct, total_mv25_b, total_mv26_b
+        FROM snapshot_breakdown
+        WHERE view = %s
+        {order_sql}
+    """, (view,))]
+
+    # Part 2 fix (unchanged behavior): cap the within-tab subtype breakdown
+    # to the top SNAPSHOT_SUBTYPE_CAP rows by parcel count for sector-scoped
+    # views (the 8 tabs, plus the legacy "commercial" view). Not applied to
+    # "overall" (fallback_label is None there -- never more than 9 rows to
+    # begin with).
+    if sector_or_commercial:
+        rows = _cap_subtype_rows(rows, fallback_label)
+
+    totals_row = query("""
+        SELECT n_total, n_up, n_down, n_flat, median_pct, total_mv25_b, total_mv26_b,
+               new_construction_count, risk_flagged_count, n_preliminary_2026, n_total_2026
+        FROM snapshot_totals
+        WHERE view = %s
+    """, (view,), one=True)
+
+    totals = None
+    new_construction_count = 0
+    risk_flagged_count = 0
+    # M4-2026-PRELIM-SNAPSHOT Part 1 (unchanged derivation, now read-time
+    # over the precomputed n_preliminary_2026/n_total_2026 counts instead of
+    # a live cert_agg query): "certified"/"preliminary"/"mixed"/"none".
+    status_2026 = "none"
+    if totals_row:
+        totals = {
+            "n_total":      totals_row["n_total"],
+            "n_up":         totals_row["n_up"],
+            "n_down":       totals_row["n_down"],
+            "n_flat":       totals_row["n_flat"],
+            "total_mv25_b": totals_row["total_mv25_b"],
+            "total_mv26_b": totals_row["total_mv26_b"],
+            "median_pct":   totals_row["median_pct"],
+        }
+        new_construction_count = int(totals_row["new_construction_count"] or 0)
+        risk_flagged_count = int(totals_row["risk_flagged_count"] or 0)
+        n_prelim = int(totals_row["n_preliminary_2026"] or 0)
+        n_total_2026 = int(totals_row["n_total_2026"] or 0)
+        if n_total_2026:
+            if n_prelim == 0:
+                status_2026 = "certified"
+            elif n_prelim == n_total_2026:
+                status_2026 = "preliminary"
+            else:
+                status_2026 = "mixed"
+
+    # ── County Benchmark Annual Trends for the selected view (unchanged --
+    # out of Tier 1 scope, see docstring above) ──────────────────────────
     bench_trends = []
     if bench_labels:
         fmt_labels = ", ".join(f"'{lb}'" for lb in bench_labels)
@@ -4044,125 +3336,27 @@ def _compute_snapshot_data(view):
             ORDER BY tax_year, property_type_label
         """)
 
-    # ── New aggregate features (Part 4) — all read-only aggregation over
-    # data that's already computed/loaded; no new pipeline. Same
-    # canonical_excl/view_where scoping as the breakdown query above, so
-    # "in the current sector" means the identical population already shown
-    # in the table.
-    #
-    # Round 4 performance fix: this query was the single biggest cost on
-    # the page (4322ms). Confirmed via check_snapshot_nestloop_off.command
-    # that the cause is the planner's Nested Loop misjudgment on the
-    # tax_year=2026 join (see query_no_nestloop()'s docstring for the full
-    # on/off evidence) — not the CTE-vs-flat syntax. Uses
-    # query_no_nestloop() rather than query() for exactly this reason.
-    new_construction_count = 0
-    risk_flagged_count = 0
-    if totals:
-        agg = query_no_nestloop(f"""
-            SELECT
-                -- "Recent" = same cutoff as the Search page's New Construction
-                -- Quick Filter (runQuickFilter() in search.html): tax_year - 1
-                -- ("built in the last year" — updated Aug 2026,
-                -- NICK-DELINQUENT-1 Part 4, from the prior tax_year - 3 rule).
-                -- Here tax_year is this page's own preliminary year, 2026, so
-                -- 2026 - 1 = 2025 — reusing that exact rule, not a new cutoff.
-                -- Deliberately kept in sync, per this comment's own original
-                -- intent (see NICK-DELINQUENT-1's final report for the
-                -- reasoning: nothing else in the codebase depends on the old
-                -- tax_year - 3 window specifically, so there's no correctness
-                -- reason to let these two "new construction" figures diverge).
-                COUNT(*) FILTER (WHERE p.year_built >= 2025)              AS n_new_construction,
-                COUNT(*) FILTER (WHERE pm.risk_large_value_jump = TRUE)   AS n_risk_flagged
-            FROM parcel p
-            JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
-            JOIN parcel_tax_year t26 ON t26.geo_id = p.geo_id AND t26.tax_year = 2026
-            LEFT JOIN parcel_metrics pm ON pm.geo_id = p.geo_id AND pm.tax_year = 2026
-            WHERE t25.market_value > 0
-              AND t26.market_value > 0
-              {canonical_excl}
-              {view_where}
-        """, one=True)
-        if agg:
-            new_construction_count = int(agg["n_new_construction"] or 0)
-            risk_flagged_count = int(agg["n_risk_flagged"] or 0)
-
-    # M4-2026-PRELIM-SNAPSHOT Part 1 fix: this page's 2026 labels (header
-    # badge, KPI badge, By Property Type section header, footer) used to
-    # hardcode "Preliminary" regardless of actual data_source -- today's
-    # certified load means most/all 2026 rows in-scope for this view are
-    # now certified. Scoped to the same population the breakdown table
-    # above shows (canonical_excl + view_where, both years present), same
-    # technique as /api/benchmark's n_preliminary fix and
-    # snapshot_neighborhood()'s status_2026. One query for the whole view
-    # (not per property-type row) since the page's shared header/footer
-    # text is view-wide, not per-row.
-    status_2026 = "none"
-    if totals:
-        cert_agg = query_no_nestloop(f"""
-            SELECT
-                COUNT(*) FILTER (WHERE t26.data_source = 'preliminary') AS n_preliminary,
-                COUNT(*)                                                AS n_total
-            FROM parcel p
-            JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
-            JOIN parcel_tax_year t26 ON t26.geo_id = p.geo_id AND t26.tax_year = 2026
-            WHERE t25.market_value > 0
-              AND t26.market_value > 0
-              {canonical_excl}
-              {view_where}
-        """, one=True)
-        if cert_agg and cert_agg["n_total"]:
-            n_prelim = int(cert_agg["n_preliminary"] or 0)
-            n_total = int(cert_agg["n_total"])
-            if n_prelim == 0:
-                status_2026 = "certified"
-            elif n_prelim == n_total:
-                status_2026 = "preliminary"
-            else:
-                status_2026 = "mixed"
-
-    # Top/bottom moving neighborhoods within the current sector. county_benchmark
-    # has no neighborhood_cd column (confirmed via schema.sql — it's county-wide
-    # only, PRIMARY KEY county_code/tax_year/property_type_label), so this is a
-    # new read aggregation grouped by neighborhood_cd, not a new data pipeline.
-    # HAVING COUNT(*) >= 10 excludes tiny neighborhoods (a 2-parcel neighborhood
-    # with one outlier would otherwise dominate the "biggest mover" list with a
-    # noisy, not-representative swing) — a judgment call, flagged rather than
-    # silently baked in.
-    #
-    # Round 4 performance fix: isolated at 2122ms via
-    # check_snapshot_other_queries.command — the same planner Nested Loop
-    # misjudgment as the other two queries (query_no_nestloop()'s docstring
-    # has the full on/off evidence). This one was the cleanest signal:
-    # the default plan was rock-steady ~2.4s across repeated runs, so
-    # there's no cache-order ambiguity in that comparison.
+    # Top/bottom moving neighborhoods (unchanged behavior): every
+    # neighborhood clearing HAVING COUNT(*) >= 10 was already filtered AT
+    # REFRESH TIME (see schema.sql's snapshot_neighborhood_movers comment)
+    # -- this is a cheap read-time sort/slice over what's typically a few
+    # dozen rows per view, not a new aggregate.
     top_neighborhoods = []
     bottom_neighborhoods = []
     if totals:
-        nb_rows = query_no_nestloop(f"""
-            SELECT
-                p.neighborhood_cd,
-                COUNT(*) AS n_parcels,
-                ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
-                    ORDER BY (t26.market_value - t25.market_value)::FLOAT / t25.market_value
-                )::NUMERIC * 100, 2) AS median_pct
-            FROM parcel p
-            JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
-            JOIN parcel_tax_year t26 ON t26.geo_id = p.geo_id AND t26.tax_year = 2026
-            WHERE t25.market_value > 0
-              AND t26.market_value > 0
-              {canonical_excl}
-              AND p.neighborhood_cd IS NOT NULL AND p.neighborhood_cd != ''
-              {view_where}
-            GROUP BY p.neighborhood_cd
-            HAVING COUNT(*) >= 10
+        nb_rows = query("""
+            SELECT neighborhood_cd, n_parcels, median_pct
+            FROM snapshot_neighborhood_movers
+            WHERE view = %s
             ORDER BY median_pct DESC
-        """)
+        """, (view,))
         if nb_rows:
-            top_neighborhoods = [dict(r) for r in nb_rows[:5]]
-            bottom_neighborhoods = [dict(r) for r in nb_rows[-5:]][::-1]
+            nb_rows = [dict(r) for r in nb_rows]
+            top_neighborhoods = nb_rows[:5]
+            bottom_neighborhoods = nb_rows[-5:][::-1]
 
     return {
+        "data_unavailable": False,
         "rows": rows,
         "totals": totals,
         "bench_trends": bench_trends,
@@ -4201,7 +3395,9 @@ def snapshot_neighborhood(code):
 
     Uses plain query(), NOT query_no_nestloop() — deliberately, despite the
     superficial resemblance to the breakdown/Part 4/neighborhoods queries
-    that DO need it. Measured via
+    that used to need it, back when they still ran live (now migrated to
+    reading precomputed summary tables, see _compute_snapshot_data()).
+    Measured via
     task_staging/neighborhood_drilldown/check_neighborhood_drilldown_perf.command:
     for this query, Nested Loop is 15-100x FASTER than forcing it off
     (3-5ms vs 79-367ms), the opposite of those other three. The difference
@@ -4209,10 +3405,12 @@ def snapshot_neighborhood(code):
     first, narrowing to ~79 rows before the two-year join, where an
     indexed point-lookup Nested Loop is the correct, fast plan — unlike
     the whole-county queries that fix targeted, where the planner's own
-    Nested Loop choice was the actual problem. query_no_nestloop() exists
-    for a specific, measured misjudgment, not as a general "always avoid
-    Nested Loop" switch — see its docstring, which warns against exactly
-    this kind of over-generalization.
+    Nested Loop choice was the actual problem. (query_no_nestloop() itself
+    was later retired entirely, Task AGGPRECOMP-2 -- its whole-county
+    callers moved to reading precomputed summary tables instead of running
+    live; this route was never one of those callers, so it's unaffected by
+    that migration and still runs its own live, indexed point-lookup query
+    exactly as described above.)
     """
     view = request.args.get("view", "overall")
     if view not in _SNAPSHOT_VALID_VIEWS:

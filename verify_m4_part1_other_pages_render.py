@@ -150,6 +150,7 @@ def main():
     def _snapshot_ctx(status_2026, mode="investor"):
         return dict(
             view="overall", mode=mode, status_2026=status_2026,
+            data_unavailable=False, data_unavailable_reason=None,
             rows=[_bd_row("Residential", 100.0, 106.0), _bd_row("Retail", 20.0, 21.0),
                   _bd_row("Industrial", 15.0, 15.5), _bd_row("Office", 10.0, 10.2),
                   _bd_row("Hotel", 5.0, 5.1), _bd_row("Multi-Family", 30.0, 32.0)],
@@ -167,10 +168,47 @@ def main():
           lambda: tpl.render(**_snapshot_ctx("mixed")))
     check("snapshot.html / status certified (homeowner)",
           lambda: tpl.render(**_snapshot_ctx("certified", mode="homeowner")))
-    check("snapshot.html / totals=None (no-data branch)",
+    check("snapshot.html / totals=None (no-data branch, e.g. an empty view)",
           lambda: tpl.render(view="overall", mode="investor", status_2026="none", rows=[], totals=None,
+                              data_unavailable=False, data_unavailable_reason=None,
                               bench_trends=[], new_construction_count=0, risk_flagged_count=0,
                               subtype_cap=8, top_neighborhoods=[], bottom_neighborhoods=[]))
+
+    # Task AGGPRECOMP-2 (Aug 2026): the new "no live fallback, ever" gate --
+    # _compute_snapshot_data() (app.py) now returns data_unavailable=True
+    # with a real reason string when the Tier 1 summary tables are missing/
+    # stale/inconsistent, instead of any of the fields above. This must
+    # render a real, visible banner and MUST NOT touch rows/totals/etc (all
+    # deliberately omitted from this context, matching exactly what
+    # _compute_snapshot_data() actually returns in this branch -- if the
+    # template accidentally referenced one of those omitted keys outside the
+    # data_unavailable gate, this render would raise, not silently pass).
+    def check_unavailable_banner(label, reason):
+        def _render():
+            out = tpl.render(view="overall", mode="investor",
+                              data_unavailable=True, data_unavailable_reason=reason,
+                              status_2026="none")
+            if "temporarily unavailable" not in out:
+                raise AssertionError("expected banner text 'temporarily unavailable' not found in output")
+            if reason not in out:
+                raise AssertionError(f"expected reason text {reason!r} not found in output")
+            return out
+        check(label, _render)
+
+    check_unavailable_banner(
+        "snapshot.html / data_unavailable=True (missing table)",
+        "Market Snapshot summary data has not been generated yet (snapshot_breakdown is empty). "
+        "This page reads only precomputed data -- run loaders/refresh_snapshot_summary.py to populate it.",
+    )
+    check_unavailable_banner(
+        "snapshot.html / data_unavailable=True (stale)",
+        "Market Snapshot data is stale -- a newer data load has not yet been reflected here. "
+        "Run loaders/refresh_snapshot_summary.py to refresh it.",
+    )
+    check("snapshot.html / data_unavailable=True (homeowner mode, still renders)",
+          lambda: tpl.render(view="residential", mode="homeowner",
+                              data_unavailable=True, data_unavailable_reason="Test reason.",
+                              status_2026="none"))
 
     print()
     if FAILURES:

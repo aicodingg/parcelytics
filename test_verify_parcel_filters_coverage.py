@@ -54,10 +54,6 @@ def check(name, condition, detail=""):
 CLEAN_APP_PY = """
 from parcel_filters import CANONICAL_PARCEL_EXCL, peer_state_cd1_match_sql
 
-def _compute_snapshot_data(view):
-    canonical_excl = CANONICAL_PARCEL_EXCL
-    query(f"... {canonical_excl} ...")
-
 @app.route("/snapshot/neighborhood/<code>")
 def snapshot_neighborhood(code):
     query(f"... {CANONICAL_PARCEL_EXCL} ...")
@@ -71,13 +67,15 @@ def parcel_list():
     query(f"... {CANONICAL_PARCEL_EXCL} ...")
 """
 
+# DELIBERATE CORRUPTION CASE 1's target function moved, Task AGGPRECOMP-2:
+# _compute_snapshot_data() is no longer in CANONICAL_EXCL_CONSUMERS at all
+# (it reads precomputed tables, has no exclusion logic of its own to
+# corrupt) -- the retyped-literal drift scenario this corruption case
+# exercises now targets parcel_list() instead, one of the consumers still
+# actually checked, keeping the same "a real consumer stops referencing the
+# canonical symbol" intent.
 CORRUPTED_APP_PY_RETYPED_LITERAL = """
 from parcel_filters import CANONICAL_PARCEL_EXCL, peer_state_cd1_match_sql
-
-def _compute_snapshot_data(view):
-    # DRIFT: someone "helpfully" inlined the fragment instead of importing it
-    canonical_excl = "AND state_cd1 NOT LIKE 'X%%' AND state_cd1 NOT LIKE 'N%%' AND geo_id NOT LIKE 'AJR%%'"
-    query(f"... {canonical_excl} ...")
 
 @app.route("/snapshot/neighborhood/<code>")
 def snapshot_neighborhood(code):
@@ -89,7 +87,9 @@ def api_benchmark():
 
 @app.route("/parcels")
 def parcel_list():
-    query(f"... {CANONICAL_PARCEL_EXCL} ...")
+    # DRIFT: someone "helpfully" inlined the fragment instead of importing it
+    canonical_excl = "AND state_cd1 NOT LIKE 'X%%' AND state_cd1 NOT LIKE 'N%%' AND geo_id NOT LIKE 'AJR%%'"
+    query(f"... {canonical_excl} ...")
 """
 
 CLEAN_COMPUTE_METRICS_PY = """
@@ -103,22 +103,57 @@ def compute_county_benchmarks():
     query(f"WHERE ... {excl}")
 """
 
+# Task AGGPRECOMP-2 (Aug 2026): the 5 new CANONICAL_EXCL_CONSUMERS entries
+# pointing at loaders/refresh_snapshot_summary.py -- module-constant
+# indirection (CANONICAL_EXCL), not a direct reference or a wrapper-function
+# call. Every fixture below that exercises check_excl_consumers_reference_
+# canonical() / check_import_requirements() against the FULL, real
+# CANONICAL_EXCL_CONSUMERS list must include this file too, or those 5
+# entries report "file not found" and drag the pass count down regardless
+# of what app.py/compute_metrics.py fixtures say.
+CLEAN_REFRESH_SNAPSHOT_SUMMARY_PY = """
+from parcel_filters import CANONICAL_PARCEL_EXCL, exclude_non_real_property_gap_sql
+
+CANONICAL_EXCL = CANONICAL_PARCEL_EXCL + f" AND ({exclude_non_real_property_gap_sql('p.state_cd1')})"
+
+def breakdown_sql(view):
+    return f"... {CANONICAL_EXCL} ..."
+
+def single_year_mv_sql(view, year):
+    return f"... {CANONICAL_EXCL} ..."
+
+def part4_agg_sql(view):
+    return f"... {CANONICAL_EXCL} ..."
+
+def cert_agg_sql(view):
+    return f"... {CANONICAL_EXCL} ..."
+
+def neighborhoods_sql(view):
+    return f"... {CANONICAL_EXCL} ..."
+"""
+
+_ALL_CONSUMER_FILES = {
+    "app.py": CLEAN_APP_PY,
+    "loaders/compute_metrics.py": CLEAN_COMPUTE_METRICS_PY,
+    "loaders/refresh_snapshot_summary.py": CLEAN_REFRESH_SNAPSHOT_SUMMARY_PY,
+}
+
 
 def test_excl_consumers_pass_on_clean_fixture():
-    files = {"app.py": CLEAN_APP_PY, "loaders/compute_metrics.py": CLEAN_COMPUTE_METRICS_PY}
-    passed, detail, problems = vpfc.check_excl_consumers_reference_canonical(files)
-    check("CLEAN fixture: all 5 exclusion consumers verified", passed, detail)
+    passed, detail, problems = vpfc.check_excl_consumers_reference_canonical(_ALL_CONSUMER_FILES)
+    check(f"CLEAN fixture: all {len(vpfc.CANONICAL_EXCL_CONSUMERS)} exclusion consumers verified", passed, detail)
 
 
 def test_excl_consumers_deliberate_corruption_retyped_literal():
-    """DELIBERATE CORRUPTION CASE 1: _compute_snapshot_data stops
-    referencing CANONICAL_PARCEL_EXCL and re-types the fragment inline
-    instead. This MUST fail the check."""
-    files = {"app.py": CORRUPTED_APP_PY_RETYPED_LITERAL, "loaders/compute_metrics.py": CLEAN_COMPUTE_METRICS_PY}
+    """DELIBERATE CORRUPTION CASE 1: parcel_list() stops referencing
+    CANONICAL_PARCEL_EXCL and re-types the fragment inline instead. This
+    MUST fail the check. (Retargeted from _compute_snapshot_data(), Task
+    AGGPRECOMP-2 -- see CORRUPTED_APP_PY_RETYPED_LITERAL's own comment.)"""
+    files = {**_ALL_CONSUMER_FILES, "app.py": CORRUPTED_APP_PY_RETYPED_LITERAL}
     passed, detail, problems = vpfc.check_excl_consumers_reference_canonical(files)
     check(
         "CORRUPTION CASE: retyped-literal consumer correctly FAILS",
-        passed is False and any(p[1] == "_compute_snapshot_data" for p in problems),
+        passed is False and any(p[1] == "parcel_list" for p in problems),
         detail,
     )
 
@@ -128,8 +163,7 @@ def test_excl_consumers_wrapper_indirection_still_passes():
     real run) actually works: compute_county_benchmarks() only references
     CANONICAL_PARCEL_EXCL_BARE through its _exclude_clause() helper, not
     directly -- this must still PASS, not be a false failure."""
-    files = {"app.py": CLEAN_APP_PY, "loaders/compute_metrics.py": CLEAN_COMPUTE_METRICS_PY}
-    passed, detail, problems = vpfc.check_excl_consumers_reference_canonical(files)
+    passed, detail, problems = vpfc.check_excl_consumers_reference_canonical(_ALL_CONSUMER_FILES)
     check(
         "Wrapper-indirection fixture (compute_county_benchmarks -> _exclude_clause) passes, not a false failure",
         passed,
@@ -151,11 +185,102 @@ def compute_county_benchmarks():
     excl = _exclude_clause()
     query(f"WHERE ... {excl}")
 """
-    files = {"app.py": CLEAN_APP_PY, "loaders/compute_metrics.py": broken_wrapper}
+    files = {**_ALL_CONSUMER_FILES, "loaders/compute_metrics.py": broken_wrapper}
     passed, detail, problems = vpfc.check_excl_consumers_reference_canonical(files)
     check(
         "CORRUPTION CASE: wrapper indirection pointing at nothing correctly FAILS",
         passed is False and any(p[1] == "compute_county_benchmarks" for p in problems),
+        detail,
+    )
+
+
+def test_excl_consumers_module_constant_indirection_still_passes():
+    """Task AGGPRECOMP-2's new indirection kind (KNOWN_MODULE_CONSTANT_
+    INDIRECTIONS): loaders/refresh_snapshot_summary.py's 5 query-builder
+    functions only reference CANONICAL_EXCL (a module-level constant), never
+    CANONICAL_PARCEL_EXCL directly -- this must PASS, not be a false
+    failure, proving the constant-indirection mechanism (sibling of the
+    wrapper-function one above) actually works."""
+    passed, detail, problems = vpfc.check_excl_consumers_reference_canonical(_ALL_CONSUMER_FILES)
+    refresh_problems = [p for p in problems if p[0] == "loaders/refresh_snapshot_summary.py"]
+    check(
+        "Module-constant-indirection fixture (refresh_snapshot_summary.py's 5 fns -> CANONICAL_EXCL) passes",
+        len(refresh_problems) == 0,
+        detail,
+    )
+
+
+def test_excl_consumers_module_constant_indirection_broken_case_still_fails():
+    """If CANONICAL_EXCL itself stops referencing CANONICAL_PARCEL_EXCL
+    (the constant indirection is real but now points at nothing), the check
+    must still catch it -- same proof-of-teeth as the wrapper-indirection
+    broken case above, for the new indirection kind."""
+    broken_refresh_script = """
+from parcel_filters import CANONICAL_PARCEL_EXCL, exclude_non_real_property_gap_sql
+
+CANONICAL_EXCL = "AND state_cd1 NOT LIKE 'X%%'"  # BROKEN: doesn't build on the canonical import above
+
+def breakdown_sql(view):
+    return f"... {CANONICAL_EXCL} ..."
+
+def single_year_mv_sql(view, year):
+    return f"... {CANONICAL_EXCL} ..."
+
+def part4_agg_sql(view):
+    return f"... {CANONICAL_EXCL} ..."
+
+def cert_agg_sql(view):
+    return f"... {CANONICAL_EXCL} ..."
+
+def neighborhoods_sql(view):
+    return f"... {CANONICAL_EXCL} ..."
+"""
+    files = {**_ALL_CONSUMER_FILES, "loaders/refresh_snapshot_summary.py": broken_refresh_script}
+    passed, detail, problems = vpfc.check_excl_consumers_reference_canonical(files)
+    check(
+        "CORRUPTION CASE: module-constant indirection pointing at nothing correctly FAILS",
+        passed is False and any(p[0] == "loaders/refresh_snapshot_summary.py" for p in problems),
+        detail,
+    )
+
+
+# ── check_snapshot_data_no_longer_duplicates_exclusion_logic() ─────────────
+def test_snapshot_data_no_duplication_pass_on_clean_fixture():
+    """_compute_snapshot_data() reading precomputed tables, no exclusion
+    logic of its own -- must PASS."""
+    clean_no_dup_app_py = """
+def _compute_snapshot_data(view):
+    totals_row = query("SELECT * FROM snapshot_totals WHERE view = %s", (view,), one=True)
+    return {"totals": totals_row}
+
+@app.route("/snapshot/neighborhood/<code>")
+def snapshot_neighborhood(code):
+    pass
+"""
+    files = {"app.py": clean_no_dup_app_py}
+    passed, detail, offenders = vpfc.check_snapshot_data_no_longer_duplicates_exclusion_logic(files)
+    check("CLEAN fixture: _compute_snapshot_data() has no re-duplicated exclusion logic", passed, detail)
+
+
+def test_snapshot_data_no_duplication_deliberate_corruption_reintroduced_live_query():
+    """DELIBERATE CORRUPTION CASE: a future edit reintroduces a live query
+    with its own canonical_excl inside _compute_snapshot_data() -- exactly
+    the regression this new check exists to catch. This MUST fail."""
+    corrupted_app_py = """
+def _compute_snapshot_data(view):
+    canonical_excl = CANONICAL_PARCEL_EXCL
+    breakdown = query(f"SELECT 1 FROM parcel p WHERE 1=1 {canonical_excl}")
+    return {"rows": breakdown}
+
+@app.route("/snapshot/neighborhood/<code>")
+def snapshot_neighborhood(code):
+    pass
+"""
+    files = {"app.py": corrupted_app_py}
+    passed, detail, offenders = vpfc.check_snapshot_data_no_longer_duplicates_exclusion_logic(files)
+    check(
+        "CORRUPTION CASE: reintroduced live canonical_excl in _compute_snapshot_data() correctly FAILS",
+        passed is False and any(o[1] == "_compute_snapshot_data" for o in offenders),
         detail,
     )
 
@@ -326,8 +451,7 @@ def use_it():
 
 # ── Check import requirements ───────────────────────────────────────────────
 def test_import_requirements_pass_on_clean_fixture():
-    files = {"app.py": CLEAN_APP_PY, "loaders/compute_metrics.py": CLEAN_COMPUTE_METRICS_PY}
-    passed, detail, missing = vpfc.check_import_requirements(files)
+    passed, detail, missing = vpfc.check_import_requirements(_ALL_CONSUMER_FILES)
     check("CLEAN fixture: import requirements satisfied", passed, detail)
 
 

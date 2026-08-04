@@ -55,6 +55,29 @@ the live county-wide total actually drops by the measured $9,969,617,448.
 Diego's own live re-run is required for both -- see this task's final
 report for exact before/after numbers to check.
 
+── UPDATE, Task AGGPRECOMP-2 (Aug 2026) ─────────────────────────────────────
+_compute_snapshot_data() (app.py) no longer runs live queries at all -- it
+was rewired to read the 5 precomputed summary values (breakdown, both
+single-year MV totals, the Part 4 aggregate, cert_agg, neighborhoods) out of
+snapshot_breakdown/snapshot_totals/snapshot_neighborhood_movers, which
+loaders/refresh_snapshot_summary.py now computes ONCE per data load. The
+canonical_excl assignment and its 5 query-site references this test
+originally checked for INSIDE _compute_snapshot_data() genuinely moved,
+in full, to that refresh script (module-level CANONICAL_EXCL constant,
+referenced by all 5 of its SQL-builder functions: breakdown_sql,
+single_year_mv_sql, part4_agg_sql, cert_agg_sql, neighborhoods_sql) -- this
+is the correct, intended effect of that migration (per
+SPEC_AGGREGATE_PRECOMPUTATION.md's own "aggregation logic lives only inside
+refresh functions" principle), not a regression of this fix. The two real-
+source checks below (test_canonical_excl_assignment_includes_l_exclusion,
+test_all_five_known_query_sites_still_reference_canonical_excl) are updated
+to check loaders/refresh_snapshot_summary.py instead of app.py -- the actual
+invariant these tests protect ("the L-exclusion fix reaches every real query
+site") is still real and still worth guarding, it just needs to watch the
+new location. See loaders/test_refresh_snapshot_summary.py for that
+migration's own, more complete fixture-test coverage (all 11 real views, not
+just a source-grep count).
+
 Run: python3 test_snapshot_correctness_1.py
 """
 import os
@@ -98,51 +121,71 @@ def _read_real_app_py():
         return f.read()
 
 
-# ── 1-2: real app.py source checks ───────────────────────────────────────
-def test_canonical_excl_assignment_includes_l_exclusion():
-    source = _read_real_app_py()
-    body = _extract_function_body(source, "_compute_snapshot_data")
-    check("_compute_snapshot_data() found in app.py", body is not None)
-    if body is None:
-        return
+def _read_real_refresh_snapshot_summary_py():
+    path = os.path.join(REPO_ROOT, "loaders", "refresh_snapshot_summary.py")
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
 
-    m = re.search(r"canonical_excl\s*=\s*(.+)", body)
-    check("canonical_excl assignment line found", m is not None)
+
+# ── 1-2: real source checks -- AGGPRECOMP-2 (Aug 2026) moved these from
+# app.py's _compute_snapshot_data() (which no longer runs any live query at
+# all) to loaders/refresh_snapshot_summary.py, where the same 5 query bodies
+# now actually live. See this file's module docstring "UPDATE" section. ────
+def test_canonical_excl_assignment_includes_l_exclusion():
+    source = _read_real_refresh_snapshot_summary_py()
+
+    m = re.search(r"^CANONICAL_EXCL\s*=\s*(.+)$", source, re.MULTILINE)
+    check("CANONICAL_EXCL assignment line found in loaders/refresh_snapshot_summary.py",
+          m is not None)
     if m is None:
         return
     assignment_line = m.group(1)
 
-    check("canonical_excl assignment still references CANONICAL_PARCEL_EXCL",
+    check("CANONICAL_EXCL assignment still references CANONICAL_PARCEL_EXCL",
           "CANONICAL_PARCEL_EXCL" in assignment_line, assignment_line)
-    check("canonical_excl assignment now also calls exclude_non_real_property_gap_sql()",
+    check("CANONICAL_EXCL assignment now also calls exclude_non_real_property_gap_sql()",
           "exclude_non_real_property_gap_sql" in assignment_line, assignment_line)
-    check("canonical_excl assignment passes p.state_cd1 (the parcel-table alias used throughout this function)",
+    check("CANONICAL_EXCL assignment passes p.state_cd1 (the parcel-table alias used throughout these queries)",
           "'p.state_cd1'" in assignment_line or '"p.state_cd1"' in assignment_line, assignment_line)
+
+    # _compute_snapshot_data() itself (app.py) must NOT have re-derived its
+    # own copy of this exclusion logic -- it should read precomputed values
+    # instead of assembling any canonical_excl-shaped WHERE fragment at all.
+    app_source = _read_real_app_py()
+    body = _extract_function_body(app_source, "_compute_snapshot_data")
+    check("_compute_snapshot_data() found in app.py", body is not None)
+    if body is not None:
+        check("_compute_snapshot_data() no longer assembles its own canonical_excl "
+              "(the exclusion logic lives only in the refresh script now, not duplicated here)",
+              "canonical_excl" not in body, body)
 
 
 def test_all_five_known_query_sites_still_reference_canonical_excl():
     """
-    The 5 distinct query bodies this task's investigation confirmed exist
-    inside _compute_snapshot_data() (not the 3 the function's own stale
-    comment names -- see this task's report): the breakdown query,
-    _single_year_mv_totals() (one query body, called twice), the Part 4
-    aggregate, the status_2026/cert_agg query, and the neighborhoods query.
-    All must still say "{canonical_excl}" verbatim -- if any query site
-    stopped referencing the variable (e.g. someone re-typed
-    CANONICAL_PARCEL_EXCL directly into one query later), this fix would
-    silently stop covering that one query, and this test would catch it.
+    The 5 distinct query-builder functions loaders/refresh_snapshot_summary.py
+    now runs ONCE per data load (breakdown_sql, single_year_mv_sql -- one
+    query shape, called twice for 2025/2026, part4_agg_sql, cert_agg_sql,
+    neighborhoods_sql) must all still reference "{CANONICAL_EXCL}" verbatim
+    -- if any query builder stopped referencing the constant (e.g. someone
+    re-typed CANONICAL_PARCEL_EXCL directly into one function later), this
+    fix would silently stop covering that one query, and this test would
+    catch it. Mirrors the original test's intent (all 5 real query sites
+    covered, not just the assignment looking correct), updated for where
+    those 5 sites actually live post-AGGPRECOMP-2.
     """
-    source = _read_real_app_py()
-    body = _extract_function_body(source, "_compute_snapshot_data")
-    check("_compute_snapshot_data() found in app.py", body is not None)
-    if body is None:
-        return
+    source = _read_real_refresh_snapshot_summary_py()
 
-    occurrences = body.count("{canonical_excl}")
-    check("canonical_excl is referenced at least 5 times in _compute_snapshot_data() "
-          "(breakdown, 1x _single_year_mv_totals body, Part 4 aggregate, "
-          "status_2026/cert_agg, neighborhoods)",
+    occurrences = source.count("{CANONICAL_EXCL}")
+    check("CANONICAL_EXCL is referenced at least 5 times in loaders/refresh_snapshot_summary.py "
+          "(breakdown_sql, single_year_mv_sql, part4_agg_sql, cert_agg_sql, neighborhoods_sql)",
           occurrences >= 5, f"found {occurrences} occurrences")
+
+    for fn_name in ("breakdown_sql", "single_year_mv_sql", "part4_agg_sql",
+                    "cert_agg_sql", "neighborhoods_sql"):
+        body = _extract_function_body(source, fn_name)
+        check(f"{fn_name}() found in loaders/refresh_snapshot_summary.py", body is not None)
+        if body is not None:
+            check(f"{fn_name}() references {{CANONICAL_EXCL}}", "{CANONICAL_EXCL}" in body, body)
 
 
 # ── 3: deliberate-corruption case, same style as
