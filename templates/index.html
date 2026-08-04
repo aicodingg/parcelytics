@@ -58,8 +58,18 @@
            "no results" message) must never be visually indistinguishable
            from no search having run — this wrapper gives scrollToResults()
            below a stable anchor to bring into view on load, regardless of
-           which of the two branches below actually rendered. #}
-        <div id="searchResults">
+           which of the two branches below actually rendered.
+
+           USER-FEEDBACK-1 (Aug 2026): data-search-happened below is the
+           real signal scrollToResults() (in {% block scripts %} further
+           down this file) keys off of -- the exact same "addr_matches or
+           error" condition that already gates the two if-blocks
+           immediately below, not a separate client-side heuristic (e.g.
+           sniffing this div's rendered text content) that could silently
+           disagree with what the server actually decided to render. One
+           source of truth, read on both the server (which HTML to
+           render) and the client (whether to scroll to it). #}
+        <div id="searchResults" data-search-happened="{{ 'true' if (addr_matches or error) else 'false' }}">
         {% if addr_matches %}
         <div class="card mt-3" style="text-align:left;">
           <div class="card-header">{{ addr_matches|length }} matching parcel{{ 's' if addr_matches|length != 1 }} — select one</div>
@@ -354,15 +364,39 @@
 <script>
   ParcelTypeahead.attach({ inputId: "heroSearchInput" });
 
-  // Item D: scroll/anchor to the results section on load, including when
-  // the only thing rendered is the honest "no results" message — a
-  // completed search must never look identical to no search having run.
-  document.addEventListener("DOMContentLoaded", function () {
+  // Item D / USER-FEEDBACK-1 (Aug 2026, two independent beta-tester reports:
+  // "I didn't realize I had to scroll down to find the results" / "the page
+  // just refreshes and doesn't move you down to the error message"):
+  // scroll/anchor to the results section on load, including when the only
+  // thing rendered is the honest "no results" message — a completed search
+  // must never look identical to no search having run.
+  //
+  // Gated on #searchResults' own data-search-happened attribute (set above
+  // from the exact same `addr_matches or error` Jinja condition that decides
+  // what actually renders inside the div) -- NOT on sniffing this div's
+  // rendered text content client-side. That was the prior implementation's
+  // approach; per this brief's own investigation, the correct, single
+  // source of truth for "did a search just happen" is whatever the server
+  // already used to decide what to render, not a second, independently-
+  // maintained client-side guess that could drift from it (e.g. if a future
+  // edit ever renders a result block containing only an icon/whitespace
+  // with no real text, a text-content check would wrongly conclude no
+  // search happened and skip the scroll).
+  //
+  // scrollIntoView({behavior:"smooth"}) -- both testers described this as
+  // the page needing to "jump to" / "move down to" the results, i.e. a
+  // visible scroll motion; the prior implementation used the default
+  // (instant) behavior, which -- landing in the same paint as a full page
+  // navigation reload -- is easy to miss entirely, plausibly the actual
+  // mechanism behind "doesn't move you down... almost looks like it didn't
+  // search" even though a scroll call was technically already present.
+  function scrollToResults() {
     var results = document.getElementById("searchResults");
-    if (results && results.textContent.trim().length > 0) {
-      results.scrollIntoView({ block: "start" });
+    if (results && results.getAttribute("data-search-happened") === "true") {
+      results.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  });
+  }
+  document.addEventListener("DOMContentLoaded", scrollToResults);
 </script>
 
 {# ── Coverage map — Fable design spec, July 20, 2026. Full rewrite,
