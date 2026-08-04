@@ -718,6 +718,13 @@ CREATE TABLE IF NOT EXISTS load_batch (
 -- ever see either the fully-old or fully-new table, never a half-refreshed
 -- one. CREATE TABLE IF NOT EXISTS below defines the steady-state shape both
 -- group_stats and group_stats_shadow share.
+-- AGGPRECOMP-2-FIX-2 scope check (Fix 1): CONFIRMED, not assumed -- this
+-- table carries NO percentage columns at all (every stat below is an
+-- absolute dollar/count value: BIGINT for market/assessed value, NUMERIC
+-- (14,2) for total_tax), so it does NOT share snapshot_breakdown/
+-- snapshot_totals/snapshot_neighborhood_movers's median_pct/p25_pct/
+-- p75_pct overflow risk. Genuinely out of scope for Fix 1, verified by
+-- reading every column below, not inferred from "it's a different table."
 CREATE TABLE IF NOT EXISTS group_stats (
     neighborhood_cd_key      VARCHAR(20)  NOT NULL DEFAULT '',
     state_cd1_class          VARCHAR(1)   NOT NULL DEFAULT '',
@@ -798,16 +805,40 @@ CREATE TABLE IF NOT EXISTS group_stats_shadow (
 CREATE TABLE IF NOT EXISTS snapshot_breakdown (
     view                      VARCHAR(20)  NOT NULL,
     ptype                     VARCHAR(120) NOT NULL,
-    sort_key                  VARCHAR(120),           -- "1".."9"/"99" for overall; == ptype (byte-identical,
+    -- NOT NULL, matching the comment's own claim -- provably true, not just
+    -- documented: every CASE expression that can produce ptype (
+    -- use_code_case_sql(), _size_tier_case_sql(), _snapshot_taxonomy_sql())
+    -- has an ELSE fallback that always returns a real string, never SQL
+    -- NULL, and sort_key is either the identical expression (non-"overall"
+    -- views) or a further CASE over that same non-NULL expression with its
+    -- own ELSE 99 (_snapshot_taxonomy_sort_case_sql(), "overall" only) --
+    -- see AGGPRECOMP-2-FIX-2's report for the full call-chain proof. The
+    -- one row shape that legitimately has ptype/sort_key = NULL (the
+    -- GROUPING SETS grand-total row) is filtered out by
+    -- merge_breakdown_rows() before these rows ever reach this table --
+    -- it becomes the snapshot_totals row instead, never a snapshot_breakdown
+    -- row. If this invariant is ever violated by a future code change, this
+    -- constraint fails the INSERT loudly instead of silently writing NULL.
+    sort_key                  VARCHAR(120) NOT NULL,  -- "1".."9"/"99" for overall; == ptype (byte-identical,
                                                         -- same width) for other views -- see AGGPRECOMP-2-FIX
 
     n_parcels                 INTEGER      NOT NULL DEFAULT 0,
     n_up                      INTEGER      NOT NULL DEFAULT 0,
     n_down                    INTEGER      NOT NULL DEFAULT 0,
     n_flat                    INTEGER      NOT NULL DEFAULT 0,
-    median_pct                NUMERIC(7,2),
-    p25_pct                   NUMERIC(7,2),
-    p75_pct                   NUMERIC(7,2),
+    -- NUMERIC(10,2), not (7,2) -- AGGPRECOMP-2-FIX-2: (7,2) caps at
+    -- +/-99,999.99%, which sounds absurd until you remember a real small
+    -- breakdown group (a handful of parcels) can have a genuinely huge
+    -- median swing -- e.g. land-only parcels becoming improved between
+    -- years already produced a real +438% neighborhood median in
+    -- production. (10,2) still caps (at +/-99,999,999.99%) rather than
+    -- going unbounded, since an unbounded value here would almost always
+    -- indicate a genuine data error (a corrupt market_value) that SHOULD
+    -- fail loudly at insert, not be silently accepted -- see this task's
+    -- report for the real max observed vs. this cap's headroom.
+    median_pct                NUMERIC(10,2),
+    p25_pct                   NUMERIC(10,2),
+    p75_pct                   NUMERIC(10,2),
     total_mv25_b               NUMERIC(14,3),
     total_mv26_b               NUMERIC(14,3),
 
@@ -836,16 +867,31 @@ CREATE TABLE IF NOT EXISTS snapshot_breakdown_shadow (
 -- trivial derivation from n_preliminary_2026/n_total_2026 (three-line
 -- if/elif, not aggregation), computed at read time same as parcel_list()'s
 -- and snapshot_neighborhood()'s own already-Python-side status_2026 derivations.
+-- AGGPRECOMP-2-FIX-2: n_total/n_up/n_down/n_flat/median_pct/total_mv25_b/
+-- total_mv26_b are NOT NULL DEFAULT 0, matching snapshot_breakdown's own
+-- convention (was inconsistent: nullable here, NOT NULL DEFAULT 0 there,
+-- despite the same real design intent applying to both -- "a row being
+-- present means real, complete data"). This is provably safe, not just a
+-- style match: build_shadow() only INSERTs a snapshot_totals row `if
+-- totals_row:` (see build_shadow()), and totals_row is only ever non-None
+-- when the GROUPING SETS grand-total row itself existed, which requires
+-- COUNT(*) >= 1 real qualifying parcels -- so every field is always a real
+-- computed value at INSERT time, never a placeholder. A view with
+-- genuinely zero qualifying parcels gets NO ROW at all (see this table's
+-- original grain comment above) rather than a row of NULLs/zeros -- the
+-- DEFAULT 0 here is a pure safety net (matching snapshot_breakdown's own),
+-- never actually relied upon by the real INSERT path.
 CREATE TABLE IF NOT EXISTS snapshot_totals (
     view                      VARCHAR(20)  NOT NULL PRIMARY KEY,
 
-    n_total                   INTEGER,
-    n_up                      INTEGER,
-    n_down                    INTEGER,
-    n_flat                    INTEGER,
-    median_pct                NUMERIC(7,2),
-    total_mv25_b               NUMERIC(14,3),
-    total_mv26_b               NUMERIC(14,3),
+    n_total                   INTEGER      NOT NULL DEFAULT 0,
+    n_up                      INTEGER      NOT NULL DEFAULT 0,
+    n_down                    INTEGER      NOT NULL DEFAULT 0,
+    n_flat                    INTEGER      NOT NULL DEFAULT 0,
+    median_pct                NUMERIC(10,2) NOT NULL DEFAULT 0,  -- see snapshot_breakdown's median_pct
+                                                                  -- comment above for the (10,2) reasoning
+    total_mv25_b               NUMERIC(14,3) NOT NULL DEFAULT 0,
+    total_mv26_b               NUMERIC(14,3) NOT NULL DEFAULT 0,
 
     new_construction_count    INTEGER      NOT NULL DEFAULT 0,
     risk_flagged_count        INTEGER      NOT NULL DEFAULT 0,
@@ -875,7 +921,16 @@ CREATE TABLE IF NOT EXISTS snapshot_neighborhood_movers (
     neighborhood_cd           VARCHAR(20)  NOT NULL,
 
     n_parcels                 INTEGER      NOT NULL,
-    median_pct                NUMERIC(7,2),
+    -- NUMERIC(10,2), not (7,2) -- AGGPRECOMP-2-FIX-2 scope check: this
+    -- column wasn't named in the brief's Fix 1 list (only snapshot_
+    -- breakdown/snapshot_totals were), but it carries the exact same
+    -- per-group median_pct computed the exact same way (PERCENTILE_CONT
+    -- over the same YoY ratio), at an even SMALLER real group size
+    -- (HAVING COUNT(*) >= 10, vs. breakdown's typically-larger ptype
+    -- groups) -- if anything, neighborhood-level groups are MORE likely to
+    -- hit an extreme median than sector-level ones, not less. Widened for
+    -- the same real reason, not left out on a technicality.
+    median_pct                NUMERIC(10,2),
 
     source_import_batch_id    BIGINT       NOT NULL,
     refreshed_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),

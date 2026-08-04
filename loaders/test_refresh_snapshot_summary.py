@@ -656,6 +656,108 @@ def test_schema_sort_key_width_covers_the_real_measured_maximum():
           declared_width != 10, declared_width)
 
 
+# ── Part 6: AGGPRECOMP-2-FIX-2, Fix 3 — cross-table consistency assertion ──
+#
+# Fable's review flagged the real gap: proving the 3-table SWAP is atomic
+# (Part 4's tests above) is not the same claim as proving the DATA is
+# internally consistent -- a refresh could complete, swap cleanly, and
+# still write a snapshot_totals row whose numbers don't actually match the
+# real sum of that view's own snapshot_breakdown rows, if breakdown_sql()
+# and single_year_mv_sql() ever drift out of sync. Per Diego: prove this
+# assertion two ways -- passing on real/correct data, AND correctly firing
+# on deliberately corrupted data -- "an assertion that's never been proven
+# to fire is a hope, not a safeguard."
+
+def test_consistency_passes_on_matching_breakdown_and_totals():
+    conn = FakeConn(results_queue=[
+        # SUM(...) FROM snapshot_breakdown GROUP BY view -- 2 views
+        ([("overall", 1000, 600, 300, 100, 180.0, 190.0),
+          ("retail", 50, 30, 15, 5, 12.5, 13.0)],
+         ["view", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        # view, n_total, n_up, n_down, n_flat, total_mv25_b, total_mv26_b FROM snapshot_totals
+        ([("overall", 1000, 600, 300, 100, 180.0, 190.0),
+          ("retail", 50, 30, 15, 5, 12.5, 13.0)],
+         ["view", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+    ])
+    is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn)
+    check("consistency: is_consistent True when breakdown sums exactly match totals",
+          is_consistent is True, detail)
+    check("consistency: zero mismatches reported", detail["mismatches"] == [], detail["mismatches"])
+    check("consistency: both views checked", detail["views_checked"] == ["overall", "retail"], detail)
+
+
+def test_consistency_passes_within_dollar_tolerance():
+    """A few cents of independent-rounding drift between breakdown_sql()'s
+    per-ptype ROUND(...,3) and single_year_mv_sql()'s own independent
+    ROUND(...,3) is expected, benign behavior -- must NOT false-positive."""
+    conn = FakeConn(results_queue=[
+        ([("overall", 1000, 600, 300, 100, 180.004, 190.0)],
+         ["view", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        ([("overall", 1000, 600, 300, 100, 180.0, 190.0)],
+         ["view", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+    ])
+    is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn, tolerance_b=0.01)
+    check("consistency: tiny rounding drift ($4K on a billions column) within tolerance -> still consistent",
+          is_consistent is True, detail)
+
+
+def test_consistency_fails_on_corrupted_n_total():
+    """Deliberate corruption: snapshot_totals.n_total doesn't match the real
+    sum of snapshot_breakdown.n_parcels for the same view -- proves the
+    assertion actually FIRES, not just that it can pass."""
+    conn = FakeConn(results_queue=[
+        ([("overall", 1000, 600, 300, 100, 180.0, 190.0)],
+         ["view", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        ([("overall", 995, 600, 300, 100, 180.0, 190.0)],  # n_total corrupted: 995 != real sum 1000
+         ["view", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+    ])
+    is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn)
+    check("consistency CORRUPTION CASE: is_consistent False when n_total doesn't match real breakdown sum",
+          is_consistent is False, detail)
+    check("consistency CORRUPTION CASE: mismatch identifies the n_total field",
+          any(m.get("field") == "n_total" for m in detail["mismatches"]), detail["mismatches"])
+    check("consistency CORRUPTION CASE: mismatch records both the real sum and the wrong stored value",
+          any(m.get("breakdown_sum") == 1000 and m.get("totals_value") == 995
+              for m in detail["mismatches"]), detail["mismatches"])
+
+
+def test_consistency_fails_on_corrupted_dollar_total_beyond_tolerance():
+    """Deliberate corruption: a genuine drift (not rounding noise) between
+    breakdown_sql()'s and single_year_mv_sql()'s dollar totals -- the exact
+    'refresh-logic drift' failure mode this assertion exists to catch
+    (matches the real SNAPSHOT-CORRECTNESS-1 bug class: one query site
+    missing a WHERE-clause fragment the other one has)."""
+    conn = FakeConn(results_queue=[
+        ([("overall", 1000, 600, 300, 100, 180.0, 190.0)],
+         ["view", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        ([("overall", 1000, 600, 300, 100, 180.0, 205.0)],  # total_mv26_b way off: 205 != real sum 190
+         ["view", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+    ])
+    is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn)
+    check("consistency CORRUPTION CASE: is_consistent False on a real (non-rounding) dollar-total drift",
+          is_consistent is False, detail)
+    check("consistency CORRUPTION CASE: mismatch identifies total_mv26_b specifically",
+          any(m.get("field") == "total_mv26_b" for m in detail["mismatches"]), detail["mismatches"])
+
+
+def test_consistency_fails_when_view_missing_from_one_table():
+    """A view present in snapshot_totals but with zero snapshot_breakdown
+    rows (or vice versa) should be impossible under a correct refresh --
+    proves this genuinely different corruption shape is also caught."""
+    conn = FakeConn(results_queue=[
+        ([("overall", 1000, 600, 300, 100, 180.0, 190.0)],
+         ["view", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        ([("overall", 1000, 600, 300, 100, 180.0, 190.0),
+          ("retail", 50, 30, 15, 5, 12.5, 13.0)],  # "retail" totals row with NO matching breakdown rows
+         ["view", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+    ])
+    is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn)
+    check("consistency CORRUPTION CASE: is_consistent False when a view's totals row has no breakdown rows",
+          is_consistent is False, detail)
+    check("consistency CORRUPTION CASE: mismatch names the orphaned view",
+          any(m["view"] == "retail" for m in detail["mismatches"]), detail["mismatches"])
+
+
 def main():
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

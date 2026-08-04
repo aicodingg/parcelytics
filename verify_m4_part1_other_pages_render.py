@@ -174,6 +174,54 @@ def main():
                               bench_trends=[], new_construction_count=0, risk_flagged_count=0,
                               subtype_cap=8, top_neighborhoods=[], bottom_neighborhoods=[]))
 
+    # AGGPRECOMP-2-FIX-2 fixture-coverage note (Fable's review): the render
+    # matrix needs at minimum overall + one SECTOR view + the empty-view
+    # case + the stale-data case, not just "overall" repeated under
+    # different status_2026 values. Everything above is "overall"; the
+    # data_unavailable cases below only use a sector view (residential) for
+    # the UNAVAILABLE branch, never for a real, POPULATED sector-view
+    # render. This scenario closes that gap: a real sector view ("retail")
+    # with MORE real subtype rows than SNAPSHOT_SUBTYPE_CAP (7), so the
+    # rollup/capping display path (_cap_subtype_rows() in app.py) is
+    # actually exercised through the template, not just "overall"'s
+    # always-<=9-rows path which never triggers capping at all.
+    def _sector_bd_row(ptype, n_parcels, mv25_b, mv26_b, med_pct=5.0):
+        # None median_pct (the real _cap_subtype_rows() rollup-row shape --
+        # see app.py's own docstring: a merged group's percentile is not a
+        # valid derived statistic) must NOT be arithmetic'd into p25/p75 --
+        # match the real function's behavior of setting all three to None
+        # together, not just median_pct.
+        p25 = p75 = None if med_pct is None else med_pct - 2
+        if med_pct is not None:
+            p75 = med_pct + 2
+        return {"ptype": ptype, "sort_key": ptype, "n_parcels": n_parcels, "n_up": 60, "n_down": 30,
+                "n_flat": 10, "median_pct": med_pct, "p25_pct": p25, "p75_pct": p75,
+                "total_mv25_b": mv25_b, "total_mv26_b": mv26_b}
+
+    check("snapshot.html / populated SECTOR view (retail, capped subtype rollup)",
+          lambda: tpl.render(
+              view="retail", mode="investor", status_2026="certified",
+              data_unavailable=False, data_unavailable_reason=None,
+              rows=[  # 8 real rows -- one more than SNAPSHOT_SUBTYPE_CAP=7, so the
+                      # last row here represents the ALREADY-ROLLED-UP "Other Retail"
+                      # bucket app.py's _cap_subtype_rows() would have produced --
+                      # this is a real, sector-shaped fixture, not "overall" reused.
+                  _sector_bd_row("Small Store (<10,000 SF)", 400, 50.0, 52.0),
+                  _sector_bd_row("Strip Center", 350, 45.0, 46.5),
+                  _sector_bd_row("Grocery Store", 200, 30.0, 31.0),
+                  _sector_bd_row("Fast Food", 150, 12.0, 12.5),
+                  _sector_bd_row("Restaurant (SFR Conv.)", 100, 8.0, 8.3),
+                  _sector_bd_row("Convenience Store", 80, 5.0, 5.2),
+                  _sector_bd_row("Auto Dealership", 60, 20.0, 21.0),
+                  _sector_bd_row("Other Retail", 90, 6.0, 6.1, med_pct=None),  # rollup row: no valid median
+              ],
+              totals={"n_total": 1430, "n_up": 800, "n_down": 500, "n_flat": 130,
+                      "total_mv25_b": 176.0, "total_mv26_b": 182.6, "median_pct": 4.8},
+              bench_trends=[], new_construction_count=18, risk_flagged_count=4,
+              subtype_cap=7, top_neighborhoods=[{"neighborhood_cd": "NB2", "n_parcels": 22, "median_pct": 9.1}],
+              bottom_neighborhoods=[{"neighborhood_cd": "NB9", "n_parcels": 14, "median_pct": -3.4}],
+          ))
+
     # Task AGGPRECOMP-2 (Aug 2026): the new "no live fallback, ever" gate --
     # _compute_snapshot_data() (app.py) now returns data_unavailable=True
     # with a real reason string when the Tier 1 summary tables are missing/

@@ -541,10 +541,138 @@ def assert_snapshot_summary_fresh(conn):
     return True, detail
 
 
+def assert_snapshot_breakdown_totals_consistent(conn, tolerance_b=0.01):
+    """
+    AGGPRECOMP-2-FIX-2, Fix 3 -- cross-table DATA consistency assertion, a
+    genuinely different check from assert_snapshot_summary_fresh() above.
+    That function proves the atomic swap kept all three tables on the same
+    batch_id (no partial-swap corruption); THIS one proves the data itself
+    is internally consistent -- that snapshot_totals' per-view aggregate
+    numbers actually equal the real, independently-computed sums over that
+    same view's own snapshot_breakdown rows. A refresh can complete
+    successfully, swap atomically, and STILL produce numbers that don't
+    add up if there's ever drift between breakdown_sql()'s and
+    single_year_mv_sql()'s WHERE/GROUP BY logic for a given view -- exactly
+    the class of bug SNAPSHOT-CORRECTNESS-1/AGGPRECOMP-1-FIX found and
+    fixed once already in the pre-migration live queries (a canonical_excl
+    fragment applied to one query site but not a sibling one). This
+    assertion is the harness's standing guard against that exact class of
+    bug recurring silently inside the refresh script.
+
+    n_total/n_up/n_down/n_flat are checked for EXACT equality -- they come
+    from the SAME breakdown_sql() GROUPING SETS query as the per-ptype
+    rows (just a different grouping-set level within ONE query execution),
+    so any real mismatch here means rows were lost/corrupted somewhere
+    between compute and write, not merely query-logic drift between two
+    different queries -- a stronger, more surprising failure mode.
+
+    total_mv25_b/total_mv26_b are checked within `tolerance_b` (default
+    0.01, i.e. $10K on a billions-denominated column) rather than exact
+    equality -- these DO come from a structurally separate query
+    (single_year_mv_sql()), independently ROUND()ed to 3 decimals at both
+    the per-ptype and grand-total aggregation levels, so a few cents of
+    independent-rounding drift accumulated across potentially hundreds of
+    ptype rows is expected, real, benign behavior -- not a bug worth
+    failing the assertion over.
+
+    median_pct is DELIBERATELY NOT checked here -- a percentile has no
+    valid mathematical identity relating a grand-total median to its
+    per-group medians (it is not a sum or an average of the parts), so
+    "checking" it would either be a meaningless no-op or, worse, a false
+    assertion of a relationship that doesn't actually hold. Deliberate
+    scope decision, not an oversight.
+
+    Returns (is_consistent: bool, detail: dict). detail["mismatches"] is a
+    list of every real discrepancy found (empty when fully consistent).
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT view,
+                   SUM(n_parcels)    AS sum_n_parcels,
+                   SUM(n_up)         AS sum_n_up,
+                   SUM(n_down)       AS sum_n_down,
+                   SUM(n_flat)       AS sum_n_flat,
+                   SUM(total_mv25_b) AS sum_mv25,
+                   SUM(total_mv26_b) AS sum_mv26
+            FROM snapshot_breakdown
+            GROUP BY view
+        """)
+        breakdown_sums = {
+            r[0]: {"n_parcels": r[1], "n_up": r[2], "n_down": r[3], "n_flat": r[4],
+                   "total_mv25_b": r[5], "total_mv26_b": r[6]}
+            for r in cur.fetchall()
+        }
+
+        cur.execute("""
+            SELECT view, n_total, n_up, n_down, n_flat, total_mv25_b, total_mv26_b
+            FROM snapshot_totals
+        """)
+        totals_by_view = {
+            r[0]: {"n_total": r[1], "n_up": r[2], "n_down": r[3], "n_flat": r[4],
+                   "total_mv25_b": r[5], "total_mv26_b": r[6]}
+            for r in cur.fetchall()
+        }
+
+    mismatches = []
+    all_views = sorted(set(breakdown_sums) | set(totals_by_view))
+    for view in all_views:
+        bsum = breakdown_sums.get(view)
+        tot = totals_by_view.get(view)
+
+        if bsum is None:
+            mismatches.append({"view": view,
+                                "reason": "snapshot_totals has a row for this view but "
+                                          "snapshot_breakdown has ZERO rows -- should be impossible"})
+            continue
+        if tot is None:
+            mismatches.append({"view": view,
+                                "reason": "snapshot_breakdown has rows for this view but "
+                                          "snapshot_totals has NO row -- should be impossible"})
+            continue
+
+        if bsum["n_parcels"] != tot["n_total"]:
+            mismatches.append({"view": view, "field": "n_total",
+                                "breakdown_sum": bsum["n_parcels"], "totals_value": tot["n_total"],
+                                "reason": "SUM(snapshot_breakdown.n_parcels) != snapshot_totals.n_total"})
+        for f in ("n_up", "n_down", "n_flat"):
+            if bsum[f] != tot[f]:
+                mismatches.append({"view": view, "field": f,
+                                    "breakdown_sum": bsum[f], "totals_value": tot[f],
+                                    "reason": f"SUM(snapshot_breakdown.{f}) != snapshot_totals.{f}"})
+
+        for f in ("total_mv25_b", "total_mv26_b"):
+            b_val = float(bsum[f] or 0)
+            t_val = float(tot[f] or 0)
+            if abs(b_val - t_val) > tolerance_b:
+                mismatches.append({"view": view, "field": f,
+                                    "breakdown_sum": b_val, "totals_value": t_val,
+                                    "diff": round(b_val - t_val, 6),
+                                    "reason": f"SUM(snapshot_breakdown.{f}) vs snapshot_totals.{f} "
+                                              f"differ by more than tolerance ({tolerance_b})"})
+
+    is_consistent = len(mismatches) == 0
+    detail = {
+        "views_checked": all_views,
+        "tolerance_b": tolerance_b,
+        "mismatches": mismatches,
+        "reason": ("all views' snapshot_totals match the real computed sums over their own "
+                   "snapshot_breakdown rows" if is_consistent else
+                   f"{len(mismatches)} real cross-table mismatch(es) found -- see detail['mismatches']"),
+    }
+    return is_consistent, detail
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="Compute + report row counts only; no writes")
-    ap.add_argument("--check-staleness", action="store_true", help="Run the staleness assertion only; no refresh")
+    ap.add_argument("--check-staleness", action="store_true",
+                     help="Run BOTH the staleness assertion AND the cross-table consistency "
+                          "assertion (AGGPRECOMP-2-FIX-2, Fix 3); no refresh. Two genuinely "
+                          "different checks -- swap atomicity vs. data correctness -- reported "
+                          "separately below even though this one flag runs both.")
+    ap.add_argument("--check-consistency", action="store_true",
+                     help="Run ONLY the cross-table consistency assertion (Fix 3); no refresh, "
+                          "no staleness check.")
     ap.add_argument("--batch-id", type=int, default=None,
                     help="Tag this refresh with an existing load_batch.batch_id "
                          "(future pipeline use; standalone runs normally omit this)")
@@ -558,13 +686,26 @@ def main():
         addr = cur.fetchone()[0]
     print(f"Target DB: {addr}  — confirm this is the environment you intend BEFORE any write commits.\n")
 
-    if args.check_staleness:
-        is_fresh, detail = assert_snapshot_summary_fresh(conn)
-        print(f"snapshot summary fresh: {is_fresh}")
+    if args.check_consistency:
+        is_consistent, detail = assert_snapshot_breakdown_totals_consistent(conn)
+        print(f"snapshot cross-table consistency: {is_consistent}")
         for k, v in detail.items():
             print(f"  {k}: {v}")
         conn.close()
-        sys.exit(0 if is_fresh else 1)
+        sys.exit(0 if is_consistent else 1)
+
+    if args.check_staleness:
+        is_fresh, fresh_detail = assert_snapshot_summary_fresh(conn)
+        print(f"snapshot summary fresh (swap-atomicity/provenance check): {is_fresh}")
+        for k, v in fresh_detail.items():
+            print(f"  {k}: {v}")
+        print()
+        is_consistent, consistency_detail = assert_snapshot_breakdown_totals_consistent(conn)
+        print(f"snapshot cross-table consistency (data-correctness check): {is_consistent}")
+        for k, v in consistency_detail.items():
+            print(f"  {k}: {v}")
+        conn.close()
+        sys.exit(0 if (is_fresh and is_consistent) else 1)
 
     result = refresh_snapshot_summary(conn, batch_id=args.batch_id, dry_run=args.dry_run)
     conn.close()
