@@ -1886,6 +1886,95 @@ _LIMIT_EXTERNAL  = "30 per hour"    # makes an external network call (portal scr
 _LIMIT_TYPEAHEAD = "60 per minute"  # high legitimate call frequency (per-keystroke), so per-minute not per-hour
 
 
+# ── Rate limit exemption allowlist (RATE-LIMIT-EXEMPT-1, Aug 2026) ────────────
+# Real incident: Diego got 429'd on his own production site by _LIMIT_HEAVY
+# during a live-testing session -- his real browser IP shares whatever
+# bucket that session's traffic consumed. config.RATE_LIMIT_EXEMPT_IPS
+# (env var RATE_LIMIT_EXEMPT_IPS, comma-separated) holds the allowlist.
+#
+# MECHANISM CHOSEN: @limiter.request_filter, not exempt_when= on individual
+# @limiter.limit(...) decorators. Investigated both (Flask-Limiter >=3.5,
+# the version pinned in requirements.txt, supports both):
+#   - exempt_when= is per-decorator -- would need to be repeated at every
+#     one of the ~13 @limiter.limit(_LIMIT_HEAVY/_LIMIT_EXTERNAL/
+#     _LIMIT_TYPEAHEAD) call sites in this file, AND would still leave the
+#     200/hour default_limits (which applies to every route with no
+#     explicit decorator) unexempted, since default_limits has no
+#     decorator to attach exempt_when= to at all.
+#   - request_filter is evaluated once per request, before ANY limit
+#     (default_limits or route-specific) is checked -- one function,
+#     applied uniformly to every tier automatically, by construction, no
+#     per-route repetition and no risk of a future new @limiter.limit(...)
+#     call site accidentally being added without the exemption attached
+#     (exactly the kind of partial-enforcement gap that makes a decorator-
+#     by-decorator approach fragile as this file grows).
+#
+# SCOPE DECISION: exempt ALL tiers (_LIMIT_HEAVY, _LIMIT_EXTERNAL,
+# _LIMIT_TYPEAHEAD, and the 200/hour default), not just _LIMIT_HEAVY.
+# Reasoning: Diego's actual use case is live-testing the whole site via an
+# automated browser session -- that traffic isn't confined to _LIMIT_HEAVY
+# routes alone, it hits typeahead (_LIMIT_TYPEAHEAD), billing/geocode
+# (_LIMIT_EXTERNAL), and everything under the default too. Exempting only
+# _LIMIT_HEAVY would leave him getting 429'd on, say, the address typeahead
+# mid-session -- not actually solving the real problem this brief exists
+# for. request_filter's all-tiers-uniformly behavior is a natural fit for
+# that, not an over-broad accident.
+#
+# REAL CLIENT IP -- Render sits behind its own edge/load balancer (and
+# Cloudflare in front of that, per Render's own community docs); this
+# app's `request.remote_addr` (what get_remote_address(), the limiter's
+# key_func, actually reads) is very likely RENDER'S PROXY IP, not the
+# real client's, on production -- there is no ProxyFix middleware or
+# gunicorn --forwarded-allow-ips configured anywhere in this codebase
+# (confirmed via grep) to translate X-Forwarded-For into remote_addr.
+# THIS DOES NOT BREAK THE EXEMPTION BELOW: request_filter short-circuits
+# rate-limit evaluation entirely for the whole request BEFORE key_func is
+# ever invoked, so this function's own IP detection (below) is what
+# matters for the exemption, independent of whatever the limiter's
+# key_func sees or doesn't see correctly. It DOES mean the limiter's
+# real-world bucketing (unrelated to this brief, out of scope to fix
+# here per "do not... rearchitecture") may currently be grouping ALL
+# production traffic under one shared proxy-IP bucket rather than one
+# bucket per real visitor -- flagged in this task's final report as a
+# separate, real, pre-existing finding worth its own investigation, not
+# silently ignored just because it isn't this brief's job to fix.
+#
+# _get_client_ip() below reads X-Forwarded-For (Render/Cloudflare's own
+# edge sets this, not directly attacker-controlled input reaching this
+# app -- a client can't bypass Render's edge to talk to this process
+# directly) and takes the LAST entry, not the first -- the standard
+# "trust exactly one hop of your own known reverse proxy" convention
+# (same rule Werkzeug's ProxyFix implements with x_for=1): if a request
+# somehow arrived with a client-supplied X-Forwarded-For already present,
+# the proxy appends its own observed value as the last entry, so trusting
+# the last entry (not the first) doesn't hand control of "which IP does
+# this look like" to arbitrary request input. Falls back to
+# request.remote_addr when the header is absent (e.g. local dev, or if
+# Render's proxy topology turns out not to set it the way assumed here).
+# NOT independently verified against Render's actual live proxy behavior
+# from this sandbox -- see this task's final report for what Diego needs
+# to confirm live.
+def _get_client_ip():
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
+    return request.remote_addr or "127.0.0.1"
+
+
+@limiter.request_filter
+def _rate_limit_exempt_ip():
+    return _get_client_ip() in config.RATE_LIMIT_EXEMPT_IPS
+
+
+if config.RATE_LIMIT_EXEMPT_IPS:
+    print(f"  Rate limit exemption: ENABLED for {len(config.RATE_LIMIT_EXEMPT_IPS)} "
+          f"IP(s): {', '.join(sorted(config.RATE_LIMIT_EXEMPT_IPS))}")
+else:
+    print(f"  Rate limit exemption: none configured (RATE_LIMIT_EXEMPT_IPS not set)")
+
+
 # ── Homeowner / Investor mode ─────────────────────────────────────────────────
 _MODES = ("homeowner", "investor")
 _MODE_COOKIE = "parcelytics_mode"

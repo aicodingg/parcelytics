@@ -156,6 +156,30 @@ if not FLASK_SECRET:
 # it exported), rather than erroring or silently using a placeholder.
 SENTRY_DSN = os.environ.get("SENTRY_DSN")
 
+# ── Rate limit exemption allowlist (RATE-LIMIT-EXEMPT-1, Aug 2026) ────────────
+# Diego got locked out of his own production site (429 Too Many Requests on
+# _LIMIT_HEAVY routes) during a live-testing session -- his real browser IP
+# shares whatever rate-limit bucket a Chrome-extension-driven testing session
+# consumes. Comma-separated list of IPs to fully exempt from every rate limit
+# (default_limits AND every @limiter.limit(...) tier -- see app.py's
+# request_filter for the reasoning on why this is applied uniformly rather
+# than per-tier). No default -- an unset/empty env var means an EMPTY
+# allowlist (nobody exempted), never "exempt everyone"; see
+# test_rate_limit_exempt.py's own explicit test for this failure mode.
+#
+# Same convention as SENTRY_DSN above: read once at import time via
+# os.environ.get(), no hardcoded fallback. Diego updates this the same way
+# he already updates Render's database IP allowlist when his location
+# changes (e.g. traveling to Dallas) -- edit the env var in Render's
+# dashboard, restart the service (not a full redeploy) to pick it up.
+# Parsed into a frozenset of stripped, non-empty strings so a trailing
+# comma or accidental whitespace ("1.2.3.4, 5.6.7.8, ") doesn't produce a
+# bogus empty-string entry that could (harmlessly, since "" would never
+# equal a real client IP, but confusingly) live in the set.
+RATE_LIMIT_EXEMPT_IPS = frozenset(
+    ip.strip() for ip in os.environ.get("RATE_LIMIT_EXEMPT_IPS", "").split(",") if ip.strip()
+)
+
 # ── Version ───────────────────────────────────────────────────────────────────
 # Cowork brief "Version Display + Single Source of Truth", July 2026. The
 # VERSION file at the repo root is the ONE place this number lives -- bump it
