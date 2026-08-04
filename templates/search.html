@@ -801,7 +801,7 @@ ParcelTypeahead.attach({ inputId: "spQ" });
             <td>${r.tax_year}</td>
             <td>${CONFIDENCE_BADGE[r.confidence] || ""}</td>
             <td class="text-end flt-delinquent-col" style="${delinquentActive ? "" : "display:none;"}">${r.total_due != null ? "$" + Math.round(r.total_due).toLocaleString() : "—"}</td>
-            <td class="flt-delinquent-col" style="${delinquentActive ? "" : "display:none;"}">${r.first_delinquent_yr != null ? r.first_delinquent_yr : "—"}</td>
+            <td class="flt-delinquent-col" style="${delinquentActive ? "" : "display:none;"}">${r.first_delinquent_yr ? r.first_delinquent_yr : "—"}</td>
           </tr>
         `).join("") || `<tr><td colspan="${delinquentActive ? 8 : 6}" class="na-cell text-center py-3">No parcels matched these filters.</td></tr>`;
         pageInfo.textContent = body.total_pages ? `Page ${body.page} of ${body.total_pages}` : "";
