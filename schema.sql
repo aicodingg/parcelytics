@@ -798,7 +798,8 @@ CREATE TABLE IF NOT EXISTS group_stats_shadow (
 CREATE TABLE IF NOT EXISTS snapshot_breakdown (
     view                      VARCHAR(20)  NOT NULL,
     ptype                     VARCHAR(120) NOT NULL,
-    sort_key                  VARCHAR(10),            -- "1".."9"/"99" for overall; == ptype for other views
+    sort_key                  VARCHAR(120),           -- "1".."9"/"99" for overall; == ptype (byte-identical,
+                                                        -- same width) for other views -- see AGGPRECOMP-2-FIX
 
     n_parcels                 INTEGER      NOT NULL DEFAULT 0,
     n_up                      INTEGER      NOT NULL DEFAULT 0,

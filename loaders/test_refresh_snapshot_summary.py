@@ -73,6 +73,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from loaders import refresh_snapshot_summary as rss
+import snapshot_taxonomy as _st
 from snapshot_taxonomy import _SNAPSHOT_VALID_VIEWS
 
 FAILURES = []
@@ -533,6 +534,126 @@ def test_assert_snapshot_summary_fresh_false_when_tables_disagree_with_each_othe
     check("cross-table-disagreement case: is_fresh False", is_fresh is False, detail)
     check("cross-table-disagreement case: reason mentions the tables disagreeing with each other",
           "disagree with each other" in detail["reason"], detail)
+
+
+# ── Part 5: AGGPRECOMP-2-FIX — sort_key width (StringDataRightTruncation) ──
+#
+# Real bug found running the real refresh against production: build_shadow()
+# writes sort_key = str(ptype) for every non-"overall" view (confirmed via
+# ptype_and_sort_case_for_view() -- sort_case IS ptype_case for those views),
+# but schema.sql's snapshot_breakdown.sort_key was VARCHAR(10). Real
+# USE_CODE_LOOKUP descriptions/fallback labels/size-tier labels routinely
+# exceed 10 characters (measured real max: 29 chars, e.g.
+# "Self-Service (Car Wash Booth)" and "Mini-Warehouse / Self-Storage") ->
+# psycopg2.errors.StringDataRightTruncation on the real INSERT.
+#
+# Why --dry-run didn't catch it: refresh_snapshot_summary()'s dry_run branch
+# only calls _compute_one_view() and does Python-side len() counts -- it
+# never calls build_shadow() and never issues a single INSERT statement, so
+# the VARCHAR(10) constraint was never evaluated by dry-run at all. Only the
+# real (non-dry-run) path calls build_shadow(), which is the only code path
+# that actually sends sort_key to Postgres for constraint checking.
+#
+# Fix: widened sort_key to VARCHAR(120), matching ptype's own column width
+# exactly (schema.sql's own comment already documented the contract
+# "== ptype for other views" -- sort_key is meant to be byte-identical to
+# ptype for these views, not a derived/truncated code, so truncating it
+# would violate that documented contract and risk silently conflating two
+# distinct long ptype values that happen to share a truncated prefix).
+# sort_key is not used for read-time ORDER BY on non-"overall" views either
+# (app.py's order_sql uses "ORDER BY n_parcels DESC NULLS LAST" for
+# sector/commercial views; "ORDER BY sort_key::int NULLS LAST" only applies
+# to "overall", whose sort_key is always a short "1".."9"/"99" string and is
+# unaffected by this bug) -- so there is no functional reason to keep it
+# artificially short, and matching ptype's already-established width closes
+# off the whole failure mode permanently rather than picking a new number
+# that could be outgrown again if TCAD lengthens a use-code description.
+
+def test_build_shadow_does_not_truncate_a_realistically_long_sort_key():
+    """Reproduces the exact real-world shape of the bug: a non-'overall'
+    view whose sort_key equals a real, long USE_CODE_LOOKUP-style ptype
+    string (29 chars -- the actual measured real-data maximum, taken
+    verbatim from USE_CODE_LOOKUP's real 'Self-Service (Car Wash Booth)'
+    entry). Proves build_shadow()'s own Python code does not itself
+    mangle/truncate the value before sending it to Postgres -- the fix here
+    is schema-side (column width), not a code change, and this test proves
+    the code path faithfully passes the full string through unmodified."""
+    long_ptype = "Self-Service (Car Wash Booth)"  # 29 chars, real USE_CODE_LOOKUP value
+    check("sanity: fixture ptype really is longer than the old VARCHAR(10)",
+          len(long_ptype) > 10, len(long_ptype))
+
+    fake_result = (
+        [{"ptype": long_ptype, "sort_key": long_ptype, "n_parcels": 5, "n_up": 2, "n_down": 2, "n_flat": 1,
+          "median_pct": 1.0, "p25_pct": 0.5, "p75_pct": 1.5, "total_mv25_b": 1.0, "total_mv26_b": 1.1}],
+        {"n_total": 5, "n_up": 2, "n_down": 2, "n_flat": 1, "total_mv25_b": 1.0, "total_mv26_b": 1.1, "median_pct": 1.0},
+        1, 0, 2, 5,
+        [{"neighborhood_cd": "NB1", "n_parcels": 10, "median_pct": 2.0}],
+    )
+
+    orig = rss._compute_one_view
+    rss._compute_one_view = lambda conn, view, verbose=True: fake_result
+    try:
+        conn = FakeConn()
+        rss.build_shadow(conn, batch_id=9, verbose=False)
+
+        kinds = _sql_kinds(conn.executed)
+        insert_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_BREAKDOWN")
+        check("build_shadow: long sort_key passed through to the INSERT params unmodified",
+              insert_params["sort_key"] == long_ptype, insert_params["sort_key"])
+        check("build_shadow: long sort_key not silently truncated to <=10 chars by our own code",
+              len(insert_params["sort_key"]) == len(long_ptype), len(insert_params["sort_key"]))
+    finally:
+        rss._compute_one_view = orig
+
+
+def _real_max_ptype_or_sort_key_length():
+    """Computes the TRUE maximum length across every real string that can
+    appear as ptype (and therefore as sort_key, for the 10 non-'overall'
+    views where sort_key == ptype byte-for-byte) -- USE_CODE_LOOKUP
+    descriptions, every sector's fallback label, and both land/agricultural
+    size-tier label sets. Deliberately NOT hardcoded/eyeballed -- computed
+    fresh from the real snapshot_taxonomy.py constants every time this test
+    runs, so if TCAD's own use-code descriptions (an external, versioned
+    reference table Parcelytics does not control) ever get longer, this
+    test fails BEFORE a production StringDataRightTruncation does."""
+    lengths = [len(desc) for desc, _method in _st.USE_CODE_LOOKUP.values()]
+
+    fallback_labels = set()
+    for view, sector_label in _st._SNAPSHOT_SECTOR_VIEWS.items():
+        fallback_labels.add("Uncategorized" if sector_label == "Other" else f"Other {sector_label}")
+    fallback_labels.add("Other Commercial")  # legacy "commercial" view
+    lengths.extend(len(lbl) for lbl in fallback_labels)
+
+    lengths.extend(len(label) for _cond, label in _st.SNAPSHOT_LAND_SIZE_TIERS)
+    lengths.extend(len(label) for _cond, label in _st.SNAPSHOT_AG_SIZE_TIERS)
+
+    return max(lengths)
+
+
+def test_schema_sort_key_width_covers_the_real_measured_maximum():
+    """Static check against the real schema.sql text (no live DB needed):
+    proves the sort_key column is declared wide enough for every real
+    ptype/sort_key value snapshot_taxonomy.py can actually produce today.
+    This is the regression guard Diego asked for -- it fails loudly if
+    someone re-narrows the column, or if a future taxonomy change produces
+    a longer label than the column can hold, instead of waiting to find out
+    via a live StringDataRightTruncation again."""
+    schema_path = os.path.join(os.path.dirname(__file__), "..", "schema.sql")
+    with open(schema_path) as f:
+        schema_text = f.read()
+
+    import re
+    m = re.search(r"^\s*sort_key\s+VARCHAR\((\d+)\)", schema_text, re.MULTILINE)
+    check("schema.sql: snapshot_breakdown.sort_key VARCHAR(N) declaration found", m is not None)
+    if not m:
+        return
+    declared_width = int(m.group(1))
+
+    real_max = _real_max_ptype_or_sort_key_length()
+    check(f"schema.sql: sort_key VARCHAR({declared_width}) >= real measured max ptype length ({real_max})",
+          declared_width >= real_max, (declared_width, real_max))
+    check("schema.sql: sort_key is no longer the old, too-narrow VARCHAR(10)",
+          declared_width != 10, declared_width)
 
 
 def main():
