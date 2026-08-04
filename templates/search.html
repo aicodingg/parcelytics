@@ -77,14 +77,20 @@
 
     {# ── Quick Filters — one-click presets that pre-fill and run the Filter
          Parcels panel below. Fills the vertical space left under Find a
-         Parcel (this column is shorter than the coverage map beside it). ── #}
+         Parcel (this column is shorter than the coverage map beside it).
+         quick-filters-body + gap-1 (Aug 2026, NICK-DELINQUENT-1 follow-up):
+         tightened padding/spacing, scoped to just this card, after the 5th
+         preset button (Delinquent Parcels) made this column taller than the
+         map -- reopening the whitespace gap below the map that this design
+         was originally built to avoid. See .quick-filter-btn's comment in
+         style.css for the matching button-padding tightening. ── #}
     <div class="card mt-3">
       <div class="card-header">Quick Filters</div>
-      <div class="card-body">
-        <div class="text-muted mb-2" style="font-size:11.5px;">
+      <div class="card-body quick-filters-body">
+        <div class="text-muted mb-1" style="font-size:11.5px;">
           One-click presets — each fills in the filter panel below and runs the search.
         </div>
-        <div class="d-flex flex-column gap-2">
+        <div class="d-flex flex-column gap-1">
           <button type="button" class="quick-filter-btn" data-preset="no_homestead" disabled>
             <span class="qf-title">Homes Without Homestead Exemption</span>
             <span class="qf-desc">Residential parcels that haven't filed for homestead</span>
@@ -95,11 +101,15 @@
           </button>
           <button type="button" class="quick-filter-btn" data-preset="high_value_commercial" disabled>
             <span class="qf-title">High-Value Commercial</span>
-            <span class="qf-desc">Commercial parcels at $1,000,000+ market value</span>
+            <span class="qf-desc">Commercial parcels at $20,000,000+ market value</span>
           </button>
           <button type="button" class="quick-filter-btn" data-preset="new_construction" disabled>
             <span class="qf-title">New Construction</span>
-            <span class="qf-desc">Built in the last 3 years</span>
+            <span class="qf-desc">Built in the last year</span>
+          </button>
+          <button type="button" class="quick-filter-btn" data-preset="delinquent" disabled>
+            <span class="qf-title">Delinquent Parcels</span>
+            <span class="qf-desc">Parcels with a real, outstanding delinquent tax balance</span>
           </button>
         </div>
       </div>
@@ -247,11 +257,15 @@
           <div class="col-md-3">
             <label class="form-label small text-muted mb-1" for="fltTaxYear">Tax Year</label>
             <select id="fltTaxYear" class="form-select form-select-sm" style="font-size:12px;">
-              {# M4-2026-PRELIM-SNAPSHOT Part 1 fix: was hardcoded "(Preliminary)"
-                 regardless of actual data_source; has_preliminary_2026 (search_page(),
-                 app.py) reflects whether any 2026 row is still on that tier. #}
-              <option value="2026">2026{% if has_preliminary_2026 %} (mostly Certified, some Preliminary){% else %} (Certified){% endif %}</option>
-              <option value="2025" selected>2025 (Certified)</option>
+              {# Plain year labels only (Aug 2026, per Diego) -- was
+                 "2026 (mostly Certified, some Preliminary)" / "2025
+                 (Certified)", the M4-2026-PRELIM-SNAPSHOT Part 1 fix's
+                 confidence-tier text. has_preliminary_2026 (still passed in
+                 by search_page(), app.py) is now unused by this template --
+                 left as-is in the route rather than removed, since trimming
+                 an unused route-level variable wasn't part of this ask. #}
+              <option value="2026">2026</option>
+              <option value="2025" selected>2025</option>
               <option value="2024">2024</option>
               <option value="2023">2023</option>
               <option value="2022">2022</option>
@@ -266,6 +280,21 @@
               <input class="form-check-input" type="checkbox" id="fltVerifiedOnly">
               <label class="form-check-label" for="fltVerifiedOnly" style="font-size:12.5px;">
                 Verified data only
+              </label>
+            </div>
+          </div>
+
+          {# ── Delinquent Only (NICK-DELINQUENT-1, Aug 2026) — real join against
+               tax_delinquent.total_due > 0 in api_search_filter(), same
+               checkbox pattern as fltLargeValueJump above. Combinable with
+               every other filter here (asset type included — Nick's actual
+               request was to narrow delinquent parcels down by type). #}
+          <div class="col-md-3">
+            <label class="form-label small text-muted mb-1 d-block">Delinquency</label>
+            <div class="form-check mt-1">
+              <input class="form-check-input" type="checkbox" id="fltDelinquentOnly">
+              <label class="form-check-label" for="fltDelinquentOnly" style="font-size:12.5px;">
+                Delinquent Only
               </label>
             </div>
           </div>
@@ -315,6 +344,20 @@
                   <th class="text-end">Market Value</th>
                   <th>Tax Year</th>
                   <th>Confidence</th>
+                  {# NICK-DELINQUENT-1: the results table has no general
+                     dynamic/conditional-column support today (fixed 6-column
+                     thead + a fixed 6-<td> JS row template, shared by every
+                     filter combination) — investigated per the brief's own
+                     instruction rather than assumed. Building true dynamic
+                     columns would touch this shared, non-delinquency-specific
+                     rendering path. Went with the smaller, contained change
+                     instead: two extra columns, always present in the DOM,
+                     hidden via the flt-delinquent-col class except when a
+                     delinquent-only search just ran (toggled in runSearch()
+                     below) — not a general dynamic-column system, just this
+                     one real, requested case. #}
+                  <th class="text-end flt-delinquent-col" style="display:none;">Total Due</th>
+                  <th class="flt-delinquent-col" style="display:none;">First Delinquent Yr</th>
                 </tr>
               </thead>
               <tbody id="fltResultsBody"></tbody>
@@ -666,6 +709,7 @@ ParcelTypeahead.attach({ inputId: "spQ" });
     if (document.getElementById("fltLargeValueJump").checked) p.set("large_value_jump", "1");
     const hs = document.getElementById("fltHomestead").value; if (hs) p.set("homestead", hs);
     if (document.getElementById("fltVerifiedOnly").checked) p.set("verified_only", "1");
+    if (document.getElementById("fltDelinquentOnly").checked) p.set("delinquent_only", "1");
     return p;
   }
 
@@ -687,6 +731,10 @@ ParcelTypeahead.attach({ inputId: "spQ" });
   function runSearch(page) {
     currentPage = page || 1;
     errorBox.style.display = "none";
+    // Captured once per request (not re-read after the fetch resolves) so a
+    // fast double-click that toggles the checkbox mid-flight can't mismatch
+    // the columns shown against the params actually sent for THIS request.
+    const delinquentActive = document.getElementById("fltDelinquentOnly").checked;
 
     // Loading state (Task: Loading Indicator on Search Page Filter
     // Results). Reuses the same "Loading…" span + disabled-button pattern
@@ -732,6 +780,18 @@ ParcelTypeahead.attach({ inputId: "spQ" });
         resultsWrap.style.display = "";
         resultsCount.textContent = body.total.toLocaleString() + " matching parcel" + (body.total === 1 ? "" : "s");
         exportCsvBtn.disabled = !body.total;
+
+        // Show/hide the two delinquency-only columns based on whether THIS
+        // response's request actually had delinquent_only set (read from the
+        // checkbox at request time via delinquentActive, captured above) —
+        // not on whether results happen to contain the field, so an empty
+        // result set for a delinquent-only search still shows (now-empty)
+        // delinquency columns rather than silently reverting to the 6-column
+        // layout.
+        document.querySelectorAll(".flt-delinquent-col").forEach(el => {
+          el.style.display = delinquentActive ? "" : "none";
+        });
+
         resultsBody.innerHTML = (body.results || []).map(r => `
           <tr>
             <td><a href="/parcel/${encodeURIComponent(r.geo_id)}">${r.situs_address || "(address unknown)"}</a></td>
@@ -740,8 +800,10 @@ ParcelTypeahead.attach({ inputId: "spQ" });
             <td class="text-end">${r.market_value != null ? "$" + Math.round(r.market_value).toLocaleString() : "—"}</td>
             <td>${r.tax_year}</td>
             <td>${CONFIDENCE_BADGE[r.confidence] || ""}</td>
+            <td class="text-end flt-delinquent-col" style="${delinquentActive ? "" : "display:none;"}">${r.total_due != null ? "$" + Math.round(r.total_due).toLocaleString() : "—"}</td>
+            <td class="flt-delinquent-col" style="${delinquentActive ? "" : "display:none;"}">${r.first_delinquent_yr != null ? r.first_delinquent_yr : "—"}</td>
           </tr>
-        `).join("") || `<tr><td colspan="6" class="na-cell text-center py-3">No parcels matched these filters.</td></tr>`;
+        `).join("") || `<tr><td colspan="${delinquentActive ? 8 : 6}" class="na-cell text-center py-3">No parcels matched these filters.</td></tr>`;
         pageInfo.textContent = body.total_pages ? `Page ${body.page} of ${body.total_pages}` : "";
         prevBtn.disabled = currentPage <= 1;
         nextBtn.disabled = currentPage >= body.total_pages;
@@ -845,6 +907,7 @@ ParcelTypeahead.attach({ inputId: "spQ" });
     document.getElementById("fltEtrIncludeNa").checked = false;
     document.getElementById("fltLargeValueJump").checked = false;
     document.getElementById("fltVerifiedOnly").checked = false;
+    document.getElementById("fltDelinquentOnly").checked = false;
     document.getElementById("fltHomestead").value = "";
     document.getElementById("fltTaxYear").value = "2025";
     errorBox.style.display = "none";
@@ -876,11 +939,21 @@ ParcelTypeahead.attach({ inputId: "spQ" });
 
     } else if (preset === "high_value_commercial") {
       propTypeTA.selectByValue("Commercial");
-      document.getElementById("fltMvMin").value = "1000000";
+      document.getElementById("fltMvMin").value = "20000000";
 
     } else if (preset === "new_construction") {
+      // "Built in the last year" (Aug 2026 threshold update, NICK-DELINQUENT-1
+      // Part 4) -- year_built >= taxYear - 1, same "how many years back"
+      // pattern as before, just 1 instead of 3. See app.py's
+      // _compute_snapshot_data() and templates/snapshot.html's New
+      // Construction KPI for the other half of this change (kept in sync,
+      // per that code's own explicit comment -- see this task's final
+      // report for the full reasoning).
       const taxYear = parseInt(document.getElementById("fltTaxYear").value || "2025", 10);
-      document.getElementById("fltYrMin").value = String(taxYear - 3);
+      document.getElementById("fltYrMin").value = String(taxYear - 1);
+
+    } else if (preset === "delinquent") {
+      document.getElementById("fltDelinquentOnly").checked = true;
     }
 
     document.getElementById("fltApplyBtn").closest(".card").scrollIntoView({ behavior: "smooth", block: "start" });

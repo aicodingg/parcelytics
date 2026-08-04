@@ -1286,11 +1286,19 @@ path.county[data-market] {
   background-size: 14px 14px;
 }
 
-/* Quick Filters (Search page) — one-click preset buttons */
+/* Quick Filters (Search page) — one-click preset buttons.
+   Padding tightened (Aug 2026, NICK-DELINQUENT-1 follow-up) from 9px 12px
+   to 7px 12px -- a 5th preset button (Delinquent Parcels) pushed this
+   card's total height past the coverage map beside it, reopening the
+   whitespace gap the original "Fills the vertical space left under Find a
+   Parcel" design (search.html's own Quick Filters comment) was built to
+   close. Combined with the gap-1 button stack and quick-filters-body
+   padding below, brings the 5-button card back close to the original
+   4-button card's height rather than taller. */
 .quick-filter-btn {
   display: flex; flex-direction: column; align-items: flex-start;
   width: 100%; text-align: left;
-  padding: 9px 12px;
+  padding: 7px 12px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-sm);
   background: var(--surface);
@@ -1301,6 +1309,12 @@ path.county[data-market] {
 .quick-filter-btn:disabled { opacity: .5; cursor: default; }
 .quick-filter-btn .qf-title { font-size: 12.5px; font-weight: var(--fw-semibold); color: var(--text); }
 .quick-filter-btn .qf-desc { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+
+/* Scoped to the Quick Filters card body specifically (search.html's
+   quick-filters-body class) -- NOT a change to the sitewide .card-body
+   default, which every other card on the site also uses and which is out
+   of scope here. */
+.quick-filters-body { padding: 12px 16px 13px !important; }
 
 /* ════════════════════════════════════════════════════════════════════════════
    POST-ACQUISITION ESTIMATOR — flagship app feature

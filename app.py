@@ -25,7 +25,7 @@ from tax_logic.texas import estimate_homestead_savings as _tx_hs_savings
 from tax_logic.texas import derive_2026_baseline as _derive_2026_baseline
 from tax_logic.classify import property_type_label, label_case_sql, label_sort_case_sql
 from loaders.scrape_billing_history import fetch_html, parse_receipts, upsert_billing_rows, HTTP_OK
-from parcel_filters import CANONICAL_PARCEL_EXCL, peer_state_cd1_match_sql, exclude_non_real_property_gap_sql
+from parcel_filters import CANONICAL_PARCEL_EXCL, CANONICAL_PARCEL_EXCL_BARE, peer_state_cd1_match_sql, exclude_non_real_property_gap_sql
 import search_logic
 
 _BILLING_TARGET_YEARS  = {2021, 2022, 2023, 2024}
@@ -4062,10 +4062,17 @@ def _compute_snapshot_data(view):
         agg = query_no_nestloop(f"""
             SELECT
                 -- "Recent" = same cutoff as the Search page's New Construction
-                -- Quick Filter (runQuickFilter() in search.html): tax_year - 3.
+                -- Quick Filter (runQuickFilter() in search.html): tax_year - 1
+                -- ("built in the last year" — updated Aug 2026,
+                -- NICK-DELINQUENT-1 Part 4, from the prior tax_year - 3 rule).
                 -- Here tax_year is this page's own preliminary year, 2026, so
-                -- 2026 - 3 = 2023 — reusing that exact rule, not a new cutoff.
-                COUNT(*) FILTER (WHERE p.year_built >= 2023)              AS n_new_construction,
+                -- 2026 - 1 = 2025 — reusing that exact rule, not a new cutoff.
+                -- Deliberately kept in sync, per this comment's own original
+                -- intent (see NICK-DELINQUENT-1's final report for the
+                -- reasoning: nothing else in the codebase depends on the old
+                -- tax_year - 3 window specifically, so there's no correctness
+                -- reason to let these two "new construction" figures diverge).
+                COUNT(*) FILTER (WHERE p.year_built >= 2025)              AS n_new_construction,
                 COUNT(*) FILTER (WHERE pm.risk_large_value_jump = TRUE)   AS n_risk_flagged
             FROM parcel p
             JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
@@ -4772,6 +4779,10 @@ def api_search_filter():
     large_value_jump = (args.get("large_value_jump") or "") == "1"
     homestead       = (args.get("homestead") or "").strip()   # 'has' | 'not_has' | ''
     verified_only   = (args.get("verified_only") or "") == "1"
+    # NICK-DELINQUENT-1 (Aug 2026): "Delinquent Only" filter -- Nick's real
+    # feature request, combinable with every other filter here (asset type
+    # included, per his actual ask: narrow delinquent parcels down by type).
+    delinquent_only = (args.get("delinquent_only") or "") == "1"
     tax_year        = _i("tax_year") or 2025
     page            = max(1, _i("page") or 1)
 
@@ -4799,7 +4810,7 @@ def api_search_filter():
         bldg_min is not None, bldg_max is not None,
         land_min is not None, land_max is not None,
         yr_min is not None, yr_max is not None,
-        large_value_jump, homestead, verified_only,
+        large_value_jump, homestead, verified_only, delinquent_only,
     ])
     if not has_real_filter:
         return jsonify({
@@ -4924,19 +4935,62 @@ def api_search_filter():
         where.append("pty.data_source = ANY(%(cert_sources)s)")
         where.append("(pty.assessed_value IS NULL OR pty.market_value IS NULL OR pty.assessed_value <= pty.market_value)")
 
+    # ── Delinquent Only (NICK-DELINQUENT-1) ─────────────────────────────────
+    # The actual filter/join happens below via delinquent_join (an INNER JOIN
+    # on tax_delinquent with the total_due > 0 condition baked into its ON
+    # clause, per the brief's explicit ask for "a real join/filter against
+    # tax_delinquent.total_due > 0") -- nothing to add to `where` for the
+    # join condition itself.
+    #
+    # Real-property scoping finding, flagged rather than silently decided:
+    # this route (every filter above -- asset type, value range, homestead,
+    # etc.) does NOT apply CANONICAL_PARCEL_EXCL anywhere today. Confirmed by
+    # reading this entire function; grep of app.py also shows no
+    # CANONICAL_PARCEL_EXCL reference inside api_search_filter(). So "respect
+    # this week's Classification Map work / CANONICAL_PARCEL_EXCL... no more
+    # than any other filter does" (the brief's own words) has a literal
+    # reading (none of them do it, so neither must this one) and an intent
+    # reading (a delinquency-focused lead list is exactly the kind of
+    # export-for-outreach feature where a stray exempt/personal-property row
+    # is most visible and most costly to get wrong). Applied here, scoped
+    # ONLY to delinquent_only, not to the route as a whole -- retrofitting
+    # every existing filter's population is a real, separate change with its
+    # own production-count impact on filters already in active use, and
+    # wasn't authorized by this brief. Uses CANONICAL_PARCEL_EXCL_BARE
+    # together with exclude_non_real_property_gap_sql() (not
+    # CANONICAL_PARCEL_EXCL alone) -- this is a raw-grain query returning
+    # individual parcel rows, not one grouped through label_case_sql()'s
+    # taxonomy, so it has none of that taxonomy's incidental protection
+    # against 'L'-class (Business Personal Property) rows slipping through,
+    # the exact gap AGGPRECOMP-1-FIX documented and fixed for group_stats.
+    if delinquent_only:
+        where.append(CANONICAL_PARCEL_EXCL_BARE)
+        where.append(exclude_non_real_property_gap_sql("p.state_cd1"))
+
     where_sql = " AND ".join(where)
     offset = (page - 1) * SEARCH_FILTER_PAGE_SIZE
     params["offset"] = offset
+
+    # total_due / first_delinquent_yr (both real tax_delinquent columns) are
+    # only selected/joined when delinquent_only is active -- see
+    # api_search_filter's results loop below and search.html's
+    # fltDelinquentOnly-gated column toggle for the other half of this.
+    delinquent_join = ""
+    delinquent_select = ""
+    if delinquent_only:
+        delinquent_join = "JOIN tax_delinquent d ON d.geo_id = p.geo_id AND d.total_due > 0"
+        delinquent_select = ", d.total_due, d.first_delinquent_yr"
 
     sql = f"""
         SELECT
             p.geo_id, p.situs_address, p.neighborhood_cd,
             ({_ptype_sql}) AS prop_type_label,
             pty.market_value, pty.assessed_value, pty.data_source, pty.tax_year,
-            COUNT(*) OVER() AS total_count
+            COUNT(*) OVER() AS total_count{delinquent_select}
         FROM parcel p
         JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = %(tax_year)s
         LEFT JOIN parcel_metrics pm ON pm.geo_id = p.geo_id AND pm.tax_year = %(tax_year)s
+        {delinquent_join}
         WHERE {where_sql}
         ORDER BY p.situs_address NULLS LAST, p.geo_id
         LIMIT {SEARCH_FILTER_PAGE_SIZE} OFFSET %(offset)s
@@ -4953,7 +5007,7 @@ def api_search_filter():
         # endpoint only had market_value on hand, so a certified-tier row
         # could never be demoted here even when it should have been.
         confidence = _row_confidence(r["data_source"], r.get("assessed_value"), r["market_value"])
-        results.append({
+        result = {
             "geo_id": r["geo_id"],
             "situs_address": r["situs_address"],
             "neighborhood_cd": r["neighborhood_cd"],
@@ -4961,7 +5015,11 @@ def api_search_filter():
             "market_value": float(r["market_value"]) if r["market_value"] is not None else None,
             "tax_year": r["tax_year"],
             "confidence": confidence,
-        })
+        }
+        if delinquent_only:
+            result["total_due"] = float(r["total_due"]) if r.get("total_due") is not None else None
+            result["first_delinquent_yr"] = r.get("first_delinquent_yr")
+        results.append(result)
 
     total_pages = (total + SEARCH_FILTER_PAGE_SIZE - 1) // SEARCH_FILTER_PAGE_SIZE if total else 0
     return jsonify({
