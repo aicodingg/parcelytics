@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-04T19:34:38.923592",
+  "generated_at": "2026-08-05T00:24:42.081181",
   "county": "travis",
   "files": [
     {
@@ -9,8 +9,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/LAND_DET.TXT",
       "size_bytes": 88230156,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "4056b89697f62fd19e5697b9a9cbfc3c83be27a6e681163a776e685327f5e846"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "4056b89697f62fd19e5697b9a9cbfc3c83be27a6e681163a776e685327f5e846",
+      "sha256_copy": "4056b89697f62fd19e5697b9a9cbfc3c83be27a6e681163a776e685327f5e846"
     },
     {
       "year": 2025,
@@ -19,8 +20,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/ARBITRATION.TXT",
       "size_bytes": 2499,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "a17107fa8b4c074e41c47ccfb5414f4f1261b8db377e1917f2d9cef0812a8646"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "a17107fa8b4c074e41c47ccfb5414f4f1261b8db377e1917f2d9cef0812a8646",
+      "sha256_copy": "a17107fa8b4c074e41c47ccfb5414f4f1261b8db377e1917f2d9cef0812a8646"
     },
     {
       "year": 2025,
@@ -29,8 +31,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/IMP_DET.TXT",
       "size_bytes": 2035716384,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "22597d7bd320490a1954873c273097fb8db9be5352c69e2179bfc7c937c30076"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "22597d7bd320490a1954873c273097fb8db9be5352c69e2179bfc7c937c30076",
+      "sha256_copy": "22597d7bd320490a1954873c273097fb8db9be5352c69e2179bfc7c937c30076"
     },
     {
       "year": 2025,
@@ -39,8 +42,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/COUNTRY.TXT",
       "size_bytes": 13965,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a",
+      "sha256_copy": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a"
     },
     {
       "year": 2025,
@@ -49,8 +53,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/APPR_HDR.TXT",
       "size_bytes": 246,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "43c78f1492fc8388f919da1b946db385d8801ff5ea0a6443ca31feeb393bd476"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "43c78f1492fc8388f919da1b946db385d8801ff5ea0a6443ca31feeb393bd476",
+      "sha256_copy": "43c78f1492fc8388f919da1b946db385d8801ff5ea0a6443ca31feeb393bd476"
     },
     {
       "year": 2025,
@@ -59,8 +64,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/SB12.TXT",
       "size_bytes": 36292619,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "4e12cbab2b66c7c5567e6c19100f9083aeb1c762e72ce1cffe1f67ac64a402e3"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "4e12cbab2b66c7c5567e6c19100f9083aeb1c762e72ce1cffe1f67ac64a402e3",
+      "sha256_copy": "4e12cbab2b66c7c5567e6c19100f9083aeb1c762e72ce1cffe1f67ac64a402e3"
     },
     {
       "year": 2025,
@@ -69,8 +75,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/TOTALS.TXT",
       "size_bytes": 454104,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "2a6942c0c9104215310fdb04af913e31b260d7cdf4a6bbff664167b18a332758"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "2a6942c0c9104215310fdb04af913e31b260d7cdf4a6bbff664167b18a332758",
+      "sha256_copy": "2a6942c0c9104215310fdb04af913e31b260d7cdf4a6bbff664167b18a332758"
     },
     {
       "year": 2025,
@@ -79,8 +86,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/1c2b485e-6515-11f0-af7f-0242ac11000c_exportTotals.pdf",
       "size_bytes": 846857,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "fd8ff5ed86b9303e8b280b84c06515289e2b5f23586943594f85daaa0ee64691"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "fd8ff5ed86b9303e8b280b84c06515289e2b5f23586943594f85daaa0ee64691",
+      "sha256_copy": "fd8ff5ed86b9303e8b280b84c06515289e2b5f23586943594f85daaa0ee64691"
     },
     {
       "year": 2025,
@@ -89,8 +97,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/AGENT.TXT",
       "size_bytes": 704520,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "84c18d9e0f3b53fc4f4d6ab6a9ff74b5e8ee0e5611431c2bc7a424f023025805"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "84c18d9e0f3b53fc4f4d6ab6a9ff74b5e8ee0e5611431c2bc7a424f023025805",
+      "sha256_copy": "84c18d9e0f3b53fc4f4d6ab6a9ff74b5e8ee0e5611431c2bc7a424f023025805"
     },
     {
       "year": 2025,
@@ -99,8 +108,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/PROP_ENT.TXT",
       "size_bytes": 8490109888,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "d7c06758dfa141a8ddd670cc490156cae29ddb4fb7d63100dd35af2782bed6d4"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "d7c06758dfa141a8ddd670cc490156cae29ddb4fb7d63100dd35af2782bed6d4",
+      "sha256_copy": "d7c06758dfa141a8ddd670cc490156cae29ddb4fb7d63100dd35af2782bed6d4"
     },
     {
       "year": 2025,
@@ -109,8 +119,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/MOBILE_HOME_INFO.TXT",
       "size_bytes": 13270170,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "4fbb838934e69a787f44e47603884b3ae1ae86d2c9073395e0b96f60aa0e721b"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "4fbb838934e69a787f44e47603884b3ae1ae86d2c9073395e0b96f60aa0e721b",
+      "sha256_copy": "4fbb838934e69a787f44e47603884b3ae1ae86d2c9073395e0b96f60aa0e721b"
     },
     {
       "year": 2025,
@@ -119,8 +130,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/ARB.TXT",
       "size_bytes": 3592650,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "16563963db2e7e9fbb6684ef2dbb181bcdab4f6b75c620cd080eee2c340e3234"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "16563963db2e7e9fbb6684ef2dbb181bcdab4f6b75c620cd080eee2c340e3234",
+      "sha256_copy": "16563963db2e7e9fbb6684ef2dbb181bcdab4f6b75c620cd080eee2c340e3234"
     },
     {
       "year": 2025,
@@ -129,8 +141,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/TAX_DEFERRAL_INFO.TXT",
       "size_bytes": 226,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "81e1fe7cf21619b8e3c8fa93e28a8798ba3c1103795755ba468eec195b81011c"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "81e1fe7cf21619b8e3c8fa93e28a8798ba3c1103795755ba468eec195b81011c",
+      "sha256_copy": "81e1fe7cf21619b8e3c8fa93e28a8798ba3c1103795755ba468eec195b81011c"
     },
     {
       "year": 2025,
@@ -139,8 +152,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/ENTITY.TXT",
       "size_bytes": 5301,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "ca82f16ebcd0701c26a824ca6bf15dd86d64e73038058bf9a68fb607ac753ada"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "ca82f16ebcd0701c26a824ca6bf15dd86d64e73038058bf9a68fb607ac753ada",
+      "sha256_copy": "ca82f16ebcd0701c26a824ca6bf15dd86d64e73038058bf9a68fb607ac753ada"
     },
     {
       "year": 2025,
@@ -149,8 +163,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/IMP_INFO.TXT",
       "size_bytes": 51091156,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "31ec648d6b6e26bd28d1605d632aee8133c3fe5003c40229d624e79f2d1561e5"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "31ec648d6b6e26bd28d1605d632aee8133c3fe5003c40229d624e79f2d1561e5",
+      "sha256_copy": "31ec648d6b6e26bd28d1605d632aee8133c3fe5003c40229d624e79f2d1561e5"
     },
     {
       "year": 2025,
@@ -159,8 +174,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/LAWSUIT.TXT",
       "size_bytes": 850493,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "88ecc8674e100c34554ede29dc7248bc6a7ee2ad04f87ad8f5f163dc67273809"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "88ecc8674e100c34554ede29dc7248bc6a7ee2ad04f87ad8f5f163dc67273809",
+      "sha256_copy": "88ecc8674e100c34554ede29dc7248bc6a7ee2ad04f87ad8f5f163dc67273809"
     },
     {
       "year": 2025,
@@ -169,8 +185,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/STATE_CD.TXT",
       "size_bytes": 5715,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "2c778f289bf38d1ca25a8318b97a407643508801b437783af4aefb3e5d4c1e1f"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "2c778f289bf38d1ca25a8318b97a407643508801b437783af4aefb3e5d4c1e1f",
+      "sha256_copy": "2c778f289bf38d1ca25a8318b97a407643508801b437783af4aefb3e5d4c1e1f"
     },
     {
       "year": 2025,
@@ -179,8 +196,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/ABS_SUBD.TXT",
       "size_bytes": 1450748,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "3826a7d77f296851e7d40c39a1b40a20e926d226897ef38e34cc51a349ab1862"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "3826a7d77f296851e7d40c39a1b40a20e926d226897ef38e34cc51a349ab1862",
+      "sha256_copy": "3826a7d77f296851e7d40c39a1b40a20e926d226897ef38e34cc51a349ab1862"
     },
     {
       "year": 2025,
@@ -189,8 +207,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/PROP.TXT",
       "size_bytes": 4503671064,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "60fb0e8bc9a762d1c1456a5f2051dac7e76edb3d629aebc134da93febd2e1e90"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "60fb0e8bc9a762d1c1456a5f2051dac7e76edb3d629aebc134da93febd2e1e90",
+      "sha256_copy": "60fb0e8bc9a762d1c1456a5f2051dac7e76edb3d629aebc134da93febd2e1e90"
     },
     {
       "year": 2025,
@@ -199,8 +218,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/IMP_ATR.TXT",
       "size_bytes": 232965154,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "759d5c5eaacbfb39a885f97f1e94fc69e18ef274a1ef70fafe7eb32140b188cb"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "759d5c5eaacbfb39a885f97f1e94fc69e18ef274a1ef70fafe7eb32140b188cb",
+      "sha256_copy": "759d5c5eaacbfb39a885f97f1e94fc69e18ef274a1ef70fafe7eb32140b188cb"
     },
     {
       "year": 2025,
@@ -209,8 +229,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2025/certified/2025-07-20/SKETCH_INFO.TXT",
       "size_bytes": 652805105,
       "vault_date": "2025-07-20",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "049c2cb4c165f70ab2c954ae7e2355b716095fae18af71cb1fdd71d8c47bdc11"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "049c2cb4c165f70ab2c954ae7e2355b716095fae18af71cb1fdd71d8c47bdc11",
+      "sha256_copy": "049c2cb4c165f70ab2c954ae7e2355b716095fae18af71cb1fdd71d8c47bdc11"
     },
     {
       "year": 2022,
@@ -219,8 +240,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/LAND_DET.TXT",
       "size_bytes": 84667833,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "532b5eee77cc4635729a30e2f5c318a967eb894bc40978ff5f7d0797a2efe03d"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "532b5eee77cc4635729a30e2f5c318a967eb894bc40978ff5f7d0797a2efe03d",
+      "sha256_copy": "532b5eee77cc4635729a30e2f5c318a967eb894bc40978ff5f7d0797a2efe03d"
     },
     {
       "year": 2022,
@@ -229,8 +251,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/IMP_DET.TXT",
       "size_bytes": 1923074400,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "82903196784580be6576ff33fe1f6f64723812cc9b240a886dfcf00de5fdddd2"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "82903196784580be6576ff33fe1f6f64723812cc9b240a886dfcf00de5fdddd2",
+      "sha256_copy": "82903196784580be6576ff33fe1f6f64723812cc9b240a886dfcf00de5fdddd2"
     },
     {
       "year": 2022,
@@ -239,8 +262,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/COUNTRY.TXT",
       "size_bytes": 13965,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a",
+      "sha256_copy": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a"
     },
     {
       "year": 2022,
@@ -249,8 +273,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/APPR_HDR.TXT",
       "size_bytes": 246,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "a0bf202e75d0272f36a06c297637aa2216af5846341389ab35fd6ca639c24646"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "a0bf202e75d0272f36a06c297637aa2216af5846341389ab35fd6ca639c24646",
+      "sha256_copy": "a0bf202e75d0272f36a06c297637aa2216af5846341389ab35fd6ca639c24646"
     },
     {
       "year": 2022,
@@ -259,8 +284,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/TOTALS.TXT",
       "size_bytes": 397386,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "4fabadbc4b433498d4b6f0d3a074314110a0a3b3976222e0668762341db30515"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "4fabadbc4b433498d4b6f0d3a074314110a0a3b3976222e0668762341db30515",
+      "sha256_copy": "4fabadbc4b433498d4b6f0d3a074314110a0a3b3976222e0668762341db30515"
     },
     {
       "year": 2022,
@@ -269,8 +295,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/AGENT.TXT",
       "size_bytes": 608760,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "3e3c5a580ee9ec7f6690ae0c9833942ce2de6786721a764de8541b3de879f2f2"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "3e3c5a580ee9ec7f6690ae0c9833942ce2de6786721a764de8541b3de879f2f2",
+      "sha256_copy": "3e3c5a580ee9ec7f6690ae0c9833942ce2de6786721a764de8541b3de879f2f2"
     },
     {
       "year": 2022,
@@ -279,8 +306,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/PROP_ENT.TXT",
       "size_bytes": 7759189416,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "2447cad7df1559daad2a47832f8569d458ab434935b8b9b344ebafe5ce175ed1"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "2447cad7df1559daad2a47832f8569d458ab434935b8b9b344ebafe5ce175ed1",
+      "sha256_copy": "2447cad7df1559daad2a47832f8569d458ab434935b8b9b344ebafe5ce175ed1"
     },
     {
       "year": 2022,
@@ -289,8 +317,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/MOBILE_HOME_INFO.TXT",
       "size_bytes": 16616310,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "4c32e387127fecf733893666bacbc97c0fcf1cecfe4327ee882b31e23fd83f58"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "4c32e387127fecf733893666bacbc97c0fcf1cecfe4327ee882b31e23fd83f58",
+      "sha256_copy": "4c32e387127fecf733893666bacbc97c0fcf1cecfe4327ee882b31e23fd83f58"
     },
     {
       "year": 2022,
@@ -299,8 +328,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/ARB.TXT",
       "size_bytes": 7072683,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "154f187470fbb6678d3879ac312fb5b7411f4a412dc08351d2496b8806e6e545"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "154f187470fbb6678d3879ac312fb5b7411f4a412dc08351d2496b8806e6e545",
+      "sha256_copy": "154f187470fbb6678d3879ac312fb5b7411f4a412dc08351d2496b8806e6e545"
     },
     {
       "year": 2022,
@@ -309,8 +339,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/TAX_DEFERRAL_INFO.TXT",
       "size_bytes": 21244,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "cfdecff436dc7855ea2e958345e1989762687e9021cb25c01a87b66d4a285e81"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "cfdecff436dc7855ea2e958345e1989762687e9021cb25c01a87b66d4a285e81",
+      "sha256_copy": "cfdecff436dc7855ea2e958345e1989762687e9021cb25c01a87b66d4a285e81"
     },
     {
       "year": 2022,
@@ -319,8 +350,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/ENTITY.TXT",
       "size_bytes": 4693,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "f46d611fac75ea41ce910a71955e27e136080f19b18be5f9e44f6ef962987c92"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "f46d611fac75ea41ce910a71955e27e136080f19b18be5f9e44f6ef962987c92",
+      "sha256_copy": "f46d611fac75ea41ce910a71955e27e136080f19b18be5f9e44f6ef962987c92"
     },
     {
       "year": 2022,
@@ -329,8 +361,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/be4f2a24-0c62-11ed-9742-0242ac110004_exportTotals.pdf",
       "size_bytes": 770041,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "f5c06609e2b5a1674ad842085bc00d10cec1b39f0c7c4ac5d416bdf7acbb2678"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "f5c06609e2b5a1674ad842085bc00d10cec1b39f0c7c4ac5d416bdf7acbb2678",
+      "sha256_copy": "f5c06609e2b5a1674ad842085bc00d10cec1b39f0c7c4ac5d416bdf7acbb2678"
     },
     {
       "year": 2022,
@@ -339,8 +372,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/IMP_INFO.TXT",
       "size_bytes": 47912756,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "3639bd52413552f631919ed5ad1eacb42f14d9eba96c94266e859e97fb7f2667"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "3639bd52413552f631919ed5ad1eacb42f14d9eba96c94266e859e97fb7f2667",
+      "sha256_copy": "3639bd52413552f631919ed5ad1eacb42f14d9eba96c94266e859e97fb7f2667"
     },
     {
       "year": 2022,
@@ -349,8 +383,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/LAWSUIT.TXT",
       "size_bytes": 760886,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "ae7ccb2f217457ba8e2c01f8ccb86c3c020e9f7d892246031eda40831ae7db07"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "ae7ccb2f217457ba8e2c01f8ccb86c3c020e9f7d892246031eda40831ae7db07",
+      "sha256_copy": "ae7ccb2f217457ba8e2c01f8ccb86c3c020e9f7d892246031eda40831ae7db07"
     },
     {
       "year": 2022,
@@ -359,8 +394,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/STATE_CD.TXT",
       "size_bytes": 5715,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "fb3d94b0977738fb6f8ba1db54705aab245cff12171725624cf193818ba93e74"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "fb3d94b0977738fb6f8ba1db54705aab245cff12171725624cf193818ba93e74",
+      "sha256_copy": "fb3d94b0977738fb6f8ba1db54705aab245cff12171725624cf193818ba93e74"
     },
     {
       "year": 2022,
@@ -369,8 +405,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/ABS_SUBD.TXT",
       "size_bytes": 1349608,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "4f337d424ad82bbaded851efc6792b3e9fab169b3db34669fd463ea1f7fe8c05"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "4f337d424ad82bbaded851efc6792b3e9fab169b3db34669fd463ea1f7fe8c05",
+      "sha256_copy": "4f337d424ad82bbaded851efc6792b3e9fab169b3db34669fd463ea1f7fe8c05"
     },
     {
       "year": 2022,
@@ -379,8 +416,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/PROP.TXT",
       "size_bytes": 4267272869,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "2a3e45a0d47e96b9ee0ca125b69add9616341d9b26701f1ec0ac445be245c01c"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "2a3e45a0d47e96b9ee0ca125b69add9616341d9b26701f1ec0ac445be245c01c",
+      "sha256_copy": "2a3e45a0d47e96b9ee0ca125b69add9616341d9b26701f1ec0ac445be245c01c"
     },
     {
       "year": 2022,
@@ -389,8 +427,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/certified/2022-07-25/IMP_ATR.TXT",
       "size_bytes": 278016954,
       "vault_date": "2022-07-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "32906b63def6be5a4c1d72d7950faa56aa8e93a51f869ed2fe2e474af9025c26"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "32906b63def6be5a4c1d72d7950faa56aa8e93a51f869ed2fe2e474af9025c26",
+      "sha256_copy": "32906b63def6be5a4c1d72d7950faa56aa8e93a51f869ed2fe2e474af9025c26"
     },
     {
       "year": 2023,
@@ -399,8 +438,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/LAND_DET.TXT",
       "size_bytes": 85801071,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "3bd2dfdf1588325f4368eaccb658d8d55fb658092c6b22f342744fa67d44ce22"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "3bd2dfdf1588325f4368eaccb658d8d55fb658092c6b22f342744fa67d44ce22",
+      "sha256_copy": "3bd2dfdf1588325f4368eaccb658d8d55fb658092c6b22f342744fa67d44ce22"
     },
     {
       "year": 2023,
@@ -409,8 +449,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/ARBITRATION.TXT",
       "size_bytes": 135660,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "6191300d8266048484744464b05c6dbddb63d61fc82c5416e8bfc77f45becb8d"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "6191300d8266048484744464b05c6dbddb63d61fc82c5416e8bfc77f45becb8d",
+      "sha256_copy": "6191300d8266048484744464b05c6dbddb63d61fc82c5416e8bfc77f45becb8d"
     },
     {
       "year": 2023,
@@ -419,8 +460,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/IMP_DET.TXT",
       "size_bytes": 1966165344,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "61dd36dfc94159f43ac22355029e9bbfd5f589e06b09fa615f0474641e726606"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "61dd36dfc94159f43ac22355029e9bbfd5f589e06b09fa615f0474641e726606",
+      "sha256_copy": "61dd36dfc94159f43ac22355029e9bbfd5f589e06b09fa615f0474641e726606"
     },
     {
       "year": 2023,
@@ -429,8 +471,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/COUNTRY.TXT",
       "size_bytes": 13965,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a",
+      "sha256_copy": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a"
     },
     {
       "year": 2023,
@@ -439,8 +482,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/APPR_HDR.TXT",
       "size_bytes": 246,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "cde6e252aad29bdf5b4d2fb0aa65a32b3095c1037c203d912d07403a76fa22ca"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "cde6e252aad29bdf5b4d2fb0aa65a32b3095c1037c203d912d07403a76fa22ca",
+      "sha256_copy": "cde6e252aad29bdf5b4d2fb0aa65a32b3095c1037c203d912d07403a76fa22ca"
     },
     {
       "year": 2023,
@@ -449,8 +493,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/SB12.TXT",
       "size_bytes": 25471549,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "8c1de8474e1be976134f0628ae838f871360fbba256d1980f3e3996187544d70"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "8c1de8474e1be976134f0628ae838f871360fbba256d1980f3e3996187544d70",
+      "sha256_copy": "8c1de8474e1be976134f0628ae838f871360fbba256d1980f3e3996187544d70"
     },
     {
       "year": 2023,
@@ -459,8 +504,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/TOTALS.TXT",
       "size_bytes": 399393,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "0a1a39fac0f7f83d1a4a60c79d3ec0597dc5fa9aad82efc0aa8a210e688d868d"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "0a1a39fac0f7f83d1a4a60c79d3ec0597dc5fa9aad82efc0aa8a210e688d868d",
+      "sha256_copy": "0a1a39fac0f7f83d1a4a60c79d3ec0597dc5fa9aad82efc0aa8a210e688d868d"
     },
     {
       "year": 2023,
@@ -469,8 +515,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/AGENT.TXT",
       "size_bytes": 641060,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "2ad30f02a0a6a70fd46db1b095f2986f2e59ca5ec49eeff77e0fb7fc9af190a3"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "2ad30f02a0a6a70fd46db1b095f2986f2e59ca5ec49eeff77e0fb7fc9af190a3",
+      "sha256_copy": "2ad30f02a0a6a70fd46db1b095f2986f2e59ca5ec49eeff77e0fb7fc9af190a3"
     },
     {
       "year": 2023,
@@ -479,8 +526,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/PROP_ENT.TXT",
       "size_bytes": 7877239032,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "bad3b537e8546454169ecc83e4690fd93fc469fed97ef3f00d792f8ce4f78a92"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "bad3b537e8546454169ecc83e4690fd93fc469fed97ef3f00d792f8ce4f78a92",
+      "sha256_copy": "bad3b537e8546454169ecc83e4690fd93fc469fed97ef3f00d792f8ce4f78a92"
     },
     {
       "year": 2023,
@@ -489,8 +537,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/MOBILE_HOME_INFO.TXT",
       "size_bytes": 12470370,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "1b16ed665a845209f4d5965268e9becc48c76abb67ff4a1fd1612b39938092d9"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "1b16ed665a845209f4d5965268e9becc48c76abb67ff4a1fd1612b39938092d9",
+      "sha256_copy": "1b16ed665a845209f4d5965268e9becc48c76abb67ff4a1fd1612b39938092d9"
     },
     {
       "year": 2023,
@@ -499,8 +548,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/ARB.TXT",
       "size_bytes": 6410397,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "55499b0b61cf607d2f94a15eda6cca7f7f972a2851fa7b5e42e024c4f82a5f0a"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "55499b0b61cf607d2f94a15eda6cca7f7f972a2851fa7b5e42e024c4f82a5f0a",
+      "sha256_copy": "55499b0b61cf607d2f94a15eda6cca7f7f972a2851fa7b5e42e024c4f82a5f0a"
     },
     {
       "year": 2023,
@@ -509,8 +559,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/TAX_DEFERRAL_INFO.TXT",
       "size_bytes": 684780,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "6c4bd61409650f6654c992cc3ec633d4614e7e2773ade7cba46d9b00f93fc371"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "6c4bd61409650f6654c992cc3ec633d4614e7e2773ade7cba46d9b00f93fc371",
+      "sha256_copy": "6c4bd61409650f6654c992cc3ec633d4614e7e2773ade7cba46d9b00f93fc371"
     },
     {
       "year": 2023,
@@ -519,8 +570,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/ENTITY.TXT",
       "size_bytes": 4807,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "fefb1de860b749b9dea4fc52c70f3cbfa38e6f72ba92cdf61d2d28aeebc2ebc4"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "fefb1de860b749b9dea4fc52c70f3cbfa38e6f72ba92cdf61d2d28aeebc2ebc4",
+      "sha256_copy": "fefb1de860b749b9dea4fc52c70f3cbfa38e6f72ba92cdf61d2d28aeebc2ebc4"
     },
     {
       "year": 2023,
@@ -529,8 +581,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/IMP_INFO.TXT",
       "size_bytes": 48974504,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "c8e5c199da5a6972c2fdff77b20af7b4ae257c31b7b3e821408cffcbdb7beda5"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "c8e5c199da5a6972c2fdff77b20af7b4ae257c31b7b3e821408cffcbdb7beda5",
+      "sha256_copy": "c8e5c199da5a6972c2fdff77b20af7b4ae257c31b7b3e821408cffcbdb7beda5"
     },
     {
       "year": 2023,
@@ -539,8 +592,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/LAWSUIT.TXT",
       "size_bytes": 714952,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "984589e7032a8be20306a94a1977679a82f2b8ed6e3962ece363c8f74b8fa1cb"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "984589e7032a8be20306a94a1977679a82f2b8ed6e3962ece363c8f74b8fa1cb",
+      "sha256_copy": "984589e7032a8be20306a94a1977679a82f2b8ed6e3962ece363c8f74b8fa1cb"
     },
     {
       "year": 2023,
@@ -549,8 +603,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/STATE_CD.TXT",
       "size_bytes": 5715,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "a8a659d3ac1bd3a4757d006d7c7c4bceae0a68f126235d853d0386495894c761"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "a8a659d3ac1bd3a4757d006d7c7c4bceae0a68f126235d853d0386495894c761",
+      "sha256_copy": "a8a659d3ac1bd3a4757d006d7c7c4bceae0a68f126235d853d0386495894c761"
     },
     {
       "year": 2023,
@@ -559,8 +614,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/ABS_SUBD.TXT",
       "size_bytes": 1392508,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "58bbdf37c1be0ea231f0e5519a05f388626ff86899932b686bb7cc957779fe5f"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "58bbdf37c1be0ea231f0e5519a05f388626ff86899932b686bb7cc957779fe5f",
+      "sha256_copy": "58bbdf37c1be0ea231f0e5519a05f388626ff86899932b686bb7cc957779fe5f"
     },
     {
       "year": 2023,
@@ -569,8 +625,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/PROP.TXT",
       "size_bytes": 4327237080,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "8b96f4063604e283e7ed8d837c863220be83e536ee559cfa534007bd625ec56d"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "8b96f4063604e283e7ed8d837c863220be83e536ee559cfa534007bd625ec56d",
+      "sha256_copy": "8b96f4063604e283e7ed8d837c863220be83e536ee559cfa534007bd625ec56d"
     },
     {
       "year": 2023,
@@ -579,8 +636,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/IMP_ATR.TXT",
       "size_bytes": 299240428,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "e2d40b21594614ee59fd4272024383462ff737f0fb1801a4d73e05c589e8d3f9"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "e2d40b21594614ee59fd4272024383462ff737f0fb1801a4d73e05c589e8d3f9",
+      "sha256_copy": "e2d40b21594614ee59fd4272024383462ff737f0fb1801a4d73e05c589e8d3f9"
     },
     {
       "year": 2023,
@@ -589,8 +647,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/SKETCH_INFO.TXT",
       "size_bytes": 426791110,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "abfc84356b28eb85c3f0e41a20b1362c4212cf1e5c0bade9436e4d825aeaae60"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "abfc84356b28eb85c3f0e41a20b1362c4212cf1e5c0bade9436e4d825aeaae60",
+      "sha256_copy": "abfc84356b28eb85c3f0e41a20b1362c4212cf1e5c0bade9436e4d825aeaae60"
     },
     {
       "year": 2023,
@@ -599,8 +658,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/certified/2023-07-22/78a6461a-28e5-11ee-90d9-0242ac110004_exportTotals.pdf",
       "size_bytes": 775274,
       "vault_date": "2023-07-22",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "ec487a0a2cf52c4cda08304bfda9eeee636b97d3bcef0a7445e13f4620f731a8"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "ec487a0a2cf52c4cda08304bfda9eeee636b97d3bcef0a7445e13f4620f731a8",
+      "sha256_copy": "ec487a0a2cf52c4cda08304bfda9eeee636b97d3bcef0a7445e13f4620f731a8"
     },
     {
       "year": 2024,
@@ -609,8 +669,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/LAND_DET.TXT",
       "size_bytes": 87057723,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "ff0f915d908e37932c8576690771c22ca78a77138d48a42ab63094599823922f"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "ff0f915d908e37932c8576690771c22ca78a77138d48a42ab63094599823922f",
+      "sha256_copy": "ff0f915d908e37932c8576690771c22ca78a77138d48a42ab63094599823922f"
     },
     {
       "year": 2024,
@@ -619,8 +680,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/ARBITRATION.TXT",
       "size_bytes": 39865,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "432e8c7238eb7b3ad2023186d3764a93a0072f375f57c48675323f94d7cd790d"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "432e8c7238eb7b3ad2023186d3764a93a0072f375f57c48675323f94d7cd790d",
+      "sha256_copy": "432e8c7238eb7b3ad2023186d3764a93a0072f375f57c48675323f94d7cd790d"
     },
     {
       "year": 2024,
@@ -629,8 +691,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/IMP_DET.TXT",
       "size_bytes": 2001425712,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "6ce89493a3130e385ebcfb7845872774fedf1f26c1f9f7652f3e98d41e3335e2"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "6ce89493a3130e385ebcfb7845872774fedf1f26c1f9f7652f3e98d41e3335e2",
+      "sha256_copy": "6ce89493a3130e385ebcfb7845872774fedf1f26c1f9f7652f3e98d41e3335e2"
     },
     {
       "year": 2024,
@@ -639,8 +702,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/COUNTRY.TXT",
       "size_bytes": 13965,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a",
+      "sha256_copy": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a"
     },
     {
       "year": 2024,
@@ -649,8 +713,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/APPR_HDR.TXT",
       "size_bytes": 246,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "0aeabda6792041933331fa6c31d4a004ce7ad7800bb6fa750ba94446ca161726"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "0aeabda6792041933331fa6c31d4a004ce7ad7800bb6fa750ba94446ca161726",
+      "sha256_copy": "0aeabda6792041933331fa6c31d4a004ce7ad7800bb6fa750ba94446ca161726"
     },
     {
       "year": 2024,
@@ -659,8 +724,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/SB12.TXT",
       "size_bytes": 0,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256_copy": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "year": 2024,
@@ -669,8 +735,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/TOTALS.TXT",
       "size_bytes": 458388,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "06ef729d15e073273901983698589474ac45a7e7832899352294881e1d51b4ea"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "06ef729d15e073273901983698589474ac45a7e7832899352294881e1d51b4ea",
+      "sha256_copy": "06ef729d15e073273901983698589474ac45a7e7832899352294881e1d51b4ea"
     },
     {
       "year": 2024,
@@ -679,8 +746,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/AGENT.TXT",
       "size_bytes": 680200,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "8ad8b2f942b923afcff07b011f50a7935c33a6e35afbb1af6fa98f68ef89dee7"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "8ad8b2f942b923afcff07b011f50a7935c33a6e35afbb1af6fa98f68ef89dee7",
+      "sha256_copy": "8ad8b2f942b923afcff07b011f50a7935c33a6e35afbb1af6fa98f68ef89dee7"
     },
     {
       "year": 2024,
@@ -689,8 +757,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/PROP_ENT.TXT",
       "size_bytes": 8382066368,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "a4f68ede1c77d9abaf5c1a679bc31a7e30c57985775012311e605dcc204a255f"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "a4f68ede1c77d9abaf5c1a679bc31a7e30c57985775012311e605dcc204a255f",
+      "sha256_copy": "a4f68ede1c77d9abaf5c1a679bc31a7e30c57985775012311e605dcc204a255f"
     },
     {
       "year": 2024,
@@ -699,8 +768,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/MOBILE_HOME_INFO.TXT",
       "size_bytes": 15252930,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "4573d26ba073b300d9f2a0a0ace2c9888042e3cc233ca479afbe160729d4dba8"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "4573d26ba073b300d9f2a0a0ace2c9888042e3cc233ca479afbe160729d4dba8",
+      "sha256_copy": "4573d26ba073b300d9f2a0a0ace2c9888042e3cc233ca479afbe160729d4dba8"
     },
     {
       "year": 2024,
@@ -709,8 +779,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/ARB.TXT",
       "size_bytes": 760971,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "3d124dcad998d448a83788811f41fb8ed9c0d48b670d98fb9cdf4bf7f7f31faa"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "3d124dcad998d448a83788811f41fb8ed9c0d48b670d98fb9cdf4bf7f7f31faa",
+      "sha256_copy": "3d124dcad998d448a83788811f41fb8ed9c0d48b670d98fb9cdf4bf7f7f31faa"
     },
     {
       "year": 2024,
@@ -719,8 +790,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/TAX_DEFERRAL_INFO.TXT",
       "size_bytes": 1356,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "22bd7a104a1124ce07a7a480b09e3fedcef3a10bcce75c34f3c35f6b03dd6006"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "22bd7a104a1124ce07a7a480b09e3fedcef3a10bcce75c34f3c35f6b03dd6006",
+      "sha256_copy": "22bd7a104a1124ce07a7a480b09e3fedcef3a10bcce75c34f3c35f6b03dd6006"
     },
     {
       "year": 2024,
@@ -729,8 +801,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/ENTITY.TXT",
       "size_bytes": 5035,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "d2522b58bf704624c1928ca62287f2115235e46ed3490ccc030c5293362aff22"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "d2522b58bf704624c1928ca62287f2115235e46ed3490ccc030c5293362aff22",
+      "sha256_copy": "d2522b58bf704624c1928ca62287f2115235e46ed3490ccc030c5293362aff22"
     },
     {
       "year": 2024,
@@ -739,8 +812,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/IMP_INFO.TXT",
       "size_bytes": 50088336,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "237d6453a91eca15797909f502d171a40c56df4355aef0d6c58e7e2cad39e532"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "237d6453a91eca15797909f502d171a40c56df4355aef0d6c58e7e2cad39e532",
+      "sha256_copy": "237d6453a91eca15797909f502d171a40c56df4355aef0d6c58e7e2cad39e532"
     },
     {
       "year": 2024,
@@ -749,8 +823,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/LAWSUIT.TXT",
       "size_bytes": 746130,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "a07b23eb244b2ae6ff46abb60136ca38581c5a936e646a918b0ba9c447beb643"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "a07b23eb244b2ae6ff46abb60136ca38581c5a936e646a918b0ba9c447beb643",
+      "sha256_copy": "a07b23eb244b2ae6ff46abb60136ca38581c5a936e646a918b0ba9c447beb643"
     },
     {
       "year": 2024,
@@ -759,8 +834,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/STATE_CD.TXT",
       "size_bytes": 5715,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "380c09057993f2e1c80ed51da70ebc3cc52442a3f8def4e55a396075aac40f10"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "380c09057993f2e1c80ed51da70ebc3cc52442a3f8def4e55a396075aac40f10",
+      "sha256_copy": "380c09057993f2e1c80ed51da70ebc3cc52442a3f8def4e55a396075aac40f10"
     },
     {
       "year": 2024,
@@ -769,8 +845,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/c1a1898c-5f18-11ef-bb2b-0242ac11000e_exportTotals.pdf",
       "size_bytes": 854191,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "087ca113d1b61b2264770a5ea15620f38521f76ae6b35afa2bab48a135760be0"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "087ca113d1b61b2264770a5ea15620f38521f76ae6b35afa2bab48a135760be0",
+      "sha256_copy": "087ca113d1b61b2264770a5ea15620f38521f76ae6b35afa2bab48a135760be0"
     },
     {
       "year": 2024,
@@ -779,8 +856,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/ABS_SUBD.TXT",
       "size_bytes": 1427816,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "101e142bdaafcee3f92657aee69b66db86bb0c375c83fb6f1eee6f4ada168f5b"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "101e142bdaafcee3f92657aee69b66db86bb0c375c83fb6f1eee6f4ada168f5b",
+      "sha256_copy": "101e142bdaafcee3f92657aee69b66db86bb0c375c83fb6f1eee6f4ada168f5b"
     },
     {
       "year": 2024,
@@ -789,8 +867,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/PROP.TXT",
       "size_bytes": 4456852626,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "f6bd4b8b3b6d68650a8281901054cc555a544f0c2e447e22ab6c1c6132043f8e"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "f6bd4b8b3b6d68650a8281901054cc555a544f0c2e447e22ab6c1c6132043f8e",
+      "sha256_copy": "f6bd4b8b3b6d68650a8281901054cc555a544f0c2e447e22ab6c1c6132043f8e"
     },
     {
       "year": 2024,
@@ -799,8 +878,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/IMP_ATR.TXT",
       "size_bytes": 233420656,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "b7841b65bab46ef65ed634a470e66bd28711ea3ee752866518048577a4dea878"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "b7841b65bab46ef65ed634a470e66bd28711ea3ee752866518048577a4dea878",
+      "sha256_copy": "b7841b65bab46ef65ed634a470e66bd28711ea3ee752866518048577a4dea878"
     },
     {
       "year": 2024,
@@ -809,8 +889,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/certified/2024-08-21/SKETCH_INFO.TXT",
       "size_bytes": 594870235,
       "vault_date": "2024-08-21",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "4edfbcb13219822d46a718cd559f1edd34a3095b73534a37618ff7b266d7a81d"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "4edfbcb13219822d46a718cd559f1edd34a3095b73534a37618ff7b266d7a81d",
+      "sha256_copy": "4edfbcb13219822d46a718cd559f1edd34a3095b73534a37618ff7b266d7a81d"
     },
     {
       "year": 2026,
@@ -819,8 +900,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/certified/2026-07-19/LAND_DET.TXT",
       "size_bytes": 89535450,
       "vault_date": "2026-07-19",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "7d61c166e8fef2b675a06adcb1681d1cf83da104c7b1868cf158f09f91319be3"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "7d61c166e8fef2b675a06adcb1681d1cf83da104c7b1868cf158f09f91319be3",
+      "sha256_copy": "7d61c166e8fef2b675a06adcb1681d1cf83da104c7b1868cf158f09f91319be3"
     },
     {
       "year": 2026,
@@ -829,8 +911,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/certified/2026-07-19/PROP_ENT.TXT",
       "size_bytes": 9844130583,
       "vault_date": "2026-07-19",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "561ca08dd87bf9f73bdf9bfd8b96f417fb15faee6ccd9364d70686c1c493b3a9"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "561ca08dd87bf9f73bdf9bfd8b96f417fb15faee6ccd9364d70686c1c493b3a9",
+      "sha256_copy": "561ca08dd87bf9f73bdf9bfd8b96f417fb15faee6ccd9364d70686c1c493b3a9"
     },
     {
       "year": 2026,
@@ -839,8 +922,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/certified/2026-07-19/PROP.TXT",
       "size_bytes": 4895747376,
       "vault_date": "2026-07-19",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "81e33a3c3f824833d37cf8ece51dc2d19bb3ec28ce511aca287b2e4dd7df62a7"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "81e33a3c3f824833d37cf8ece51dc2d19bb3ec28ce511aca287b2e4dd7df62a7",
+      "sha256_copy": "81e33a3c3f824833d37cf8ece51dc2d19bb3ec28ce511aca287b2e4dd7df62a7"
     },
     {
       "year": 2026,
@@ -849,8 +933,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/certified/2026-07-30/certified_2026.zip",
       "size_bytes": 557228168,
       "vault_date": "2026-07-30",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "62d0d1cd22b03f31db8d3986160eb181c5d00044df98a303fce9e17a44e9aa02"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "62d0d1cd22b03f31db8d3986160eb181c5d00044df98a303fce9e17a44e9aa02",
+      "sha256_copy": "62d0d1cd22b03f31db8d3986160eb181c5d00044df98a303fce9e17a44e9aa02"
     },
     {
       "year": 2026,
@@ -859,8 +944,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/LAND_DET.TXT",
       "size_bytes": 89529420,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "86f64357abaf2f2811f58904625674e60b8d397254bddd9efb4aee5a6151dd01"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "86f64357abaf2f2811f58904625674e60b8d397254bddd9efb4aee5a6151dd01",
+      "sha256_copy": "86f64357abaf2f2811f58904625674e60b8d397254bddd9efb4aee5a6151dd01"
     },
     {
       "year": 2026,
@@ -869,8 +955,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/ARBITRATION.TXT",
       "size_bytes": 1428,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "c138d213385115699189a108162dcc7c1b780666db348d75f86c77d92b194d02"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "c138d213385115699189a108162dcc7c1b780666db348d75f86c77d92b194d02",
+      "sha256_copy": "c138d213385115699189a108162dcc7c1b780666db348d75f86c77d92b194d02"
     },
     {
       "year": 2026,
@@ -879,8 +966,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/IMP_DET.TXT",
       "size_bytes": 2065683360,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "d80a6ac3e8c1abec580433d8984764d4dd73c1e53dc796134298e958b35f30ec"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "d80a6ac3e8c1abec580433d8984764d4dd73c1e53dc796134298e958b35f30ec",
+      "sha256_copy": "d80a6ac3e8c1abec580433d8984764d4dd73c1e53dc796134298e958b35f30ec"
     },
     {
       "year": 2026,
@@ -889,8 +977,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/COUNTRY.TXT",
       "size_bytes": 13965,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a",
+      "sha256_copy": "b8f3a5c50e5b60de5dba1c675787eac72bee2cf6e949adb0499b5877cf9fc12a"
     },
     {
       "year": 2026,
@@ -899,8 +988,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/APPR_HDR.TXT",
       "size_bytes": 246,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "eaf18e6479e60c49a892f4f56f8a6c7a45252306fa2f14b63769bf0b13a7bc55"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "eaf18e6479e60c49a892f4f56f8a6c7a45252306fa2f14b63769bf0b13a7bc55",
+      "sha256_copy": "eaf18e6479e60c49a892f4f56f8a6c7a45252306fa2f14b63769bf0b13a7bc55"
     },
     {
       "year": 2026,
@@ -909,8 +999,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/SB12.TXT",
       "size_bytes": 26235339,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "84a8913e9dcbed7f06fe03bd1f11d6122b9f03783e185a4ef40f7fe2a556aaaf"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "84a8913e9dcbed7f06fe03bd1f11d6122b9f03783e185a4ef40f7fe2a556aaaf",
+      "sha256_copy": "84a8913e9dcbed7f06fe03bd1f11d6122b9f03783e185a4ef40f7fe2a556aaaf"
     },
     {
       "year": 2026,
@@ -919,8 +1010,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/TOTALS.TXT",
       "size_bytes": 548775,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "0a2d0f6d555dddc5562dadd50825ea9aca250bfebee4773baa7325c4f5c8b3dd"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "0a2d0f6d555dddc5562dadd50825ea9aca250bfebee4773baa7325c4f5c8b3dd",
+      "sha256_copy": "0a2d0f6d555dddc5562dadd50825ea9aca250bfebee4773baa7325c4f5c8b3dd"
     },
     {
       "year": 2026,
@@ -929,8 +1021,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/AGENT.TXT",
       "size_bytes": 750120,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "53628d25d4e2addac7ee9af0fc5374840a75fb8f182c186505fe7837cc30e912"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "53628d25d4e2addac7ee9af0fc5374840a75fb8f182c186505fe7837cc30e912",
+      "sha256_copy": "53628d25d4e2addac7ee9af0fc5374840a75fb8f182c186505fe7837cc30e912"
     },
     {
       "year": 2026,
@@ -939,8 +1032,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/PROP_ENT.TXT",
       "size_bytes": 9646895063,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "7af0bbed75ad3f62f228aa0f2d054e19d0396b1ef147afe518c29d24dda1c489"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "7af0bbed75ad3f62f228aa0f2d054e19d0396b1ef147afe518c29d24dda1c489",
+      "sha256_copy": "7af0bbed75ad3f62f228aa0f2d054e19d0396b1ef147afe518c29d24dda1c489"
     },
     {
       "year": 2026,
@@ -949,8 +1043,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/9014e9e8-6481-11f1-9605-0242ac110003_exportTotals.pdf",
       "size_bytes": 936473,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "c89f94469e86c12bfac294f1a75bf95db05be70084ede5fea826d5760f18e25c"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "c89f94469e86c12bfac294f1a75bf95db05be70084ede5fea826d5760f18e25c",
+      "sha256_copy": "c89f94469e86c12bfac294f1a75bf95db05be70084ede5fea826d5760f18e25c"
     },
     {
       "year": 2026,
@@ -959,8 +1054,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/MOBILE_HOME_INFO.TXT",
       "size_bytes": 15644460,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "dd098dccabcea3701b3daaf35cd2602a729e0de5dfbbee0a4d0790ec30328379"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "dd098dccabcea3701b3daaf35cd2602a729e0de5dfbbee0a4d0790ec30328379",
+      "sha256_copy": "dd098dccabcea3701b3daaf35cd2602a729e0de5dfbbee0a4d0790ec30328379"
     },
     {
       "year": 2026,
@@ -969,8 +1065,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/ARB.TXT",
       "size_bytes": 25467180,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "eb8b1c5ad94cf4e568e4f8c1db6ac4b64bedc0e15a322db8172afeab2f0ea795"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "eb8b1c5ad94cf4e568e4f8c1db6ac4b64bedc0e15a322db8172afeab2f0ea795",
+      "sha256_copy": "eb8b1c5ad94cf4e568e4f8c1db6ac4b64bedc0e15a322db8172afeab2f0ea795"
     },
     {
       "year": 2026,
@@ -979,8 +1076,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/TAX_DEFERRAL_INFO.TXT",
       "size_bytes": 756874,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "9e9fd78ceb05562896647b67a16b92dd46e3793026f8bd4f194f53ce203199c8"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "9e9fd78ceb05562896647b67a16b92dd46e3793026f8bd4f194f53ce203199c8",
+      "sha256_copy": "9e9fd78ceb05562896647b67a16b92dd46e3793026f8bd4f194f53ce203199c8"
     },
     {
       "year": 2026,
@@ -989,8 +1087,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/ENTITY.TXT",
       "size_bytes": 5567,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "d7bc6fb2f7850c1b96ae06055384fb72a02070a5557dfdabd18ff3803ba6d0dc"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "d7bc6fb2f7850c1b96ae06055384fb72a02070a5557dfdabd18ff3803ba6d0dc",
+      "sha256_copy": "d7bc6fb2f7850c1b96ae06055384fb72a02070a5557dfdabd18ff3803ba6d0dc"
     },
     {
       "year": 2026,
@@ -999,8 +1098,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/IMP_INFO.TXT",
       "size_bytes": 52783364,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "936cb3b52413ebd0cc4dbd6a11f89973cca001b140deed2e84de4087337f1e1d"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "936cb3b52413ebd0cc4dbd6a11f89973cca001b140deed2e84de4087337f1e1d",
+      "sha256_copy": "936cb3b52413ebd0cc4dbd6a11f89973cca001b140deed2e84de4087337f1e1d"
     },
     {
       "year": 2026,
@@ -1009,8 +1109,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/LAWSUIT.TXT",
       "size_bytes": 939624,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "aa999d8b2cc8df8afa4bd5f800a038d36f23985ca586cafe2848062b16576718"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "aa999d8b2cc8df8afa4bd5f800a038d36f23985ca586cafe2848062b16576718",
+      "sha256_copy": "aa999d8b2cc8df8afa4bd5f800a038d36f23985ca586cafe2848062b16576718"
     },
     {
       "year": 2026,
@@ -1019,8 +1120,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/STATE_CD.TXT",
       "size_bytes": 5715,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "4dfd72295b4c1707a9eb403041ad742da70fee2b9e929e6c8e9adbb96a9d1100"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "4dfd72295b4c1707a9eb403041ad742da70fee2b9e929e6c8e9adbb96a9d1100",
+      "sha256_copy": "4dfd72295b4c1707a9eb403041ad742da70fee2b9e929e6c8e9adbb96a9d1100"
     },
     {
       "year": 2026,
@@ -1029,8 +1131,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/ABS_SUBD.TXT",
       "size_bytes": 1473472,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "e26401a3bd7ed3153e0d5aeb00d07114308cdacd4ba5da113c5c8c43068493e8"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "e26401a3bd7ed3153e0d5aeb00d07114308cdacd4ba5da113c5c8c43068493e8",
+      "sha256_copy": "e26401a3bd7ed3153e0d5aeb00d07114308cdacd4ba5da113c5c8c43068493e8"
     },
     {
       "year": 2026,
@@ -1039,8 +1142,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/PROP.TXT",
       "size_bytes": 4837850556,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "dd69e4aeb60fc0401e2b515a793b994dab7c7a6c58a29c286ae7999c40583bf6"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "dd69e4aeb60fc0401e2b515a793b994dab7c7a6c58a29c286ae7999c40583bf6",
+      "sha256_copy": "dd69e4aeb60fc0401e2b515a793b994dab7c7a6c58a29c286ae7999c40583bf6"
     },
     {
       "year": 2026,
@@ -1049,8 +1153,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/IMP_ATR.TXT",
       "size_bytes": 232215774,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "9a35fbcdcef44ea88f6b4e4c76b0f508b9321d72485fb59a2345ad6f953d123a"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "9a35fbcdcef44ea88f6b4e4c76b0f508b9321d72485fb59a2345ad6f953d123a",
+      "sha256_copy": "9a35fbcdcef44ea88f6b4e4c76b0f508b9321d72485fb59a2345ad6f953d123a"
     },
     {
       "year": 2026,
@@ -1059,8 +1164,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2026/preliminary/2026-06-12/SKETCH_INFO.TXT",
       "size_bytes": 757846270,
       "vault_date": "2026-06-12",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "9362fb985920b4d1e148f000a98c3877ff9ecc1a45ae12a166dbab1c89115eb8"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "9362fb985920b4d1e148f000a98c3877ff9ecc1a45ae12a166dbab1c89115eb8",
+      "sha256_copy": "9362fb985920b4d1e148f000a98c3877ff9ecc1a45ae12a166dbab1c89115eb8"
     },
     {
       "year": 2021,
@@ -1069,8 +1175,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2021/ajr/2021-09-25/20210925_000416_PTD.csv",
       "size_bytes": 716013704,
       "vault_date": "2021-09-25",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "6f377ce41be80328077b4a7630ed367605fbc1fece5109a8e0613232bcf4158c"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "6f377ce41be80328077b4a7630ed367605fbc1fece5109a8e0613232bcf4158c",
+      "sha256_copy": "6f377ce41be80328077b4a7630ed367605fbc1fece5109a8e0613232bcf4158c"
     },
     {
       "year": 2022,
@@ -1079,8 +1186,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2022/ajr/2022-09-28/227EARS092822.csv",
       "size_bytes": 743921588,
       "vault_date": "2022-09-28",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "06ee1f2369ea25ca709af102b22bb375e78bec28f10b744615f564089b2b5f42"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "06ee1f2369ea25ca709af102b22bb375e78bec28f10b744615f564089b2b5f42",
+      "sha256_copy": "06ee1f2369ea25ca709af102b22bb375e78bec28f10b744615f564089b2b5f42"
     },
     {
       "year": 2023,
@@ -1089,8 +1197,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2023/ajr/2023-08-30/227EARS083023.csv",
       "size_bytes": 760408042,
       "vault_date": "2023-08-30",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "c330794b1a13ac5cff7e48e4ec81c181c647f67315000c27cde1926b01ffc6c3"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "c330794b1a13ac5cff7e48e4ec81c181c647f67315000c27cde1926b01ffc6c3",
+      "sha256_copy": "c330794b1a13ac5cff7e48e4ec81c181c647f67315000c27cde1926b01ffc6c3"
     },
     {
       "year": 2024,
@@ -1099,8 +1208,9 @@
       "vault_path": "/Volumes/Expansion/parcelytics_vault/travis/2024/ajr/2024-08-28/227EARS082824.csv",
       "size_bytes": 973128466,
       "vault_date": "2024-08-28",
-      "status": "CHECKSUMMED_NOT_COPIED",
-      "sha256_original": "1847782eca5d3d433b0094a5e1ed143b5ea9292fa49ace42d9e47ce2a15a1f44"
+      "status": "COPIED_VERIFIED",
+      "sha256_original": "1847782eca5d3d433b0094a5e1ed143b5ea9292fa49ace42d9e47ce2a15a1f44",
+      "sha256_copy": "1847782eca5d3d433b0094a5e1ed143b5ea9292fa49ace42d9e47ce2a15a1f44"
     }
   ]
 }
