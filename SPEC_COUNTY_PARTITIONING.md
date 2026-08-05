@@ -422,3 +422,17 @@ Per this brief's own verification requirements:
 3. **Sandbox-vs-live disclosure:** everything in §9.1-9.5, §9.7-9.8, and §9.10 is a document-consistency and design-reasoning review, completed fully in this sandbox from repo-read evidence (including the fresh read of `loaders/quarantine_contamination.py` lines 138-158 confirming §9.10's exact real table definition). §9.9 (the maintenance-window test) is explicitly **not** attempted from this sandbox, per the brief's own out-of-scope instruction — it requires a live, non-production Render database copy, which only Diego can provision and run against. §9.3's DCAD-vs-TCAD grep is similarly real but not runnable yet — it requires real Dallas source files that don't exist in this sandbox or, as far as this investigation found, anywhere yet.
 
 Nothing in this amendment executes any schema change against real, populated production tables. No `ALTER TABLE`, no `CREATE TABLE`, no `resolve_parcel()` implementation, no live database connection of any kind was made in producing this section.
+
+### 9.13 Maintenance-window test — real result (2026-08-05)
+
+Diego ran the real test per Section 9.9's own instructions, against a genuine
+Render PITR test instance (a real, isolated copy of production, deleted after
+the test). Real result: **no maintenance window needed.** A background process
+ran 1,588 real queries continuously against `parcel` throughout both the shadow
+build (92.036s) and the actual swap (0.173s) -- zero errors, zero slow queries,
+during either phase. Confirms the expectation stated in Section 9.9: the swap
+itself is momentary and safe under normal Postgres DDL locking, matching the
+same real profile already proven for `group_stats` and `snapshot_*`.
+
+This closes the last open blocker before the implementation brief can be
+written.
