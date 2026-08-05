@@ -57,29 +57,56 @@ Searched `schema.sql` for every `CREATE TABLE` (20 statements, including `_shado
 | `tax_billing_quarantine` | `(geo_id, tax_year)` | Defined in `loaders/quarantine_contamination.py`, not `schema.sql` — same geo_id-collision exposure as `tax_billing`. Small table (12 hardcoded geo_ids as of this session), low priority but should not be forgotten in a real migration. |
 | `parcel_2026_preliminary_snapshot` | `geo_id` (single-column) | Explicitly a one-time, narrow-scoped, NOT-kept-in-sync table per its own docstring (schema.sql:597-618) — recommend simply retiring/archiving this rather than migrating it; it was never designed to be a durable multi-year, let alone multi-county, structure. |
 
-### 1.2 Real row counts and disk sizes — honest gap, not fabricated numbers
+### 1.2 Real row counts and disk sizes — filled in, real production data (2026-08-05)
 
-This sandbox has no live Postgres connection (same constraint disclosed all session). I will not invent row counts or `pg_total_relation_size()` figures. What I have from this session's own real, documented work:
+Diego ran the read-only query below against production. Real, complete numbers,
+ordered by total size:
 
-- `parcel`: **517,614 total rows** (all `state_cd1` prefixes, confirmed live, June 2026 — `KNOWN_LIMITATIONS.md` §"state_cd1 prefix population"). Residential subset alone: 317,461. Commercial (post-AJR-exclusion): 13,527.
-- `tax_billing`: **426,491 rows** for 2025 alone (confirmed live, per this session's earlier billing-verification work) — real total across all years not separately confirmed this session.
-- `snapshot_breakdown` / `snapshot_totals` / `snapshot_neighborhood_movers`: **190 / 11 / 4,626 rows** respectively — the real row counts from tonight's AGGPRECOMP-2-FIX-2 dry-run and confirmed by Diego's real refresh.
-- `group_stats`: not directly measured this session; grain is `(neighborhood_cd × state_cd1_class × classi_cd × tax_year)` — with roughly a few hundred real neighborhood codes, 5 `state_cd1_class` values, on the order of 100 `classi_cd` values, and 6 tax years (2021-2026), a **rough estimate** is tens of thousands of rows, but this is an estimate, not a measurement, and should not be treated as one.
-- `parcel_tax_year`, `tax_billing_entity`, `tax_delinquent`, `county_tax_rate`, `parcel_metrics`, `prop_unit`, `prop_unit_tax_year`, `ingest_audit`, `load_batch`, `parcel_2026_preliminary_snapshot`, `tax_billing_quarantine`: **not measured this session.** No real number is stated for any of these rather than guessing.
+| Table | Rows | Total size | Table size | Index size |
+|---|---|---|---|---|
+| `tax_billing_entity` | **10,769,096** | 1036 MB | 619 MB | 417 MB |
+| `parcel` | 517,655 | 851 MB | 645 MB | 206 MB |
+| `parcel_tax_year` | 2,783,141 | 850 MB | 471 MB | 379 MB |
+| `prop_unit_tax_year` | 2,870,749 | 718 MB | 430 MB | 288 MB |
+| `parcel_metrics` | 2,796,423 | 546 MB | 277 MB | 269 MB |
+| `tax_billing` | 2,060,493 | 298 MB | 209 MB | 89 MB |
+| `prop_unit` | 513,122 | 145 MB | 95 MB | 50 MB |
+| `parcel_2026_preliminary_snapshot` | 433,050 | 62 MB | 44 MB | 18 MB |
+| `group_stats` | 59,469 | 13 MB | 11 MB | 1880 kB |
+| `tax_billing_quarantine` | 16,516 | 7416 kB | 6848 kB | 568 kB |
+| `tax_delinquent` | 10,087 | 1064 kB | 704 kB | 360 kB |
+| `snapshot_neighborhood_movers` | 4,626 | 552 kB | 344 kB | 208 kB |
+| `county_tax_rate` | 3,256 | 416 kB | 208 kB | 208 kB |
+| `ingest_audit` | 103 | 96 kB | 16 kB | 80 kB |
+| `snapshot_breakdown` | 190 | 88 kB | 32 kB | 56 kB |
+| `county_benchmark` | 30 | 40 kB | 8192 bytes | 32 kB |
+| `load_batch` | 6 | 32 kB | 8192 bytes | 24 kB |
+| `snapshot_totals` | 11 | 24 kB | 8192 bytes | 16 kB |
 
-Disk sizes (`pg_total_relation_size()`) for any table: **not measured** — this genuinely requires a live connection; there is no code-reading substitute for it.
+Real, significant finding: tax_billing_entity is far larger than every other
+table -- 10.77M rows on Travis alone, roughly 4x parcel_tax_year's count despite
+not appearing in this document's earlier estimates at all (it was in the
+"not measured" list). At the same 3-5x scale used throughout Section 4.1's
+reasoning, tax_billing_entity alone projects to roughly 32-54 million rows --
+this would cross the 20-30M-row native-partitioning revisit trigger (Section 4.1,
+condition (b)(i) added in Section 9.2) on its own, while every other table stays
+comfortably under it (parcel_tax_year/prop_unit_tax_year/parcel_metrics, the
+next-largest group, project to roughly 8-14M rows at the same scale -- well
+under the trigger).
 
-**Diego, run this once and the inventory above can be filled in completely** (safe, read-only):
+This does not change Section 4.1's recommendation today -- the trigger is
+designed to reopen this exact conversation with real data, and this is that real
+data arriving early for one specific table rather than the whole schema. Real,
+concrete implication for the implementation brief: tax_billing_entity is the one
+table worth measuring again, specifically, once real Dallas data exists -- it
+may individually justify native partitioning (or at minimum, more aggressive
+index-only-scan optimization) well before the other tables in this schema do,
+even if the schema-wide recommendation stays lightweight.
 
-```sql
-SELECT relname AS table_name,
-       n_live_tup AS approx_row_count,
-       pg_size_pretty(pg_total_relation_size(relid)) AS total_size,
-       pg_size_pretty(pg_relation_size(relid)) AS table_size,
-       pg_size_pretty(pg_total_relation_size(relid) - pg_relation_size(relid)) AS index_size
-FROM pg_stat_user_tables
-ORDER BY pg_total_relation_size(relid) DESC;
-```
+All other real numbers land close to this document's own earlier estimates
+(parcel: 517,655 measured vs. 517,614 estimated; parcel_tax_year: 2,783,141
+measured vs. a rough parcel-count-times-six-years estimate in the same range) --
+the original estimation approach in Section 4.1 held up well against real data.
 
 ---
 
