@@ -175,6 +175,167 @@ def test_vault_date_for_respects_override():
     return check("vault_date_for() respects an explicit date_override", got == "2020-01-01", got)
 
 
+# ── VAULT-COPY-FIX-1 (Aug 2026): shutil.copy() not copy2(), ExFAT chflags ──
+#
+# This sandbox's own filesystem is neither macOS nor ExFAT (Linux
+# container mount) -- os.chflags doesn't even exist as an attribute on
+# Linux, and shutil.copystat() silently skips the flags step when it's
+# absent, so the real OSError(errno=22) from Diego's actual ExFAT drive
+# cannot be organically reproduced here. Per this brief's own instruction,
+# that's disclosed explicitly, not glossed over -- see the final report.
+#
+# What CAN be verified here, and is: (1) shutil.copy() -- what
+# build_manifest() now calls -- structurally never invokes copystat() at
+# all (confirmed by monkeypatching shutil.copystat to raise the EXACT real
+# production error and proving a real do_copy=True run never triggers it),
+# which is what actually eliminates this failure mode, on any OS/
+# filesystem, not just by getting lucky on this sandbox's own filesystem;
+# and (2) that the monkeypatched copystat WOULD have fired under the OLD
+# copy2()-based code, reproducing the bug's real trigger condition
+# one level up, proving this fixture is actually wired to the real failure
+# mode and not a no-op.
+
+def test_copy_mode_never_invokes_copystat_chflags_path():
+    """The core proof: build_manifest()'s real do_copy=True path must NOT
+    call shutil.copystat() (the function whose internal chflags() call is
+    the actual, confirmed root cause) at all. Monkeypatches copystat to
+    raise the EXACT real production error if it's ever called, then runs a
+    real copy through the unmodified build_manifest() -- must succeed
+    cleanly."""
+    import vault_backfill as vb
+
+    def _copystat_raises_like_exfat(*a, **kw):
+        raise OSError(22, "Invalid argument")  # the exact real errno/message
+
+    orig_copystat = shutil.copystat
+    shutil.copystat = _copystat_raises_like_exfat
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            src_dir = os.path.join(tmp, "src", "2099_Certified_Export")
+            os.makedirs(src_dir)
+            with open(os.path.join(src_dir, "LAND_DET.TXT"), "wb") as f:
+                f.write(b"real content, same filename as Diego's real failure")
+            vault_dir = os.path.join(tmp, "vault")
+
+            orig_gather = vb.gather_sources
+            vb.gather_sources = lambda only=None: [(2099, "certified", src_dir)]
+            try:
+                rows, total = vb.build_manifest(vault_dir, do_copy=True)
+            finally:
+                vb.gather_sources = orig_gather
+
+        ok = check("copy mode with copystat() poisoned to fail like ExFAT: still succeeds",
+                    rows[0]["status"] == "COPIED_VERIFIED", rows[0])
+        return ok
+    finally:
+        shutil.copystat = orig_copystat
+
+
+def test_old_copy2_approach_would_have_failed_this_exact_way():
+    """Companion proof, one level up: confirms this fixture is actually
+    wired to the real bug -- if build_manifest() still called
+    shutil.copy2() (the pre-fix code), the SAME poisoned copystat() WOULD
+    raise, reproducing Diego's real traceback shape. This is what makes
+    the test above meaningful (proving absence of a call that would
+    otherwise really fire), not a tautology."""
+    def _copystat_raises_like_exfat(*a, **kw):
+        raise OSError(22, "Invalid argument")
+
+    orig_copystat = shutil.copystat
+    shutil.copystat = _copystat_raises_like_exfat
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "LAND_DET.TXT")
+            dst = os.path.join(tmp, "copy_of_LAND_DET.TXT")
+            with open(src, "wb") as f:
+                f.write(b"content")
+            raised = False
+            try:
+                shutil.copy2(src, dst)  # the OLD approach -- must still fail here
+            except OSError as e:
+                raised = e.errno == 22
+        return check("sanity: shutil.copy2() (old approach) really does hit the poisoned "
+                      "copystat() -- proves the fixture reproduces the real failure mode",
+                      raised)
+    finally:
+        shutil.copystat = orig_copystat
+
+
+def test_copy_mode_preserves_mtime_via_explicit_os_utime():
+    """VAULT-COPY-FIX-1's second half: switching away from copy2() must not
+    silently drop mtime preservation -- the explicit os.utime() call
+    must still leave the vault copy's mtime matching the source's,
+    even though copystat() (which copy2() would have used) is never
+    called."""
+    import vault_backfill as vb
+    with tempfile.TemporaryDirectory() as tmp:
+        src_dir = os.path.join(tmp, "src", "2099_Certified_Export")
+        os.makedirs(src_dir)
+        src_path = os.path.join(src_dir, "PROP.TXT")
+        with open(src_path, "wb") as f:
+            f.write(b"content")
+        # A known, distinctive mtime, far from "now" so a false pass
+        # (mtime just happening to be close to copy-time) can't sneak by.
+        known_time = 1_700_000_000  # 2023-11-14 -- arbitrary, just fixed+distinctive
+        os.utime(src_path, (known_time, known_time))
+        vault_dir = os.path.join(tmp, "vault")
+
+        orig_gather = vb.gather_sources
+        vb.gather_sources = lambda only=None: [(2099, "certified", src_dir)]
+        try:
+            rows, total = vb.build_manifest(vault_dir, do_copy=True)
+        finally:
+            vb.gather_sources = orig_gather
+
+        vault_path = rows[0]["vault_path"]
+        got_mtime = int(os.path.getmtime(vault_path))
+        return check("copy mode: vault copy's mtime matches the source's real mtime "
+                     "(preserved via explicit os.utime(), not copystat())",
+                     got_mtime == known_time, f"got {got_mtime}, expected {known_time}")
+
+
+def test_checksum_verification_logic_unaffected_by_copy_function_change():
+    """Explicit re-confirmation (not just 'the existing tests still pass'):
+    the copy-mismatch detection -- this script's REAL integrity guarantee,
+    per its own docstring -- still fires correctly after switching away
+    from copy2(). Same technique as the pre-existing corruption test,
+    kept as its own named assertion here so this specific requirement
+    (checksum logic unaffected by the copy-function change) has a test
+    that documents exactly what it's proving, not just riding along on a
+    pre-existing test that was written for a different reason."""
+    import vault_backfill as vb
+    with tempfile.TemporaryDirectory() as tmp:
+        src_dir = os.path.join(tmp, "src", "2099_Certified_Export")
+        os.makedirs(src_dir)
+        with open(os.path.join(src_dir, "PROP.TXT"), "wb") as f:
+            f.write(b"original content")
+        vault_dir = os.path.join(tmp, "vault")
+
+        orig_gather = vb.gather_sources
+        orig_sha = vb.sha256_of
+        call_count = {"n": 0}
+
+        def fake_sha256(path):
+            call_count["n"] += 1
+            return "aaaa" if call_count["n"] == 1 else "bbbb_corrupted"
+
+        vb.gather_sources = lambda only=None: [(2099, "certified", src_dir)]
+        vb.sha256_of = fake_sha256
+        try:
+            raised = False
+            try:
+                vb.build_manifest(vault_dir, do_copy=True)
+            except RuntimeError as e:
+                raised = "Integrity check failed" in str(e)
+        finally:
+            vb.gather_sources = orig_gather
+            vb.sha256_of = orig_sha
+
+        return check("post-fix: checksum mismatch detection still raises RuntimeError "
+                     "(the real integrity guarantee is unchanged by the copy() switch)",
+                     raised)
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

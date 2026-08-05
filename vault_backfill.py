@@ -15,13 +15,44 @@ AJR_FILES):
      acquisition-date signal (see "DATE-DERIVATION" below for why mtime,
      not a parsed filename, is this script's source of truth).
   3. (--copy mode only) Copies -- never moves -- the file into
-     vault/{county}/{year}/{source}/{date}/, preserving mtime
-     (shutil.copy2), then re-hashes the COPY and asserts it matches the
-     original's checksum before considering that file done. This is the
-     integrity check DATA_LIFECYCLE.md Principle 6 ("The raw file is
-     forever... checksummed") actually needs -- a checksum computed only
-     once, before copying, proves nothing about whether the copy itself
-     is intact.
+     vault/{county}/{year}/{source}/{date}/ via shutil.copy() + an explicit
+     os.utime() to preserve mtime (see VAULT-COPY-FIX-1, Aug 2026, below,
+     for why NOT shutil.copy2() -- its copystat() step attempts chflags(),
+     which ExFAT-formatted destinations, a common choice for portable
+     external drives, cannot support), then re-hashes the COPY and asserts
+     it matches the original's checksum before considering that file done.
+     This is the integrity check DATA_LIFECYCLE.md Principle 6 ("The raw
+     file is forever... checksummed") actually needs -- a checksum computed
+     only once, before copying, proves nothing about whether the copy
+     itself is intact.
+
+VAULT-COPY-FIX-1 (Aug 2026) -- WHY shutil.copy(), NOT shutil.copy2()
+Diego's real --copy run against his new 8TB external drive (confirmed
+ExFAT via diskutil info) failed partway through:
+    OSError: [Errno 22] Invalid argument: '.../LAND_DET.TXT'
+      File "shutil.py", line 396, in copystat
+        lookup("chflags")(dst, st.st_flags, follow_symlinks=follow)
+Root cause, confirmed: shutil.copy2()'s copystat() step tries to preserve
+macOS-specific file flags via chflags() -- ExFAT cannot represent them, a
+well-known APFS/HFS+ -> ExFAT incompatibility on macOS, not specific to
+this one file (it would hit the same wall on essentially any file once
+copystat() runs). The disk-space guard itself worked correctly (7,451.63 GB
+free, no false refusal) -- this was purely the metadata-preservation step.
+Fix: build_manifest()'s do_copy branch uses shutil.copy() (content +
+permission bits, no copystat()/chflags attempt) plus an explicit
+os.utime(vault_path, (src_atime, src_mtime)) to still preserve mtime
+specifically -- cross-filesystem-safe, unlike chflags. This script's real
+integrity guarantee was always the SHA-256 re-hash-and-compare immediately
+below, not macOS-specific metadata -- switching copy functions does not
+weaken it.
+Deliberately NOT filesystem-detection (ExFAT vs APFS/HFS+ branching) --
+shutil.copy() is used unconditionally regardless of destination
+filesystem. This script's whole purpose is portable, long-term archival,
+and an external drive (exactly this script's typical --vault-dir target)
+is commonly ExFAT for cross-platform compatibility -- the safer approach
+costs nothing on APFS/HFS+ either, so there's no real benefit to detecting
+and branching, only added complexity and another thing that could itself
+go wrong.
   4. Writes a manifest in both forms required by this brief: a
      human-readable Markdown table (vault_manifest.md) Diego can spot-
      check by eye, and a machine-readable JSON file (vault_manifest.json)
@@ -323,7 +354,47 @@ def build_manifest(vault_dir, date_override=None, do_copy=False, only=None):
             row["sha256_original"] = checksum
             if do_copy:
                 os.makedirs(vault_subdir, exist_ok=True)
-                shutil.copy2(file_path, vault_path)
+                # VAULT-COPY-FIX-1: shutil.copy(), NOT shutil.copy2(). copy2()
+                # additionally calls copystat(), which on macOS attempts
+                # chflags() to preserve macOS-specific file flags -- ExFAT
+                # (the common format for portable/cross-platform external
+                # drives, exactly the kind of target this script's own
+                # long-term-archival purpose points at) cannot represent
+                # those flags at all, so copystat() raises
+                # OSError(errno=22, "Invalid argument") on effectively every
+                # file, not just this one. Confirmed via diskutil info on
+                # Diego's real drive + the real traceback (copystat ->
+                # chflags). copy() copies content + permission bits only --
+                # no chflags attempt, so this failure mode cannot occur with
+                # it, on ANY filesystem.
+                #
+                # This is NOT filesystem-detection (ExFAT vs APFS/HFS+) --
+                # copy() is used unconditionally, regardless of destination
+                # filesystem. Investigated whether that under-preserves
+                # something DATA_LIFECYCLE.md's Raw Vault section/Principle 6
+                # actually requires: Principle 6 ("The raw file is forever...
+                # archived, checksummed, and never edited") is about CONTENT
+                # immutability, verified by the checksum comparison right
+                # below -- not about preserving OS-level flags/xattrs/
+                # creation-date. Nothing in that spec asks for those. Given
+                # that, and that copy() is strictly safer (works identically
+                # on APFS/HFS+ AND ExFAT) with no real downside, defaulting
+                # to it unconditionally is the right call -- filesystem
+                # detection would add real complexity (parsing diskutil
+                # output or equivalent, another failure mode of its own) for
+                # a benefit nothing here actually needs.
+                #
+                # mtime IS worth preserving explicitly, though -- unlike
+                # chflags, os.utime() is cross-filesystem-safe (ExFAT
+                # supports plain mtime/atime, just not macOS flags), and
+                # matches copy2()'s original intent for the one piece of
+                # metadata that's both meaningful (secondary provenance
+                # signal alongside the manifest's own recorded vault_date,
+                # inspectable directly via `ls -la` without cross-referencing
+                # the manifest) and actually portable.
+                src_stat = os.stat(file_path)
+                shutil.copy(file_path, vault_path)
+                os.utime(vault_path, (src_stat.st_atime, src_stat.st_mtime))
                 copy_checksum = sha256_of(vault_path)
                 row["sha256_copy"] = copy_checksum
                 row["status"] = "COPIED_VERIFIED" if copy_checksum == checksum else "COPY_MISMATCH"
