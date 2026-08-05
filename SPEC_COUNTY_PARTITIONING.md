@@ -253,3 +253,145 @@ No URL or route in this application currently has any concept of "which county" 
 - Migration shape: generalized shadow-table pattern, reconciliation-gated swap (§5).
 
 Nothing above has been executed. No `ALTER TABLE`, no `CREATE TABLE ... PARTITION BY`, no write of any kind against `parcel`, `parcel_tax_year`, `tax_billing`, `tax_billing_entity`, `prop_unit`, `prop_unit_tax_year`, or any of the Tier 1/3 precomputed tables. This document is the artifact for review.
+
+---
+
+## 9. Rulings & Amendments — August 5, 2026 (v1.1, from Fable review)
+
+Same pattern as `DATA_LIFECYCLE.md`'s own v1.1 amendment: the sections above are the original investigation, unedited. This section is the record of what Fable's review changed and why. Still investigation-and-design only — nothing in this section executes any schema change against real, populated production tables.
+
+### 9.1 Decision 1 — lightweight composite keys over native partitioning: AGREED, with a correction
+
+The recommendation in §4.1 stands. One sentence of its stated reasoning is corrected, not the conclusion: §4.1 claimed upsert behavior under native partitioning carries "more edge cases and version-sensitivity... than a plain table." That overstates the case — modern Postgres (11+, and whatever Render runs is well past it) supports `ON CONFLICT` upserts on partitioned tables correctly, under the same constraint the composite-key design already imposes anyway (the partition key, like the leading `county_code` in the lightweight design, must be present in the row being upserted). Leaving an overstated cost in a spec invites it being relitigated later on a false premise, so it's corrected here rather than left standing.
+
+The real cost centers, replacing that sentence:
+
+- **Real operational ceremony.** Every new county under native partitioning is a real DDL event — create the partition, attach it, validate constraints — recurring infrastructure work the lightweight design doesn't have (a new county under the lightweight design is just new rows with a new `county_code` value; no DDL).
+- **FK-with-partition-key requirement** (this part of the original reasoning was correct and stands unchanged): the live `parcel_metrics.geo_id REFERENCES parcel(geo_id)` FK would need the partition key folded into the constraint under native partitioning, real re-work the lightweight design also does (§4.3's composite FK), but native partitioning adds version-sensitive edge cases around FK enforcement across partitions that the lightweight design's single-table FK does not have.
+- **Genuine incompatibility with the shadow-swap pattern — the decisive point, not previously stated.** `build_shadow()`/`swap_shadow_in()` (proven twice this session, on `group_stats` and `snapshot_*`) works because swapping a table in is one `RENAME`. A partitioned table doesn't have a clean equivalent: swapping in a new partitioned structure means recreating and reattaching every partition, not one rename — materially higher ceremony than the pattern this project already leans on. This is the real reason the proven pattern doesn't carry over cleanly to native partitioning, and it's a stronger argument than the upsert claim it replaces.
+
+### 9.2 Three conditions added to the Decision 1 design
+
+**(a) `county_code` leads every composite key and every index — no exceptions.** This formalizes §4.3/§4.4's existing leading-column design as a firm rule, not a preference: a trailing `county_code` forfeits the index-locality that makes the lightweight approach work at all, so this isn't optional per-table judgment going forward.
+
+**(b) Two more revisit triggers, added to §4.1's existing 20-30M-row trigger:**
+- **(i) Refresh-stage budget breach.** If the measured multi-county summary refresh (the shadow-build phase this session measured at 472.2s / 51-52% of its 900s budget, Travis-only) actually exceeds the 15-minute budget once Dallas/Harris data is real, that reopens the partitioning conversation with real measured data, not the linear-projection estimate this document used. This is a stronger, earlier signal than row count alone — a query-plan/duration problem can show up before a table crosses the 20-30M-row line.
+- **(ii) County count ≥ 5.** Three counties (Travis, Dallas, Harris) is genuinely composite-key territory — three DDL events isn't where partitioning's ceremony pays for itself. The roadmap names six markets (Travis, Dallas, Harris, New York County, Los Angeles, Cook — the same six in `index.html`'s `MARKETS` array). Six amortizes per-county partition-maintenance ceremony differently than three does; this trigger exists so the conversation reopens on county count alone, independent of whether either of the other two triggers has fired.
+
+**(c) A real county-scoped reload procedure, designed now, not deferred to whichever trigger fires first.** This closes a real gap the original document didn't address: the proven shadow-swap pattern (§5, and `build_shadow()`/`swap_shadow_in()` as already built) rebuilds an *entire* table — every county's rows — on every refresh. That's fine today because there's only one county. Once `group_stats`, `snapshot_breakdown`, `snapshot_totals`, `snapshot_neighborhood_movers`, and `county_benchmark` hold multiple counties' rows, a Dallas-only data change forces a full rebuild of Travis's and Harris's already-fresh rows too just to refresh Dallas — real wasted work, and it needlessly widens every refresh's blast radius (a bug in one county's computation now risks corrupting rows for counties that were never touched).
+
+Important distinction from §5's migration plan: §5's rename-swap is for the **one-time structural migration** — adding `county_code` to the core, `geo_id`/`prop_id`-keyed tables (`parcel`, `parcel_tax_year`, etc.) — which happens once per table, ever. The procedure below is for the **recurring refresh cycle** of the shared, multi-county aggregate tables, which happens routinely (nightly/on-demand) after that migration is done. They are different operations solving different problems; §5 is unchanged by this addition.
+
+**Proposed procedure — county-scoped delete + reload inside a promotion transaction:**
+
+1. Compute the affected county's new rows into a staging area, scoped by `WHERE county_code = <target>` — same computation logic `build_shadow()`/`refresh_snapshot_summary.py` already use, just filtered to one county rather than all rows.
+2. Reconcile the staged county-scoped rows against source-of-truth aggregates for that county alone (the same row-count + dollar-sum standard as every other real migration this session), **before** the live table is touched — if reconciliation fails, the live table is never touched, same fail-safe property the existing shadow-swap pattern already has.
+3. Promotion, one transaction, not a rename:
+   ```sql
+   BEGIN;
+   DELETE FROM group_stats WHERE county_code = 'DALLAS';
+   INSERT INTO group_stats SELECT * FROM group_stats_dallas_staging;
+   COMMIT;
+   ```
+   Both statements inside one transaction means the table is never observed missing that county's rows mid-operation — either the full delete+insert completes, or neither does. This is a real, accepted departure from the rename-swap pattern, not an oversight: Postgres transactional atomicity provides the same "never see a half-updated table" guarantee a rename does, just via a different mechanism.
+4. **Real duration acceptance:** because this is scoped to one county's row subset, not the whole table, its duration is bounded by that county's data volume, not the full multi-county table — even at 6-county scale, refreshing Dallas alone stays proportional to Dallas's own rows. Whatever that real duration turns out to be is accepted under the same hold-the-flip banner `DATA_LIFECYCLE.md` §5 Stage 3 already establishes for promotion transactions generally — a longer transaction that guarantees correctness is preferred over a faster one that risks a torn read.
+5. The freshness stamp updates for the affected `county_code` only — this is what finding 9.7 (per-county freshness stamps) requires, and this procedure is exactly where that per-county stamp gets written.
+
+### 9.3 Decision 2 — `county_tax_rate.entity_code`: ruled, removed from open questions
+
+§4.3 and §8 both flagged whether `county_tax_rate`'s key should gain `county_code`, worried a cross-county taxing district might legitimately need the same `entity_code` in two counties. That worry pointed the wrong direction: CAD entity codes arrive from each CAD's own export and are a CAD-local namespace, not a coordinated one — a taxing district spanning Travis and a neighboring county appears in *each* CAD's own files under *that CAD's own code*, with no guarantee the two CADs' codes for the same shared entity match. County-scoping the key isn't "actively wrong" for cross-county districts, as §4.3 worried — it's the only representation that matches how the real source data actually arrives. Even in a coincidental same-code case, two county-scoped rows are still semantically correct: each county's roll carries its own row, and the district's one adopted rate simply appears in both, which is true.
+
+**Ruled:** the primary key becomes `(county_code, entity_code, tax_year)` — `county_code` joins as the new leading column per condition (a) above; `entity_code` and `tax_year` are retained exactly as the original key already had them (the original key was `(entity_code, tax_year)` — nothing about `tax_year`'s presence in the key was ever in question; this ruling is about where `county_code` attaches, not about dropping the temporal grain).
+
+**This removes item "whether `county_tax_rate.entity_code` can legitimately collide across counties" from §8's "Real gaps" list** — it is resolved, not open.
+
+The real cross-county comparison need this raises — "show one taxing district's rate across every county it spans" — is a genuinely different, future analytics problem, solved later by a `canonical_entity` mapping layer sitting *above* the county-local codes (e.g. a small table mapping `(county_code, entity_code) → canonical_entity_id` for the handful of entities known to span counties), never by merging the county-local namespaces themselves.
+
+**Named, falsifiable deferred verification:** when real Dallas files arrive, one grep against DCAD's entity-code export confirms whether any shared entity's DCAD code matches its TCAD code (expected result: no match, confirming the county-local-namespace assumption above). This is a specific, checkable step for that future moment, not an open-ended unknown left for later.
+
+### 9.4 New finding — `DEFAULT 'TRAVIS'` must not survive past the migration
+
+Real, serious finding, not a style preference. A default county value on a new column is a contamination vector, not just backfill convenience: it's precisely the mechanism by which a future loader bug (a forgotten `county_code` parameter, a copy-pasted INSERT missing the new column) could silently file Dallas rows as Travis — the same contamination class the Classification Map's `UNKNOWN`-hard-stop (`DATA_LIFECYCLE.md` Stage 1) was built to prevent, reintroduced one layer down, at the schema level, if a default is left in place after migration.
+
+**New acceptance criterion for the eventual implementation brief:** after the backfill step (§5 step 2, and the equivalent for every other migrated table) completes and is reconciled, every `county_code` column becomes `NOT NULL` with **no default** — the explicit backfill `UPDATE`/`INSERT` populates existing rows (as §4.2 already specified), and from that point forward every write must supply `county_code` explicitly or fail. The ingestion gate (`ingest_gate.py`'s G-battery, per `DATA_LIFECYCLE.md` Stage 2) gains a check rejecting any row arriving without an explicit county, the schema-level twin of the existing `UNKNOWN`-classification hard stop.
+
+This includes `county_benchmark.county_code VARCHAR(20) NOT NULL DEFAULT 'TRAVIS'` — the real prior art §2 found. Its default is dropped in this same migration. It only has a default today because nothing multi-county writes to it yet; once `compute_metrics.py:713`'s hardcoded literal is replaced with a real parameter (§6.2), the default becomes exactly the same silent-contamination risk as every other newly-added column.
+
+### 9.5 New finding — design (don't build) a resolver seam for the 218-call-site blast radius
+
+§6.1 correctly named the real cost — 218 `geo_id` occurrences across 28 route handlers in `app.py`, all implicitly single-county today. §7 correctly kept the *routing/UI* decision deferred to Diego. But the architecture that makes that eventual decision cheap doesn't need to wait for it.
+
+**Design (not implemented — see verification note below and Out of Scope):** a single real function, e.g. `resolve_parcel(county_code, geo_id)` in a new small module (candidate: `parcel_resolver.py`, alongside `search_logic.py` and `parcel_filters.py`'s existing pattern of small, Flask-free, shared-logic modules) that every one of the 218 real call sites in `app.py` would route through instead of inlining `WHERE geo_id = %s`. For now, `county_code` is hardcoded to `'TRAVIS'` at that one seam — nowhere else — until Diego's routing decision exists. Real signature sketch:
+
+```python
+def resolve_parcel(geo_id, county_code="TRAVIS"):
+    """Single seam for every geo_id-keyed parcel lookup. Once county_code
+    stops being hardcoded here, every one of app.py's 218 call sites
+    updates by having already been routed through this function --
+    a 1-edit change here instead of a 218-edit sweep across app.py."""
+    return query("SELECT * FROM parcel WHERE county_code = %s AND geo_id = %s",
+                 (county_code, geo_id), one=True)
+```
+
+This converts a future 218-call-site migration into a future 1-edit change to this function's default/caller. **Real constraint, stated plainly:** this cannot actually be wired up against the real 218 call sites until the `county_code` columns genuinely exist on `parcel` and its siblings — wiring it up today against a schema that doesn't have the column yet would be premature, real code with no real column to query. This stays a *design* addition to this spec (the seam's shape, its home, its signature) — not code that gets written and merged in this brief.
+
+**Routing/SEO alignment note, per Fable's review (relayed here, not independently verified against a repo-local document — no growth-plan or programmatic-SEO file exists in this repo to grep against):** Fable's review flagged that the growth plan's own programmatic-SEO URL structure is understood to already imply county-in-path (e.g. `/travis-county/austin/...`-shaped URLs). If that's accurate, the eventual routing decision in §7 should be made once, jointly for SEO slugs and application routes, rather than decided twice by two different people at two different times. This is flagged here as Fable's finding for Diego's awareness — it does not change §7's boundary (the routing/UI decision is still Diego's, still deferred), it only names a real coordination risk (two separate decisions landing on incompatible URL shapes) worth avoiding when that decision gets made.
+
+### 9.6 New finding — this migration is a formal supersede event against sealed vintages
+
+Real tie-in to `DATA_LIFECYCLE.md`'s own rules that the original document didn't address. `DATA_LIFECYCLE.md` Principle 1 states a sealed vintage is immutable, and §4 states "a sealed vintage is never edited — it is superseded." Adding a `county_code` column and changing the primary key rewrites the physical shape of rows that may already be SEALED under that lifecycle (Travis's founding vintages, per `DATA_LIFECYCLE.md` §9.2, are typed `FOUNDING (retroactive)` and would be exactly this kind of already-sealed data).
+
+**Added to this spec's migration-plan section (§5), as a real requirement, not an afterthought:** the county-partitioning migration must run as a **formal supersede event** — a genuine Vintage Ledger entry recording the migration itself (not a data change, a structural one) as the documented reason, with the seal checksums and immutability assertions re-baselined against the new physical row shape after migration completes. This is the lifecycle framework applying to its own infrastructure: skipping this formality would be the first silent structural edit of sealed data this project has done, exactly the failure mode `DATA_LIFECYCLE.md` exists to prevent.
+
+### 9.7 New finding — per-county freshness stamps, not one global stamp
+
+Once `group_stats` and the `snapshot_*` tables gain `county_code` (§4.3), the existing staleness-assertion design — `assert_snapshot_summary_fresh()` and `refresh_group_stats.py --check-staleness` (both built and proven this session on Travis-only data) — needs to become per-county, not table-wide.
+
+**Real, concrete bug the current single-stamp design would produce, unmodified:** refreshing Travis alone (via the county-scoped reload procedure in §9.2(c)) would leave the table's one global freshness stamp updated, which would incorrectly report Dallas's data as "fresh" too, even though nothing about Dallas was touched by that refresh. This is a real, specific bug, not a hypothetical — it follows directly from how `assert_snapshot_summary_fresh()`'s single `source_import_batch_id`-vs-`load_batch` comparison is written today.
+
+**Design requirement added for the freshness-gate section:** the freshness check becomes per-`county_code` — each county's rows carry their own freshness stamp (naturally, since §9.2(c)'s reload procedure already writes per-county), and `_snapshot_summary_freshness()` (the real function this session's `test_snapshot_data_unavailable.py` proved against) needs to check freshness for the specific county being served, not the table as a whole. This is a design requirement for the eventual implementation brief, not built here.
+
+### 9.8 New finding — keep FIPS, demote it into a real reference table
+
+§2's rejection of FIPS as the `county_code` *value* stays correct and unchanged. The gap: FIPS codes are currently scattered across independent copies — `templates/index.html`'s `MARKETS` array and `templates/search.html`'s `ROADMAP` object each carry their own copy of the same six FIPS codes, with no single source of truth.
+
+**Added to the design (§4, future scope — not this migration's build):** a small `county_ref` reference table: `county_code` (PK, matching the convention §2/§4.2 already established), `display_name`, `state`, `fips_code`, and room for future attributes. Map-rendering code (`index.html`, `search.html`) would eventually read its FIPS value from this table instead of carrying an independent hardcoded copy — one real source of truth instead of several. This is additive to the existing design, not a change to the core migration's scope — flagged as future consolidation work, not required before the core `county_code` migration can proceed.
+
+### 9.9 New finding — pre-declare the maintenance-window threshold, don't leave it open until the implementation brief
+
+§5 correctly flagged that whether the app needs a maintenance window during the swap step (§5 step 4) is unresolved and needs a real test. Fable's review endorses testing this on a real Render database copy (explicitly **not** production) before the implementation brief is written, rather than deferring it to implementation time. The expected profile matches AGGPRECOMP's own proven pattern from this session — the `RENAME` swap itself is momentary (0.632s measured for `swap_shadow_in()`), and the real shadow-build time (472.2s measured) holds zero locks on live tables — so the expectation is that no maintenance window is needed, but this is stated as an expectation to be confirmed, not asserted as fact.
+
+**This is real, hands-on measurement work against a live database copy — Diego's to run, not buildable from this sandbox.** Flagged here explicitly, per the brief's own instruction, as a separate, pre-implementation-brief task: run a timed swap-step test against a non-production Render copy, confirm whether any in-flight request during the rename window ever observes an error or stale read, and bring that real result into the implementation brief rather than assuming either way.
+
+### 9.10 New finding — consolidate `tax_billing_quarantine` into `schema.sql`
+
+§1.1's own systematic search correctly caught this table being defined inline in code rather than in `schema.sql` — confirmed again this pass: the real definition lives in `loaders/quarantine_contamination.py` lines 138-158 (`_CREATE_QUARANTINE_SQL`, a Python string, not a `schema.sql` statement):
+
+```sql
+CREATE TABLE IF NOT EXISTS tax_billing_quarantine (
+    geo_id              VARCHAR(20)  NOT NULL,
+    tax_year            SMALLINT     NOT NULL,
+    ...
+    PRIMARY KEY (geo_id, tax_year)
+);
+```
+
+**Added to this migration's real scope:** fold this table's definition into `schema.sql` properly (alongside its already-planned key change to `(county_code, geo_id, tax_year)` per §4.3) as part of the same migration, so the next systematic table search finds every table in one place rather than needing a separate repo-wide grep to catch the ones defined outside `schema.sql`.
+
+### 9.11 What stays genuinely, correctly open — unchanged by this amendment
+
+Restated, not resolved here, exactly as the brief specified:
+
+- **Dallas's real source-file structure** — unknowable until real files exist. The internal County Profile / Classification Map work for Dallas (per `DATA_LIFECYCLE.md` §6 "New county onboarding") remains the standing, unstarted prerequisite this entire document depends on.
+- **The application-level routing/UI decision** — still Diego's, still deferred per §7, now cheaper to make thanks to §9.5's resolver-seam design (the eventual decision changes one function's default, not 218 call sites).
+- **The DCAD-vs-TCAD entity-code grep** (§9.3) — a real, specific, falsifiable check that can only run once real Dallas files exist.
+
+### 9.12 Verification performed for this amendment
+
+Per this brief's own verification requirements:
+
+1. **Document-consistency check:** this amendment was cross-checked against the original body (§1-§8) for contradiction. None found — §9.1 corrects one sentence of §4.1's reasoning while leaving its conclusion intact; §9.3 resolves an item §4.3/§8 explicitly left open, without contradicting either; §9.2(c)'s county-scoped reload procedure is additive to §5 and explicitly scoped to a different operation (recurring refresh vs. one-time migration) so it does not conflict with §5's rename-swap design; §9.4-§9.10 are each additive findings with no prior claim in §1-§8 that they override.
+2. **Resolver-seam design status (§9.5):** confirmed marked design-only in its own text — the function signature above is illustrative of the design, not code written into the repo, and the section states explicitly it cannot be wired up before the `county_code` columns exist. No file in this repo was created or modified to implement `resolve_parcel()`.
+3. **Sandbox-vs-live disclosure:** everything in §9.1-9.5, §9.7-9.8, and §9.10 is a document-consistency and design-reasoning review, completed fully in this sandbox from repo-read evidence (including the fresh read of `loaders/quarantine_contamination.py` lines 138-158 confirming §9.10's exact real table definition). §9.9 (the maintenance-window test) is explicitly **not** attempted from this sandbox, per the brief's own out-of-scope instruction — it requires a live, non-production Render database copy, which only Diego can provision and run against. §9.3's DCAD-vs-TCAD grep is similarly real but not runnable yet — it requires real Dallas source files that don't exist in this sandbox or, as far as this investigation found, anywhere yet.
+
+Nothing in this amendment executes any schema change against real, populated production tables. No `ALTER TABLE`, no `CREATE TABLE`, no `resolve_parcel()` implementation, no live database connection of any kind was made in producing this section.
