@@ -91,7 +91,7 @@
   --accent-ring:   rgba(66, 99, 235, 0.30);
   --accent-dark:   #3550C8;   /* legacy alias used by some templates */
   --accent-light:  #EEF1FE;   /* legacy alias — now a faint tint, not a field */
-  /* Dark-surface companions (July 2026, per Diego — Homepage hero: "keep it
+  /* Dark-surface companions (July 2026, per the founder — Homepage hero: "keep it
      dark, make it deliberate"): the hero/trust-panel dark sections
      (Home + About only) used these exact values already, just as bare
      hex/rgba literals scattered across the FRONT DOOR block below instead
@@ -454,7 +454,7 @@ main.container.is-frontdoor { max-width: var(--maxw); }
 @media (max-width: 900px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 540px) { .kpi-row { grid-template-columns: 1fr 1fr; } }
 
-/* Investor Overview two-year restructure (July 2026, per Diego): 3 cards per
+/* Investor Overview two-year restructure (July 2026, per the founder): 3 cards per
    row (Market Value / Assessed-Taxable Value / Effective Tax Rate), one row
    for 2025 and one for 2026 — a 3-column variant of .kpi-row, which is fixed
    at 4 columns and would otherwise leave a visible empty gap. */
@@ -1112,7 +1112,7 @@ canvas { max-height: 440px; }
    .card-header, which forces uppercase/bold/11px on its own text by
    default (the site's standard "eyebrow" treatment for card titles). */
 .map-legend-chip { font-size: 11.5px; color: var(--text-2); white-space: nowrap; }
-/* Counties-only decision (Diego, July 2026): the map no longer has dots, so
+/* Counties-only decision (the founder, July 2026): the map no longer has dots, so
    the legend's filled/hollow DOT glyphs stopped meaning anything -- they
    used to mirror the dot styling exactly, and now mirror nothing. Replaced
    with small color-swatch glyphs (a rounded square of the actual fill each
@@ -1128,7 +1128,7 @@ canvas { max-height: 440px; }
 .map-legend-swatch.is-live { background: var(--map-live); }
 .map-legend-swatch.is-soon { background: var(--map-soon-fill); border: 1px solid var(--map-soon-stroke); }
 
-/* "Magnify market counties in place" brief (Diego, July 2026), item 4 --
+/* "Magnify market counties in place" brief (the founder, July 2026), item 4 --
    honesty microcopy disclosing the scale-in-place transform. Matches the
    site's existing fine-print register: same size/color as the roadmap
    disclaimer paragraph below the market-card row (11.5px, --text-2,
@@ -1157,7 +1157,7 @@ canvas { max-height: 440px; }
 .map-tooltip .map-tooltip-status.is-live { color: var(--map-live); }
 .map-tooltip .map-tooltip-status.is-soon { color: var(--map-soon-stroke); }
 
-/* Counties-only decision (Diego, July 2026, amends Fable's spec §4): all
+/* Counties-only decision (the founder, July 2026, amends Fable's spec §4): all
    marker-dot CSS (.market-dot / .market-dot-visible / @keyframes
    marketPulse / .market-dot-pulse) is removed -- there is no marker-like
    element on the map anymore, full stop. The map now carries status
@@ -1679,7 +1679,7 @@ footer:not(.site-footer) {
    ════════════════════════════════════════════════════════════════════════════ */
 .hero {
   background: var(--ink);
-  /* Hand-off fix (July 2026, per Diego — Homepage hero: "make it
+  /* Hand-off fix (July 2026, per the founder — Homepage hero: "make it
      deliberate"): the third gradient layer below REPLACES the previous
      `border-bottom: 1px solid rgba(255,255,255,0.07)` hard rule. That
      border ended the hero on a razor edge -- functionally fine, but read
@@ -1904,7 +1904,7 @@ footer:not(.site-footer) {
      to shrink the base font BELOW the already-small 14px desktop size
      (13.5px) -- backwards from what mobile needs (a LARGER base, since
      small text is harder to read on a phone, not easier). Bumped to 16px,
-     the top of Diego's requested 15-16px range and also the exact
+     the top of the founder's requested 15-16px range and also the exact
      threshold iOS Safari uses to decide whether to auto-zoom a page on
      input focus (see the form-control rule below, same reasoning). */
   body { font-size: 16px; }

@@ -489,7 +489,7 @@
       // DOM (so their tooltip still fires -- acceptance criterion 10) but
       // dropped to 35% opacity / 0.4px so they read as texture, not a grid;
       // state borders at full opacity, 1px. Market counties get their own
-      // status fill and no visible border at rest (Diego's counties-only
+      // status fill and no visible border at rest (the founder's counties-only
       // decision, July 2026: the map now carries identification through
       // exactly three fill tiers -- Live / Coming-soon / neutral backdrop --
       // plus hover emphasis; border only appears on hover, see .is-hovered
@@ -521,13 +521,13 @@
         .attr("d", path).attr("fill", "none")
         .attr("stroke", "#FFFFFF").attr("stroke-width", 1);
 
-      // Counties-only decision (Diego, July 2026, amends Fable's spec §4):
+      // Counties-only decision (the founder, July 2026, amends Fable's spec §4):
       // no marker dots. Removed entirely: the six dot groups, their
       // invisible 12-unit hit-circles, the visible dot circles, the
       // one-time Live-dot pulse animation and its class/animationend
       // wiring. Identification/findability now lives in the card row and
       // the hover linking below, not on the map itself -- a deliberate
-      // trade of map-scan findability for cleanliness (Diego's call,
+      // trade of map-scan findability for cleanliness (the founder's call,
       // accepted). The county path itself (built above, §3) is now the
       // sole map-side hover target for a market -- it's interactive again
       // since the last follow-up fix reverted pointer-events:none, which
@@ -535,7 +535,7 @@
       const featureById = {};
       counties.features.forEach(f => { featureById[String(f.id)] = f; });
 
-      // §NEW -- Brief E: magnify market counties in place (Diego's decision,
+      // §NEW -- Brief E: magnify market counties in place (the founder's decision,
       // second product amendment to Fable's spec, July 2026). Live reality
       // check on the counties-only build: at national scale the five
       // non-Travis market counties are too small to see -- NYC especially is
@@ -632,7 +632,7 @@
       // not state changes. A second attempt at the same problem additionally
       // set pointer-events:none on market county fills; that caused a WORSE
       // regression (all six markets flickering, confirmed empirically) and
-      // was reverted. Now that the dots are gone entirely (Diego's
+      // was reverted. Now that the dots are gone entirely (the founder's
       // counties-only decision), a market is exactly ONE element -- its own
       // county path -- so this relatedTarget dedup has nothing left to
       // dedup INTERNALLY, but it's kept unchanged: it still correctly

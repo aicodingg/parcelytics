@@ -4919,7 +4919,7 @@
    is safe regardless of which mode actually rendered. #}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-// Missing-imagery fallback fix (July 2026, per Diego): the card container and
+// Missing-imagery fallback fix (July 2026, per the founder): the card container and
 // its "Satellite image not available" fallback (see comment above hoSatCard)
 // now always render; this script's only job is to swap the fallback for the
 // real map on success. On any failure (no d, !d.ok, or d.lat == null) the
@@ -4931,7 +4931,7 @@
   if (!mapEl || !window.L) return;
   fetch('/api/geocode/{{ parcel.geo_id }}').then(r => r.json()).then(d => {
     if (!d || !d.ok || d.lat == null) return;   // no fabricated location — fallback stays visible
-    // Both-visible-at-once bug fix (July 2026, per Diego — parcel 0100030109):
+    // Both-visible-at-once bug fix (July 2026, per the founder — parcel 0100030109):
     // #hoSatFallback carries Bootstrap's `d-flex` utility class, which Bootstrap
     // defines as `display: flex !important` in its stylesheet. A plain
     // `fallbackEl.style.display = 'none'` sets a NON-important inline style,
@@ -6169,12 +6169,12 @@ function ordinalSuffix(n) {
 })();
 
 // ── Peer Set — up to 5 comparable parcels (Task 7) ──────────────────────────
-// Exact-use-code filter fix (July 2026, per Diego): the API now reports which
+// Exact-use-code filter fix (July 2026, per the founder): the API now reports which
 // fallback tier actually produced the peers (`scope`) and a `limited` flag
 // for anything looser than "exact use code, same neighborhood". This used to
 // bail out silently (`if (!d.peers.length) return`) whenever the query came
 // back empty, leaving the whole section hidden with no explanation — exactly
-// the "silently break or show a misleadingly empty table" outcome Diego said
+// the "silently break or show a misleadingly empty table" outcome the founder said
 // not to let happen. Now the section always shows once the API responds ok,
 // with an honest message for the zero-peer case instead of just disappearing.
 (function () {
