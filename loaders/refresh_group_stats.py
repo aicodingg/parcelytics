@@ -302,9 +302,20 @@ def _build_insert_sql():
     return f"INSERT INTO group_stats_shadow ({columns}) {select_with_batch}"
 
 
-def _mint_batch(conn, note):
+def _mint_batch(conn, note, county_code="TRAVIS"):
+    # county_code (real, urgent fix -- found running the actual refresh live
+    # against production): load_batch also gained a NOT NULL, no-default
+    # county_code column during migrate_county_partitioning.py's real,
+    # already-run migration (add_column mode) -- same PARTITION-2-FIX-1 gap
+    # class, just in this helper function rather than build_shadow(), so it
+    # wasn't caught by that fix's fixture tests. Confirmed safe: the first
+    # real attempt failed cleanly on a NotNullViolation with zero residue
+    # (verified directly against production -- no orphaned load_batch row).
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO load_batch (note) VALUES (%s) RETURNING batch_id", (note,))
+        cur.execute(
+            "INSERT INTO load_batch (note, county_code) VALUES (%s, %s) RETURNING batch_id",
+            (note, county_code),
+        )
         batch_id = cur.fetchone()[0]
     conn.commit()
     return batch_id
@@ -395,7 +406,7 @@ def refresh_group_stats(conn, batch_id=None, dry_run=False, county_code="TRAVIS"
 
     used_batch_id = batch_id
     if used_batch_id is None:
-        used_batch_id = _mint_batch(conn, note="refresh_group_stats.py standalone run")
+        used_batch_id = _mint_batch(conn, note="refresh_group_stats.py standalone run", county_code=county_code)
         _log(f"  Minted new load_batch row: batch_id={used_batch_id} "
              f"(standalone mode -- no pipeline caller passed one in)")
     else:
