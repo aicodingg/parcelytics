@@ -791,11 +791,15 @@ def main():
     for r in reports:
         table = r["table"]
         if r.get("dry_run"):
-            print(f"  [DRY RUN] {table}: {r.get('old_row_count', '?'):,} row(s) would be migrated")
+            cnt = r.get('old_row_count')
+            cnt_str = f"{cnt:,}" if isinstance(cnt, int) else str(cnt)
+            print(f"  [DRY RUN] {table}: {cnt_str} row(s) would be migrated")
         elif r.get("reconciliation_passed") is False:
             print(f"  {table}: RECONCILIATION FAILED — NOT swapped, {table}_new left for inspection")
         else:
-            print(f"  {table}: migrated ({r.get('old_row_count', '?'):,} row(s))"
+            cnt = r.get('old_row_count')
+            cnt_str = f"{cnt:,}" if isinstance(cnt, int) else str(cnt)
+            print(f"  {table}: migrated ({cnt_str} row(s))"
                   + (f", {table}_old_pre_partition retained" if r.get("swapped") else ""))
 
     if args.report_out:
