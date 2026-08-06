@@ -307,12 +307,25 @@ def _compute_one_view(conn, view, verbose=True):
     return rows, totals_row, new_construction_count, risk_flagged_count, n_preliminary_2026, n_total_2026, neighborhood_rows
 
 
-def build_shadow(conn, batch_id, verbose=True):
+def build_shadow(conn, batch_id, county_code="TRAVIS", verbose=True):
     """
     Phase 1: build all three shadow tables fresh, across all 11 views. Does
     NOT touch the live snapshot_breakdown/snapshot_totals/
     snapshot_neighborhood_movers tables at all -- safe to run while those are
     being read by live traffic, however long it takes.
+
+    county_code (PARTITION-2-FIX-1): every row this function writes now
+    stamps county_code explicitly. Required, not cosmetic --
+    migrate_county_partitioning.py's real, already-run migration made
+    county_code a NOT NULL column with no default on all three of these
+    tables (finding 9.4: the default is deliberately dropped post-migration
+    to prevent silent contamination), so the INSERTs below would fail
+    outright without this. Defaults to 'TRAVIS' -- same single hardcoded
+    seam as every other PARTITION-2-IMPLEMENT Part 3 call site; per this
+    brief's explicit scope boundary, this is NOT an attempt to make this
+    script multi-county-aware (that's reload_county_scope.py's job, for the
+    future) -- every value written here is 'TRAVIS', matching today's real,
+    single-county production data.
     """
     def _log(msg):
         if verbose:
@@ -337,14 +350,15 @@ def build_shadow(conn, batch_id, verbose=True):
                 cur.execute(
                     """
                     INSERT INTO snapshot_breakdown_shadow
-                        (view, ptype, sort_key, n_parcels, n_up, n_down, n_flat,
+                        (county_code, view, ptype, sort_key, n_parcels, n_up, n_down, n_flat,
                          median_pct, p25_pct, p75_pct, total_mv25_b, total_mv26_b,
                          source_import_batch_id, refreshed_at)
-                    VALUES (%(view)s, %(ptype)s, %(sort_key)s, %(n_parcels)s, %(n_up)s,
+                    VALUES (%(county_code)s, %(view)s, %(ptype)s, %(sort_key)s, %(n_parcels)s, %(n_up)s,
                             %(n_down)s, %(n_flat)s, %(median_pct)s, %(p25_pct)s, %(p75_pct)s,
                             %(total_mv25_b)s, %(total_mv26_b)s, %(batch_id)s, NOW())
                     """,
                     {
+                        "county_code": county_code,
                         "view": view, "ptype": r["ptype"], "sort_key": str(r["sort_key"]) if r["sort_key"] is not None else None,
                         "n_parcels": r["n_parcels"], "n_up": r["n_up"], "n_down": r["n_down"], "n_flat": r["n_flat"],
                         "median_pct": r["median_pct"], "p25_pct": r["p25_pct"], "p75_pct": r["p75_pct"],
@@ -358,15 +372,16 @@ def build_shadow(conn, batch_id, verbose=True):
                 cur.execute(
                     """
                     INSERT INTO snapshot_totals_shadow
-                        (view, n_total, n_up, n_down, n_flat, median_pct, total_mv25_b, total_mv26_b,
+                        (county_code, view, n_total, n_up, n_down, n_flat, median_pct, total_mv25_b, total_mv26_b,
                          new_construction_count, risk_flagged_count, n_preliminary_2026, n_total_2026,
                          source_import_batch_id, refreshed_at)
-                    VALUES (%(view)s, %(n_total)s, %(n_up)s, %(n_down)s, %(n_flat)s, %(median_pct)s,
+                    VALUES (%(county_code)s, %(view)s, %(n_total)s, %(n_up)s, %(n_down)s, %(n_flat)s, %(median_pct)s,
                             %(total_mv25_b)s, %(total_mv26_b)s, %(new_construction_count)s,
                             %(risk_flagged_count)s, %(n_preliminary_2026)s, %(n_total_2026)s,
                             %(batch_id)s, NOW())
                     """,
                     {
+                        "county_code": county_code,
                         "view": view, "n_total": totals_row["n_total"], "n_up": totals_row["n_up"],
                         "n_down": totals_row["n_down"], "n_flat": totals_row["n_flat"],
                         "median_pct": totals_row["median_pct"], "total_mv25_b": totals_row["total_mv25_b"],
@@ -382,10 +397,11 @@ def build_shadow(conn, batch_id, verbose=True):
                 cur.execute(
                     """
                     INSERT INTO snapshot_neighborhood_movers_shadow
-                        (view, neighborhood_cd, n_parcels, median_pct, source_import_batch_id, refreshed_at)
-                    VALUES (%(view)s, %(neighborhood_cd)s, %(n_parcels)s, %(median_pct)s, %(batch_id)s, NOW())
+                        (county_code, view, neighborhood_cd, n_parcels, median_pct, source_import_batch_id, refreshed_at)
+                    VALUES (%(county_code)s, %(view)s, %(neighborhood_cd)s, %(n_parcels)s, %(median_pct)s, %(batch_id)s, NOW())
                     """,
                     {
+                        "county_code": county_code,
                         "view": view, "neighborhood_cd": nb["neighborhood_cd"],
                         "n_parcels": nb["n_parcels"], "median_pct": nb["median_pct"],
                         "batch_id": batch_id,
@@ -426,10 +442,15 @@ def swap_shadow_in(conn, verbose=True):
     _log(f"    swap committed (3 tables)  [{time.time()-t0:.3f}s]")
 
 
-def refresh_snapshot_summary(conn, batch_id=None, dry_run=False, verbose=True):
+def refresh_snapshot_summary(conn, batch_id=None, dry_run=False, county_code="TRAVIS", verbose=True):
     """
     Full refresh entry point. Same signature/behavior contract as
     refresh_group_stats.refresh_group_stats().
+
+    county_code (PARTITION-2-FIX-1): threaded through to build_shadow() --
+    see that function's docstring. Not applicable to the dry_run branch
+    below (dry-run computes and reports row counts only; it never writes,
+    so there is no county_code column to populate).
     """
     def _log(msg):
         if verbose:
@@ -465,13 +486,15 @@ def refresh_snapshot_summary(conn, batch_id=None, dry_run=False, verbose=True):
     else:
         _log(f"  Using caller-supplied batch_id={used_batch_id}")
 
-    breakdown_row_count, totals_row_count, nb_row_count = build_shadow(conn, used_batch_id, verbose=verbose)
+    breakdown_row_count, totals_row_count, nb_row_count = build_shadow(
+        conn, used_batch_id, county_code=county_code, verbose=verbose
+    )
     swap_shadow_in(conn, verbose=verbose)
 
     return {
         "dry_run": False, "breakdown_row_count": breakdown_row_count,
         "totals_row_count": totals_row_count, "neighborhood_row_count": nb_row_count,
-        "batch_id": used_batch_id,
+        "batch_id": used_batch_id, "county_code": county_code,
     }
 
 
@@ -720,11 +743,14 @@ def main():
                     help="Tag this refresh with an existing load_batch.batch_id "
                          "(future pipeline use; standalone runs normally omit this)")
     ap.add_argument("--county", default="TRAVIS",
-                    help="county_code to scope --check-staleness's freshness half to "
-                         "(PARTITION-2-IMPLEMENT, Part 3 -- default: TRAVIS). Does NOT affect "
+                    help="county_code to scope this run to. Drives TWO real, distinct things "
+                         "(PARTITION-2-IMPLEMENT Part 3 + PARTITION-2-FIX-1, default: TRAVIS): "
+                         "(1) --check-staleness's freshness half -- does NOT affect "
                          "--check-consistency, which is not county-scoped in this brief -- see "
-                         "assert_snapshot_summary_fresh()'s docstring for why. Only meaningful "
-                         "once these tables carry county_code (migrate_county_partitioning.py).")
+                         "assert_snapshot_summary_fresh()'s docstring for why; (2) a real refresh "
+                         "(no flag / --dry-run) -- the county_code value stamped on every row "
+                         "build_shadow() writes. Required as of PARTITION-2-FIX-1: these tables' "
+                         "county_code column is NOT NULL with no default post-migration.")
     args = ap.parse_args()
 
     from loaders.db import get_conn
@@ -756,7 +782,7 @@ def main():
         conn.close()
         sys.exit(0 if (is_fresh and is_consistent) else 1)
 
-    result = refresh_snapshot_summary(conn, batch_id=args.batch_id, dry_run=args.dry_run)
+    result = refresh_snapshot_summary(conn, batch_id=args.batch_id, dry_run=args.dry_run, county_code=args.county)
     conn.close()
 
     print(f"\n{'='*65}")

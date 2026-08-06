@@ -758,6 +758,104 @@ def test_consistency_fails_when_view_missing_from_one_table():
           any(m["view"] == "retail" for m in detail["mismatches"]), detail["mismatches"])
 
 
+# ── Part 7: PARTITION-2-FIX-1 — county_code on all three real INSERTs ──────
+#
+# Real, urgent gap: migrate_county_partitioning.py's already-run migration
+# made county_code a NOT NULL column with no default on snapshot_breakdown/
+# snapshot_totals/snapshot_neighborhood_movers (finding 9.4). build_shadow()
+# writes to all THREE of these per view -- this proves county_code reaches
+# every one of the 3 INSERT paths, not just one, per this brief's explicit
+# instruction not to assume a single, simple fix covers all of them.
+
+def test_build_shadow_stamps_county_code_on_all_three_inserts():
+    orig = rss._compute_one_view
+    rss._compute_one_view = _fake_compute_one_view
+    try:
+        conn = FakeConn()
+        rss.build_shadow(conn, batch_id=7, verbose=False)
+
+        kinds = _sql_kinds(conn.executed)
+        breakdown_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_BREAKDOWN")
+        totals_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_TOTALS")
+        nb_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_NEIGHBORHOOD")
+
+        check("build_shadow: snapshot_breakdown_shadow INSERT carries county_code='TRAVIS' (default)",
+              breakdown_params["county_code"] == "TRAVIS", breakdown_params)
+        check("build_shadow: snapshot_totals_shadow INSERT carries county_code='TRAVIS' (default)",
+              totals_params["county_code"] == "TRAVIS", totals_params)
+        check("build_shadow: snapshot_neighborhood_movers_shadow INSERT carries county_code='TRAVIS' (default)",
+              nb_params["county_code"] == "TRAVIS", nb_params)
+
+        breakdown_sql = next(s for k, (s, _p) in zip(kinds, conn.executed) if k == "INSERT_BREAKDOWN")
+        totals_sql = next(s for k, (s, _p) in zip(kinds, conn.executed) if k == "INSERT_TOTALS")
+        nb_sql = next(s for k, (s, _p) in zip(kinds, conn.executed) if k == "INSERT_NEIGHBORHOOD")
+        check("build_shadow: snapshot_breakdown_shadow INSERT's column list includes county_code",
+              "county_code" in breakdown_sql, breakdown_sql)
+        check("build_shadow: snapshot_totals_shadow INSERT's column list includes county_code",
+              "county_code" in totals_sql, totals_sql)
+        check("build_shadow: snapshot_neighborhood_movers_shadow INSERT's column list includes county_code",
+              "county_code" in nb_sql, nb_sql)
+    finally:
+        rss._compute_one_view = orig
+
+
+def test_build_shadow_threads_a_non_default_county_code_into_all_three_inserts():
+    """The real, future-facing proof: build_shadow() must genuinely thread
+    through whatever county_code the caller passes, not just default it --
+    same reasoning as refresh_group_stats.py's own equivalent test."""
+    orig = rss._compute_one_view
+    rss._compute_one_view = _fake_compute_one_view
+    try:
+        conn = FakeConn()
+        rss.build_shadow(conn, batch_id=7, county_code="DALLAS", verbose=False)
+
+        kinds = _sql_kinds(conn.executed)
+        breakdown_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_BREAKDOWN")
+        totals_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_TOTALS")
+        nb_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_NEIGHBORHOOD")
+
+        check("build_shadow(county_code='DALLAS'): breakdown INSERT carries 'DALLAS', not the TRAVIS default",
+              breakdown_params["county_code"] == "DALLAS", breakdown_params)
+        check("build_shadow(county_code='DALLAS'): totals INSERT carries 'DALLAS'",
+              totals_params["county_code"] == "DALLAS", totals_params)
+        check("build_shadow(county_code='DALLAS'): neighborhood INSERT carries 'DALLAS'",
+              nb_params["county_code"] == "DALLAS", nb_params)
+    finally:
+        rss._compute_one_view = orig
+
+
+def test_refresh_snapshot_summary_threads_county_code_through_to_build_shadow():
+    orig = rss._compute_one_view
+    rss._compute_one_view = _fake_compute_one_view
+    try:
+        conn = FakeConn()
+        result = rss.refresh_snapshot_summary(conn, batch_id=555, dry_run=False, county_code="DALLAS", verbose=False)
+
+        kinds = _sql_kinds(conn.executed)
+        breakdown_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_BREAKDOWN")
+        check("refresh_snapshot_summary(county_code='DALLAS'): the real breakdown INSERT carries 'DALLAS'",
+              breakdown_params["county_code"] == "DALLAS", breakdown_params)
+        check("refresh_snapshot_summary(county_code='DALLAS'): result dict reports the county_code used",
+              result["county_code"] == "DALLAS", result)
+    finally:
+        rss._compute_one_view = orig
+
+
+def test_refresh_snapshot_summary_dry_run_does_not_require_county_code():
+    """dry_run never reaches build_shadow() at all -- proves the new
+    parameter doesn't change dry-run's existing 'no writes' contract."""
+    orig = rss._compute_one_view
+    rss._compute_one_view = _fake_compute_one_view
+    try:
+        conn = FakeConn()
+        result = rss.refresh_snapshot_summary(conn, dry_run=True, county_code="DALLAS", verbose=False)
+        check("dry-run: still issues zero DB statements even with a non-default county_code passed",
+              conn.executed == [], conn.executed)
+        check("dry-run: result still marked dry_run=True", result["dry_run"] is True)
+    finally:
+        rss._compute_one_view = orig
+
+
 def main():
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

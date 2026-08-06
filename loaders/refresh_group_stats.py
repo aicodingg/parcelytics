@@ -255,13 +255,26 @@ REFRESH_GROUP_STATS_SQL = f"""
 
 def _build_insert_sql():
     """
-    INSERT INTO group_stats_shadow (...) SELECT ..., %(batch_id)s, NOW()
-    FROM effective GROUP BY ... -- built by inserting the two extra
-    columns into REFRESH_GROUP_STATS_SQL's SELECT list and GROUP BY-less
-    tail, rather than hand-duplicating the whole query a second time.
+    INSERT INTO group_stats_shadow (...) SELECT ..., %(county_code)s,
+    %(batch_id)s, NOW() FROM effective GROUP BY ... -- built by inserting
+    the three extra columns into REFRESH_GROUP_STATS_SQL's SELECT list and
+    GROUP BY-less tail, rather than hand-duplicating the whole query a
+    second time.
+
+    county_code (PARTITION-2-FIX-1): required, not cosmetic --
+    migrate_county_partitioning.py's real, already-run migration made
+    county_code a NOT NULL column with no default on group_stats (finding
+    9.4 -- same gap PARTITION-2-FIX-1 found and fixed in
+    refresh_snapshot_summary.py; group_stats was migrated via the same
+    composite_pk mode, confirmed against migrate_county_partitioning.py's
+    real TABLE_SPECS, so it has the exact same gap even though this brief
+    didn't originally name this file). Every row this script writes stamps
+    'TRAVIS' -- same single hardcoded seam as every other PARTITION-2
+    call site, and the same explicit scope boundary: this is NOT an
+    attempt to make this script multi-county-aware.
     """
     select_sql = REFRESH_GROUP_STATS_SQL.rstrip()
-    # Insert the two extra SELECT-list expressions right before the
+    # Insert the three extra SELECT-list expressions right before the
     # closing "FROM effective" of the final SELECT.
     marker = "    FROM   effective"
     assert marker in select_sql, "REFRESH_GROUP_STATS_SQL shape changed -- update _build_insert_sql()"
@@ -274,6 +287,7 @@ def _build_insert_sql():
         "REFRESH_GROUP_STATS_SQL's SELECT list changed shape -- update _build_insert_sql()"
     select_with_batch = (
         head + ",\n"
+        "        %(county_code)s                                                        AS county_code,\n"
         "        %(batch_id)s::BIGINT                                                  AS source_import_batch_id,\n"
         "        NOW()                                                                  AS refreshed_at\n"
         + marker + tail
@@ -283,7 +297,7 @@ def _build_insert_sql():
         count, min_market_value, p25_market_value, median_market_value, p75_market_value, max_market_value,
         min_assessed_value, p25_assessed_value, median_assessed_value, p75_assessed_value, max_assessed_value,
         count_total_tax, min_total_tax, p25_total_tax, median_total_tax, p75_total_tax, max_total_tax,
-        source_import_batch_id, refreshed_at
+        county_code, source_import_batch_id, refreshed_at
     """
     return f"INSERT INTO group_stats_shadow ({columns}) {select_with_batch}"
 
@@ -296,11 +310,15 @@ def _mint_batch(conn, note):
     return batch_id
 
 
-def build_shadow(conn, batch_id, verbose=True):
+def build_shadow(conn, batch_id, county_code="TRAVIS", verbose=True):
     """
     Phase 1: build group_stats_shadow fresh. Does NOT touch the live
     group_stats table at all -- safe to run while group_stats is being
     read by live traffic, however long it takes.
+
+    county_code (PARTITION-2-FIX-1): see _build_insert_sql()'s docstring.
+    Defaults to 'TRAVIS', matching today's real, single-county production
+    data.
     """
     def _log(msg):
         if verbose:
@@ -310,7 +328,7 @@ def build_shadow(conn, batch_id, verbose=True):
     with conn.cursor() as cur:
         cur.execute("DROP TABLE IF EXISTS group_stats_shadow")
         cur.execute("CREATE TABLE group_stats_shadow (LIKE group_stats INCLUDING ALL)")
-        cur.execute(_build_insert_sql(), {"batch_id": batch_id})
+        cur.execute(_build_insert_sql(), {"batch_id": batch_id, "county_code": county_code})
         row_count = cur.rowcount
     conn.commit()
     _log(f"    group_stats_shadow built: {row_count:,} rows  [{time.time()-t0:.1f}s]")
@@ -337,7 +355,7 @@ def swap_shadow_in(conn, verbose=True):
     _log(f"    swap committed  [{time.time()-t0:.3f}s]")
 
 
-def refresh_group_stats(conn, batch_id=None, dry_run=False, verbose=True):
+def refresh_group_stats(conn, batch_id=None, dry_run=False, county_code="TRAVIS", verbose=True):
     """
     Full refresh entry point.
 
@@ -351,7 +369,13 @@ def refresh_group_stats(conn, batch_id=None, dry_run=False, verbose=True):
         %(batch_id)s / no shadow table / no load_batch row minted) and
         returns row count + a few sample groups, without writing anything
         -- same "--dry-run: parse/compute only, no writes" contract as
-        every other loader touched this week.
+        every other loader touched this week. Not applicable to
+        county_code below -- dry-run never writes, so there's no
+        county_code column to populate.
+
+    county_code (PARTITION-2-FIX-1): threaded through to build_shadow() --
+    see _build_insert_sql()'s docstring for why this is required, not
+    optional, against the real, already-migrated production schema.
 
     Returns a dict summary.
     """
@@ -377,10 +401,10 @@ def refresh_group_stats(conn, batch_id=None, dry_run=False, verbose=True):
     else:
         _log(f"  Using caller-supplied batch_id={used_batch_id}")
 
-    row_count = build_shadow(conn, used_batch_id, verbose=verbose)
+    row_count = build_shadow(conn, used_batch_id, county_code=county_code, verbose=verbose)
     swap_shadow_in(conn, verbose=verbose)
 
-    return {"dry_run": False, "row_count": row_count, "batch_id": used_batch_id}
+    return {"dry_run": False, "row_count": row_count, "batch_id": used_batch_id, "county_code": county_code}
 
 
 def assert_group_stats_fresh(conn, county_code="TRAVIS"):
@@ -477,9 +501,12 @@ def main():
                     help="Tag this refresh with an existing load_batch.batch_id "
                          "(future pipeline use; standalone runs normally omit this)")
     ap.add_argument("--county", default="TRAVIS",
-                    help="county_code to scope --check-staleness to (PARTITION-2-IMPLEMENT, "
-                         "Part 3 -- default: TRAVIS). Only meaningful once group_stats has "
-                         "been migrated to carry county_code (migrate_county_partitioning.py).")
+                    help="county_code to scope this run to. Drives TWO real, distinct things "
+                         "(PARTITION-2-IMPLEMENT Part 3 + PARTITION-2-FIX-1, default: TRAVIS): "
+                         "(1) --check-staleness's freshness check; (2) a real refresh (no flag / "
+                         "--dry-run) -- the county_code value stamped on every row build_shadow() "
+                         "writes. Required as of PARTITION-2-FIX-1: group_stats' county_code "
+                         "column is NOT NULL with no default post-migration.")
     args = ap.parse_args()
 
     from loaders.db import get_conn
@@ -498,7 +525,7 @@ def main():
         conn.close()
         sys.exit(0 if is_fresh else 1)
 
-    result = refresh_group_stats(conn, batch_id=args.batch_id, dry_run=args.dry_run)
+    result = refresh_group_stats(conn, batch_id=args.batch_id, dry_run=args.dry_run, county_code=args.county)
     conn.close()
 
     print(f"\n{'='*65}")
