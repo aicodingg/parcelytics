@@ -383,12 +383,39 @@ def refresh_group_stats(conn, batch_id=None, dry_run=False, verbose=True):
     return {"dry_run": False, "row_count": row_count, "batch_id": used_batch_id}
 
 
-def assert_group_stats_fresh(conn):
+def assert_group_stats_fresh(conn, county_code="TRAVIS"):
     """
     Staleness assertion. Modeled on loaders/db.py's is_valid_tax_year() --
     a real, callable invariant, not a passive comment. Verifies every
-    group_stats row's source_import_batch_id matches the latest known
-    load_batch row.
+    group_stats row FOR county_code's source_import_batch_id matches the
+    latest known load_batch row.
+
+    county_code (PARTITION-2-IMPLEMENT, Part 3, SPEC_COUNTY_PARTITIONING.md
+    finding 9.7): scoped per county, not table-wide -- same real bug this
+    fixes as app.py's _snapshot_summary_freshness() (see that function's
+    own docstring for the full concrete scenario): once group_stats holds
+    multiple counties' rows, an unscoped "SELECT DISTINCT
+    source_import_batch_id FROM group_stats" would see >1 distinct batch_id
+    the moment ANY two counties' rows were refreshed at different times --
+    which, after county-scoped reloads (loaders/reload_county_scope.py,
+    §9.2(c)) become the normal refresh mechanism, is the ORDINARY case, not
+    a failure. That would make this assertion permanently, falsely report
+    "not fresh" for the whole table forever. Scoping by county_code asks
+    the honest, answerable question instead: is county_code's OWN data
+    current.
+
+    Defaults to 'TRAVIS' -- same single hardcoded seam as every other
+    PARTITION-2-IMPLEMENT Part 3 call site (see app.py's
+    _snapshot_summary_freshness() docstring for the full reasoning) --
+    until Diego's real per-county operational tooling exists to pass a
+    real value here.
+
+    REAL DEPLOYMENT-SEQUENCING WARNING (same as app.py's twin function):
+    this references a county_code column that does not exist on
+    group_stats until migrate_county_partitioning.py's migration of that
+    table has actually run. Do not deploy/run this against a database
+    where that hasn't happened yet -- it will fail with "column
+    county_code does not exist."
 
     Returns (is_fresh: bool, detail: dict) -- usable both as a standalone
     diagnostic (Diego can call this directly / via --check-staleness) and
@@ -403,24 +430,29 @@ def assert_group_stats_fresh(conn):
     independently of this script.
     """
     with conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT source_import_batch_id FROM group_stats")
+        cur.execute(
+            "SELECT DISTINCT source_import_batch_id FROM group_stats WHERE county_code = %s",
+            (county_code,),
+        )
         batch_ids_in_table = {r[0] for r in cur.fetchall()}
         cur.execute("SELECT MAX(batch_id) FROM load_batch")
         row = cur.fetchone()
         latest_batch_id = row[0] if row else None
 
     detail = {
+        "county_code": county_code,
         "latest_batch_id": latest_batch_id,
         "batch_ids_in_group_stats": sorted(batch_ids_in_table),
     }
 
     if not batch_ids_in_table:
-        detail["reason"] = "group_stats is empty -- cannot be fresh (nothing to check)"
+        detail["reason"] = f"group_stats has no rows for county_code={county_code!r} -- cannot be fresh (nothing to check)"
         return False, detail
     if len(batch_ids_in_table) > 1:
-        detail["reason"] = ("group_stats contains rows from more than one batch_id -- "
-                             "a partial/failed refresh; should be impossible if the "
-                             "shadow-swap is genuinely atomic")
+        detail["reason"] = (f"group_stats contains rows from more than one batch_id for "
+                             f"county_code={county_code!r} -- a partial/failed refresh; should "
+                             f"be impossible if the shadow-swap/county-scoped reload is "
+                             f"genuinely atomic")
         return False, detail
     if latest_batch_id is None:
         detail["reason"] = "load_batch is empty -- no known batch to compare against"
@@ -428,11 +460,12 @@ def assert_group_stats_fresh(conn):
 
     table_batch_id = next(iter(batch_ids_in_table))
     if table_batch_id != latest_batch_id:
-        detail["reason"] = (f"group_stats reflects batch {table_batch_id}, but the latest "
-                             f"known batch is {latest_batch_id} -- STALE")
+        detail["reason"] = (f"group_stats for county_code={county_code!r} reflects batch "
+                             f"{table_batch_id}, but the latest known batch is "
+                             f"{latest_batch_id} -- STALE")
         return False, detail
 
-    detail["reason"] = "group_stats matches the latest known batch"
+    detail["reason"] = f"group_stats for county_code={county_code!r} matches the latest known batch"
     return True, detail
 
 
@@ -443,6 +476,10 @@ def main():
     ap.add_argument("--batch-id", type=int, default=None,
                     help="Tag this refresh with an existing load_batch.batch_id "
                          "(future pipeline use; standalone runs normally omit this)")
+    ap.add_argument("--county", default="TRAVIS",
+                    help="county_code to scope --check-staleness to (PARTITION-2-IMPLEMENT, "
+                         "Part 3 -- default: TRAVIS). Only meaningful once group_stats has "
+                         "been migrated to carry county_code (migrate_county_partitioning.py).")
     args = ap.parse_args()
 
     from loaders.db import get_conn
@@ -454,8 +491,8 @@ def main():
     print(f"Target DB: {addr}  — confirm this is the environment you intend BEFORE any write commits.\n")
 
     if args.check_staleness:
-        is_fresh, detail = assert_group_stats_fresh(conn)
-        print(f"group_stats fresh: {is_fresh}")
+        is_fresh, detail = assert_group_stats_fresh(conn, county_code=args.county)
+        print(f"group_stats fresh (county_code={args.county!r}): {is_fresh}")
         for k, v in detail.items():
             print(f"  {k}: {v}")
         conn.close()

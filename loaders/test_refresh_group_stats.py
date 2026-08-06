@@ -581,7 +581,16 @@ def test_assert_group_stats_fresh_false_when_table_empty():
     ])
     is_fresh, detail = rgs.assert_group_stats_fresh(conn)
     check("empty-table case: is_fresh False", is_fresh is False, detail)
-    check("empty-table case: reason mentions the table being empty", "empty" in detail["reason"], detail)
+    # PARTITION-2-IMPLEMENT, Part 3: assert_group_stats_fresh() is now
+    # county_code-scoped (SPEC_COUNTY_PARTITIONING.md finding 9.7) -- the
+    # real, correct message changed from "group_stats is empty" (a
+    # table-wide claim that stops being true/meaningful once other
+    # counties' rows can coexist) to "group_stats has no rows for
+    # county_code='TRAVIS'" (correct under both single- and multi-county
+    # data). Updated here to match the real, intentional wording change,
+    # not a regression.
+    check("empty-table case: reason names the specific county_code with no rows",
+          "no rows for county_code" in detail["reason"] and "TRAVIS" in detail["reason"], detail)
 
 
 def test_assert_group_stats_fresh_false_when_multiple_batch_ids_present():

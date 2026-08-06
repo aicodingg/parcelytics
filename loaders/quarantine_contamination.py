@@ -135,6 +135,20 @@ CLASS_A_TRACKED_EXCEPTIONS = [
     "0339110406",  # pending individual investigation
 ]
 
+# PARTITION-2-IMPLEMENT, Part 5 (SPEC_COUNTY_PARTITIONING.md finding 9.10):
+# this table's canonical definition now ALSO lives in schema.sql (added by
+# that brief) -- this project's real single-source-of-truth home for every
+# other table. This copy is kept, deliberately, as a defensive, idempotent
+# bootstrap: every real call site below (investigate(), run(),
+# emit_class_a_list(), --investigate) calls this unconditionally so the
+# script keeps working standalone even against a database where schema.sql
+# hasn't been (re)applied yet -- same reasoning refresh_group_stats.py's
+# build_shadow() relies on group_stats already existing rather than
+# creating it itself, just inverted here for a script that predates that
+# convention. The two definitions are asserted column-for-column identical
+# by test_migrate_county_partitioning.py's own regression check, so a
+# future edit to one that isn't mirrored in the other fails loudly instead
+# of silently drifting.
 _CREATE_QUARANTINE_SQL = """
 CREATE TABLE IF NOT EXISTS tax_billing_quarantine (
     geo_id              VARCHAR(20)  NOT NULL,

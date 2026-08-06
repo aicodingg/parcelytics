@@ -475,7 +475,7 @@ def refresh_snapshot_summary(conn, batch_id=None, dry_run=False, verbose=True):
     }
 
 
-def assert_snapshot_summary_fresh(conn):
+def assert_snapshot_summary_fresh(conn, county_code="TRAVIS"):
     """
     Staleness assertion across all three Tier 1 tables. Modeled directly on
     refresh_group_stats.assert_group_stats_fresh() -- extended to require
@@ -483,6 +483,42 @@ def assert_snapshot_summary_fresh(conn):
     load_batch, since a genuinely atomic swap (see swap_shadow_in() above)
     means they can never legitimately disagree; if they do, that's proof the
     swap was NOT atomic (a real bug), not just staleness.
+
+    county_code (PARTITION-2-IMPLEMENT, Part 3): scoped per county, same
+    real reasoning as app.py's _snapshot_summary_freshness() (this
+    function's own direct real-world twin -- that function's docstring
+    literally names this one as the loader-side original it was modeled
+    on) and refresh_group_stats.assert_group_stats_fresh(). SCOPE NOTE:
+    this specific function wasn't named in PARTITION-2-IMPLEMENT's brief
+    text (which named _snapshot_summary_freshness() and
+    refresh_group_stats.py's --check-staleness explicitly) -- extended to
+    this one too as a deliberate, disclosed judgment call, not silently:
+    leaving this function table-wide while its intentionally-mirrored
+    app.py twin became per-county-scoped would immediately reintroduce
+    finding 9.7's exact bug, just discovered from the loader side (a
+    --check-staleness run) instead of the request side. See this task's
+    final report for this call being flagged explicitly, per this
+    project's standing practice of naming judgment calls rather than
+    deciding them silently.
+
+    Defaults to 'TRAVIS' -- same hardcoded seam as every other
+    PARTITION-2-IMPLEMENT Part 3 call site.
+
+    REAL DEPLOYMENT-SEQUENCING WARNING (same as every other Part 3 change):
+    references a county_code column that does not exist on
+    snapshot_breakdown/snapshot_totals/snapshot_neighborhood_movers until
+    migrate_county_partitioning.py's migration of those three tables has
+    actually run. Do not deploy/run against a database where that hasn't
+    happened yet.
+
+    NOT extended in this brief: assert_snapshot_breakdown_totals_consistent()
+    (AGGPRECOMP-2-FIX-2, Fix 3) -- a genuinely different, data-CORRECTNESS
+    check (not a freshness/staleness check), out of PARTITION-2-IMPLEMENT's
+    named scope ("no changes to anything not named in §4.3's table list or
+    this brief's six parts"). It would likely need the same per-county
+    scoping eventually, for the same class of reason -- flagged as a real,
+    separate, un-actioned follow-up in this task's final report, not
+    silently left unaddressed.
 
     Returns (is_fresh: bool, detail: dict).
 
@@ -497,25 +533,30 @@ def assert_snapshot_summary_fresh(conn):
     batch_ids_by_table = {}
     with conn.cursor() as cur:
         for tbl in tables:
-            cur.execute(f"SELECT DISTINCT source_import_batch_id FROM {tbl}")
+            cur.execute(
+                f"SELECT DISTINCT source_import_batch_id FROM {tbl} WHERE county_code = %s",
+                (county_code,),
+            )
             batch_ids_by_table[tbl] = {r[0] for r in cur.fetchall()}
         cur.execute("SELECT MAX(batch_id) FROM load_batch")
         row = cur.fetchone()
         latest_batch_id = row[0] if row else None
 
     detail = {
+        "county_code": county_code,
         "latest_batch_id": latest_batch_id,
         "batch_ids_by_table": {k: sorted(v) for k, v in batch_ids_by_table.items()},
     }
 
     for tbl in tables:
         if not batch_ids_by_table[tbl]:
-            detail["reason"] = f"{tbl} is empty -- cannot be fresh (nothing to check)"
+            detail["reason"] = f"{tbl} has no rows for county_code={county_code!r} -- cannot be fresh (nothing to check)"
             return False, detail
         if len(batch_ids_by_table[tbl]) > 1:
-            detail["reason"] = (f"{tbl} contains rows from more than one batch_id -- "
-                                 f"a partial/failed refresh; should be impossible if the "
-                                 f"shadow-swap is genuinely atomic")
+            detail["reason"] = (f"{tbl} contains rows from more than one batch_id for "
+                                 f"county_code={county_code!r} -- a partial/failed refresh; "
+                                 f"should be impossible if the shadow-swap/county-scoped "
+                                 f"reload is genuinely atomic")
             return False, detail
 
     if latest_batch_id is None:
@@ -526,18 +567,20 @@ def assert_snapshot_summary_fresh(conn):
     distinct_table_batches = set(table_batch_ids.values())
     if len(distinct_table_batches) > 1:
         detail["reason"] = (f"the three Tier 1 tables disagree with each other on "
-                             f"source_import_batch_id ({table_batch_ids}) -- the atomic "
-                             f"swap did not actually keep them in sync; this should be "
-                             f"impossible and indicates a real bug, not ordinary staleness")
+                             f"source_import_batch_id for county_code={county_code!r} "
+                             f"({table_batch_ids}) -- the atomic swap/reload did not actually "
+                             f"keep them in sync; this should be impossible and indicates a "
+                             f"real bug, not ordinary staleness")
         return False, detail
 
     common_batch_id = next(iter(distinct_table_batches))
     if common_batch_id != latest_batch_id:
-        detail["reason"] = (f"Tier 1 tables reflect batch {common_batch_id}, but the latest "
-                             f"known batch is {latest_batch_id} -- STALE")
+        detail["reason"] = (f"Tier 1 tables for county_code={county_code!r} reflect batch "
+                             f"{common_batch_id}, but the latest known batch is "
+                             f"{latest_batch_id} -- STALE")
         return False, detail
 
-    detail["reason"] = "all three Tier 1 tables match the latest known batch"
+    detail["reason"] = f"all three Tier 1 tables match the latest known batch for county_code={county_code!r}"
     return True, detail
 
 
@@ -676,6 +719,12 @@ def main():
     ap.add_argument("--batch-id", type=int, default=None,
                     help="Tag this refresh with an existing load_batch.batch_id "
                          "(future pipeline use; standalone runs normally omit this)")
+    ap.add_argument("--county", default="TRAVIS",
+                    help="county_code to scope --check-staleness's freshness half to "
+                         "(PARTITION-2-IMPLEMENT, Part 3 -- default: TRAVIS). Does NOT affect "
+                         "--check-consistency, which is not county-scoped in this brief -- see "
+                         "assert_snapshot_summary_fresh()'s docstring for why. Only meaningful "
+                         "once these tables carry county_code (migrate_county_partitioning.py).")
     args = ap.parse_args()
 
     from loaders.db import get_conn
@@ -695,8 +744,8 @@ def main():
         sys.exit(0 if is_consistent else 1)
 
     if args.check_staleness:
-        is_fresh, fresh_detail = assert_snapshot_summary_fresh(conn)
-        print(f"snapshot summary fresh (swap-atomicity/provenance check): {is_fresh}")
+        is_fresh, fresh_detail = assert_snapshot_summary_fresh(conn, county_code=args.county)
+        print(f"snapshot summary fresh (county_code={args.county!r}, swap-atomicity/provenance check): {is_fresh}")
         for k, v in fresh_detail.items():
             print(f"  {k}: {v}")
         print()

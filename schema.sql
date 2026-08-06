@@ -594,6 +594,58 @@ CREATE INDEX IF NOT EXISTS idx_ingest_audit_source ON ingest_audit(source_tag, r
 CREATE INDEX IF NOT EXISTS idx_ingest_audit_failed  ON ingest_audit(passed) WHERE passed = FALSE;
 CREATE INDEX IF NOT EXISTS idx_metrics_year_etr       ON parcel_metrics(tax_year, effective_tax_rate);
 
+-- ── tax_billing_quarantine (PARTITION-2-IMPLEMENT, Part 5 — real
+-- consolidation, SPEC_COUNTY_PARTITIONING.md finding 9.10) ─────────────────
+-- Real, reversible holding table for contaminated tax_billing rows (the
+-- July 14, 2026 TAXYEAR-scoping incident) — see
+-- loaders/quarantine_contamination.py's own module docstring for the full
+-- incident history, the Class A/B carve-out logic, and the restore()
+-- mechanism.
+--
+-- PARTITION-1's own systematic table search (SPEC_COUNTY_PARTITIONING.md
+-- §1.1) caught this table being defined ONLY inline in that loader script
+-- (as a Python string, `_CREATE_QUARANTINE_SQL`), never here in schema.sql
+-- — the one real table this project's otherwise-systematic
+-- schema.sql-is-the-single-source convention had missed. Folded in here so
+-- the next systematic table search finds every table in one place, per
+-- that finding's own instruction. This does NOT remove
+-- loaders/quarantine_contamination.py's own `_CREATE_QUARANTINE_SQL` —
+-- that script calls it defensively (CREATE TABLE IF NOT EXISTS) at several
+-- of its own real call sites so it keeps working standalone even against a
+-- database where this schema.sql hasn't been (re)applied yet; the two
+-- definitions are asserted to stay column-for-column identical by
+-- test_migrate_county_partitioning.py's own regression check (grep-style,
+-- not just eyeballed) rather than trusted to never drift apart silently.
+--
+-- Key change: (geo_id, tax_year) today -> (county_code, geo_id, tax_year)
+-- once migrate_county_partitioning.py's real migration runs — same
+-- geo_id-collision exposure as this table's sibling, tax_billing itself
+-- (SPEC_COUNTY_PARTITIONING.md §4.3). The definition below still shows the
+-- CURRENT, pre-migration shape (matching every other core table in this
+-- file, none of which have been rewritten to their post-migration shape
+-- here — that rewrite is a later, separate step once the real migration
+-- has actually run against production, not something schema.sql should
+-- claim has already happened).
+CREATE TABLE IF NOT EXISTS tax_billing_quarantine (
+    geo_id              VARCHAR(20)  NOT NULL,
+    tax_year            SMALLINT     NOT NULL,
+    billing_num         VARCHAR(30),
+    owner_name          TEXT,
+    total_tax           NUMERIC(14,2),
+    total_paid          NUMERIC(14,2),
+    total_due           NUMERIC(14,2),
+    is_delinquent       BOOLEAN      DEFAULT FALSE,
+    first_delinquent_yr SMALLINT,
+    cause_number        VARCHAR(50),
+    exemption_codes     VARCHAR(50),
+    data_source         VARCHAR(32),
+    confidence_level    VARCHAR(16),
+    quarantined_at      TIMESTAMP    NOT NULL DEFAULT now(),
+    incident_ref        VARCHAR(64)  NOT NULL,
+    reason              TEXT         NOT NULL,
+    PRIMARY KEY (geo_id, tax_year)
+);
+
 -- ── parcel_2026_preliminary_snapshot (Task M4-2026-PRELIM-SNAPSHOT, Part 2,
 -- July 2026) ──────────────────────────────────────────────────────────────
 -- Permanent, standalone retention of the ORIGINAL 2026 Preliminary Export

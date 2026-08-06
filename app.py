@@ -3119,7 +3119,7 @@ def county_snapshot():
     return render_template("snapshot.html", view=view, **payload)
 
 
-def _snapshot_summary_freshness():
+def _snapshot_summary_freshness(county_code="TRAVIS"):
     """
     Tier 1 "no live fallback, ever" gate for /snapshot (SPEC_AGGREGATE_
     PRECOMPUTATION.md's own explicit principle). Returns (is_fresh: bool,
@@ -3137,11 +3137,54 @@ def _snapshot_summary_freshness():
     direction, and the check itself is small enough that duplicating it
     once here is cheaper and safer than adding a novel app.py -> loaders/
     dependency edge for a single function).
+
+    county_code (PARTITION-2-IMPLEMENT, Part 3, per SPEC_COUNTY_
+    PARTITIONING.md finding 9.7): every query below is now scoped to one
+    real county's rows, not the table as a whole. Real, concrete bug this
+    fixes -- once snapshot_breakdown/snapshot_totals/
+    snapshot_neighborhood_movers hold multiple counties' rows (after
+    migrate_county_partitioning.py's migration runs), refreshing Travis
+    ALONE via the county-scoped reload procedure (loaders/
+    reload_county_scope.py, §9.2(c)) would leave the table's batch_id
+    values for Dallas's rows untouched -- an UNSCOPED version of this
+    check (the old table-wide SELECT DISTINCT source_import_batch_id FROM
+    <tbl>, no WHERE at all) would then either report the WHOLE table
+    stale forever (multiple distinct batch_ids present, tripping the
+    ">1 batch_id" branch below on every refresh from now on, since
+    Travis's and Dallas's batch_ids will almost never coincide) or, worse,
+    silently treat Dallas's still-stale rows as "fresh" by construction of
+    whichever single value happened to look right -- neither is correct;
+    the honest answer is "is THIS county's data fresh," which is what the
+    WHERE county_code = %s scoping below actually answers.
+
+    Defaults to 'TRAVIS' -- the same single, explicitly-marked hardcoded
+    seam SPEC_COUNTY_PARTITIONING.md's finding 9.5 (the resolve_parcel()
+    resolver design) uses, until Diego's separate application-level
+    routing/UI decision (§7, still undecided, still not this function's
+    job) gives every call site a real county_code to pass instead of this
+    default.
+
+    REAL DEPLOYMENT-SEQUENCING WARNING, stated plainly (see this task's
+    final report): this diff references a county_code column that does
+    NOT YET EXIST on snapshot_breakdown/snapshot_totals/
+    snapshot_neighborhood_movers on production today --
+    migrate_county_partitioning.py has not been run there. Deploying this
+    version of app.py BEFORE that migration actually executes against
+    production would break /snapshot outright (every query below would
+    fail with "column county_code does not exist"). This code is built
+    now per the brief's own explicit instruction ("this logic change
+    matters immediately once county_code exists as a real column... don't
+    defer this part"), but it must not reach production until AFTER
+    migrate_county_partitioning.py's migration of these three tables has
+    actually run there.
     """
     tables = ("snapshot_breakdown", "snapshot_totals", "snapshot_neighborhood_movers")
     batch_ids_by_table = {}
     for tbl in tables:
-        rows = query(f"SELECT DISTINCT source_import_batch_id FROM {tbl}")
+        rows = query(
+            f"SELECT DISTINCT source_import_batch_id FROM {tbl} WHERE county_code = %s",
+            (county_code,),
+        )
         batch_ids_by_table[tbl] = {r["source_import_batch_id"] for r in rows}
 
     latest_row = query("SELECT MAX(batch_id) AS latest FROM load_batch", one=True)
@@ -3150,15 +3193,15 @@ def _snapshot_summary_freshness():
     for tbl in tables:
         if not batch_ids_by_table[tbl]:
             return False, (
-                "Market Snapshot summary data has not been generated yet "
-                f"({tbl} is empty). This page reads only precomputed data -- "
-                "run loaders/refresh_snapshot_summary.py to populate it."
+                f"Market Snapshot summary data has not been generated yet for {county_code} "
+                f"({tbl} has no rows for this county). This page reads only precomputed data "
+                "-- run loaders/refresh_snapshot_summary.py to populate it."
             )
         if len(batch_ids_by_table[tbl]) > 1:
             return False, (
-                f"Market Snapshot data is in an inconsistent state ({tbl} reflects "
-                "more than one data batch, indicating a partial or failed refresh). "
-                "Re-run loaders/refresh_snapshot_summary.py."
+                f"Market Snapshot data is in an inconsistent state for {county_code} ({tbl} "
+                "reflects more than one data batch for this county, indicating a partial or "
+                "failed refresh). Re-run loaders/refresh_snapshot_summary.py."
             )
 
     if latest_batch_id is None:
@@ -3170,16 +3213,16 @@ def _snapshot_summary_freshness():
     table_batch_ids = {tbl: next(iter(batch_ids_by_table[tbl])) for tbl in tables}
     if len(set(table_batch_ids.values())) > 1:
         return False, (
-            "Market Snapshot summary tables are out of sync with each other -- "
-            "a refresh did not complete atomically. Re-run "
+            f"Market Snapshot summary tables are out of sync with each other for {county_code} "
+            "-- a refresh did not complete atomically. Re-run "
             "loaders/refresh_snapshot_summary.py."
         )
 
     common_batch_id = next(iter(set(table_batch_ids.values())))
     if common_batch_id != latest_batch_id:
         return False, (
-            "Market Snapshot data is stale -- a newer data load has not yet been "
-            "reflected here. Run loaders/refresh_snapshot_summary.py to refresh it."
+            f"Market Snapshot data for {county_code} is stale -- a newer data load has not yet "
+            "been reflected here. Run loaders/refresh_snapshot_summary.py to refresh it."
         )
 
     return True, None
@@ -3240,7 +3283,31 @@ def _compute_snapshot_data(view):
     spec's own "aggregation logic lives only inside refresh functions"
     principle -- capping/slicing isn't aggregation, it's display shaping.
     """
-    is_fresh, unavailable_reason = _snapshot_summary_freshness()
+    # PARTITION-2-IMPLEMENT, Part 3: county_code="TRAVIS" is the same single,
+    # explicitly-marked hardcoded seam SPEC_COUNTY_PARTITIONING.md's finding
+    # 9.5 (resolve_parcel()) uses -- until Diego's separate routing/UI
+    # decision (§7) exists, every call site here defaults to Travis
+    # explicitly, at this one place, not scattered.
+    #
+    # KNOWN, DELIBERATE GAP (disclosed, not silently left): the freshness
+    # CHECK below is now real per-county-scoped (finding 9.7) -- but the
+    # actual READ queries further down this function (SELECT ... FROM
+    # snapshot_breakdown/snapshot_totals/snapshot_neighborhood_movers WHERE
+    # view = %s) are NOT yet county-scoped. That's the broader "county_code
+    # needs to reach every one of app.py's 218 real call sites" wiring
+    # SPEC_COUNTY_PARTITIONING.md's finding 9.5 explicitly designs a
+    # resolver seam for and explicitly defers -- out of scope for THIS
+    # brief (PARTITION-2-IMPLEMENT's own "no wiring of resolve_parcel()
+    # into app.py's real call sites" boundary covers this same class of
+    # change). Freshness reporting will be correctly per-county the moment
+    # migrate_county_partitioning.py runs; the actual displayed ROWS will
+    # only be correctly county-scoped once that broader, later wiring
+    # happens. Not a problem today (Travis is the only county with data,
+    # so an unscoped read query returns exactly the same rows a scoped one
+    # would) -- but a real, known gap the moment a second county's rows
+    # land in these tables, flagged here so it isn't mistaken for "already
+    # handled."
+    is_fresh, unavailable_reason = _snapshot_summary_freshness(county_code="TRAVIS")
     if not is_fresh:
         return {
             "data_unavailable": True,
