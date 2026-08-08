@@ -1010,6 +1010,24 @@ CREATE TABLE IF NOT EXISTS snapshot_neighborhood_movers_shadow (
 -- Real, honest, NOT a complete fix -- other tables/call sites very likely
 -- have the identical gap; flagged for a real, comprehensive audit, not
 -- assumed covered by these 4 alone.
+--
+-- vvv REAL, CRITICAL, TIME-LIMITED WARNING (Fable review, Aug 8, 2026) vvv
+-- These indexes are a TRANSITIONAL PERFORMANCE FIX ONLY, safe today
+-- purely because Travis is the only county with real data. The moment a
+-- second county's rows exist, a bare "WHERE geo_id = %s" query (every one
+-- of app.py's 218 real call sites, until the resolver seam wires
+-- county_code through) becomes SEMANTICALLY WRONG, not just slow -- it
+-- can silently return an arbitrary county's row (one=True takes whatever
+-- comes first), and THESE INDEXES make that wrong answer arrive fast
+-- instead of timing out. Born tonight to fix a real outage; must DIE at
+-- the resolver seam. Hard policy (Fable, Aug 8, 2026): Dallas data does
+-- NOT load into production until the resolver seam is wired through all
+-- 218 call sites and a real coverage audit reports zero county-unscoped
+-- queries against county-keyed tables -- at which point these 4 indexes
+-- should be dropped, since geo_id-only queries will no longer exist and
+-- they become pure write-cost. Do not let this become permanent by
+-- default.
+-- ^^^ ^^^
 CREATE INDEX IF NOT EXISTS idx_parcel_geo_id_only ON parcel (geo_id);
 CREATE INDEX IF NOT EXISTS idx_pty_geo_id ON parcel_tax_year (geo_id, tax_year);
 CREATE INDEX IF NOT EXISTS idx_metrics_geo_id ON parcel_metrics (geo_id, tax_year);
