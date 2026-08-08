@@ -993,3 +993,24 @@ CREATE TABLE IF NOT EXISTS snapshot_neighborhood_movers (
 CREATE TABLE IF NOT EXISTS snapshot_neighborhood_movers_shadow (
     LIKE snapshot_neighborhood_movers INCLUDING ALL
 );
+
+-- ── Real, urgent hotfix (Aug 8, 2026, applied directly to production) ──────
+-- migrate_county_partitioning.py's real, already-run migration made
+-- county_code the LEADING column of these tables' primary keys. Any real
+-- query filtering on geo_id ALONE (every one of app.py's 218 real call
+-- sites, today -- PARTITION-2-IMPLEMENT finding 9.5's resolver seam was
+-- deliberately deferred) lost its fast lookup path, since a composite
+-- index led by county_code cannot efficiently serve a geo_id-only filter.
+-- This is NOT the same gap the earlier secondary-index rebuild fixed --
+-- that restored ORIGINAL secondary indexes; these are NEW, standalone
+-- indexes that exist specifically because the PRIMARY KEY itself changed
+-- shape. Real, live incident: property_detail() timing out in production
+-- on a simple parcel_tax_year lookup; confirmed fixed for the specific
+-- failing parcel after adding these + ANALYZE + a service restart.
+-- Real, honest, NOT a complete fix -- other tables/call sites very likely
+-- have the identical gap; flagged for a real, comprehensive audit, not
+-- assumed covered by these 4 alone.
+CREATE INDEX IF NOT EXISTS idx_parcel_geo_id_only ON parcel (geo_id);
+CREATE INDEX IF NOT EXISTS idx_pty_geo_id ON parcel_tax_year (geo_id, tax_year);
+CREATE INDEX IF NOT EXISTS idx_metrics_geo_id ON parcel_metrics (geo_id, tax_year);
+CREATE INDEX IF NOT EXISTS idx_delinquent_geo_id ON tax_delinquent (geo_id);
