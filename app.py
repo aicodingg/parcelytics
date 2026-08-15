@@ -5819,7 +5819,14 @@ def api_billing(geo_id):
     # match the real live unique constraint (county_code, geo_id, tax_year).
     # Also see loaders/scrape_billing_history.py's _UPSERT_SQL fix (this
     # route's upsert_billing_rows() call below shares that same write path
-    # and had the identical bug -- fixed there, not duplicated here).
+    # and had the identical county_code bug -- fixed there, not duplicated
+    # here). BILLING-DIAG-7: that same shared function's OWN commit behavior
+    # was separately investigated and found to already be correct (it always
+    # committed) -- see the BILLING-DIAG-7 report for the full correction of
+    # an incorrect "missing commit" theory. It now uses `with conn:` instead
+    # of a bare conn.commit() call purely as defense-in-depth (auto-rollback
+    # on exception, not previously guaranteed for this route's own error
+    # path), not because anything was silently failing to commit.
     county_code = g.county_code
     conn = get_db()
     try:
@@ -5900,97 +5907,15 @@ def api_billing(geo_id):
                 # network failure (retried, then reported if exhausted) --
                 # not as "genuinely fetched, no data."
                 if html is not None and status == HTTP_OK and _BILLING_PORTAL_MARKER not in html:
-                    # BILLING-DIAG-6: TEMPORARY -- log a bounded, real slice of
-                    # the actual mismatched content (plus a few known
-                    # alternative-page markers) BEFORE resetting html to None
-                    # below, so a real WAF/CAPTCHA/redirect page (if that's
-                    # what this is) is visible, not just the boolean fact that
-                    # the expected marker was missing. Remove once
-                    # BILLING-DIAG-6 is resolved.
-                    _alt_markers = [m for m in (
-                        "CAPTCHA", "captcha", "Access Denied", "blocked",
-                        "Blocked", "verify you are human", "<title>",
-                    ) if m in html]
-                    print(
-                        f"BILLING-DIAG-6: geo_id={geo_id} marker mismatch -- "
-                        f"len(html)={len(html)} alt_markers_found={_alt_markers} "
-                        f"first_500_chars={html[:500]!r}",
-                        flush=True,
-                    )
                     html, status = None, HTTP_NETWORK_ERR
                 if html is not None and status == HTTP_OK:
                     break
                 if status == HTTP_NOT_FOUND:
                     break   # account genuinely not in portal -- don't retry
 
-            # BILLING-DIAG-3: TEMPORARY diagnostic breadcrumb. BILLING-DIAG-3's
-            # own live evidence ruled out both single-attempt fragility
-            # (BILLING-DIAG-1) and the Render shared-outbound-IP/WAF theory
-            # (BILLING-DIAG-2) -- a direct Render Shell test of fetch_html()
-            # succeeded cleanly on the exact same infrastructure this route
-            # runs on, yet the live route still returns empty. This message
-            # reports, for every real live invocation of this branch, exactly
-            # what fetch_html() returned INSIDE the actual request context --
-            # the one piece of evidence no sandbox test or Shell script can
-            # produce, since it requires observing the live gunicorn worker's
-            # own behavior. Remove once BILLING-DIAG-3 is resolved.
-            sentry_sdk.capture_message(
-                f"BILLING-DIAG-3: geo_id={geo_id} post-retry-loop "
-                f"html_is_none={html is None} status={status} "
-                f"attempts_made={_attempt + 1}",
-                level="info",
-            )
-            # BILLING-DIAG-4: this call was missing the same flush() the other
-            # two real Sentry calls in this function already got (the
-            # exhausted-retry warning below, and the exception handler) --
-            # BILLING-DIAG-2's own reasoning (queued events aren't guaranteed
-            # delivery before a gunicorn worker recycles) applies identically
-            # here and was simply missed when this breadcrumb was added.
-            sentry_sdk.flush(timeout=2)
-            # BILLING-DIAG-5: TEMPORARY, second/parallel diagnostic channel.
-            # The BILLING-DIAG-3 breadcrumb above still never appeared in
-            # Sentry even after BILLING-DIAG-4's real, confirmed flush() fix
-            # deployed -- Sentry's own UI, Inbound Data Filters, and this
-            # app's own sentry_sdk.init() call have all been checked directly
-            # and ruled out as the cause. Rather than keep debugging Sentry's
-            # delivery path, use a channel already proven reliable this same
-            # session (Render's real Application Logs, via plain stdout --
-            # the "Sentry error monitoring: ENABLED" startup line and every
-            # real HTTP access log line both show up there every time).
-            # flush=True forces immediate stdout delivery, the print()
-            # equivalent of the flush() fix already applied to the Sentry
-            # call above. Does NOT replace the Sentry breadcrumb -- both
-            # channels run in parallel, no working code removed. Remove once
-            # BILLING-DIAG-5 is resolved.
-            print(
-                f"BILLING-DIAG-5: geo_id={geo_id} post-retry-loop "
-                f"html_is_none={html is None} status={status} "
-                f"attempts_made={_attempt + 1}",
-                flush=True,
-            )
             if html is not None and status == HTTP_OK:
                 receipts = parse_receipts(html)
                 target   = [r for r in receipts if r["tax_year"] in _BILLING_TARGET_YEARS]
-                # BILLING-DIAG-6: TEMPORARY. BILLING-DIAG-5's own live evidence
-                # (html_is_none=False, status=0, printed AFTER the marker
-                # check above) means the marker check above did NOT fire on
-                # that real request -- the marker WAS present, ruling out the
-                # BILLING-DIAG-2 WAF/block-page theory as the cause for that
-                # specific request, contrary to this brief's own stated
-                # deduction (see BILLING-DIAG-6 report for the full
-                # correction). The real remaining question is what happens in
-                # THIS branch: how many receipts parse_receipts() actually
-                # found, how many matched the 2021-2024 target window, and
-                # which of the two branches below (real write vs. sentinel)
-                # actually executes. Remove once BILLING-DIAG-6 is resolved.
-                print(
-                    f"BILLING-DIAG-6: geo_id={geo_id} parsed "
-                    f"receipts_found={len(receipts)} "
-                    f"receipt_years={sorted(set(r['tax_year'] for r in receipts))} "
-                    f"target_found={len(target)} "
-                    f"target_years={sorted(r['tax_year'] for r in target)}",
-                    flush=True,
-                )
                 if target:
                     records = [
                         {
@@ -6002,7 +5927,23 @@ def api_billing(geo_id):
                         }
                         for r in target
                     ]
-                    upsert_billing_rows(conn, records)
+                    # BILLING-DIAG-7: upsert_billing_rows() now returns the real
+                    # row count and commits internally via `with conn:` (see
+                    # loaders/scrape_billing_history.py). PERMANENT (not a
+                    # temporary diagnostic, per Fable's review): the write path
+                    # emitted nothing on success this entire time, which is
+                    # exactly why 79 real sentinel rows accumulated in
+                    # production with zero real target-year rows ever visibly
+                    # confirmed as written -- this line makes that state
+                    # observable on every future request, not just during an
+                    # active investigation.
+                    written = upsert_billing_rows(conn, records)
+                    print(
+                        f"api_billing write: geo_id={geo_id} county_code={county_code} "
+                        f"receipts_parsed={len(receipts)} target_matched={len(target)} "
+                        f"rows_written={written} commit_confirmed=True",
+                        flush=True,
+                    )
                 else:
                     # Portal has this account but no 2021-2024 receipts — sentinel
                     with conn.cursor() as cur:
@@ -6014,6 +5955,20 @@ def api_billing(geo_id):
                             (county_code, geo_id, _BILLING_SENTINEL_YEAR)
                         )
                     conn.commit()
+                    # BILLING-DIAG-7: PERMANENT. Symmetric with the real-write
+                    # log line above -- this is the branch that has actually
+                    # been firing for all 79 real sentinel rows found in
+                    # production. Making it observable is the real, concrete
+                    # next step toward answering whether that's correct
+                    # (parse_receipts() genuinely finds no 2021-2024 data for
+                    # these parcels) or a real parsing bug -- not resolved by
+                    # this brief, see the BILLING-DIAG-7 report.
+                    print(
+                        f"api_billing write: geo_id={geo_id} county_code={county_code} "
+                        f"receipts_parsed={len(receipts)} target_matched=0 "
+                        f"rows_written=0 sentinel_written=True commit_confirmed=True",
+                        flush=True,
+                    )
             elif status != HTTP_NOT_FOUND:
                 # Network/429/5xx/WAF-block-page, both attempts exhausted →
                 # still don't cache (let next page visit retry, same as

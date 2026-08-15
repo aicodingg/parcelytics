@@ -275,8 +275,27 @@ def get_eligible_geo_ids(
         return [row[0] for row in cur.fetchall()]
 
 
-def upsert_billing_rows(conn, records: list[dict]) -> None:
-    """Upsert a batch of billing records. Raises on DB error (caller rolls back).
+def upsert_billing_rows(conn, records: list[dict]) -> int:
+    """Upsert a batch of billing records. Commits and returns len(records) on
+    success. Rolls back automatically on any DB error and re-raises -- the
+    caller does NOT need to commit or roll back separately.
+
+    BILLING-DIAG-7: this docstring previously read "Raises on DB error
+    (caller rolls back)" -- an implicit, negatively-framed contract (what the
+    function does NOT do) rather than a positive statement of what it DOES
+    do. Per Fable's architectural review, that's the same class of failure
+    as a convention that has to be correctly re-derived at every call site
+    instead of being structurally enforced. Rewritten to state ownership
+    positively, and the function itself now uses `with conn:` (commits on
+    clean exit, rolls back automatically on exception) instead of a bare
+    conn.commit() call after the `with cursor` block -- structurally
+    equivalent on the success path (this function already committed
+    correctly before this change; see the BILLING-DIAG-7 report for the full
+    correction of the "missing commit" theory this brief was originally
+    built around), but now also rolls back automatically on the error path,
+    which the previous version did not do on its own (callers without their
+    own explicit `except: conn.rollback()`, e.g. app.py's api_billing(),
+    relied on the implicit rollback-on-close instead).
 
     DALLAS-GATE-2: each record dict must now include a "county_code" key
     (_UPSERT_SQL's %(county_code)s placeholder) -- both callers (this file's
@@ -285,10 +304,11 @@ def upsert_billing_rows(conn, records: list[dict]) -> None:
     execute_batch before anything is written, not silently skip the column.
     """
     if not records:
-        return
-    with conn.cursor() as cur:
-        psycopg2.extras.execute_batch(cur, _UPSERT_SQL, records, page_size=500)
-    conn.commit()
+        return 0
+    with conn:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_batch(cur, _UPSERT_SQL, records, page_size=500)
+    return len(records)
 
 
 # ── checkpoint ────────────────────────────────────────────────────────────────
@@ -636,8 +656,14 @@ def main() -> None:
                 for r in target
             ]
             try:
-                upsert_billing_rows(conn, records)
-                stats["inserted"] += len(records)
+                # BILLING-DIAG-7: upsert_billing_rows() now returns the real
+                # row count it wrote -- use that instead of len(records) as
+                # the single source of truth. The explicit conn.rollback()
+                # below is now redundant with the function's own internal
+                # `with conn:` auto-rollback (harmless to call twice; kept
+                # for clarity and because this loop's own error accounting
+                # depends on reaching this except block regardless).
+                stats["inserted"] += upsert_billing_rows(conn, records)
             except Exception as exc:
                 stats["errors"] += 1
                 err_msg = f"{geo_id}: DB error — {exc!r}"
