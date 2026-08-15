@@ -57,6 +57,15 @@ from snapshot_taxonomy import (
 # import block above) -- can't drift out of sync again.
 _BILLING_SENTINEL_YEAR = 9999   # stored when portal returns no target-year data
 
+# BILLING-DIAG-2: a real, distinctive marker string confirmed present in
+# BILLING-DIAG-1's own direct inspection of a genuine, successful portal
+# fetch (22,594 real chars of actual page content). Used to reject a
+# same-shape-but-wrong HTTP 200 (e.g. a WAF/bot-detection interstitial page,
+# which returns 200 with HTML but isn't the real portal) rather than
+# trusting status == HTTP_OK alone -- see api_billing()'s own comment for
+# the full reasoning.
+_BILLING_PORTAL_MARKER = "Travis County Tax"
+
 # TaxDelqOpenData.csv snapshot date (July 2026, per Diego's "Delinquency Data
 # Freshness" Cowork brief). TaxDelqOpenData is a periodic export from the
 # Travis County Tax Office, not a live feed -- a delinquent balance shown on
@@ -5861,10 +5870,59 @@ def api_billing(geo_id):
             html, status = None, HTTP_NETWORK_ERR
             for _attempt in range(2):
                 html, status = fetch_html(geo_id, timeout=10)
+                # BILLING-DIAG-2: a real HTTP 200 with html content is no
+                # longer trusted as "the real portal" on its own. New,
+                # externally-corroborated evidence (Render community threads
+                # + Render's own docs: outbound IPs are SHARED across ALL
+                # Render customers in a region, changed range Nov 2025, and
+                # other customers report 403s/WAF blocks reaching third-party
+                # sites from those shared IPs) points to a real, structural
+                # possibility this diagnosis didn't consider before: a WAF or
+                # bot-detection layer in front of travis.go2gov.net could be
+                # returning a real HTTP 200 with an HTML "blocked"/CAPTCHA
+                # interstitial page instead of a clean 403 -- a common WAF
+                # pattern specifically designed to defeat naive status-code
+                # checks like BILLING-DIAG-1's `status == HTTP_OK`. If that's
+                # what's happening, the OLD logic here would have treated a
+                # block page as a successful, empty fetch and written a
+                # PERMANENT, WRONG sentinel row (tax_year=9999) -- silently
+                # poisoning that geo_id forever, since a sentinel makes
+                # already_fetched True on every future visit, meaning it
+                # would never be retried again. This also fully explains
+                # BILLING-DIAG-2's own mystery (why the new Sentry warning
+                # never fired): the code believed it had succeeded, so it
+                # never reached the warning branch at all.
+                # _BILLING_PORTAL_MARKER is real page content confirmed
+                # present in BILLING-DIAG-1's own direct inspection of a
+                # genuine, successful fetch (22,594 real chars, real
+                # <title>Travis County Tax</title>). Its absence on an
+                # otherwise-200 response is now treated the SAME as a
+                # network failure (retried, then reported if exhausted) --
+                # not as "genuinely fetched, no data."
+                if html is not None and status == HTTP_OK and _BILLING_PORTAL_MARKER not in html:
+                    html, status = None, HTTP_NETWORK_ERR
                 if html is not None and status == HTTP_OK:
                     break
                 if status == HTTP_NOT_FOUND:
                     break   # account genuinely not in portal -- don't retry
+
+            # BILLING-DIAG-3: TEMPORARY diagnostic breadcrumb. BILLING-DIAG-3's
+            # own live evidence ruled out both single-attempt fragility
+            # (BILLING-DIAG-1) and the Render shared-outbound-IP/WAF theory
+            # (BILLING-DIAG-2) -- a direct Render Shell test of fetch_html()
+            # succeeded cleanly on the exact same infrastructure this route
+            # runs on, yet the live route still returns empty. This message
+            # reports, for every real live invocation of this branch, exactly
+            # what fetch_html() returned INSIDE the actual request context --
+            # the one piece of evidence no sandbox test or Shell script can
+            # produce, since it requires observing the live gunicorn worker's
+            # own behavior. Remove once BILLING-DIAG-3 is resolved.
+            sentry_sdk.capture_message(
+                f"BILLING-DIAG-3: geo_id={geo_id} post-retry-loop "
+                f"html_is_none={html is None} status={status} "
+                f"attempts_made={_attempt + 1}",
+                level="info",
+            )
             if html is not None and status == HTTP_OK:
                 receipts = parse_receipts(html)
                 target   = [r for r in receipts if r["tax_year"] in _BILLING_TARGET_YEARS]
@@ -5892,18 +5950,34 @@ def api_billing(geo_id):
                         )
                     conn.commit()
             elif status != HTTP_NOT_FOUND:
-                # Network/429/5xx, both attempts exhausted → still don't
-                # cache (let next page visit retry, same as before) — but
-                # now a low-noise, non-exception Sentry signal (level=
-                # warning) so a PERSISTENTLY failing parcel is visible as a
-                # pattern instead of indistinguishable from "genuinely no
-                # receipts", which is exactly what made BILLING-DIAG-1's bug
-                # invisible until a manual curl+SQL cross-check found it.
+                # Network/429/5xx/WAF-block-page, both attempts exhausted →
+                # still don't cache (let next page visit retry, same as
+                # before) — but now a low-noise, non-exception Sentry signal
+                # (level=warning) so a PERSISTENTLY failing parcel is visible
+                # as a pattern instead of indistinguishable from "genuinely
+                # no receipts", which is exactly what made BILLING-DIAG-1's
+                # bug invisible until a manual curl+SQL cross-check found it.
+                #
+                # BILLING-DIAG-2: explicit flush(), bounded to 2s, added
+                # after this call. sentry_sdk queues events to a background
+                # delivery thread by default and does NOT guarantee delivery
+                # before the request returns/the process moves on -- under
+                # gunicorn's 30s default worker timeout (no --timeout flag
+                # set, confirmed in BILLING-DIAG-1's own report) a request
+                # that runs close to that budget risks the worker being
+                # recycled/killed before a queued-but-undelivered message
+                # reaches Sentry. This doesn't prove that's what happened to
+                # BILLING-DIAG-2's own missing warning (this sandbox cannot
+                # reach Sentry's ingest API to confirm either way), but it's
+                # a real, low-risk, unconditionally-correct hardening
+                # regardless of which of BILLING-DIAG-2's hypotheses turns
+                # out to be the actual cause.
                 sentry_sdk.capture_message(
                     f"api_billing: portal fetch failed for geo_id={geo_id} "
                     f"after 2 attempts, last status={status}",
                     level="warning",
                 )
+                sentry_sdk.flush(timeout=2)
             # HTTP_NOT_FOUND (404): genuinely no account in portal — no
             # sentinel written here either (unchanged from before this fix;
             # the sentinel is specifically for "account found, no target-
@@ -5933,6 +6007,21 @@ def api_billing(geo_id):
         return jsonify({"status": "ok", "cached": already_fetched, "rows": rows})
 
     except Exception as exc:
+        # BILLING-DIAG-3: real, standalone gap found and fixed here, independent
+        # of which BILLING-DIAG-3 hypothesis turns out to be the cause. This
+        # except block has ALWAYS silently converted any real exception into a
+        # clean-looking {"status":"error",...} JSON response with ZERO Sentry
+        # visibility -- confirmed via grep across the whole file: no
+        # capture_exception() call existed anywhere, and sentry_sdk's
+        # FlaskIntegration (app.py's own sentry_sdk.init() call, ~line 1332)
+        # only auto-captures exceptions that bubble up UNCAUGHT to Flask --
+        # an exception caught here, inside application code, never reaches
+        # that auto-instrumentation. This means any real, unexpected error in
+        # this route (a dropped DB connection, a KeyError, anything) has been
+        # completely invisible in Sentry this entire time, regardless of the
+        # billing-fetch investigation. Fixed unconditionally; not a guess.
+        sentry_sdk.capture_exception(exc)
+        sentry_sdk.flush(timeout=2)
         return jsonify({"status": "error", "message": str(exc), "rows": []})
     finally:
         conn.close()

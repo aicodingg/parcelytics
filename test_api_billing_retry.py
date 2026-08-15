@@ -1,8 +1,8 @@
 """
-test_api_billing_retry.py — fixture tests for the BILLING-DIAG-1 fix to
+test_api_billing_retry.py — fixture tests for the BILLING-DIAG-1/2 fixes to
 api_billing() (/<county_slug>/api/billing/<geo_id>).
 
-Real bug found this brief: a single, un-retried fetch_html(geo_id) call
+BILLING-DIAG-1: a single, un-retried fetch_html(geo_id) call
 (REQUEST_TIMEOUT=20s, no retry) was the live route's only attempt to reach
 the Travis County Tax portal. Confirmed via live evidence (curl + a direct
 SQL check against production on two real parcels -- neither had so much as
@@ -12,8 +12,28 @@ invisible until a manual curl+SQL cross-check. Fix: 2 attempts, 10s each
 (NOT the CLI loader's 3x20s pattern -- would risk exceeding gunicorn's 30s
 default worker timeout and reintroducing the WORKER TIMEOUT/SIGKILL class
 of incident this codebase already hit once), plus a low-noise Sentry
-message on exhausted-retry failure so this class of bug is visible next
-time instead of requiring another manual cross-check.
+message on exhausted-retry failure.
+
+BILLING-DIAG-2 (post-deploy: the symptom didn't resolve, and the new Sentry
+warning never fired either): new evidence (Render's own docs + community
+threads -- outbound IPs are SHARED across ALL Render customers in a region
+and other customers report 403s/WAF blocks reaching third-party sites from
+those shared IPs) raised a real possibility this diagnosis hadn't
+considered -- a WAF/bot-detection layer in front of travis.go2gov.net could
+return a real HTTP 200 with an HTML block/CAPTCHA page instead of a clean
+403, which the OLD `status == HTTP_OK` check alone would have wrongly
+trusted as a genuine, successful, empty fetch -- writing a PERMANENT wrong
+sentinel row and explains why the warning never fired (the code believed it
+had succeeded). Fix: a real, distinctive marker string
+(_BILLING_PORTAL_MARKER = "Travis County Tax", confirmed present in
+BILLING-DIAG-1's own direct inspection of a genuine successful fetch) must
+also be present before a 200 response is trusted; its absence is now
+treated as a failure (retried, then reported), not "genuinely fetched, no
+data." Also added: an explicit sentry_sdk.flush(timeout=2) after the
+warning, since sentry_sdk queues events to a background thread by default
+and does not guarantee delivery before the request returns or the process
+is recycled -- a real, low-risk hardening regardless of which BILLING-
+DIAG-2 hypothesis turns out to be the actual cause.
 
 Sandbox has no Flask/psycopg2 (confirmed unavailable, same constraint as
 every other slice-and-exec test in this codebase). Uses the same technique
@@ -22,15 +42,16 @@ app.py between two markers and exec() it against a minimal namespace of
 fakes (fake `request`/`g`, a fake `conn`/cursor that records SQL, a fake
 `fetch_html` that returns a scripted sequence of (html, status) per call so
 the retry loop's real behavior can be observed, real HTTP_OK/HTTP_NOT_FOUND/
-HTTP_NETWORK_ERR sentinels, a fake `sentry_sdk.capture_message` that records
-calls). This tests the ACTUAL function body that ships in app.py, not a
-reimplementation of it -- which is exactly what caught a real NameError
-(HTTP_NETWORK_ERR referenced but not imported in app.py) during this
-brief's own work, before it could reach production.
+HTTP_NETWORK_ERR sentinels, a fake `sentry_sdk` recording capture_message()
+and flush() calls). This tests the ACTUAL function body that ships in
+app.py, not a reimplementation of it -- which is exactly what caught a real
+NameError (HTTP_NETWORK_ERR referenced but not imported in app.py) during
+BILLING-DIAG-1's own work, before it could reach production.
 
 What these tests check:
-  1. fetch_html() succeeds on the FIRST attempt: called exactly once, real
-     records written via upsert_billing_rows(), no Sentry message.
+  1. fetch_html() succeeds on the FIRST attempt (real marker present):
+     called exactly once, real records written via upsert_billing_rows(),
+     no Sentry message.
   2. fetch_html() fails once (network error) then succeeds on the 2nd
      attempt: called exactly twice, real records still written, no Sentry
      message (a transient blip that self-corrects is NOT reported --
@@ -38,13 +59,20 @@ What these tests check:
   3. fetch_html() fails BOTH attempts (network error each time): called
      exactly twice, NO write attempted (no upsert_billing_rows call, no
      sentinel INSERT), a Sentry warning-level message IS sent naming the
-     geo_id and last status, and the route still returns a clean
-     {"status":"ok","rows":[]} response (not an exception) -- reproducing
-     the exact live symptom from this brief's evidence trail.
+     geo_id and last status, sentry_sdk.flush() is called, and the route
+     still returns a clean {"status":"ok","rows":[]} response (not an
+     exception) -- reproducing the exact live symptom from this brief's
+     evidence trail.
   4. fetch_html() returns HTTP_NOT_FOUND on the first attempt: called
      exactly ONCE (no retry for a genuine 404 -- retrying an account that
      doesn't exist wastes the retry budget), no Sentry message (a 404 is
      an expected, not exceptional, outcome), no write.
+  5. (BILLING-DIAG-2, new) fetch_html() returns HTTP_OK with html content
+     BOTH attempts, but the real portal marker is missing both times (the
+     WAF/block-page scenario): treated as a failure, NOT a genuine empty
+     fetch -- called exactly twice, NO sentinel written, a Sentry warning
+     IS sent. Proves the fix actually closes the "permanent wrong
+     sentinel" risk this brief specifically raised.
 
 Run: python3 test_api_billing_retry.py
 """
@@ -65,12 +93,19 @@ FUNC_SRC = APP_PY[start:end]
 assert "def api_billing" in FUNC_SRC
 assert "for _attempt in range(2):" in FUNC_SRC, "sanity: slice must contain the retry loop"
 assert "sentry_sdk.capture_message" in FUNC_SRC, "sanity: slice must contain the new logging"
+assert "_BILLING_PORTAL_MARKER" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-2 marker check"
+assert "sentry_sdk.flush" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-2 flush() call"
+assert "sentry_sdk.capture_exception" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-3 exception capture"
+assert "BILLING-DIAG-3" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-3 diagnostic breadcrumb"
 
 HTTP_OK = 0
 HTTP_NOT_FOUND = 404
 HTTP_NETWORK_ERR = -1
 _BILLING_TARGET_YEARS = {2021, 2022, 2023, 2024}
 _BILLING_SENTINEL_YEAR = 9999
+_BILLING_PORTAL_MARKER = "Travis County Tax"
+REAL_PAGE = f"<html><head><title>{_BILLING_PORTAL_MARKER}</title></head><body>real receipts</body></html>"
+BLOCK_PAGE = "<html><head><title>Access Denied</title></head><body>Please verify you are human.</body></html>"
 
 
 class FakeArgs(dict):
@@ -91,9 +126,18 @@ class FakeCursor:
     api_billing(). fetchone() returns a scripted row for the "already
     fetched?" check (always {"cnt": 0} here -- these tests are about the
     fetch/retry path, not the cache-hit path, which has its own, unrelated
-    existing coverage need)."""
-    def __init__(self, log):
+    existing coverage need).
+
+    BILLING-DIAG-3: optional `boom_on_sql_substring` simulates a connection
+    that dies somewhere between the fetch and a later use of the same `conn`
+    (e.g. an idle-connection reap by a pooler/proxy while the request was
+    blocked on the outbound HTTP call) -- execute() raises the given
+    exception the first time it's called with SQL containing that substring.
+    """
+    def __init__(self, log, boom_on_sql_substring=None, boom_exc=None):
         self.log = log
+        self.boom_on_sql_substring = boom_on_sql_substring
+        self.boom_exc = boom_exc
 
     def __enter__(self):
         return self
@@ -103,6 +147,9 @@ class FakeCursor:
 
     def execute(self, sql, params=None):
         self.log.append((sql, params))
+        if self.boom_on_sql_substring and self.boom_on_sql_substring in sql:
+            self.boom_on_sql_substring = None  # only once
+            raise self.boom_exc
 
     def fetchone(self):
         return {"cnt": 0}
@@ -112,13 +159,15 @@ class FakeCursor:
 
 
 class FakeConn:
-    def __init__(self):
+    def __init__(self, boom_on_sql_substring=None, boom_exc=None):
         self.execute_log = []
         self.commits = 0
         self.closed = False
+        self.boom_on_sql_substring = boom_on_sql_substring
+        self.boom_exc = boom_exc
 
     def cursor(self, cursor_factory=None):
-        return FakeCursor(self.execute_log)
+        return FakeCursor(self.execute_log, self.boom_on_sql_substring, self.boom_exc)
 
     def commit(self):
         self.commits += 1
@@ -130,16 +179,27 @@ class FakeConn:
 class FakeSentry:
     def __init__(self):
         self.messages = []
+        self.flush_calls = []
+        self.exceptions = []
 
     def capture_message(self, msg, level=None):
         self.messages.append((msg, level))
 
+    def capture_exception(self, exc=None):
+        self.exceptions.append(exc)
 
-def run_api_billing(geo_id, fetch_sequence):
+    def flush(self, timeout=None):
+        self.flush_calls.append(timeout)
+
+
+def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc=None):
     """
     fetch_sequence: list of (html, status) tuples, one per fetch_html() call
     (consumed in order; raises IndexError if the real code calls it more
     times than scripted -- which is itself a useful assertion).
+
+    boom_on_sql_substring/boom_exc: BILLING-DIAG-3 -- simulate a real
+    exception raised on a specific SQL statement (see FakeCursor).
     """
     fetch_calls = []
 
@@ -165,7 +225,7 @@ def run_api_billing(geo_id, fetch_sequence):
     def fake_jsonify(payload):
         return payload
 
-    fake_conn = FakeConn()
+    fake_conn = FakeConn(boom_on_sql_substring, boom_exc)
     fake_sentry = FakeSentry()
 
     namespace = {
@@ -182,6 +242,7 @@ def run_api_billing(geo_id, fetch_sequence):
         "HTTP_NETWORK_ERR": HTTP_NETWORK_ERR,
         "_BILLING_TARGET_YEARS": _BILLING_TARGET_YEARS,
         "_BILLING_SENTINEL_YEAR": _BILLING_SENTINEL_YEAR,
+        "_BILLING_PORTAL_MARKER": _BILLING_PORTAL_MARKER,
         # psycopg2.extras.RealDictCursor is referenced as a cursor_factory
         # kwarg value only -- FakeConn.cursor() ignores it, so any sentinel
         # object works.
@@ -194,9 +255,19 @@ def run_api_billing(geo_id, fetch_sequence):
         "fetch_calls": fetch_calls,
         "upsert_calls": upsert_calls,
         "sentry_messages": fake_sentry.messages,
+        "sentry_flush_calls": fake_sentry.flush_calls,
+        "sentry_exceptions": fake_sentry.exceptions,
         "conn_closed": fake_conn.closed,
         "execute_log": fake_conn.execute_log,
     }
+
+
+def info_msgs(messages):
+    return [m for m in messages if m[1] == "info"]
+
+
+def warning_msgs(messages):
+    return [m for m in messages if m[1] == "warning"]
 
 
 def check(label, cond):
@@ -209,25 +280,30 @@ all_ok = True
 
 # ── 1. First attempt succeeds ────────────────────────────────────────────
 print("Test 1: fetch_html succeeds on the first attempt")
-r = run_api_billing("0100030105", [("<html>real receipts</html>", HTTP_OK)])
+r = run_api_billing("0100030105", [(REAL_PAGE, HTTP_OK)])
 all_ok &= check("fetch_html called exactly once", len(r["fetch_calls"]) == 1)
 all_ok &= check("upsert_billing_rows called with real target-year records",
                 len(r["upsert_calls"]) == 1 and len(r["upsert_calls"][0]) == 4)
 all_ok &= check("records carry county_code", all(rec["county_code"] == "TRAVIS" for rec in r["upsert_calls"][0]))
-all_ok &= check("no Sentry message sent", r["sentry_messages"] == [])
+all_ok &= check("no warning-level Sentry message sent", warning_msgs(r["sentry_messages"]) == [])
+all_ok &= check("BILLING-DIAG-3 info breadcrumb sent (exactly 1, post-retry-loop)",
+                len(info_msgs(r["sentry_messages"])) == 1)
+all_ok &= check("no capture_exception call (no exception occurred)", r["sentry_exceptions"] == [])
 all_ok &= check("route returns status ok", r["payload"]["status"] == "ok")
 all_ok &= check("connection closed in finally", r["conn_closed"] is True)
 
 # ── 2. First attempt fails (network error), second succeeds ─────────────
 print("Test 2: fetch_html fails once, then succeeds on retry")
-r = run_api_billing("0254402034", [(None, HTTP_NETWORK_ERR), ("<html>real receipts</html>", HTTP_OK)])
+r = run_api_billing("0254402034", [(None, HTTP_NETWORK_ERR), (REAL_PAGE, HTTP_OK)])
 all_ok &= check("fetch_html called exactly twice", len(r["fetch_calls"]) == 2)
 all_ok &= check("second call still uses the 10s live-route timeout",
                 r["fetch_calls"][1][1] == 10)
 all_ok &= check("upsert_billing_rows still called (transient blip self-corrected)",
                 len(r["upsert_calls"]) == 1)
-all_ok &= check("no Sentry message sent for a transient, self-corrected blip",
-                r["sentry_messages"] == [])
+all_ok &= check("no warning-level Sentry message for a transient, self-corrected blip",
+                warning_msgs(r["sentry_messages"]) == [])
+all_ok &= check("BILLING-DIAG-3 info breadcrumb still sent (exactly 1)",
+                len(info_msgs(r["sentry_messages"])) == 1)
 
 # ── 3. Both attempts fail (network error) — the real, live bug's exact shape
 print("Test 3: fetch_html fails BOTH attempts (reproduces the live bug's exact symptom)")
@@ -238,8 +314,14 @@ all_ok &= check("NO upsert_billing_rows call (nothing written)", r["upsert_calls
 all_ok &= check("NO sentinel INSERT (execute_log has only the cache-check + final SELECT, no INSERT)",
                 not any("INSERT" in (sql or "") for sql, _ in r["execute_log"]))
 all_ok &= check("a Sentry warning-level message WAS sent",
-                len(r["sentry_messages"]) == 1 and r["sentry_messages"][0][1] == "warning")
-all_ok &= check("Sentry message names the real geo_id", "0100030105" in r["sentry_messages"][0][0])
+                len(warning_msgs(r["sentry_messages"])) == 1)
+all_ok &= check("Sentry warning names the real geo_id", "0100030105" in warning_msgs(r["sentry_messages"])[0][0])
+all_ok &= check("BILLING-DIAG-3 info breadcrumb also sent, reporting the exhausted-retry state",
+                len(info_msgs(r["sentry_messages"])) == 1
+                and "html_is_none=True" in info_msgs(r["sentry_messages"])[0][0]
+                and "attempts_made=2" in info_msgs(r["sentry_messages"])[0][0])
+all_ok &= check("sentry_sdk.flush() was called (BILLING-DIAG-2 hardening)",
+                len(r["sentry_flush_calls"]) == 1)
 all_ok &= check("route STILL returns a clean status:ok (not an exception) — matches live evidence exactly",
                 r["payload"]["status"] == "ok" and r["payload"]["rows"] == [])
 all_ok &= check("connection closed in finally even on total fetch failure", r["conn_closed"] is True)
@@ -249,8 +331,49 @@ print("Test 4: fetch_html returns HTTP_NOT_FOUND (genuine 404) — no retry, no 
 r = run_api_billing("9999999999", [(None, HTTP_NOT_FOUND)])
 all_ok &= check("fetch_html called exactly once (no retry for a genuine 404)",
                 len(r["fetch_calls"]) == 1)
-all_ok &= check("no Sentry message for an expected 404", r["sentry_messages"] == [])
+all_ok &= check("no warning-level Sentry message for an expected 404", warning_msgs(r["sentry_messages"]) == [])
+all_ok &= check("BILLING-DIAG-3 info breadcrumb still sent (fires unconditionally after the retry loop)",
+                len(info_msgs(r["sentry_messages"])) == 1)
 all_ok &= check("no upsert call", r["upsert_calls"] == [])
+
+# ── 5. WAF/block-page scenario (BILLING-DIAG-2's own new hypothesis) ─────
+print("Test 5: fetch_html returns HTTP_OK with html BOTH times, but it's a block page (no real marker)")
+r = run_api_billing("0100030105", [(BLOCK_PAGE, HTTP_OK), (BLOCK_PAGE, HTTP_OK)])
+all_ok &= check("fetch_html called exactly twice (block page treated as a failure, retried)",
+                len(r["fetch_calls"]) == 2)
+all_ok &= check("NO upsert_billing_rows call", r["upsert_calls"] == [])
+all_ok &= check("NO sentinel INSERT written (this is the exact 'permanent wrong sentinel' risk this brief raised)",
+                not any("INSERT" in (sql or "") for sql, _ in r["execute_log"]))
+all_ok &= check("a Sentry warning-level message WAS sent (block page correctly classified as a failure)",
+                len(warning_msgs(r["sentry_messages"])) == 1)
+all_ok &= check("BILLING-DIAG-3 info breadcrumb also sent",
+                len(info_msgs(r["sentry_messages"])) == 1)
+all_ok &= check("sentry_sdk.flush() was called", len(r["sentry_flush_calls"]) == 1)
+all_ok &= check("route still returns a clean status:ok/rows:[]",
+                r["payload"]["status"] == "ok" and r["payload"]["rows"] == [])
+
+# ── 6. BILLING-DIAG-3: a real exception mid-request now reaches Sentry ────
+print("Test 6: a real exception after a successful fetch (e.g. a dropped/reaped DB "
+      "connection surfacing on the next query) — previously silently invisible to Sentry")
+boom = RuntimeError("server closed the connection unexpectedly")
+r = run_api_billing(
+    "0100030105", [(REAL_PAGE, HTTP_OK)],
+    boom_on_sql_substring="BETWEEN 2021 AND 2024",  # the final SELECT in step 3
+    boom_exc=boom,
+)
+all_ok &= check("fetch_html succeeded (1 call) — the exception happens AFTER the fetch",
+                len(r["fetch_calls"]) == 1)
+all_ok &= check("upsert_billing_rows WAS called (the write itself succeeded)",
+                len(r["upsert_calls"]) == 1)
+all_ok &= check("route returns status:error (exception correctly caught, not a crash)",
+                r["payload"]["status"] == "error")
+all_ok &= check("error message is the real exception text",
+                r["payload"]["message"] == "server closed the connection unexpectedly")
+all_ok &= check("BILLING-DIAG-3 fix: sentry_sdk.capture_exception(exc) WAS called with the real exception",
+                len(r["sentry_exceptions"]) == 1 and r["sentry_exceptions"][0] is boom)
+all_ok &= check("sentry_sdk.flush() was called after the exception capture",
+                len(r["sentry_flush_calls"]) == 1)
+all_ok &= check("connection still closed in finally even on this exception path", r["conn_closed"] is True)
 
 print()
 if all_ok:
