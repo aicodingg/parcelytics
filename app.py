@@ -2308,25 +2308,26 @@ def property_detail(geo_id):
     # the preliminary export, or the snapshot loader hasn't been run) --
     # the template must show an explicit "not available" gap for that case,
     # never a blank/zero/assumed value (brief's data-honesty requirement).
-    # DALLAS-GATE-1 FINDING (not fixed here -- flagged for the report):
-    # parcel_2026_preliminary_snapshot has NO county_code column at all --
-    # it's missing from migrate_county_partitioning.py's own TABLE_SPECS
-    # list (checked directly), unlike every other geo_id-keyed table. Per
-    # SPEC_COUNTY_PARTITIONING.md §3, geo_id cross-county collision is a
-    # real, investigated risk, not hypothetical -- so once Dallas data
-    # loads, this query could return another county's snapshot row for a
-    # colliding geo_id. Left geo_id-only here (adding "AND county_code = %s"
-    # would just raise "column does not exist" against the real schema) --
-    # this needs its own schema migration (ADD COLUMN + backfill, same
-    # pattern as migrate_county_partitioning.py's Mode 1 tables) before it
-    # can be safely scoped. Reporting this as a genuine gap discovered
-    # during Part 2, outside the brief's own named list.
+    # DALLAS-GATE-2 Part 3: parcel_2026_preliminary_snapshot is now in
+    # migrate_county_partitioning.py's TABLE_SPECS (added this brief,
+    # reversing the original spec's "retire, don't migrate" recommendation
+    # -- see that script's own module docstring UPDATE note). Scoped by
+    # county_code below.
+    #
+    # REAL SEQUENCING REQUIREMENT, not just a style note: this query will
+    # raise "column county_code does not exist" against a live database
+    # the migration hasn't been run against yet. The migration
+    # (migrate_county_partitioning.py, this table's new Mode-1 entry) MUST
+    # run before this app.py change reaches a live gunicorn worker, or
+    # every property-detail page load 500s for a parcel with a 2026
+    # preliminary snapshot row. Flagged prominently in this brief's report
+    # -- do not deploy this commit before running the migration.
     prelim_2026_snapshot = query("""
         SELECT market_value, assessed_value, taxable_value,
                land_value, imprv_value, exemption_codes, unit_count
         FROM   parcel_2026_preliminary_snapshot
-        WHERE  geo_id = %s
-    """, (geo_id,), one=True)
+        WHERE  geo_id = %s AND county_code = %s
+    """, (geo_id, county_code), one=True)
 
     # M4-2026-PRELIM-SNAPSHOT Part 1 fix: computed here (Python), not as a
     # Jinja {% set %} inside property.html's {% block content %} -- a
@@ -2645,6 +2646,18 @@ def export_due_diligence_pdf(geo_id):
     if not parcel:
         return jsonify({"ok": False, "error": f"Parcel \"{geo_id}\" not found"}), 404
 
+    # DALLAS-GATE-2 Part 2: this route duplicates property_detail()'s query
+    # shapes (see this function's own docstring, "JUDGMENT CALL" section)
+    # rather than sharing its pipeline -- which meant it did NOT inherit
+    # property_detail()'s DALLAS-GATE-1 Part 2 county_code scoping when that
+    # fix landed. The three queries below (history / entity_detail /
+    # entity_detail_prev) are exactly verify_index_coverage.py's flagged
+    # dynamic-WHERE-fragment gaps at app.py:2649/:2664/:2676 -- each filtered
+    # tax_billing / tax_billing_entity (both county_code-leading composite-PK
+    # tables per migrate_county_partitioning.py's TABLE_SPECS) by geo_id alone.
+    # county_code added below as an ADDITIONAL predicate only.
+    county_code = g.county_code
+
     history = query("""
         SELECT pty.tax_year, pty.market_value, pty.assessed_value, pty.taxable_value,
                pty.hs_cap_loss, pty.exemption_codes, pty.data_source,
@@ -2653,9 +2666,10 @@ def export_due_diligence_pdf(geo_id):
                tb.confidence_level AS billing_confidence
         FROM   parcel_tax_year pty
         LEFT JOIN tax_billing tb ON tb.geo_id = pty.geo_id AND tb.tax_year = pty.tax_year
-        WHERE  pty.geo_id = %s
+                                 AND tb.county_code = pty.county_code
+        WHERE  pty.geo_id = %s AND pty.county_code = %s
         ORDER  BY pty.tax_year
-    """, (geo_id,))
+    """, (geo_id, county_code))
 
     # Entity detail WITH prior-year (2024) rate, needed both for the key-figures
     # table and to feed build_bill_waterfall() below — same shape
@@ -2666,17 +2680,19 @@ def export_due_diligence_pdf(geo_id):
         FROM   tax_billing_entity tbe
         LEFT JOIN county_tax_rate ctr      ON ctr.entity_code      = tbe.entity_code
                                            AND ctr.tax_year         = 2025
+                                           AND ctr.county_code      = tbe.county_code
         LEFT JOIN county_tax_rate ctr_prev ON ctr_prev.entity_code = tbe.entity_code
                                            AND ctr_prev.tax_year    = 2024
-        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2025
+                                           AND ctr_prev.county_code = tbe.county_code
+        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2025 AND tbe.county_code = %s
         ORDER  BY tbe.amount_due DESC NULLS LAST
-    """, (geo_id,))
+    """, (geo_id, county_code))
 
     entity_detail_prev = query("""
         SELECT tbe.entity_code, tbe.amount_due
         FROM   tax_billing_entity tbe
-        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2024
-    """, (geo_id,))
+        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2024 AND tbe.county_code = %s
+    """, (geo_id, county_code))
 
     delinquent = query("SELECT * FROM tax_delinquent WHERE geo_id = %s", (geo_id,), one=True)
 
@@ -3163,6 +3179,14 @@ def categorize_entity(code, name):
 @app.route("/<county_slug>/rates")
 def tax_rates():
     """Tax rate trend page — county-level, no parcel required."""
+    # DALLAS-GATE-2 Part 1: county_tax_rate is a county_code-leading
+    # composite-PK table per migrate_county_partitioning.py's TABLE_SPECS
+    # (old_pk ["entity_code", "tax_year"] -> new_pk ["county_code",
+    # "entity_code", "tax_year"]). This route is explicitly named in
+    # DALLAS-GATE-2's brief ("/rates"). county_code added as an ADDITIONAL
+    # predicate only -- ORDER BY/shape unchanged.
+    county_code = g.county_code
+
     # Key entities to highlight in the main chart
     KEY_ENTITIES = ["TCO", "IAU", "CAT", "THD", "ACT"]
 
@@ -3177,8 +3201,9 @@ def tax_rates():
     rates = query("""
         SELECT entity_code, entity_name, tax_year, rate
         FROM   county_tax_rate
+        WHERE  county_code = %(county_code)s
         ORDER  BY entity_code, tax_year
-    """)
+    """, {"county_code": county_code})
 
     # Build {entity_code: [{year, rate}, …]} structure for JS
     by_entity = {}
@@ -3270,11 +3295,18 @@ def api_parcel_entities():
     if not parcel:
         return jsonify({"ok": False, "error": f"No parcel found matching \"{q}\"."})
 
+    # DALLAS-GATE-2 Part 2: verify_index_coverage.py flagged this WHERE
+    # clause's tax_billing_entity filter (geo_id + tax_year, no county_code)
+    # -- a county_code-leading composite-PK table per migrate_county_
+    # partitioning.py's TABLE_SPECS. county_code added as an ADDITIONAL
+    # predicate only; the parcel-resolution queries above this block are
+    # unchanged (out of this fix's scope -- tracked separately under
+    # DALLAS-GATE-2 Part 1's route sweep).
     rows = query("""
         SELECT DISTINCT entity_code
         FROM   tax_billing_entity
-        WHERE  geo_id = %s AND tax_year = 2025
-    """, (parcel["geo_id"],))
+        WHERE  geo_id = %s AND tax_year = 2025 AND county_code = %s
+    """, (parcel["geo_id"], g.county_code))
     entity_codes = sorted(r["entity_code"] for r in rows)
 
     return jsonify({
@@ -3880,9 +3912,29 @@ def api_benchmark():
     # parcel_filters.py). Cannot drift from the others again.
     excl_filter = CANONICAL_PARCEL_EXCL
 
+    # DALLAS-GATE-2 Part 2: county_code (g.county_code, set per-request by
+    # _pull_county_slug) threaded through every live on-the-fly aggregation
+    # query below. NOTE for whoever re-runs verify_index_coverage.py against
+    # this function later: its schema-sql-mode static audit flagged only the
+    # prev_row query below (app.py's original :3916) as a dynamic WHERE
+    # fragment -- the sibling `row` queries in both branches (classi_cd's
+    # main query, and the 2026-live prop_type query further down) use the
+    # exact same unscoped-geo_id/classi_cd shape but were NOT flagged, because
+    # each SELECTs a `COUNT(*) FILTER (WHERE t.data_source = 'preliminary')`
+    # expression -- the audit tool's WHERE-clause boundary search
+    # (verify_index_coverage.py's `_clause_end`) matches on the FIRST `WHERE`
+    # keyword in the statement, which is this inner FILTER's WHERE, not the
+    # real outer WHERE further down; it then reports zero unresolved/filtered
+    # columns for the outer clause instead of flagging it. Found only by
+    # reading this function's real SQL directly, not by trusting the tool's
+    # findings list -- fixed here anyway, since the underlying gap is
+    # identical. Flagging this tool limitation for a follow-up fix to
+    # verify_index_coverage.py itself (out of this task's scope).
+    county_code = g.county_code
+
     if classi_cd and classi_cd != "all":
         # ── On-the-fly aggregation by classi_cd ──────────────────────────
-        params_cc = [year, classi_cd]
+        params_cc = [year, classi_cd, county_code]
         if neighborhood:
             params_cc.append(neighborhood)
         row = query(f"""
@@ -3894,7 +3946,9 @@ def api_benchmark():
                 COUNT(*) FILTER (WHERE t.data_source = 'preliminary')                 AS n_preliminary
             FROM parcel p
             JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = %s
+                                   AND t.county_code = p.county_code
             WHERE p.classi_cd = %s
+              AND p.county_code = %s
               AND t.market_value IS NOT NULL AND t.market_value > 0
               {ds_filter}
               {excl_filter}
@@ -3909,14 +3963,16 @@ def api_benchmark():
         yoy = None
         if prev_year >= 2021:
             prev_ds = "" if prev_year == 2026 else "AND (t.data_source IS NULL OR t.data_source != 'preliminary')"
-            prev_params = [prev_year, classi_cd]
+            prev_params = [prev_year, classi_cd, county_code]
             if neighborhood:
                 prev_params.append(neighborhood)
             prev_row = query(f"""
                 SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.market_value) AS prev_med
                 FROM parcel p
                 JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = %s
+                                       AND t.county_code = p.county_code
                 WHERE p.classi_cd = %s
+                  AND p.county_code = %s
                   AND t.market_value IS NOT NULL AND t.market_value > 0
                   {prev_ds}
                   {excl_filter}
@@ -3956,7 +4012,9 @@ def api_benchmark():
             if not prefixes:
                 return jsonify({"ok": False, "error": "Unknown property type."})
             like_parts = " OR ".join(f"p.state_cd1 LIKE '{px}%%'" for px in prefixes)
-            params_2026 = (neighborhood,) if neighborhood else None
+            params_2026 = [county_code]
+            if neighborhood:
+                params_2026.append(neighborhood)
             row = query(f"""
                 SELECT
                     COUNT(*)                                                            AS n_parcels,
@@ -3966,7 +4024,9 @@ def api_benchmark():
                     COUNT(*) FILTER (WHERE t.data_source = 'preliminary')              AS n_preliminary
                 FROM parcel p
                 JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = 2026
+                                       AND t.county_code = p.county_code
                 WHERE ({like_parts})
+                  AND p.county_code = %s
                   AND t.market_value IS NOT NULL AND t.market_value > 0
                   {excl_filter}
                   {nb_filter}
@@ -4016,11 +4076,24 @@ def api_benchmark():
 @app.route("/<county_slug>/api/benchmark/meta")
 def api_benchmark_meta():
     """Return available property types and use codes with ≥10 parcels (for filter dropdowns)."""
+    # DALLAS-GATE-2 Part 1: this whole function was entirely county-implicit
+    # -- none of its 5 queries (county_benchmark, parcel x2, and the two
+    # neighborhood/total-count parcel counts below) filtered by county_code.
+    # county_benchmark and parcel are both county_code-leading composite-PK
+    # tables per migrate_county_partitioning.py's TABLE_SPECS/DEFAULT_ONLY_
+    # TABLES. Explicitly named in DALLAS-GATE-2's brief ("api/benchmark*
+    # (both api_benchmark and api_benchmark_meta)") but NOT among the 22
+    # tool-flagged dynamic-clause gaps (these are plain, statically-visible
+    # WHERE clauses the coverage tool should already catch on its next run --
+    # this fix is Part 1 direct wiring, not a Part 2 dynamic-gap fix).
+    # county_code added as an ADDITIONAL predicate to every query below;
+    # no query shape/join/index-path changes.
+    county_code = g.county_code
     prop_types_raw = query("""
         SELECT DISTINCT property_type_label
-        FROM county_benchmark WHERE tax_year = 2025
+        FROM county_benchmark WHERE tax_year = 2025 AND county_code = %(county_code)s
         ORDER BY property_type_label
-    """)
+    """, {"county_code": county_code})
     prop_types = [r["property_type_label"] for r in prop_types_raw]
 
     # Was a hand-rolled, state_cd1-only CASE that duplicated (and diverged
@@ -4037,10 +4110,11 @@ def api_benchmark_meta():
             COUNT(*) AS n
         FROM parcel p
         WHERE p.classi_cd IS NOT NULL AND p.classi_cd != '00'
+          AND p.county_code = %(county_code)s
         GROUP BY p.classi_cd, prop_type
         HAVING COUNT(*) >= 10
         ORDER BY prop_type, n DESC
-    """)
+    """, {"county_code": county_code})
 
     by_type = {}
     for r in use_codes_raw:
@@ -4077,14 +4151,19 @@ def api_benchmark_meta():
         SELECT neighborhood_cd, COUNT(*) AS n
         FROM parcel
         WHERE neighborhood_cd IS NOT NULL AND neighborhood_cd != ''
+          AND county_code = %(county_code)s
         GROUP BY neighborhood_cd
         HAVING COUNT(*) >= 5
         ORDER BY n DESC
-    """)
-    total_parcels = query("SELECT COUNT(*) AS n FROM parcel", one=True)["n"]
+    """, {"county_code": county_code})
+    total_parcels = query(
+        "SELECT COUNT(*) AS n FROM parcel WHERE county_code = %(county_code)s",
+        {"county_code": county_code}, one=True
+    )["n"]
     nb_non_null = query(
-        "SELECT COUNT(*) AS n FROM parcel WHERE neighborhood_cd IS NOT NULL AND neighborhood_cd != ''",
-        one=True
+        "SELECT COUNT(*) AS n FROM parcel WHERE neighborhood_cd IS NOT NULL AND neighborhood_cd != '' "
+        "AND county_code = %(county_code)s",
+        {"county_code": county_code}, one=True
     )["n"]
     nb_coverage_pct = round(100.0 * nb_non_null / total_parcels, 1) if total_parcels else 0
 
@@ -4347,8 +4426,23 @@ def api_search_filter():
                       "would match all 508,000+ Travis County parcels."),
         }), 400
 
-    where = ["1=1"]
-    params = {"tax_year": tax_year}
+    # DALLAS-GATE-2 Part 2 (search_filter-related dynamic WHERE construction --
+    # same risk shape as the original incident): this `where` list used to
+    # have NO county_code predicate anywhere in it, and the query built below
+    # assembles its WHERE clause via `" AND ".join(where)` -- an f-string
+    # fragment (`{where_sql}`) verify_index_coverage.py's static audit cannot
+    # resolve, which is exactly why this gap survived schema-sql-mode
+    # auditing undetected until a human read the real, assembled SQL.
+    # Filtering only via geo_id-equality JOINs (p.geo_id = pty.geo_id, etc.)
+    # against parcel / parcel_tax_year / parcel_metrics -- all county_code-
+    # leading composite-PK tables per migrate_county_partitioning.py's
+    # TABLE_SPECS -- is precisely the incident's failure shape. g.county_code
+    # (set per-request by _pull_county_slug) is threaded through below as an
+    # ADDITIONAL predicate only -- no existing filter, ORDER BY, or column
+    # selection changes.
+    county_code = g.county_code
+    where = ["1=1", "p.county_code = %(county_code)s"]
+    params = {"tax_year": tax_year, "county_code": county_code}
 
     if neighborhood:
         where.append("p.neighborhood_cd = %(neighborhood)s")
@@ -4506,7 +4600,12 @@ def api_search_filter():
     delinquent_join = ""
     delinquent_select = ""
     if delinquent_only:
-        delinquent_join = "JOIN tax_delinquent d ON d.geo_id = p.geo_id AND d.total_due > 0"
+        # DALLAS-GATE-2 Part 2: county_code added to this JOIN's ON clause
+        # (tax_delinquent is one of migrate_county_partitioning.py's
+        # county_code-leading composite-PK tables) -- matches the p.county_code
+        # predicate now in `where` above rather than leaving this one JOIN as
+        # the sole unscoped access path into tax_delinquent.
+        delinquent_join = "JOIN tax_delinquent d ON d.geo_id = p.geo_id AND d.total_due > 0 AND d.county_code = p.county_code"
         delinquent_select = ", d.total_due, d.first_delinquent_yr"
 
     sql = f"""
@@ -4517,7 +4616,9 @@ def api_search_filter():
             COUNT(*) OVER() AS total_count{delinquent_select}
         FROM parcel p
         JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = %(tax_year)s
+                                 AND pty.county_code = p.county_code
         LEFT JOIN parcel_metrics pm ON pm.geo_id = p.geo_id AND pm.tax_year = %(tax_year)s
+                                    AND pm.county_code = p.county_code
         {delinquent_join}
         WHERE {where_sql}
         ORDER BY p.situs_address NULLS LAST, p.geo_id
@@ -4610,14 +4711,20 @@ def api_estimate_acq(geo_id):
     if not current_yr_row or not current_yr_row.get("market_value"):
         return jsonify({"ok": False, "error": "No 2025 certified market value for this parcel"})
 
+    # DALLAS-GATE-2 Part 2: verify_index_coverage.py flagged this WHERE
+    # clause (tax_billing_entity filtered by geo_id + tax_year alone --
+    # county_code-leading composite-PK table per migrate_county_
+    # partitioning.py's TABLE_SPECS, same shape as county_tax_rate joined
+    # below). county_code added as an ADDITIONAL predicate only.
     entity_detail = query("""
         SELECT tbe.entity_code, ctr.entity_name, ctr.rate, tbe.amount_due
         FROM   tax_billing_entity tbe
         LEFT JOIN county_tax_rate ctr
                ON ctr.entity_code = tbe.entity_code AND ctr.tax_year = 2025
-        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2025
+              AND ctr.county_code = tbe.county_code
+        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2025 AND tbe.county_code = %s
         ORDER  BY tbe.amount_due DESC NULLS LAST
-    """, (geo_id,))
+    """, (geo_id, g.county_code))
 
     if not entity_detail:
         return jsonify({"ok": False, "error": "No 2025 entity billing data for this parcel"})
@@ -4781,6 +4888,12 @@ def api_peer_benchmark_local(geo_id):
     if not parcel:
         return jsonify({"ok": False, "error": "Parcel not found"})
 
+    # DALLAS-GATE-2 Part 2 (peer-match-related dynamic WHERE construction --
+    # same risk shape as the original incident): threaded through the
+    # candidates CTE and both LEFT JOINs below. g.county_code, same
+    # per-request value every other DALLAS-GATE fix in this file reads.
+    county_code = g.county_code
+
     mv_row = query("""
         SELECT market_value FROM parcel_tax_year WHERE geo_id = %s AND tax_year = 2025
     """, (geo_id,), one=True)
@@ -4850,14 +4963,16 @@ def api_peer_benchmark_local(geo_id):
     # peer-set/logic change.
     peers = query(f"""
         WITH candidates AS (
-            SELECT p.geo_id, pty.market_value, pty.assessed_value
+            SELECT p.geo_id, p.county_code, pty.market_value, pty.assessed_value
             FROM   parcel p
             JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+                                       AND pty.county_code = p.county_code
             WHERE  p.neighborhood_cd = %(nb)s
               AND  {_peer_match}
               AND  pty.market_value BETWEEN %(lo)s AND %(hi)s
               AND  p.geo_id NOT LIKE 'AJR%%'
               AND  p.geo_id != %(geo_id)s
+              AND  p.county_code = %(county_code)s
               AND  pty.market_value > 0
         )
         SELECT
@@ -4868,15 +4983,17 @@ def api_peer_benchmark_local(geo_id):
             tbe.entity_tax_sum
         FROM   candidates c
         LEFT JOIN tax_billing  tb  ON tb.geo_id  = c.geo_id AND tb.tax_year  = 2025
+                                   AND tb.county_code = c.county_code
         LEFT JOIN (
             SELECT geo_id, SUM(amount_due) AS entity_tax_sum
             FROM   tax_billing_entity
             WHERE  tax_year = 2025
+              AND  county_code = %(county_code)s
               AND  geo_id IN (SELECT geo_id FROM candidates)
             GROUP  BY geo_id
         ) tbe ON tbe.geo_id = c.geo_id
         ORDER  BY c.market_value
-    """, {"nb": neighborhood, "sc1": state_cd1, "lo": mv_lo, "hi": mv_hi, "geo_id": geo_id})
+    """, {"nb": neighborhood, "sc1": state_cd1, "lo": mv_lo, "hi": mv_hi, "geo_id": geo_id, "county_code": county_code})
 
     n = len(peers)
     if n < 3:
@@ -4887,28 +5004,32 @@ def api_peer_benchmark_local(geo_id):
         # primary query above.
         peers = query(f"""
             WITH candidates AS (
-                SELECT p.geo_id, pty.market_value, pty.assessed_value
+                SELECT p.geo_id, p.county_code, pty.market_value, pty.assessed_value
                 FROM   parcel p
                 JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+                                           AND pty.county_code = p.county_code
                 WHERE  p.neighborhood_cd = %(nb)s
                   AND  {_peer_match}
                   AND  p.geo_id NOT LIKE 'AJR%%'
                   AND  p.geo_id != %(geo_id)s
+                  AND  p.county_code = %(county_code)s
                   AND  pty.market_value > 0
             )
             SELECT c.geo_id, c.market_value, c.assessed_value,
                    tb.total_tax, tbe.entity_tax_sum
             FROM   candidates c
             LEFT JOIN tax_billing  tb  ON tb.geo_id  = c.geo_id AND tb.tax_year  = 2025
+                                       AND tb.county_code = c.county_code
             LEFT JOIN (
                 SELECT geo_id, SUM(amount_due) AS entity_tax_sum
                 FROM   tax_billing_entity
                 WHERE  tax_year = 2025
+                  AND  county_code = %(county_code)s
                   AND  geo_id IN (SELECT geo_id FROM candidates)
                 GROUP  BY geo_id
             ) tbe ON tbe.geo_id = c.geo_id
             ORDER  BY c.market_value
-        """, {"nb": neighborhood, "sc1": state_cd1, "geo_id": geo_id})
+        """, {"nb": neighborhood, "sc1": state_cd1, "geo_id": geo_id, "county_code": county_code})
         n = len(peers)
         band_note = "Size band relaxed (neighborhood + type only — fewer than 3 ±50% MV peers)"
     else:
@@ -4997,6 +5118,13 @@ def api_peer_benchmark_sf(geo_id):
     if not parcel:
         return jsonify({"ok": False, "error": "Parcel not found"})
 
+    # DALLAS-GATE-2 Part 2 (peer-match-related dynamic WHERE construction --
+    # same risk shape as the original incident, same function family as
+    # api_peer_benchmark_local() above): threaded through the peer query's
+    # WHERE clause below. g.county_code, same per-request value every other
+    # DALLAS-GATE fix in this file reads.
+    county_code = g.county_code
+
     parcel_data = query("""
         SELECT p.living_area_sqft,
                p.gross_building_area_sqft,
@@ -5059,10 +5187,11 @@ def api_peer_benchmark_sf(geo_id):
             params = {
                 "nb": neighborhood, "sc1": state_cd1,
                 "sqft_lo": sqft_lo, "sqft_hi": sqft_hi, "geo_id": geo_id,
+                "county_code": county_code,
             }
         else:
             size_clause = ""
-            params = {"nb": neighborhood, "sc1": state_cd1, "geo_id": geo_id}
+            params = {"nb": neighborhood, "sc1": state_cd1, "geo_id": geo_id, "county_code": county_code}
 
         peers = query(f"""
             SELECT
@@ -5079,11 +5208,13 @@ def api_peer_benchmark_sf(geo_id):
                      THEN CAST(pty.assessed_value AS FLOAT) / p.gross_building_area_sqft END AS assessed_psf_gross
             FROM   parcel p
             JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+                                       AND pty.county_code = p.county_code
             WHERE  p.neighborhood_cd  = %(nb)s
               AND  {_peer_match}
               AND  p.living_area_sqft > 0
               AND  p.geo_id NOT LIKE 'AJR%%'
               AND  p.geo_id != %(geo_id)s
+              AND  p.county_code = %(county_code)s
               AND  pty.market_value   > 0
               AND  pty.assessed_value > 0
               {size_clause}
@@ -5364,14 +5495,24 @@ def api_peer_set(geo_id):
     widened or broad-category result as if it were the tightest possible
     match.
     """
-    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    # DALLAS-GATE-2 Part 1 (prioritized -- Sentry-flagged chronic endpoint):
+    # county_code threaded through every query in this function, including
+    # the two performance-tuned MATERIALIZED CTE tiers below. Added as an
+    # ADDITIONAL filter predicate only -- does not change either CTE's
+    # chosen index (idx_parcel_classi_cd / idx_pty_year_market_value), so
+    # this does not reintroduce the round-1 query-shape regression this
+    # function's own history warns about.
+    county_code = g.county_code
+    parcel = query(
+        "SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s",
+        (geo_id, county_code), one=True)
     if not parcel:
         return jsonify({"ok": False, "error": "Parcel not found"})
 
     subj = query("""
         SELECT pty.market_value
-        FROM parcel_tax_year pty WHERE pty.geo_id = %s AND pty.tax_year = 2025
-    """, (geo_id,), one=True)
+        FROM parcel_tax_year pty WHERE pty.geo_id = %s AND pty.tax_year = 2025 AND pty.county_code = %s
+    """, (geo_id, county_code), one=True)
     if not subj or not subj.get("market_value"):
         return jsonify({"ok": False, "error": "No 2025 market value for subject"})
 
@@ -5396,11 +5537,15 @@ def api_peer_set(geo_id):
                   FROM tax_billing_entity tbe
                   JOIN county_tax_rate ctr
                     ON ctr.entity_code = tbe.entity_code AND ctr.tax_year = 2025
-                 WHERE tbe.geo_id = p.geo_id AND tbe.tax_year = 2025) AS total_tax_rate
+                   AND ctr.county_code = tbe.county_code
+                 WHERE tbe.geo_id = p.geo_id AND tbe.tax_year = 2025
+                   AND tbe.county_code = p.county_code) AS total_tax_rate
         FROM parcel p
         JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
+                                 AND pty.county_code = p.county_code
         WHERE p.geo_id <> %(geo)s
           AND p.geo_id NOT LIKE 'AJR%%'
+          AND p.county_code = %(county_code)s
     """
     exact_select = common_cols + " AND UPPER(TRIM(p.classi_cd)) = %(cc)s"
     broad_select = common_cols + f" AND ({lbl_sql}) IS NOT DISTINCT FROM %(lbl)s"
@@ -5409,6 +5554,7 @@ def api_peer_set(geo_id):
         "geo": geo_id, "lo": subj_mv * 0.75, "hi": subj_mv * 1.25,
         "lo_wide": subj_mv * 0.60, "hi_wide": subj_mv * 1.40,
         "lbl": subj_label, "nb": nb, "sc1": sc1, "cc": subj_cc, "mv": subj_mv,
+        "county_code": county_code,
     }
 
     # Task PEER-SET-PERF-1/2 (Aug 2026): Tiers 2 and 3 below, history:
@@ -5518,12 +5664,14 @@ def api_peer_set(geo_id):
                       AND  p.geo_id NOT LIKE 'AJR%%'
                       AND  UPPER(TRIM(p.classi_cd)) = %(cc)s
                       AND  {_peer_match_upper}
+                      AND  p.county_code = %(county_code)s
                 ),
                 mv_band AS MATERIALIZED (
                     SELECT pty.geo_id, pty.market_value, pty.assessed_value
                     FROM   parcel_tax_year pty
                     WHERE  pty.tax_year = 2025
                       AND  pty.market_value BETWEEN %(lo)s AND %(hi)s
+                      AND  pty.county_code = %(county_code)s
                 )
                 SELECT c.geo_id, c.prop_id, c.situs_address, c.classi_cd,
                        c.living_area_sqft, c.land_sqft, c.year_built,
@@ -5533,7 +5681,9 @@ def api_peer_set(geo_id):
                           FROM tax_billing_entity tbe
                           JOIN county_tax_rate ctr
                             ON ctr.entity_code = tbe.entity_code AND ctr.tax_year = 2025
-                         WHERE tbe.geo_id = c.geo_id AND tbe.tax_year = 2025) AS total_tax_rate
+                           AND ctr.county_code = tbe.county_code
+                         WHERE tbe.geo_id = c.geo_id AND tbe.tax_year = 2025
+                           AND tbe.county_code = %(county_code)s) AS total_tax_rate
                 FROM   candidates c
                 JOIN   mv_band m ON m.geo_id = c.geo_id
                 ORDER  BY ABS(m.market_value - %(mv)s) LIMIT 5
@@ -5558,12 +5708,14 @@ def api_peer_set(geo_id):
                     WHERE  p.geo_id <> %(geo)s
                       AND  p.geo_id NOT LIKE 'AJR%%'
                       AND  UPPER(TRIM(p.classi_cd)) = %(cc)s
+                      AND  p.county_code = %(county_code)s
                 ),
                 mv_band AS MATERIALIZED (
                     SELECT pty.geo_id, pty.market_value, pty.assessed_value
                     FROM   parcel_tax_year pty
                     WHERE  pty.tax_year = 2025
                       AND  pty.market_value BETWEEN %(lo_wide)s AND %(hi_wide)s
+                      AND  pty.county_code = %(county_code)s
                 )
                 SELECT c.geo_id, c.prop_id, c.situs_address, c.classi_cd,
                        c.living_area_sqft, c.land_sqft, c.year_built,
@@ -5573,7 +5725,9 @@ def api_peer_set(geo_id):
                           FROM tax_billing_entity tbe
                           JOIN county_tax_rate ctr
                             ON ctr.entity_code = tbe.entity_code AND ctr.tax_year = 2025
-                         WHERE tbe.geo_id = c.geo_id AND tbe.tax_year = 2025) AS total_tax_rate
+                           AND ctr.county_code = tbe.county_code
+                         WHERE tbe.geo_id = c.geo_id AND tbe.tax_year = 2025
+                           AND tbe.county_code = %(county_code)s) AS total_tax_rate
                 FROM   candidates c
                 JOIN   mv_band m ON m.geo_id = c.geo_id
                 ORDER  BY ABS(m.market_value - %(mv)s) LIMIT 5
@@ -5636,14 +5790,25 @@ def api_billing(geo_id):
     Network errors are NOT cached — the next visit will retry.
     """
     geo_id = geo_id.strip()
+    # DALLAS-GATE-2 Part 1: tax_billing is a county_code-leading composite-PK
+    # table per migrate_county_partitioning.py's TABLE_SPECS (already
+    # migrated live in production by DALLAS-GATE-1). Every query below
+    # (already-fetched check, sentinel INSERT + its ON CONFLICT target, final
+    # SELECT) previously had no county_code at all -- county_code added as an
+    # ADDITIONAL predicate/column throughout, ON CONFLICT target corrected to
+    # match the real live unique constraint (county_code, geo_id, tax_year).
+    # Also see loaders/scrape_billing_history.py's _UPSERT_SQL fix (this
+    # route's upsert_billing_rows() call below shares that same write path
+    # and had the identical bug -- fixed there, not duplicated here).
+    county_code = g.county_code
     conn = get_db()
     try:
         # 1. Already fetched? (real data or sentinel both count)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT COUNT(*) AS cnt FROM tax_billing "
-                "WHERE geo_id = %s AND data_source = 'portal_scrape'",
-                (geo_id,)
+                "WHERE geo_id = %s AND data_source = 'portal_scrape' AND county_code = %s",
+                (geo_id, county_code)
             )
             already_fetched = cur.fetchone()["cnt"] > 0
 
@@ -5660,6 +5825,7 @@ def api_billing(geo_id):
                             "tax_year":   r["tax_year"],
                             "total_tax":  r["payment_amount"],
                             "total_paid": r["payment_amount"],
+                            "county_code": county_code,
                         }
                         for r in target
                     ]
@@ -5669,10 +5835,10 @@ def api_billing(geo_id):
                     with conn.cursor() as cur:
                         cur.execute(
                             "INSERT INTO tax_billing "
-                            "  (geo_id, tax_year, data_source, confidence_level) "
-                            "VALUES (%s, %s, 'portal_scrape', 'partial') "
-                            "ON CONFLICT (geo_id, tax_year) DO NOTHING",
-                            (geo_id, _BILLING_SENTINEL_YEAR)
+                            "  (county_code, geo_id, tax_year, data_source, confidence_level) "
+                            "VALUES (%s, %s, %s, 'portal_scrape', 'partial') "
+                            "ON CONFLICT (county_code, geo_id, tax_year) DO NOTHING",
+                            (county_code, geo_id, _BILLING_SENTINEL_YEAR)
                         )
                     conn.commit()
             # Network/429/5xx → don't cache, let next page visit retry
@@ -5685,8 +5851,9 @@ def api_billing(geo_id):
                 "WHERE geo_id = %s "
                 "  AND tax_year BETWEEN 2021 AND 2024 "
                 "  AND data_source = 'portal_scrape' "
+                "  AND county_code = %s "
                 "ORDER BY tax_year",
-                (geo_id,)
+                (geo_id, county_code)
             )
             rows = [dict(r) for r in cur.fetchall()]
 
@@ -5825,15 +5992,26 @@ def parcel_list():
 
     where_fragment = _ptype_drill_where(view, ptype, rolled=rolled) if ptype else "1=1"
 
+    # DALLAS-GATE-2 Part 2: verify_index_coverage.py flagged this WHERE
+    # clause as entirely dynamic ({where_fragment}) and therefore
+    # unresolvable by static analysis -- reading the real, assembled SQL by
+    # hand shows it had NO county_code predicate anywhere. p.county_code
+    # added to the y25 CTE's SELECT list (so it can be carried through to
+    # the t26 JOIN below) and its WHERE clause; g.county_code threaded
+    # through as an ADDITIONAL predicate only.
+    county_code = g.county_code
+
     # Build alias-safe filter: join alias is 'y25', parcel alias is 'p'
     rows = query(f"""
         WITH y25 AS (
-            SELECT p.geo_id, p.state_cd1, p.classi_cd, p.situs_address, p.owner_name,
+            SELECT p.geo_id, p.county_code, p.state_cd1, p.classi_cd, p.situs_address, p.owner_name,
                    t.market_value AS mv25
             FROM   parcel p
             JOIN   parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = 2025
+                                     AND t.county_code = p.county_code
             WHERE  t.market_value > 0
               {CANONICAL_PARCEL_EXCL}
+              AND  p.county_code = %(county_code)s
               AND  ({where_fragment})
         )
         SELECT
@@ -5846,9 +6024,10 @@ def parcel_list():
         FROM  y25
         LEFT JOIN parcel_tax_year t26
                ON t26.geo_id = y25.geo_id AND t26.tax_year = 2026
+              AND t26.county_code = y25.county_code
         ORDER BY y25.mv25 DESC NULLS LAST
         LIMIT 500
-    """, {"ptype": ptype, "rolled": rolled})
+    """, {"ptype": ptype, "rolled": rolled, "county_code": county_code})
 
     parcels = [dict(r) for r in rows]
 
@@ -5901,6 +6080,13 @@ def compare_parcels():
             error="Provide 2–4 geo_ids as ?ids=id1,id2 to compare.",
         )
 
+    # DALLAS-GATE-2 Part 2: verify_index_coverage.py flagged this route's
+    # tax_billing lookup below (geo_id + tax_year, no county_code -- a
+    # county_code-leading composite-PK table per migrate_county_
+    # partitioning.py's TABLE_SPECS). county_code added as an ADDITIONAL
+    # predicate only.
+    county_code = g.county_code
+
     parcels = []
     for geo_id in geo_ids:
         parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
@@ -5919,8 +6105,8 @@ def compare_parcels():
 
         billing = query("""
             SELECT total_tax, total_paid, total_due, is_delinquent
-            FROM   tax_billing WHERE geo_id = %s AND tax_year = 2025
-        """, (geo_id,), one=True)
+            FROM   tax_billing WHERE geo_id = %s AND tax_year = 2025 AND county_code = %s
+        """, (geo_id, county_code), one=True)
 
         sc1 = (parcel.get("state_cd1") or "").strip()[:1]
         type_map = {

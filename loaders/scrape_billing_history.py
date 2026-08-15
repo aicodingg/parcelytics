@@ -165,15 +165,33 @@ ALTER TABLE tax_billing
     ADD COLUMN IF NOT EXISTS confidence_level VARCHAR(16);
 """
 
+# DALLAS-GATE-2 Part 1 (real, live-breaking bug found while wiring
+# api_billing()'s /<county_slug>/api/billing/<geo_id> route -- this is the
+# ONLY write path that route's real-time portal-scrape success case uses):
+# tax_billing is a county_code-leading composite-PK table per
+# migrate_county_partitioning.py's TABLE_SPECS (old_pk ["geo_id","tax_year"]
+# -> new_pk ["county_code","geo_id","tax_year"]). This migration already ran
+# and deployed against production (DALLAS-GATE-1). Before this fix,
+# _UPSERT_SQL neither wrote county_code (a real NOT NULL column on the live
+# table once migrated -- every INSERT here would hard-fail) nor targeted the
+# real live unique constraint in its ON CONFLICT clause (still named the old
+# (geo_id, tax_year) columns, which is no longer the table's actual
+# constraint post-migration -- Postgres errors with "there is no unique or
+# exclusion constraint matching the ON CONFLICT specification" against a
+# migrated table). Both api_billing()'s async fetch path AND this file's own
+# CLI batch-scrape mode call upsert_billing_rows() -- so both were broken by
+# this the moment DALLAS-GATE-1's migration landed on production, until now.
+DEFAULT_COUNTY = "TRAVIS"  # matches parcel_resolver.py's own DEFAULT_COUNTY convention
+
 # Upsert: insert or update ONLY if the existing row has no better data source.
 # Rows loaded from 'taxcur' or 'pir_billing' are preserved as-is.
 _UPSERT_SQL = """
 INSERT INTO tax_billing
-    (geo_id, tax_year, total_tax, total_paid, data_source, confidence_level)
+    (county_code, geo_id, tax_year, total_tax, total_paid, data_source, confidence_level)
 VALUES
-    (%(geo_id)s, %(tax_year)s, %(total_tax)s, %(total_paid)s,
+    (%(county_code)s, %(geo_id)s, %(tax_year)s, %(total_tax)s, %(total_paid)s,
      'portal_scrape', 'partial')
-ON CONFLICT (geo_id, tax_year) DO UPDATE
+ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE
     SET total_tax         = EXCLUDED.total_tax,
         total_paid        = EXCLUDED.total_paid,
         data_source       = EXCLUDED.data_source,
@@ -258,7 +276,14 @@ def get_eligible_geo_ids(
 
 
 def upsert_billing_rows(conn, records: list[dict]) -> None:
-    """Upsert a batch of billing records. Raises on DB error (caller rolls back)."""
+    """Upsert a batch of billing records. Raises on DB error (caller rolls back).
+
+    DALLAS-GATE-2: each record dict must now include a "county_code" key
+    (_UPSERT_SQL's %(county_code)s placeholder) -- both callers (this file's
+    own CLI batch loop below, and app.py's api_billing() route) were updated
+    to supply it. Records missing the key will raise a KeyError from
+    execute_batch before anything is written, not silently skip the column.
+    """
     if not records:
         return
     with conn.cursor() as cur:
@@ -425,6 +450,19 @@ def main() -> None:
         "--diagnose", action="store_true",
         help="Fetch 20 parcels from the error log with verbose output — use to identify error types.",
     )
+    ap.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=(
+            f"county_code written to every upserted row (default: {DEFAULT_COUNTY}). "
+            "DALLAS-GATE-2: this loader's own geo_id-discovery query "
+            "(get_eligible_geo_ids) is NOT county-scoped -- harmless today "
+            "since only Travis has real data loaded (explicit scope boundary: "
+            "no Dallas data loading this brief), but will need a matching "
+            "p.county_code filter added once a second county's parcels exist, "
+            "or this flag will write the wrong county_code onto cross-county "
+            "results."
+        ),
+    )
     args = ap.parse_args()
 
     # ── Diagnostic mode ───────────────────────────────────────────────────────
@@ -584,6 +622,7 @@ def main() -> None:
                     "tax_year":  r["tax_year"],
                     "total_tax": r["payment_amount"],
                     "total_paid": r["payment_amount"],
+                    "county_code": args.county,
                 }
                 for r in target
             ]

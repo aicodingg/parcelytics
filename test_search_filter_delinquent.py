@@ -74,6 +74,17 @@ class FakeRequest:
         self.args = FakeArgs(args)
 
 
+class FakeG:
+    """DALLAS-GATE-2 Part 2: api_search_filter() now reads g.county_code
+    (the fix for the search_filter-related gap flagged by
+    verify_index_coverage.py -- see app.py's own comment at the top of the
+    function's `where` list construction). Minimal stand-in for Flask's real
+    `g` request-context object -- same single attribute _pull_county_slug()
+    sets on every real request, hardcoded to 'TRAVIS' here since these tests
+    exercise the delinquent-filter SQL/logic, not multi-county routing."""
+    county_code = "TRAVIS"
+
+
 def _row_confidence(data_source, assessed_value=None, market_value=None):
     # Minimal stand-in -- these tests are about the delinquent-filter SQL/
     # logic, not confidence tiering (which has its own dedicated coverage
@@ -105,6 +116,7 @@ def run_api_search_filter(query_args, fake_rows=None, fake_total_count=0):
 
     namespace = {
         "request": FakeRequest(query_args),
+        "g": FakeG(),
         "query": fake_query,
         "jsonify": fake_jsonify,
         "label_case_sql": label_case_sql,

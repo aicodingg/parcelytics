@@ -76,13 +76,23 @@ import parcel_rollup
 
 TAX_YEAR = 2026
 
-TRUNCATE_SQL = "TRUNCATE TABLE parcel_2026_preliminary_snapshot"
+# DALLAS-GATE-2: matches parcel_resolver.py's own DEFAULT_COUNTY convention.
+DEFAULT_COUNTY = "TRAVIS"
+
+# DALLAS-GATE-2: was an unconditional TRUNCATE TABLE (whole-table wipe) --
+# safe only because Travis was the only county with data. Once this table
+# gains county_code (migrate_county_partitioning.py, Mode 1) and a second
+# county's rows genuinely exist here, an unconditional TRUNCATE run for a
+# Travis-only refresh would silently destroy Dallas's rows too. Changed to
+# a county-scoped DELETE, same discipline loaders/reload_county_scope.py
+# already established for the other precomputed/snapshot tables.
+DELETE_SQL = "DELETE FROM parcel_2026_preliminary_snapshot WHERE county_code = %(county_code)s"
 
 INSERT_SQL = """
     INSERT INTO parcel_2026_preliminary_snapshot
-        (geo_id, market_value, assessed_value, taxable_value,
+        (county_code, geo_id, market_value, assessed_value, taxable_value,
          land_value, imprv_value, exemption_codes, unit_count)
-    VALUES (%(geo_id)s, %(market_value)s, %(assessed_value)s, %(taxable_value)s,
+    VALUES (%(county_code)s, %(geo_id)s, %(market_value)s, %(assessed_value)s, %(taxable_value)s,
             %(land_value)s, %(imprv_value)s, %(exemption_codes)s, %(unit_count)s)
 """
 
@@ -164,12 +174,13 @@ def build_unit_rows(prop_path=None, ent_path=None, land_path=None,
     return unit_rows
 
 
-def write_snapshot(conn, rolled_rows):
+def write_snapshot(conn, rolled_rows, county_code=DEFAULT_COUNTY):
     import psycopg2.extras
     with conn.cursor() as cur:
-        cur.execute(TRUNCATE_SQL)
+        cur.execute(DELETE_SQL, {"county_code": county_code})
         rows = [
             {
+                "county_code": county_code,
                 "geo_id": r["geo_id"],
                 "market_value": r["market_value"],
                 "assessed_value": r["assessed_value"],
@@ -215,6 +226,8 @@ def main():
                     help="Parse and roll up only; do not connect to the DB or write anything")
     ap.add_argument("--prelim-dir", default=config.PRELIM_2026_DIR,
                     help="Override the 2026 Preliminary Export source directory")
+    ap.add_argument("--county", default=DEFAULT_COUNTY,
+                    help=f"county_code to write this snapshot under (default: {DEFAULT_COUNTY})")
     args = ap.parse_args()
 
     if not os.path.isdir(args.prelim_dir):
@@ -247,7 +260,7 @@ def main():
     conn = get_conn()
     execute_schema(conn)
     try:
-        written = write_snapshot(conn, rolled_rows)
+        written = write_snapshot(conn, rolled_rows, county_code=args.county)
     finally:
         conn.close()
 

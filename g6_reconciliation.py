@@ -186,7 +186,15 @@ def g6_lite(label, loaded_total, file_internal_total, tolerance=1_000_000):
 # this refactor didn't change the one already-proven, already-shipped case.
 # Kept as a real, runnable entry point (not just a fixture) since it's
 # still the actual gate for this specific comparison going forward.
-def run_2026_prelim_vs_cert():
+def run_2026_prelim_vs_cert(county_code="TRAVIS"):
+    """county_code (DALLAS-GATE-2): this was entirely county-implicit
+    before -- neither query below filtered by county_code anywhere,
+    including the parcel join itself. Now takes a real parameter, default
+    'TRAVIS' matching parcel_resolver.py's own DEFAULT_COUNTY convention,
+    so this tool gives a correct per-county reconciliation once a second
+    county's parcel_2026_preliminary_snapshot rows exist (same sequencing
+    requirement as app.py's fix: requires the parcel_2026_preliminary_
+    snapshot migration to have already run)."""
     from loaders import db
     from parcel_filters import CANONICAL_PARCEL_EXCL, exclude_non_real_property_gap_sql
 
@@ -200,17 +208,17 @@ def run_2026_prelim_vs_cert():
         cur.execute(f"""
             SELECT s.geo_id, s.market_value
             FROM parcel_2026_preliminary_snapshot s
-            JOIN parcel p ON p.geo_id = s.geo_id
-            WHERE 1=1 {excl}
-        """)
+            JOIN parcel p ON p.geo_id = s.geo_id AND p.county_code = s.county_code
+            WHERE p.county_code = %(county_code)s {excl}
+        """, {"county_code": county_code})
         prelim = {row[0]: row[1] for row in cur.fetchall()}
 
         cur.execute(f"""
             SELECT pty.geo_id, pty.market_value
             FROM parcel_tax_year pty
-            JOIN parcel p ON p.geo_id = pty.geo_id
-            WHERE pty.tax_year = 2026 {excl}
-        """)
+            JOIN parcel p ON p.geo_id = pty.geo_id AND p.county_code = pty.county_code
+            WHERE pty.tax_year = 2026 AND p.county_code = %(county_code)s {excl}
+        """, {"county_code": county_code})
         cert = {row[0]: row[1] for row in cur.fetchall()}
 
     result = g6_full(prelim, cert, label_a="2026 Preliminary", label_b="2026 Certified")

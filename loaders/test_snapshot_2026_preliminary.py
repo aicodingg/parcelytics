@@ -24,9 +24,10 @@ Covers:
   - imprv_value = max(0, market_value - land_value) derivation, including
     the case where land_value is missing (imprv stays None, not 0 or a
     wrong number).
-  - INSERT_SQL / TRUNCATE_SQL contain exactly the columns schema.sql
-    defines for parcel_2026_preliminary_snapshot (a drift guard — if
-    someone edits the schema or the SQL string without updating the
+  - INSERT_SQL contains exactly the columns schema.sql defines for
+    parcel_2026_preliminary_snapshot, plus county_code (DALLAS-GATE-2,
+    added post-migration -- see that test's own comment) (a drift guard —
+    if someone edits the schema or the SQL string without updating the
     other, this test catches the mismatch without needing a live DB).
 
 Run: python3 loaders/test_snapshot_2026_preliminary.py
@@ -158,17 +159,30 @@ def test_insert_sql_matches_schema_columns():
     )
     insert_target_cols = {c.strip() for c in insert_target_cols}
 
-    check("INSERT_SQL's placeholder names are all real schema columns",
-          insert_cols <= schema_cols, insert_cols - schema_cols)
+    # DALLAS-GATE-2: county_code is now written by INSERT_SQL (the table
+    # gained it as a real live PK column via migrate_county_partitioning.py)
+    # but schema.sql's own CREATE TABLE text for this table was
+    # deliberately left unedited -- same "stale inline text, live DB is
+    # authoritative" convention already established for the other 14
+    # migrated tables (see schema.sql's own comment on this table, and
+    # POST-PARTITION-INCIDENT-1-AUDIT's stale-PK-vs-real-index distinction).
+    # Excluded from the schema-column comparison below for that reason --
+    # this is a known, deliberate mismatch, not drift.
+    schema_cols_for_comparison = schema_cols | {"county_code"}
+
+    check("INSERT_SQL's placeholder names are all real schema columns (plus county_code, "
+          "deliberately added post-migration -- see comment above)",
+          insert_cols <= schema_cols_for_comparison, insert_cols - schema_cols_for_comparison)
     check("INSERT_SQL's target column list matches its own placeholders",
           insert_cols == insert_target_cols, (insert_cols, insert_target_cols))
     # snapshotted_at is DEFAULT NOW() in schema.sql and deliberately NOT in
     # INSERT_SQL's column list (every row gets the same load-time
     # timestamp via the column default, not a per-row Python value) --
-    # every OTHER schema column should be written explicitly.
-    check("every schema column except snapshotted_at is written by INSERT_SQL",
-          (schema_cols - {"snapshotted_at"}) == insert_target_cols,
-          (schema_cols - {"snapshotted_at"}, insert_target_cols))
+    # every OTHER schema column (plus county_code) should be written
+    # explicitly.
+    check("every schema column except snapshotted_at (plus county_code) is written by INSERT_SQL",
+          (schema_cols_for_comparison - {"snapshotted_at"}) == insert_target_cols,
+          (schema_cols_for_comparison - {"snapshotted_at"}, insert_target_cols))
 
 
 def main():

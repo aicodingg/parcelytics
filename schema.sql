@@ -704,6 +704,16 @@ CREATE TABLE IF NOT EXISTS parcel_2026_preliminary_snapshot (
     snapshotted_at  TIMESTAMP    DEFAULT NOW()
 );
 
+-- DALLAS-GATE-2 (Aug 15, 2026): this table is now in migrate_county_
+-- partitioning.py's TABLE_SPECS (Mode 1, same as every other single-
+-- column-PK table) -- county_code becomes the new leading PK column once
+-- Diego runs that migration. This CREATE TABLE text above is left
+-- unedited (matching how the other 14 already-migrated tables' inline PK
+-- text was also left stale in this file after their own live migrations
+-- -- see POST-PARTITION-INCIDENT-1-AUDIT's stale-PK-vs-real-index
+-- distinction) -- the live DB's real PK is authoritative, not this file's
+-- CREATE TABLE text, once the migration has actually run.
+
 -- ── load_batch (Task AGGPRECOMP-1, Aug 2026) ───────────────────────────────
 -- Real gap closed here, not a spec-invented concept: investigated whether any
 -- per-load-run identifier already existed anywhere in this codebase before
@@ -1082,7 +1092,16 @@ CREATE INDEX IF NOT EXISTS idx_snapshot_nbhd_movers_view ON snapshot_neighborhoo
 CREATE INDEX IF NOT EXISTS idx_county_benchmark_ptype ON county_benchmark (property_type_label);
 CREATE INDEX IF NOT EXISTS idx_tbe_entity_code ON tax_billing_entity (entity_code);
 
--- Real, still-open, lower-urgency (loader-only, not live-request-path):
+-- UPDATE (DALLAS-GATE-1, Aug 15, 2026, later same day): the two
+-- loader-only gaps flagged below as "still-open" at the time this second
+-- wave was written were closed later the same day -- see idx_billing_year
+-- and idx_quarantine_geo in the "Indexes for fast lookups" section near
+-- the top of this file, same transitional-index pattern. Left the
+-- original note text below unedited (struck through in spirit, not
+-- deleted) so the real history of when each gap was found vs. closed
+-- stays legible, rather than quietly rewriting this record.
+--
+-- Real, [CLOSED -- see above], loader-only-at-the-time-of-writing:
 -- tax_billing filtered by tax_year alone (backfill_tax_billing_2025_
 -- confidence.py:145, load_tax_current.py:134) and tax_billing_quarantine
 -- filtered by geo_id alone (quarantine_contamination.py:397, :445) --

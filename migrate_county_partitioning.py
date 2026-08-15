@@ -40,13 +40,31 @@ take that backup for you.
    PK change, no shadow-swap, and (unlike mode 1) no DEFAULT is ever added
    in the first place, so there's nothing to drop afterward.
 
-Explicitly NOT migrated by this script (see SPEC_COUNTY_PARTITIONING.md
-§1.1's own inventory): parcel_2026_preliminary_snapshot — that table's own
-schema.sql comment already documents it as a one-time, NOT-kept-in-sync
-snapshot never meant to be a durable structure; §1.1 recommends retiring
-it, not migrating it. Not in TABLE_SPECS/MIGRATION_ORDER below; out of
-scope per this brief's own "no changes to anything not named in §4.3's
-table list" instruction.
+UPDATE (DALLAS-GATE-2, Aug 15 2026, later same day): parcel_2026_
+preliminary_snapshot is now IN this script's scope, reversing the
+retirement recommendation below — recorded here rather than deleted, so
+the real reasoning shift stays visible. §1.1's "retire it" recommendation
+predated M4-2026-PRELIM-SNAPSHOT Part 3 (property_detail()'s real,
+shipped 2026 Preliminary→Certified comparison card, both Homeowner and
+Investor modes) and g6_reconciliation.py's run_2026_prelim_vs_cert() —
+both real, currently-live consumers confirmed via a direct repo grep
+before making this call, not assumed. A table that's genuinely dead is
+safe to retire instead of migrate; a table a live UI feature reads from
+every property-detail page load is not — retiring it now would silently
+break that feature, a product-scope decision this brief isn't the place
+to make unilaterally. The table's own real shape (schema.sql's
+"NOT-kept-in-sync, populated once" framing) is otherwise unchanged and
+still accurate — it's Mode 1 like every other single-column-PK table
+below, just written to less often.
+
+Prior text (now superseded, kept for the historical record): "Explicitly
+NOT migrated by this script (see SPEC_COUNTY_PARTITIONING.md §1.1's own
+inventory): parcel_2026_preliminary_snapshot — that table's own schema.sql
+comment already documents it as a one-time, NOT-kept-in-sync snapshot
+never meant to be a durable structure; §1.1 recommends retiring it, not
+migrating it. Not in TABLE_SPECS/MIGRATION_ORDER below; out of scope per
+this brief's own 'no changes to anything not named in §4.3's table list'
+instruction."
 
 ── REAL PER-TABLE PROCEDURE (mode 1), matching §5 exactly ─────────────────
   1. CREATE <table>_new — every real LIVE column (via information_schema,
@@ -201,6 +219,16 @@ TABLE_SPECS = [
      "new_pk": ["county_code", "view"], "fk_drop": [], "fk_add": []},
     {"name": "snapshot_neighborhood_movers", "old_pk": ["view", "neighborhood_cd"],
      "new_pk": ["county_code", "view", "neighborhood_cd"], "fk_drop": [], "fk_add": []},
+    # DALLAS-GATE-2: added, reversing the original "retire, don't migrate"
+    # recommendation -- see this file's own module docstring UPDATE note
+    # above for the real reasoning (a live UI feature and a live
+    # reconciliation tool both genuinely read this table today). Plain
+    # single-column PK, no FKs reference it (confirmed via a direct
+    # schema.sql grep before adding this entry), so it's an ordinary
+    # Mode 1 table -- no special handling needed beyond what every other
+    # entry in this list already gets.
+    {"name": "parcel_2026_preliminary_snapshot", "old_pk": ["geo_id"],
+     "new_pk": ["county_code", "geo_id"], "fk_drop": [], "fk_add": []},
 ]
 SPEC_BY_NAME = {s["name"]: s for s in TABLE_SPECS}
 
