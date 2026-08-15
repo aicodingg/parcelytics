@@ -24,7 +24,11 @@ from tax_logic.texas import estimate_post_acquisition as _tx_estimate
 from tax_logic.texas import estimate_homestead_savings as _tx_hs_savings
 from tax_logic.texas import derive_2026_baseline as _derive_2026_baseline
 from tax_logic.classify import property_type_label, label_case_sql, label_sort_case_sql
-from loaders.scrape_billing_history import fetch_html, parse_receipts, upsert_billing_rows, HTTP_OK
+from loaders.scrape_billing_history import (
+    fetch_html, parse_receipts, upsert_billing_rows,
+    HTTP_OK, HTTP_NOT_FOUND, HTTP_NETWORK_ERR,
+    TARGET_YEARS as _BILLING_TARGET_YEARS,
+)
 from parcel_filters import CANONICAL_PARCEL_EXCL, CANONICAL_PARCEL_EXCL_BARE, peer_state_cd1_match_sql, exclude_non_real_property_gap_sql
 import search_logic
 # AGGPRECOMP-2 (Aug 2026): Market Snapshot taxonomy + view-scoping SQL-fragment
@@ -43,7 +47,14 @@ from snapshot_taxonomy import (
     _snapshot_view_where, ptype_and_sort_case_for_view,
 )
 
-_BILLING_TARGET_YEARS  = {2021, 2022, 2023, 2024}
+# BILLING-DIAG-1: _BILLING_TARGET_YEARS used to be its own separately-
+# maintained {2021, 2022, 2023, 2024} literal here -- confirmed identical in
+# value/type to loaders/scrape_billing_history.py's own TARGET_YEARS, but
+# two independent definitions of the same real constant was flagged in this
+# brief as worth consolidating regardless of whether it was the actual root
+# cause (it wasn't -- see the fix's own comment in api_billing() for the
+# real cause). Now a single import (see the loaders.scrape_billing_history
+# import block above) -- can't drift out of sync again.
 _BILLING_SENTINEL_YEAR = 9999   # stored when portal returns no target-year data
 
 # TaxDelqOpenData.csv snapshot date (July 2026, per Diego's "Delinquency Data
@@ -5814,7 +5825,46 @@ def api_billing(geo_id):
 
         # 2. Portal fetch (only if not cached)
         if not already_fetched:
-            html, status = fetch_html(geo_id)
+            # BILLING-DIAG-1 (real, live bug found and fixed here): this call
+            # used to be `fetch_html(geo_id)` -- exactly ONE attempt, no
+            # retry, REQUEST_TIMEOUT=20s. Confirmed via live evidence (curl
+            # + a direct SQL check against production on two real parcels --
+            # neither had so much as a sentinel row) that a single,
+            # un-retried external HTTP call to this portal genuinely fails
+            # often enough in production to matter, and the failure branch
+            # was a silent no-op (no logging, no Sentry signal, by original
+            # design -- "let next page visit retry") -- invisible until this
+            # brief's manual curl+SQL cross-check, because Sentry only
+            # captures unhandled exceptions and this path deliberately
+            # doesn't raise one.
+            #
+            # Fix: 2 attempts, 10s timeout each -- deliberately NOT reusing
+            # loaders/scrape_billing_history.py's own CLI-loader pattern
+            # (MAX_RETRIES=3, REQUEST_TIMEOUT=20s each, up to 60s worst
+            # case). That pattern is safe for the CLI batch script, which
+            # has no request-time budget, but would be dangerous on this
+            # live route: get_db()'s own comment (~line 1524) confirms
+            # gunicorn runs with no --timeout flag -- the plain 30s DEFAULT
+            # worker timeout is in effect, a hard SIGKILL boundary. 3 x 20s
+            # would comfortably blow past it and reintroduce exactly the
+            # WORKER TIMEOUT/SIGKILL class of incident (Sentry
+            # PYTHON-FLASK-5/6) this codebase already hit once. 2 x 10s = 20s
+            # worst case, leaving ~10s margin for DB I/O + Flask overhead.
+            # Judgment call, flagged rather than silently decided: this
+            # trades a little reliability (vs. the CLI loader's more patient
+            # retry) for staying safely inside the request-time budget: the
+            # real, more robust long-term fix is the async/background
+            # pattern already proposed for this route in a prior brief
+            # (Cowork "Propose /api/billing async/background pattern"),
+            # which would remove this tradeoff entirely -- not built here,
+            # this fix keeps the existing synchronous architecture.
+            html, status = None, HTTP_NETWORK_ERR
+            for _attempt in range(2):
+                html, status = fetch_html(geo_id, timeout=10)
+                if html is not None and status == HTTP_OK:
+                    break
+                if status == HTTP_NOT_FOUND:
+                    break   # account genuinely not in portal -- don't retry
             if html is not None and status == HTTP_OK:
                 receipts = parse_receipts(html)
                 target   = [r for r in receipts if r["tax_year"] in _BILLING_TARGET_YEARS]
@@ -5841,7 +5891,24 @@ def api_billing(geo_id):
                             (county_code, geo_id, _BILLING_SENTINEL_YEAR)
                         )
                     conn.commit()
-            # Network/429/5xx → don't cache, let next page visit retry
+            elif status != HTTP_NOT_FOUND:
+                # Network/429/5xx, both attempts exhausted → still don't
+                # cache (let next page visit retry, same as before) — but
+                # now a low-noise, non-exception Sentry signal (level=
+                # warning) so a PERSISTENTLY failing parcel is visible as a
+                # pattern instead of indistinguishable from "genuinely no
+                # receipts", which is exactly what made BILLING-DIAG-1's bug
+                # invisible until a manual curl+SQL cross-check found it.
+                sentry_sdk.capture_message(
+                    f"api_billing: portal fetch failed for geo_id={geo_id} "
+                    f"after 2 attempts, last status={status}",
+                    level="warning",
+                )
+            # HTTP_NOT_FOUND (404): genuinely no account in portal — no
+            # sentinel written here either (unchanged from before this fix;
+            # the sentinel is specifically for "account found, no target-
+            # year receipts", a different real case than "no account at
+            # all" — worth its own look but out of BILLING-DIAG-1's scope).
 
         # 3. Return 2021-2024 portal_scrape rows (sentinel excluded by year range)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

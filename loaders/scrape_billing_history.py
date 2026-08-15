@@ -344,7 +344,7 @@ HTTP_SERVER_ERR  = 500
 HTTP_NETWORK_ERR = -1    # connection-level failure (timeout, DNS, etc.)
 
 
-def fetch_html(geo_id: str) -> tuple[str | None, int]:
+def fetch_html(geo_id: str, timeout: int = REQUEST_TIMEOUT) -> tuple[str | None, int]:
     """Fetch the payment-receipts page for one geo_id.
 
     Returns (html_string, status) where:
@@ -355,12 +355,21 @@ def fetch_html(geo_id: str) -> tuple[str | None, int]:
       - status = HTTP_NETWORK_ERR (-1) → network/SSL error, html is None
 
     Portal returns ISO-8859-1 encoded HTML.
+
+    BILLING-DIAG-1: `timeout` param added (default unchanged, REQUEST_TIMEOUT
+    = 20s — this file's own CLI batch loop below still gets that, plus its
+    own MAX_RETRIES=3 wrapper, unaffected by this change). app.py's
+    api_billing() route now passes a shorter, explicit timeout for its own
+    bounded retry loop -- see that function's own comment for why it can't
+    reuse this file's 20s/3-retry pattern verbatim (gunicorn's 30s default
+    worker timeout is a hard SIGKILL boundary a live route must respect;
+    this batch script has no such constraint).
     """
     account = geo_id + "0000"   # 10-digit geo_id → 14-digit portal account
     url     = BASE_URL.format(account=account)
     req     = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT,
+        with urllib.request.urlopen(req, timeout=timeout,
                                     context=_SSL_CTX) as resp:
             raw = resp.read()
             return raw.decode("iso-8859-1", errors="replace"), HTTP_OK
