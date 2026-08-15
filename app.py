@@ -5900,6 +5900,23 @@ def api_billing(geo_id):
                 # network failure (retried, then reported if exhausted) --
                 # not as "genuinely fetched, no data."
                 if html is not None and status == HTTP_OK and _BILLING_PORTAL_MARKER not in html:
+                    # BILLING-DIAG-6: TEMPORARY -- log a bounded, real slice of
+                    # the actual mismatched content (plus a few known
+                    # alternative-page markers) BEFORE resetting html to None
+                    # below, so a real WAF/CAPTCHA/redirect page (if that's
+                    # what this is) is visible, not just the boolean fact that
+                    # the expected marker was missing. Remove once
+                    # BILLING-DIAG-6 is resolved.
+                    _alt_markers = [m for m in (
+                        "CAPTCHA", "captcha", "Access Denied", "blocked",
+                        "Blocked", "verify you are human", "<title>",
+                    ) if m in html]
+                    print(
+                        f"BILLING-DIAG-6: geo_id={geo_id} marker mismatch -- "
+                        f"len(html)={len(html)} alt_markers_found={_alt_markers} "
+                        f"first_500_chars={html[:500]!r}",
+                        flush=True,
+                    )
                     html, status = None, HTTP_NETWORK_ERR
                 if html is not None and status == HTTP_OK:
                     break
@@ -5954,6 +5971,26 @@ def api_billing(geo_id):
             if html is not None and status == HTTP_OK:
                 receipts = parse_receipts(html)
                 target   = [r for r in receipts if r["tax_year"] in _BILLING_TARGET_YEARS]
+                # BILLING-DIAG-6: TEMPORARY. BILLING-DIAG-5's own live evidence
+                # (html_is_none=False, status=0, printed AFTER the marker
+                # check above) means the marker check above did NOT fire on
+                # that real request -- the marker WAS present, ruling out the
+                # BILLING-DIAG-2 WAF/block-page theory as the cause for that
+                # specific request, contrary to this brief's own stated
+                # deduction (see BILLING-DIAG-6 report for the full
+                # correction). The real remaining question is what happens in
+                # THIS branch: how many receipts parse_receipts() actually
+                # found, how many matched the 2021-2024 target window, and
+                # which of the two branches below (real write vs. sentinel)
+                # actually executes. Remove once BILLING-DIAG-6 is resolved.
+                print(
+                    f"BILLING-DIAG-6: geo_id={geo_id} parsed "
+                    f"receipts_found={len(receipts)} "
+                    f"receipt_years={sorted(set(r['tax_year'] for r in receipts))} "
+                    f"target_found={len(target)} "
+                    f"target_years={sorted(r['tax_year'] for r in target)}",
+                    flush=True,
+                )
                 if target:
                     records = [
                         {

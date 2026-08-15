@@ -102,6 +102,11 @@ assert FUNC_SRC.count("sentry_sdk.flush") == 3, \
     "sanity: exactly 3 flush() calls expected (breadcrumb, warning branch, exception handler)"
 assert "BILLING-DIAG-5" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-5 print() diagnostic"
 assert "flush=True" in FUNC_SRC, "sanity: the BILLING-DIAG-5 print() must force immediate stdout delivery"
+assert FUNC_SRC.count("BILLING-DIAG-6") >= 2, \
+    "sanity: slice must contain both BILLING-DIAG-6 diagnostics (marker mismatch + parse result)"
+assert "alt_markers_found=" in FUNC_SRC, "sanity: marker-mismatch diagnostic must report alt markers"
+assert "first_500_chars=" in FUNC_SRC, "sanity: marker-mismatch diagnostic must log a real content slice"
+assert "receipts_found=" in FUNC_SRC, "sanity: parse-result diagnostic must report real receipt counts"
 
 HTTP_OK = 0
 HTTP_NOT_FOUND = 404
@@ -207,7 +212,17 @@ class FakeSentry:
         self.calls.append(("flush", timeout))
 
 
-def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc=None):
+_DEFAULT_RECEIPTS = [
+    {"tax_year": 2021, "payment_amount": 64459.78},
+    {"tax_year": 2022, "payment_amount": 62522.55},
+    {"tax_year": 2023, "payment_amount": 76601.36},
+    {"tax_year": 2024, "payment_amount": 85848.63},
+    {"tax_year": 2025, "payment_amount": 90000.00},  # outside target range
+]
+
+
+def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc=None,
+                     parse_receipts_result=None):
     """
     fetch_sequence: list of (html, status) tuples, one per fetch_html() call
     (consumed in order; raises IndexError if the real code calls it more
@@ -215,6 +230,11 @@ def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc
 
     boom_on_sql_substring/boom_exc: BILLING-DIAG-3 -- simulate a real
     exception raised on a specific SQL statement (see FakeCursor).
+
+    parse_receipts_result: BILLING-DIAG-6 -- override what fake
+    parse_receipts() returns, so the empty-target/sentinel branch (never
+    exercised by the original 6 scenarios -- they all used a fixed receipts
+    list with 4 real target-year entries) can be reproduced.
     """
     fetch_calls = []
 
@@ -223,14 +243,9 @@ def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc
         return fetch_sequence[len(fetch_calls) - 1]
 
     def fake_parse_receipts(html):
-        # Real receipts shape, matching BILLING-DIAG-1's own evidence trail.
-        return [
-            {"tax_year": 2021, "payment_amount": 64459.78},
-            {"tax_year": 2022, "payment_amount": 62522.55},
-            {"tax_year": 2023, "payment_amount": 76601.36},
-            {"tax_year": 2024, "payment_amount": 85848.63},
-            {"tax_year": 2025, "payment_amount": 90000.00},  # outside target range
-        ]
+        # Real receipts shape, matching BILLING-DIAG-1's own evidence trail
+        # (or the BILLING-DIAG-6 override, for the empty-target/sentinel path).
+        return parse_receipts_result if parse_receipts_result is not None else list(_DEFAULT_RECEIPTS)
 
     upsert_calls = []
 
@@ -297,22 +312,38 @@ def warning_msgs(messages):
     return [m for m in messages if m[1] == "warning"]
 
 
-def check_diag5_print(label_prefix, r, expect_geo_id=None, expect_substrings=None):
-    """BILLING-DIAG-5: assert the parallel print() diagnostic fired exactly
-    once, with flush=True, and (optionally) that its message contains the
-    expected geo_id / status substrings."""
+def find_print_by_tag(print_calls, tag):
+    """BILLING-DIAG-6: with 3 distinct print() call sites now live in the
+    same function (DIAG-5's breadcrumb, DIAG-6's marker-mismatch slice,
+    DIAG-6's parse-result summary), tests must find calls by their own
+    distinct tag string rather than assuming there's only ever one print()
+    per request."""
+    return [c for c in print_calls if c["args"] and tag in str(c["args"][0])]
+
+
+def check_print_by_tag(label_prefix, r, tag, expect_count=1, expect_geo_id=None, expect_substrings=None):
+    """Assert a print() call carrying `tag` fired `expect_count` times, each
+    with flush=True, and (for the first match) contains the expected
+    substrings."""
     ok = True
-    ok &= check(f"{label_prefix}: print() called exactly once", len(r["print_calls"]) == 1)
-    if r["print_calls"]:
-        call = r["print_calls"][0]
-        ok &= check(f"{label_prefix}: print() used flush=True", call["kwargs"].get("flush") is True)
-        msg = call["args"][0] if call["args"] else ""
-        ok &= check(f"{label_prefix}: print() message tagged BILLING-DIAG-5", "BILLING-DIAG-5" in msg)
+    matches = find_print_by_tag(r["print_calls"], tag)
+    ok &= check(f"{label_prefix}: print() tagged '{tag}' called {expect_count}x", len(matches) == expect_count)
+    for call in matches:
+        ok &= check(f"{label_prefix}: '{tag}' print() used flush=True", call["kwargs"].get("flush") is True)
+    if matches:
+        msg = str(matches[0]["args"][0])
         if expect_geo_id:
-            ok &= check(f"{label_prefix}: print() message names the real geo_id", expect_geo_id in msg)
+            ok &= check(f"{label_prefix}: '{tag}' print() names the real geo_id", expect_geo_id in msg)
         for sub in (expect_substrings or []):
-            ok &= check(f"{label_prefix}: print() message contains '{sub}'", sub in msg)
+            ok &= check(f"{label_prefix}: '{tag}' print() contains '{sub}'", sub in msg)
     return ok
+
+
+def check_diag5_print(label_prefix, r, expect_geo_id=None, expect_substrings=None):
+    """BILLING-DIAG-5's own breadcrumb specifically (always exactly 1 per
+    request, regardless of which branch is taken afterward)."""
+    return check_print_by_tag(label_prefix, r, "BILLING-DIAG-5:", expect_count=1,
+                               expect_geo_id=expect_geo_id, expect_substrings=expect_substrings)
 
 
 def every_capture_immediately_flushed(calls):
@@ -350,6 +381,11 @@ all_ok &= check("BILLING-DIAG-4: breadcrumb's capture_message() is immediately f
                 every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check("exactly 1 flush() call total (just the breadcrumb's)", len(r["sentry_flush_calls"]) == 1)
 all_ok &= check_diag5_print("Test 1", r, expect_geo_id="0100030105", expect_substrings=["html_is_none=False", "status=0"])
+all_ok &= check_print_by_tag("Test 1", r, "parsed receipts_found", expect_count=1,
+                              expect_geo_id="0100030105",
+                              expect_substrings=["receipts_found=5", "target_found=4"])
+all_ok &= check("no DIAG-6 marker-mismatch print (real marker was present)",
+                find_print_by_tag(r["print_calls"], "marker mismatch") == [])
 all_ok &= check("route returns status ok", r["payload"]["status"] == "ok")
 all_ok &= check("connection closed in finally", r["conn_closed"] is True)
 
@@ -368,6 +404,8 @@ all_ok &= check("BILLING-DIAG-3 info breadcrumb still sent (exactly 1)",
 all_ok &= check("BILLING-DIAG-4: breadcrumb's capture_message() is immediately followed by flush()",
                 every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check_diag5_print("Test 2", r, expect_geo_id="0254402034", expect_substrings=["attempts_made=2"])
+all_ok &= check_print_by_tag("Test 2", r, "parsed receipts_found", expect_count=1,
+                              expect_substrings=["receipts_found=5", "target_found=4"])
 
 # ── 3. Both attempts fail (network error) — the real, live bug's exact shape
 print("Test 3: fetch_html fails BOTH attempts (reproduces the live bug's exact symptom)")
@@ -390,6 +428,8 @@ all_ok &= check("BILLING-DIAG-4: every capture_message() is immediately followed
                 every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check_diag5_print("Test 3", r, expect_geo_id="0100030105",
                              expect_substrings=["html_is_none=True", "status=-1", "attempts_made=2"])
+all_ok &= check("no DIAG-6 marker-mismatch or parse-result print (html never reached OK)",
+                find_print_by_tag(r["print_calls"], "BILLING-DIAG-6") == [])
 all_ok &= check("route STILL returns a clean status:ok (not an exception) — matches live evidence exactly",
                 r["payload"]["status"] == "ok" and r["payload"]["rows"] == [])
 all_ok &= check("connection closed in finally even on total fetch failure", r["conn_closed"] is True)
@@ -405,6 +445,8 @@ all_ok &= check("BILLING-DIAG-3 info breadcrumb still sent (fires unconditionall
 all_ok &= check("BILLING-DIAG-4: breadcrumb's capture_message() is immediately followed by flush()",
                 every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check_diag5_print("Test 4", r, expect_geo_id="9999999999", expect_substrings=["attempts_made=1"])
+all_ok &= check("no DIAG-6 print (404 never reaches the marker check or parse branch)",
+                find_print_by_tag(r["print_calls"], "BILLING-DIAG-6") == [])
 all_ok &= check("no upsert call", r["upsert_calls"] == [])
 
 # ── 5. WAF/block-page scenario (BILLING-DIAG-2's own new hypothesis) ─────
@@ -425,6 +467,14 @@ all_ok &= check("BILLING-DIAG-4: every capture_message() is immediately followed
                 every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check_diag5_print("Test 5", r, expect_geo_id="0100030105",
                              expect_substrings=["html_is_none=True", "attempts_made=2"])
+all_ok &= check_print_by_tag("Test 5", r, "marker mismatch", expect_count=2,
+                              expect_geo_id="0100030105",
+                              expect_substrings=["alt_markers_found=", "first_500_chars="])
+all_ok &= check("marker-mismatch print correctly finds NO real portal marker in the block page",
+                all("Travis County Tax" not in str(c["args"][0])
+                    for c in find_print_by_tag(r["print_calls"], "marker mismatch")))
+all_ok &= check("no DIAG-6 parse-result print (html never reached OK post-loop)",
+                find_print_by_tag(r["print_calls"], "parsed receipts_found") == [])
 all_ok &= check("route still returns a clean status:ok/rows:[]",
                 r["payload"]["status"] == "ok" and r["payload"]["rows"] == [])
 
@@ -452,7 +502,37 @@ all_ok &= check("sentry_sdk.flush() called twice (BILLING-DIAG-4: breadcrumb + e
 all_ok &= check("BILLING-DIAG-4: every capture_message()/capture_exception() is immediately followed by flush()",
                 every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check_diag5_print("Test 6", r, expect_geo_id="0100030105", expect_substrings=["html_is_none=False"])
+all_ok &= check_print_by_tag("Test 6", r, "parsed receipts_found", expect_count=1,
+                              expect_substrings=["receipts_found=5", "target_found=4"])
 all_ok &= check("connection still closed in finally even on this exception path", r["conn_closed"] is True)
+
+# ── 7. BILLING-DIAG-6: fetch succeeds, marker present, but NO target-year ──
+# receipts -- the sentinel branch. Never exercised by Tests 1-6 (all used a
+# fixed receipts fixture with 4 real target-year entries); worth covering
+# now because BILLING-DIAG-6's live evidence (html_is_none=False, status=0)
+# means the route took EITHER this branch OR the real-write branch, not the
+# WAF-marker branch the brief itself assumed.
+print("Test 7: fetch succeeds, marker present, but receipts have no 2021-2024 rows (sentinel branch)")
+r = run_api_billing(
+    "0100030105", [(REAL_PAGE, HTTP_OK)],
+    parse_receipts_result=[
+        {"tax_year": 2020, "payment_amount": 50000.00},
+        {"tax_year": 2025, "payment_amount": 90000.00},
+    ],
+)
+all_ok &= check("fetch_html called exactly once", len(r["fetch_calls"]) == 1)
+all_ok &= check("upsert_billing_rows NOT called (no target-year receipts)", r["upsert_calls"] == [])
+all_ok &= check("a sentinel INSERT (tax_year=9999) WAS written",
+                any("INSERT" in (sql or "") and params and 9999 in params
+                    for sql, params in r["execute_log"]))
+all_ok &= check_diag5_print("Test 7", r, expect_geo_id="0100030105", expect_substrings=["html_is_none=False", "status=0"])
+all_ok &= check_print_by_tag("Test 7", r, "parsed receipts_found", expect_count=1,
+                              expect_substrings=["receipts_found=2", "target_found=0", "target_years=[]"])
+all_ok &= check("no DIAG-6 marker-mismatch print (real marker was present)",
+                find_print_by_tag(r["print_calls"], "marker mismatch") == [])
+all_ok &= check("route returns status:ok, cached:False, rows:[] -- matches BILLING-DIAG-3's own live SQL "
+                "evidence (no rows) IF this is the real live branch",
+                r["payload"]["status"] == "ok" and r["payload"]["rows"] == [])
 
 print()
 if all_ok:
