@@ -1032,3 +1032,36 @@ CREATE INDEX IF NOT EXISTS idx_parcel_geo_id_only ON parcel (geo_id);
 CREATE INDEX IF NOT EXISTS idx_pty_geo_id ON parcel_tax_year (geo_id, tax_year);
 CREATE INDEX IF NOT EXISTS idx_metrics_geo_id ON parcel_metrics (geo_id, tax_year);
 CREATE INDEX IF NOT EXISTS idx_delinquent_geo_id ON tax_delinquent (geo_id);
+
+-- ── Real, second wave of transitional indexes (Aug 15, 2026) ───────────────
+-- Found by verify_index_coverage.py's real, live audit (POST-PARTITION-
+-- INCIDENT-1-AUDIT), run --index-source live against production: 13
+-- confirmed real gaps, 6 of them on live, user-facing app.py query paths
+-- (the other 4 are loader-only, lower urgency, not yet fixed). Same real
+-- class as the first wave above: county_code now leads every composite
+-- key on these tables, so a query filtering by ONE non-county column
+-- alone (view / property_type_label / entity_code / prop_id) can't use
+-- the primary key efficiently.
+--
+-- SAME REAL, CRITICAL, TIME-LIMITED WARNING AS THE FIRST WAVE: safe today
+-- only because Travis is the only county with data. Once Dallas exists,
+-- a bare "WHERE view = %s" (or property_type_label / entity_code / prop_id
+-- alone) becomes semantically wrong, not just slow -- it can silently mix
+-- or return the wrong county's rows. Subject to the SAME hard policy:
+-- Dallas data does not load until the resolver seam is wired through all
+-- real call sites and the coverage audit reports zero county-unscoped
+-- queries. Drop these at the same time as the first wave.
+CREATE INDEX IF NOT EXISTS idx_prop_unit_prop_id_only ON prop_unit (prop_id);
+CREATE INDEX IF NOT EXISTS idx_snapshot_totals_view ON snapshot_totals (view);
+CREATE INDEX IF NOT EXISTS idx_snapshot_breakdown_view ON snapshot_breakdown (view);
+CREATE INDEX IF NOT EXISTS idx_snapshot_nbhd_movers_view ON snapshot_neighborhood_movers (view);
+CREATE INDEX IF NOT EXISTS idx_county_benchmark_ptype ON county_benchmark (property_type_label);
+CREATE INDEX IF NOT EXISTS idx_tbe_entity_code ON tax_billing_entity (entity_code);
+
+-- Real, still-open, lower-urgency (loader-only, not live-request-path):
+-- tax_billing filtered by tax_year alone (backfill_tax_billing_2025_
+-- confidence.py:145, load_tax_current.py:134) and tax_billing_quarantine
+-- filtered by geo_id alone (quarantine_contamination.py:397, :445) --
+-- both real, both confirmed gaps, deliberately not fixed in this pass
+-- since they affect background jobs, not live traffic. Flagged so they
+-- aren't forgotten, not silently left off this record.
