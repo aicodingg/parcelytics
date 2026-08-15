@@ -97,6 +97,9 @@ assert "_BILLING_PORTAL_MARKER" in FUNC_SRC, "sanity: slice must contain the BIL
 assert "sentry_sdk.flush" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-2 flush() call"
 assert "sentry_sdk.capture_exception" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-3 exception capture"
 assert "BILLING-DIAG-3" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-3 diagnostic breadcrumb"
+assert "BILLING-DIAG-4" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-4 flush() fix"
+assert FUNC_SRC.count("sentry_sdk.flush") == 3, \
+    "sanity: exactly 3 flush() calls expected (breadcrumb, warning branch, exception handler)"
 
 HTTP_OK = 0
 HTTP_NOT_FOUND = 404
@@ -177,19 +180,29 @@ class FakeConn:
 
 
 class FakeSentry:
+    """BILLING-DIAG-4: `calls` is an ORDERED log of every capture_message/
+    capture_exception/flush call, so tests can assert that each capture is
+    immediately followed by a flush() -- not just that flush() was called
+    *some* number of times, which wouldn't catch a specific capture call
+    missing its own flush() the way BILLING-DIAG-4's real bug was structured
+    (two of the three real Sentry call sites got a flush(), one didn't)."""
     def __init__(self):
         self.messages = []
         self.flush_calls = []
         self.exceptions = []
+        self.calls = []
 
     def capture_message(self, msg, level=None):
         self.messages.append((msg, level))
+        self.calls.append(("capture_message", msg, level))
 
     def capture_exception(self, exc=None):
         self.exceptions.append(exc)
+        self.calls.append(("capture_exception", exc))
 
     def flush(self, timeout=None):
         self.flush_calls.append(timeout)
+        self.calls.append(("flush", timeout))
 
 
 def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc=None):
@@ -257,6 +270,7 @@ def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc
         "sentry_messages": fake_sentry.messages,
         "sentry_flush_calls": fake_sentry.flush_calls,
         "sentry_exceptions": fake_sentry.exceptions,
+        "sentry_calls": fake_sentry.calls,
         "conn_closed": fake_conn.closed,
         "execute_log": fake_conn.execute_log,
     }
@@ -268,6 +282,18 @@ def info_msgs(messages):
 
 def warning_msgs(messages):
     return [m for m in messages if m[1] == "warning"]
+
+
+def every_capture_immediately_flushed(calls):
+    """BILLING-DIAG-4: for every capture_message/capture_exception entry in
+    the ordered call log, the very next entry must be a flush() -- this is
+    the real regression guard for BILLING-DIAG-4's exact bug (a capture call
+    with no flush() after it)."""
+    for i, c in enumerate(calls):
+        if c[0] in ("capture_message", "capture_exception"):
+            if i + 1 >= len(calls) or calls[i + 1][0] != "flush":
+                return False
+    return True
 
 
 def check(label, cond):
@@ -289,6 +315,9 @@ all_ok &= check("no warning-level Sentry message sent", warning_msgs(r["sentry_m
 all_ok &= check("BILLING-DIAG-3 info breadcrumb sent (exactly 1, post-retry-loop)",
                 len(info_msgs(r["sentry_messages"])) == 1)
 all_ok &= check("no capture_exception call (no exception occurred)", r["sentry_exceptions"] == [])
+all_ok &= check("BILLING-DIAG-4: breadcrumb's capture_message() is immediately followed by flush()",
+                every_capture_immediately_flushed(r["sentry_calls"]))
+all_ok &= check("exactly 1 flush() call total (just the breadcrumb's)", len(r["sentry_flush_calls"]) == 1)
 all_ok &= check("route returns status ok", r["payload"]["status"] == "ok")
 all_ok &= check("connection closed in finally", r["conn_closed"] is True)
 
@@ -304,6 +333,8 @@ all_ok &= check("no warning-level Sentry message for a transient, self-corrected
                 warning_msgs(r["sentry_messages"]) == [])
 all_ok &= check("BILLING-DIAG-3 info breadcrumb still sent (exactly 1)",
                 len(info_msgs(r["sentry_messages"])) == 1)
+all_ok &= check("BILLING-DIAG-4: breadcrumb's capture_message() is immediately followed by flush()",
+                every_capture_immediately_flushed(r["sentry_calls"]))
 
 # ── 3. Both attempts fail (network error) — the real, live bug's exact shape
 print("Test 3: fetch_html fails BOTH attempts (reproduces the live bug's exact symptom)")
@@ -320,8 +351,10 @@ all_ok &= check("BILLING-DIAG-3 info breadcrumb also sent, reporting the exhaust
                 len(info_msgs(r["sentry_messages"])) == 1
                 and "html_is_none=True" in info_msgs(r["sentry_messages"])[0][0]
                 and "attempts_made=2" in info_msgs(r["sentry_messages"])[0][0])
-all_ok &= check("sentry_sdk.flush() was called (BILLING-DIAG-2 hardening)",
-                len(r["sentry_flush_calls"]) == 1)
+all_ok &= check("sentry_sdk.flush() called twice (BILLING-DIAG-4: breadcrumb + warning, each flushed)",
+                len(r["sentry_flush_calls"]) == 2)
+all_ok &= check("BILLING-DIAG-4: every capture_message() is immediately followed by flush()",
+                every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check("route STILL returns a clean status:ok (not an exception) — matches live evidence exactly",
                 r["payload"]["status"] == "ok" and r["payload"]["rows"] == [])
 all_ok &= check("connection closed in finally even on total fetch failure", r["conn_closed"] is True)
@@ -334,6 +367,8 @@ all_ok &= check("fetch_html called exactly once (no retry for a genuine 404)",
 all_ok &= check("no warning-level Sentry message for an expected 404", warning_msgs(r["sentry_messages"]) == [])
 all_ok &= check("BILLING-DIAG-3 info breadcrumb still sent (fires unconditionally after the retry loop)",
                 len(info_msgs(r["sentry_messages"])) == 1)
+all_ok &= check("BILLING-DIAG-4: breadcrumb's capture_message() is immediately followed by flush()",
+                every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check("no upsert call", r["upsert_calls"] == [])
 
 # ── 5. WAF/block-page scenario (BILLING-DIAG-2's own new hypothesis) ─────
@@ -348,7 +383,10 @@ all_ok &= check("a Sentry warning-level message WAS sent (block page correctly c
                 len(warning_msgs(r["sentry_messages"])) == 1)
 all_ok &= check("BILLING-DIAG-3 info breadcrumb also sent",
                 len(info_msgs(r["sentry_messages"])) == 1)
-all_ok &= check("sentry_sdk.flush() was called", len(r["sentry_flush_calls"]) == 1)
+all_ok &= check("sentry_sdk.flush() called twice (BILLING-DIAG-4: breadcrumb + warning, each flushed)",
+                len(r["sentry_flush_calls"]) == 2)
+all_ok &= check("BILLING-DIAG-4: every capture_message() is immediately followed by flush()",
+                every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check("route still returns a clean status:ok/rows:[]",
                 r["payload"]["status"] == "ok" and r["payload"]["rows"] == [])
 
@@ -371,8 +409,10 @@ all_ok &= check("error message is the real exception text",
                 r["payload"]["message"] == "server closed the connection unexpectedly")
 all_ok &= check("BILLING-DIAG-3 fix: sentry_sdk.capture_exception(exc) WAS called with the real exception",
                 len(r["sentry_exceptions"]) == 1 and r["sentry_exceptions"][0] is boom)
-all_ok &= check("sentry_sdk.flush() was called after the exception capture",
-                len(r["sentry_flush_calls"]) == 1)
+all_ok &= check("sentry_sdk.flush() called twice (BILLING-DIAG-4: breadcrumb + exception handler, each flushed)",
+                len(r["sentry_flush_calls"]) == 2)
+all_ok &= check("BILLING-DIAG-4: every capture_message()/capture_exception() is immediately followed by flush()",
+                every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check("connection still closed in finally even on this exception path", r["conn_closed"] is True)
 
 print()

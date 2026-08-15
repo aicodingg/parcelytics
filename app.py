@@ -5923,6 +5923,13 @@ def api_billing(geo_id):
                 f"attempts_made={_attempt + 1}",
                 level="info",
             )
+            # BILLING-DIAG-4: this call was missing the same flush() the other
+            # two real Sentry calls in this function already got (the
+            # exhausted-retry warning below, and the exception handler) --
+            # BILLING-DIAG-2's own reasoning (queued events aren't guaranteed
+            # delivery before a gunicorn worker recycles) applies identically
+            # here and was simply missed when this breadcrumb was added.
+            sentry_sdk.flush(timeout=2)
             if html is not None and status == HTTP_OK:
                 receipts = parse_receipts(html)
                 target   = [r for r in receipts if r["tax_year"] in _BILLING_TARGET_YEARS]
