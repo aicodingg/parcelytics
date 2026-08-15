@@ -9,7 +9,7 @@ import re
 import time
 from io import BytesIO
 from datetime import datetime, date
-from flask import Flask, render_template, request, redirect, url_for, jsonify, Response
+from flask import Flask, render_template, request, redirect, url_for, jsonify, Response, g, abort
 import psycopg2
 import psycopg2.extras
 import sentry_sdk
@@ -1627,10 +1627,21 @@ def resolve_prop_id_to_geo_id(prop_id):
     given environment) — should not be the normal path once migration
     data is loaded.
     """
-    row = query("SELECT geo_id FROM prop_unit WHERE prop_id = %s", (prop_id,), one=True)
+    # DALLAS-GATE-1 Part 2: county_code now threaded through both lookups
+    # below via g.county_code (set per-request by _pull_county_slug, see
+    # the county-routing block further down this file). Both prop_unit and
+    # parcel have county_code as the LEADING column of their real live PK
+    # (migrate_county_partitioning.py TABLE_SPECS) — filtering by it here
+    # is required for these to stay index-covered lookups post-partition,
+    # not just correctness (see POST-PARTITION-INCIDENT-1-AUDIT).
+    row = query(
+        "SELECT geo_id FROM prop_unit WHERE prop_id = %s AND county_code = %s",
+        (prop_id, g.county_code), one=True)
     if row:
         return row["geo_id"]
-    row = query("SELECT geo_id FROM parcel WHERE prop_id = %s", (prop_id,), one=True)
+    row = query(
+        "SELECT geo_id FROM parcel WHERE prop_id = %s AND county_code = %s",
+        (prop_id, g.county_code), one=True)
     return row["geo_id"] if row else None
 
 
@@ -1643,12 +1654,18 @@ def resolve_exact_parcel(q):
     api_address_search(), so a typed account number now resolves identically
     from the navbar typeahead as it does from the full-results submit path.
     """
+    # DALLAS-GATE-1 Part 2: county_code-scoped, same rationale as
+    # resolve_prop_id_to_geo_id() above.
     geo_id = normalize_parcel_id(q)
-    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    parcel = query(
+        "SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s",
+        (geo_id, g.county_code), one=True)
     if not parcel and q.isdigit():
         fallback_geo_id = resolve_prop_id_to_geo_id(int(q))
         if fallback_geo_id:
-            parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (fallback_geo_id,), one=True)
+            parcel = query(
+                "SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s",
+                (fallback_geo_id, g.county_code), one=True)
     return dict(parcel) if parcel else None
 
 
@@ -1699,16 +1716,25 @@ def search_parcels_by_address(q, limit=8):
         return []
     for pattern_tokens, boost_tokens in search_logic.address_match_attempts(tokens):
         pattern = " ".join(pattern_tokens)
+        # DALLAS-GATE-1 Part 2: county_code added to the WHERE clause. Note
+        # this one is NOT an index-coverage fix the way the two lookups
+        # above are -- situs_address has no real index either way, this
+        # was already a text-pattern scan (see the ORDER-BY-before-LIMIT
+        # comment above) -- but it's still a REQUIRED correctness fix: a
+        # county-unscoped ILIKE here would return cross-county address
+        # matches once Dallas/Harris data exists, silently mixing counties
+        # in search results.
         rows = query("""
             SELECT geo_id, situs_address, owner_name
             FROM   parcel
             WHERE  UPPER(situs_address) ILIKE %(pattern)s
               AND  geo_id NOT LIKE 'AJR%%'
+              AND  county_code = %(county_code)s
             ORDER  BY
                 CASE WHEN UPPER(situs_address) LIKE %(prefix_pattern)s THEN 0 ELSE 1 END,
                 situs_address
             LIMIT  200
-        """, {"pattern": f"%{pattern}%", "prefix_pattern": f"{pattern}%"})
+        """, {"pattern": f"%{pattern}%", "prefix_pattern": f"{pattern}%", "county_code": g.county_code})
         if rows:
             ranked = search_logic.rank_candidates(
                 [dict(r) for r in rows], boost_tokens, pattern_tokens
@@ -1717,9 +1743,192 @@ def search_parcels_by_address(q, limit=8):
     return []
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── County-in-URL routing (DALLAS-GATE-1, Part 1/2) ────────────────────────────
+# Real, decided input (Diego, 2026-08-15): county routing is a URL PATH
+# SEGMENT -- e.g. /travis-tx/parcel/<geo_id> -- not inferred-from-geo_id, not
+# subdomain-based. Slug format CONFIRMED against real, live evidence (Diego's
+# own call, same session): "travis-tx" -- matching the slug already shipped
+# and rendered today in templates/index.html's MARKETS array (data-market
+# attributes, homepage coverage map JS) -- NOT "travis-county" (the shape
+# used only as a loose example in the brief and in Fable's one relayed,
+# never-independently-confirmed growth-plan note; no separate growth-plan/
+# programmatic-SEO document exists in this repo or in the connected Notion
+# workspace to verify that shape against). Diego's own stated reasoning for
+# travis-tx: the state suffix disambiguates same-named counties across
+# states (a real, correct concern -- e.g. "Dallas County" also exists in AL,
+# AR, IA, MO, TX).
+#
+# COUNTY_SLUGS is intentionally seeded with dallas-tx/harris-tx now, even
+# though only travis-tx is live -- costs nothing today (an unrecognized
+# slug 404s either way) and means the URL scheme itself never needs a
+# second decision when real Dallas/Harris data eventually loads. Loading
+# that data remains explicitly gated behind DATA_LIFECYCLE.md's own
+# still-unstarted prerequisites (Source Registry, County Profile,
+# Classification Map) -- registering a slug string here is not the same as
+# onboarding a county, and does not shortcut that gate.
+COUNTY_SLUGS = {
+    "travis-tx": "TRAVIS",
+    "dallas-tx": "DALLAS",   # reserved -- no real data loaded yet, see above
+    "harris-tx": "HARRIS",   # reserved -- no real data loaded yet, see above
+}
+DEFAULT_COUNTY_SLUG = "travis-tx"
 
-@app.route("/")
+
+@app.url_value_preprocessor
+def _pull_county_slug(endpoint, values):
+    """Runs BEFORE the matched view function, for every real route below
+    that declares a leading <county_slug> path segment. Pops county_slug
+    out of the URL's own captured values (so view functions never receive
+    it as a kwarg -- they read g.county_code instead, the same pattern any
+    other Flask app-wide request-context value uses) and resolves it to
+    the real county_code every county-keyed query() call site should now
+    filter by.
+
+    404s on an unrecognized slug -- deliberately NOT a silent fallback to
+    Travis. A wrong/mistyped slug silently serving Travis data instead of
+    a 404 would be a real, live correctness hazard (the same class of bug
+    this whole DALLAS-GATE-1 brief exists to close off), not just a typo
+    someone notices.
+
+    Routes with no <county_slug> segment at all (currently only /healthz,
+    a DB-free liveness probe with no county concept) are unaffected --
+    values.pop with a default of None makes this a no-op for them."""
+    if values is None:
+        return
+    slug = values.pop("county_slug", None)
+    if slug is None:
+        return
+    county_code = COUNTY_SLUGS.get(slug)
+    if county_code is None:
+        abort(404)
+    g.county_slug = slug
+    g.county_code = county_code
+
+
+@app.url_defaults
+def _add_county_slug(endpoint, values):
+    """Companion to _pull_county_slug(): auto-injects the CURRENT request's
+    county_slug into every url_for() call for an endpoint that expects one,
+    so existing call sites (e.g. index()'s own
+    `redirect(url_for("property_detail", geo_id=...))` below) keep working
+    unchanged -- they get the right county prefix for free instead of each
+    needing an individual county_slug=... edit. Falls back to
+    DEFAULT_COUNTY_SLUG for url_for() calls made outside a real request
+    context that resolved one (e.g. future CLI/script usage)."""
+    if "county_slug" in values:
+        return
+    if app.url_map.is_endpoint_expecting(endpoint, "county_slug"):
+        values["county_slug"] = getattr(g, "county_slug", DEFAULT_COUNTY_SLUG)
+
+
+def county_url(path):
+    """Template-facing helper (registered below via context_processor):
+    prefixes a real, already-known site-internal path with the CURRENT
+    request's county slug -- e.g. county_url('/snapshot') ->
+    '/travis-tx/snapshot'. Exists so templates can build a direct,
+    already-correct link (no redirect hop) instead of the old bare path,
+    which still works today ONLY because of the legacy 301 redirects
+    registered below -- county_url() is the real, non-redirected way to
+    link internally going forward. `path` must start with '/' and must NOT
+    already include a county slug."""
+    slug = getattr(g, "county_slug", DEFAULT_COUNTY_SLUG)
+    return f"/{slug}{path}"
+
+
+@app.context_processor
+def _inject_county_helpers():
+    return {
+        "county_slug": getattr(g, "county_slug", DEFAULT_COUNTY_SLUG),
+        "county_url": county_url,
+    }
+
+
+# ── Legacy URL → county-prefixed URL, real permanent (301) redirects ───────────
+# Real, required per Part 1.2 (this is a live, already-indexed site with real
+# backlinks, including ones on LinkedIn from recent marketing work): every
+# existing Travis URL keeps resolving, forever, via a genuine 301 (not a
+# soft/JS redirect, not a 302) to its new county-prefixed shape. Listed here
+# as (old_path, real_endpoint_name) pairs -- old_path is EXACTLY today's
+# pre-DALLAS-GATE-1 route string for that endpoint (captured directly from
+# the real @app.route decorators before they were each given a leading
+# <county_slug> segment below), so this list is a real, verifiable diff
+# against this file's own prior state, not hand-typed from memory.
+#
+# /healthz is deliberately excluded -- it was never given a county prefix
+# (see COUNTY_SLUGS block above), so there is no old-vs-new shape to redirect
+# between; it is the same single DB-free path either way.
+_LEGACY_REDIRECT_ROUTES = [
+    ("/", "index"),
+    ("/search", "search_page"),
+    ("/parcel/<geo_id>", "property_detail"),
+    ("/parcel/<geo_id>/export.pdf", "export_due_diligence_pdf"),
+    ("/rates", "tax_rates"),
+    ("/api/parcel_entities", "api_parcel_entities"),
+    ("/snapshot", "county_snapshot"),
+    ("/snapshot/neighborhood/<code>", "snapshot_neighborhood"),
+    ("/api/rates", "api_rates"),
+    ("/api/benchmark", "api_benchmark"),
+    ("/api/benchmark/meta", "api_benchmark_meta"),
+    ("/api/search_filter", "api_search_filter"),
+    ("/api/estimate_acq/<geo_id>", "api_estimate_acq"),
+    ("/api/address_search", "api_address_search"),
+    ("/api/peer_benchmark_local/<geo_id>", "api_peer_benchmark_local"),
+    ("/api/peer_benchmark_sf/<geo_id>", "api_peer_benchmark_sf"),
+    ("/api/news", "api_news"),
+    ("/api/geocode/<geo_id>", "api_geocode"),
+    ("/api/peer_set/<geo_id>", "api_peer_set"),
+    ("/api/billing/<geo_id>", "api_billing"),
+    ("/parcels", "parcel_list"),
+    ("/compare", "compare_parcels"),
+    ("/info", "info"),
+    ("/about", "about"),
+    ("/terms", "terms"),
+    ("/privacy", "privacy"),
+    ("/disclaimer", "disclaimer"),
+    ("/styleguide", "styleguide"),
+]
+
+
+def _make_legacy_redirect(target_endpoint):
+    """Returns a real, working Flask view function that 301-redirects any
+    request at an OLD (pre-county-prefix) path to that same endpoint's NEW
+    county-prefixed URL, preserving both the real captured path parameters
+    (**kwargs, e.g. geo_id) and the real query string (?view=..., ?ids=...
+    etc. -- dropping these on redirect would silently break every existing
+    filtered/paramaterized bookmark and backlink, not just the bare page
+    URLs). url_for(target_endpoint, **kwargs) automatically gets the right
+    county_slug injected by _add_county_slug() above -- defaults to
+    DEFAULT_COUNTY_SLUG ('travis-tx') since a request arriving at a legacy,
+    unprefixed URL has no county_slug of its own to carry forward (there
+    is, today, only one real county to redirect it to)."""
+    def _view(**kwargs):
+        target = url_for(target_endpoint, **kwargs)
+        qs = request.query_string.decode()
+        if qs:
+            target = f"{target}?{qs}"
+        return redirect(target, code=301)
+    return _view
+
+
+for _old_path, _endpoint in _LEGACY_REDIRECT_ROUTES:
+    app.add_url_rule(
+        _old_path,
+        endpoint=f"{_endpoint}__legacy_redirect",
+        view_func=_make_legacy_redirect(_endpoint),
+    )
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+# Every real route below (except /healthz) is now registered with a leading
+# <county_slug> path segment -- e.g. "/<county_slug>/parcel/<geo_id>" -- per
+# Diego's real routing decision (see the county-routing block above this
+# comment for the full design rationale). _pull_county_slug() resolves that
+# segment into g.county_code before the view function body runs; view
+# functions read g.county_code the same way they'd read any other real
+# Flask request-context value -- they do NOT receive county_slug as an
+# argument (Flask's url_value_preprocessor pops it before dispatch).
+
+@app.route("/<county_slug>")
 @limiter.limit(_LIMIT_HEAVY)
 def index():
     q = request.args.get("q", "").strip()
@@ -1781,7 +1990,7 @@ def healthz():
     return jsonify({"ok": True}), 200
 
 
-@app.route("/search")
+@app.route("/<county_slug>/search")
 def search_page():
     """Task 13 — dedicated search page with a US coverage map (visual only).
     Not an interactive GIS map; just communicates current coverage (Travis County)."""
@@ -1791,18 +2000,33 @@ def search_page():
     # certified. Cheap EXISTS check (stops at first match) rather than a
     # full COUNT, since the dropdown only needs a yes/no for whether any
     # 2026 row is still on the preliminary tier.
+    # DALLAS-GATE-1 Part 2: county_code-scoped -- this county's search page
+    # should describe this county's own 2026 data state, not another
+    # county's.
     has_preliminary_2026 = bool(query(
-        "SELECT EXISTS(SELECT 1 FROM parcel_tax_year WHERE tax_year = 2026 AND data_source = 'preliminary') AS x",
-        one=True,
+        "SELECT EXISTS(SELECT 1 FROM parcel_tax_year WHERE tax_year = 2026 "
+        "AND data_source = 'preliminary' AND county_code = %s) AS x",
+        (g.county_code,), one=True,
     )["x"])
     return render_template("search.html", has_preliminary_2026=has_preliminary_2026)
 
 
-@app.route("/parcel/<geo_id>")
+@app.route("/<county_slug>/parcel/<geo_id>")
 @limiter.limit(_LIMIT_HEAVY)
 def property_detail(geo_id):
+    # DALLAS-GATE-1 Part 2: every query below in this function is now scoped
+    # to g.county_code (set per-request by _pull_county_slug). This is the
+    # highest-traffic route in the app and was the ORIGINAL site of the
+    # incident this brief exists to close out -- see
+    # POST-PARTITION-INCIDENT-1-AUDIT and schema.sql's reactive-index
+    # comments for the four tables (parcel, parcel_tax_year, tax_billing,
+    # tax_delinquent) that incident already forced index fixes for.
+    county_code = g.county_code
+
     # Core parcel
-    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    parcel = query(
+        "SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s",
+        (geo_id, county_code), one=True)
     if not parcel:
         return render_template(
             "index.html",
@@ -1831,11 +2055,12 @@ def property_detail(geo_id):
                tb.data_source      AS billing_source,
                tb.confidence_level AS billing_confidence
         FROM   parcel_tax_year pty
-        LEFT JOIN tax_billing   tb  ON tb.geo_id   = pty.geo_id
-                                   AND tb.tax_year = pty.tax_year
-        WHERE  pty.geo_id = %s
+        LEFT JOIN tax_billing   tb  ON tb.geo_id      = pty.geo_id
+                                   AND tb.tax_year     = pty.tax_year
+                                   AND tb.county_code  = pty.county_code
+        WHERE  pty.geo_id = %s AND pty.county_code = %s
         ORDER  BY pty.tax_year
-    """, (geo_id,))
+    """, (geo_id, county_code))
 
     # Multi-unit panel (Migration M2, SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.5).
     # A geo_id can now genuinely represent more than one TCAD unit (condo
@@ -1852,10 +2077,12 @@ def property_detail(geo_id):
                    y.market_value, y.assessed_value, y.taxable_value
             FROM   prop_unit u
             LEFT JOIN prop_unit_tax_year y
-                   ON y.prop_id = u.prop_id AND y.tax_year = %s
-            WHERE  u.geo_id = %s
+                   ON y.prop_id     = u.prop_id
+                  AND y.tax_year    = %s
+                  AND y.county_code = u.county_code
+            WHERE  u.geo_id = %s AND u.county_code = %s
             ORDER  BY u.prop_id
-        """, (latest_unit_year, geo_id))
+        """, (latest_unit_year, geo_id, county_code))
         # Only render a "multi-unit" panel when there's genuinely more than
         # one unit — a single-unit parcel showing a one-row panel would just
         # repeat the KPI cards above with no new information.
@@ -1872,11 +2099,13 @@ def property_detail(geo_id):
         FROM   tax_billing_entity tbe
         LEFT JOIN county_tax_rate  ctr      ON ctr.entity_code      = tbe.entity_code
                                            AND ctr.tax_year         = 2025
+                                           AND ctr.county_code      = tbe.county_code
         LEFT JOIN county_tax_rate  ctr_prev ON ctr_prev.entity_code = tbe.entity_code
                                            AND ctr_prev.tax_year    = 2024
-        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2025
+                                           AND ctr_prev.county_code = tbe.county_code
+        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2025 AND tbe.county_code = %s
         ORDER  BY tbe.amount_due DESC NULLS LAST
-    """, (geo_id,))
+    """, (geo_id, county_code))
 
     # Prior-year (2024) entity breakdown — needed ONLY for the Bill-Change
     # Waterfall (build_bill_waterfall, below). entity_detail above already
@@ -1887,12 +2116,13 @@ def property_detail(geo_id):
     entity_detail_prev = query("""
         SELECT tbe.entity_code, tbe.amount_due
         FROM   tax_billing_entity tbe
-        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2024
-    """, (geo_id,))
+        WHERE  tbe.geo_id = %s AND tbe.tax_year = 2024 AND tbe.county_code = %s
+    """, (geo_id, county_code))
 
     # Delinquency
     delinquent = query(
-        "SELECT * FROM tax_delinquent WHERE geo_id = %s", (geo_id,), one=True
+        "SELECT * FROM tax_delinquent WHERE geo_id = %s AND county_code = %s",
+        (geo_id, county_code), one=True
     )
 
     # Current year snapshot (2025)
@@ -1949,14 +2179,15 @@ def property_detail(geo_id):
     rate_history = query("""
         SELECT ctr.tax_year, SUM(ctr.rate) AS total_rate
         FROM   county_tax_rate ctr
-        WHERE  ctr.entity_code IN (
+        WHERE  ctr.county_code = %s
+        AND    ctr.entity_code IN (
                    SELECT entity_code FROM tax_billing_entity
-                   WHERE  geo_id = %s AND tax_year = 2025
+                   WHERE  geo_id = %s AND tax_year = 2025 AND county_code = %s
                )
         AND    ctr.tax_year BETWEEN 2021 AND 2025
         GROUP  BY ctr.tax_year
         ORDER  BY ctr.tax_year
-    """, (geo_id,))
+    """, (county_code, geo_id, county_code))
 
     # ── Computed historical tax (feature flag: COMPUTED_HIST_TAX_ENABLED) ────────
     # When enabled, rows where total_tax is NULL (2021–2024 without billing data)
@@ -2008,13 +2239,14 @@ def property_detail(geo_id):
     rate_history_rows = query("""
         SELECT ctr.entity_code, ctr.tax_year, ctr.rate
         FROM   county_tax_rate ctr
-        WHERE  ctr.entity_code IN (
+        WHERE  ctr.county_code = %s
+        AND    ctr.entity_code IN (
                    SELECT entity_code FROM tax_billing_entity
-                   WHERE  geo_id = %s AND tax_year = 2025
+                   WHERE  geo_id = %s AND tax_year = 2025 AND county_code = %s
                )
         AND    ctr.tax_year BETWEEN 2016 AND 2025
         ORDER  BY ctr.entity_code, ctr.tax_year
-    """, (geo_id,))
+    """, (county_code, geo_id, county_code))
 
     # {entity_code: {year: rate_float}}
     entity_rate_by_code = {}
@@ -2076,6 +2308,19 @@ def property_detail(geo_id):
     # the preliminary export, or the snapshot loader hasn't been run) --
     # the template must show an explicit "not available" gap for that case,
     # never a blank/zero/assumed value (brief's data-honesty requirement).
+    # DALLAS-GATE-1 FINDING (not fixed here -- flagged for the report):
+    # parcel_2026_preliminary_snapshot has NO county_code column at all --
+    # it's missing from migrate_county_partitioning.py's own TABLE_SPECS
+    # list (checked directly), unlike every other geo_id-keyed table. Per
+    # SPEC_COUNTY_PARTITIONING.md §3, geo_id cross-county collision is a
+    # real, investigated risk, not hypothetical -- so once Dallas data
+    # loads, this query could return another county's snapshot row for a
+    # colliding geo_id. Left geo_id-only here (adding "AND county_code = %s"
+    # would just raise "column does not exist" against the real schema) --
+    # this needs its own schema migration (ADD COLUMN + backfill, same
+    # pattern as migrate_county_partitioning.py's Mode 1 tables) before it
+    # can be safely scoped. Reporting this as a genuine gap discovered
+    # during Part 2, outside the brief's own named list.
     prelim_2026_snapshot = query("""
         SELECT market_value, assessed_value, taxable_value,
                land_value, imprv_value, exemption_codes, unit_count
@@ -2108,7 +2353,8 @@ def property_detail(geo_id):
     benchmark_by_year = {}
     try:
         for m in query(
-            "SELECT * FROM parcel_metrics WHERE geo_id = %s ORDER BY tax_year", (geo_id,)
+            "SELECT * FROM parcel_metrics WHERE geo_id = %s AND county_code = %s ORDER BY tax_year",
+            (geo_id, county_code)
         ):
             metrics_by_year[m["tax_year"]] = m
 
@@ -2118,8 +2364,8 @@ def property_detail(geo_id):
         if bench_label:
             for b in query("""
                 SELECT * FROM county_benchmark
-                WHERE property_type_label = %s ORDER BY tax_year
-            """, (bench_label,)):
+                WHERE property_type_label = %s AND county_code = %s ORDER BY tax_year
+            """, (bench_label, county_code)):
                 benchmark_by_year[b["tax_year"]] = b
     except Exception:
         pass  # Phase 2 tables not yet populated — skip metrics sections
@@ -2350,7 +2596,7 @@ def property_detail(geo_id):
     )
 
 
-@app.route("/parcel/<geo_id>/export.pdf")
+@app.route("/<county_slug>/parcel/<geo_id>/export.pdf")
 @limiter.limit(_LIMIT_HEAVY)
 def export_due_diligence_pdf(geo_id):
     """
@@ -2914,7 +3160,7 @@ def categorize_entity(code, name):
                       # that doesn't match a bucket above.
 
 
-@app.route("/rates")
+@app.route("/<county_slug>/rates")
 def tax_rates():
     """Tax rate trend page — county-level, no parcel required."""
     # Key entities to highlight in the main chart
@@ -2986,7 +3232,7 @@ def tax_rates():
     )
 
 
-@app.route("/api/parcel_entities")
+@app.route("/<county_slug>/api/parcel_entities")
 def api_parcel_entities():
     """
     Rate Trends page, Part 5 — "which entities apply to my property".
@@ -3115,7 +3361,7 @@ _SNAPSHOT_CACHE = {}
 _SNAPSHOT_CACHE_TTL_SECONDS = 600
 
 
-@app.route("/snapshot")
+@app.route("/<county_slug>/snapshot")
 @limiter.limit(_LIMIT_HEAVY)
 def county_snapshot():
     """County Market Snapshot — 2026 preliminary vs 2025 certified.
@@ -3134,12 +3380,18 @@ def county_snapshot():
     # current DB state) — mode only changes which template text renders,
     # not the query results — so it's safe to cache by view alone, shared
     # across homeowner/investor mode.
-    cached = _SNAPSHOT_CACHE.get(view)
+    # DALLAS-GATE-1 Part 2: cache key now (county_code, view), not view alone
+    # -- this closes the "not yet county-scoped" gap _compute_snapshot_data()
+    # itself flagged (see its docstring/comment, PARTITION-2-IMPLEMENT Part
+    # 3). Keying by view alone would have let Travis and Dallas requests for
+    # the same view collide on one cache entry once both have real data.
+    cache_key = (g.county_code, view)
+    cached = _SNAPSHOT_CACHE.get(cache_key)
     if cached and (time.time() - cached["ts"]) < _SNAPSHOT_CACHE_TTL_SECONDS:
         payload = cached["payload"]
     else:
-        payload = _compute_snapshot_data(view)
-        _SNAPSHOT_CACHE[view] = {"payload": payload, "ts": time.time()}
+        payload = _compute_snapshot_data(view, g.county_code)
+        _SNAPSHOT_CACHE[cache_key] = {"payload": payload, "ts": time.time()}
 
     return render_template("snapshot.html", view=view, **payload)
 
@@ -3253,7 +3505,7 @@ def _snapshot_summary_freshness(county_code="TRAVIS"):
     return True, None
 
 
-def _compute_snapshot_data(view):
+def _compute_snapshot_data(view, county_code):
     """
     Reads the Market Snapshot data for one sector view from the Tier 1
     summary tables (snapshot_breakdown / snapshot_totals /
@@ -3308,31 +3560,14 @@ def _compute_snapshot_data(view):
     spec's own "aggregation logic lives only inside refresh functions"
     principle -- capping/slicing isn't aggregation, it's display shaping.
     """
-    # PARTITION-2-IMPLEMENT, Part 3: county_code="TRAVIS" is the same single,
-    # explicitly-marked hardcoded seam SPEC_COUNTY_PARTITIONING.md's finding
-    # 9.5 (resolve_parcel()) uses -- until Diego's separate routing/UI
-    # decision (§7) exists, every call site here defaults to Travis
-    # explicitly, at this one place, not scattered.
-    #
-    # KNOWN, DELIBERATE GAP (disclosed, not silently left): the freshness
-    # CHECK below is now real per-county-scoped (finding 9.7) -- but the
-    # actual READ queries further down this function (SELECT ... FROM
-    # snapshot_breakdown/snapshot_totals/snapshot_neighborhood_movers WHERE
-    # view = %s) are NOT yet county-scoped. That's the broader "county_code
-    # needs to reach every one of app.py's 218 real call sites" wiring
-    # SPEC_COUNTY_PARTITIONING.md's finding 9.5 explicitly designs a
-    # resolver seam for and explicitly defers -- out of scope for THIS
-    # brief (PARTITION-2-IMPLEMENT's own "no wiring of resolve_parcel()
-    # into app.py's real call sites" boundary covers this same class of
-    # change). Freshness reporting will be correctly per-county the moment
-    # migrate_county_partitioning.py runs; the actual displayed ROWS will
-    # only be correctly county-scoped once that broader, later wiring
-    # happens. Not a problem today (Travis is the only county with data,
-    # so an unscoped read query returns exactly the same rows a scoped one
-    # would) -- but a real, known gap the moment a second county's rows
-    # land in these tables, flagged here so it isn't mistaken for "already
-    # handled."
-    is_fresh, unavailable_reason = _snapshot_summary_freshness(county_code="TRAVIS")
+    # DALLAS-GATE-1 Part 2: closes the gap PARTITION-2-IMPLEMENT Part 3 left
+    # explicitly open and disclosed (see git history for this docstring's
+    # prior wording) -- county_code is now a real caller-supplied parameter
+    # (from g.county_code via county_snapshot(), set per-request by
+    # _pull_county_slug), not a hardcoded "TRAVIS" literal. Every read query
+    # below (snapshot_breakdown/snapshot_totals/snapshot_neighborhood_movers/
+    # county_benchmark) and the freshness check are now scoped to it.
+    is_fresh, unavailable_reason = _snapshot_summary_freshness(county_code=county_code)
     if not is_fresh:
         return {
             "data_unavailable": True,
@@ -3360,9 +3595,9 @@ def _compute_snapshot_data(view):
         SELECT ptype, sort_key, n_parcels, n_up, n_down, n_flat,
                median_pct, p25_pct, p75_pct, total_mv25_b, total_mv26_b
         FROM snapshot_breakdown
-        WHERE view = %s
+        WHERE view = %s AND county_code = %s
         {order_sql}
-    """, (view,))]
+    """, (view, county_code))]
 
     # Part 2 fix (unchanged behavior): cap the within-tab subtype breakdown
     # to the top SNAPSHOT_SUBTYPE_CAP rows by parcel count for sector-scoped
@@ -3376,8 +3611,8 @@ def _compute_snapshot_data(view):
         SELECT n_total, n_up, n_down, n_flat, median_pct, total_mv25_b, total_mv26_b,
                new_construction_count, risk_flagged_count, n_preliminary_2026, n_total_2026
         FROM snapshot_totals
-        WHERE view = %s
-    """, (view,), one=True)
+        WHERE view = %s AND county_code = %s
+    """, (view, county_code), one=True)
 
     totals = None
     new_construction_count = 0
@@ -3424,9 +3659,9 @@ def _compute_snapshot_data(view):
                 median_assessment_ratio,
                 median_yoy_value_change_pct
             FROM county_benchmark
-            WHERE property_type_label IN ({fmt_labels})
+            WHERE property_type_label IN ({fmt_labels}) AND county_code = %s
             ORDER BY tax_year, property_type_label
-        """)
+        """, (county_code,))
 
     # Top/bottom moving neighborhoods (unchanged behavior): every
     # neighborhood clearing HAVING COUNT(*) >= 10 was already filtered AT
@@ -3439,9 +3674,9 @@ def _compute_snapshot_data(view):
         nb_rows = query("""
             SELECT neighborhood_cd, n_parcels, median_pct
             FROM snapshot_neighborhood_movers
-            WHERE view = %s
+            WHERE view = %s AND county_code = %s
             ORDER BY median_pct DESC
-        """, (view,))
+        """, (view, county_code))
         if nb_rows:
             nb_rows = [dict(r) for r in nb_rows]
             top_neighborhoods = nb_rows[:5]
@@ -3461,7 +3696,7 @@ def _compute_snapshot_data(view):
     }
 
 
-@app.route("/snapshot/neighborhood/<code>")
+@app.route("/<county_slug>/snapshot/neighborhood/<code>")
 @limiter.limit(_LIMIT_HEAVY)
 def snapshot_neighborhood(code):
     """
@@ -3547,15 +3782,18 @@ def snapshot_neighborhood(code):
             COUNT(*) OVER() AS total_count
         FROM parcel p
         JOIN parcel_tax_year t25 ON t25.geo_id = p.geo_id AND t25.tax_year = 2025
+                                 AND t25.county_code = p.county_code
         JOIN parcel_tax_year t26 ON t26.geo_id = p.geo_id AND t26.tax_year = 2026
+                                 AND t26.county_code = p.county_code
         WHERE t25.market_value > 0
           AND t26.market_value > 0
           AND p.neighborhood_cd = %(code)s
+          AND p.county_code = %(county_code)s
           {CANONICAL_PARCEL_EXCL}
           {view_where}
         ORDER BY pct_chg DESC
         LIMIT {SEARCH_FILTER_PAGE_SIZE} OFFSET %(offset)s
-    """, params={"code": code, "offset": offset})
+    """, params={"code": code, "offset": offset, "county_code": g.county_code})
 
     total = int(rows[0]["total_count"]) if rows else 0
     total_pages = (total + SEARCH_FILTER_PAGE_SIZE - 1) // SEARCH_FILTER_PAGE_SIZE if total else 0
@@ -3594,7 +3832,7 @@ def snapshot_neighborhood(code):
     )
 
 
-@app.route("/api/rates")
+@app.route("/<county_slug>/api/rates")
 def api_rates():
     """JSON endpoint for rate data (for dynamic chart filtering)."""
     rates = query("""
@@ -3606,7 +3844,7 @@ def api_rates():
     return jsonify([dict(r) for r in rates])
 
 
-@app.route("/api/benchmark")
+@app.route("/<county_slug>/api/benchmark")
 @limiter.limit(_LIMIT_HEAVY)
 def api_benchmark():
     """
@@ -3775,7 +4013,7 @@ def api_benchmark():
     return jsonify({"ok": False, "error": "Specify prop_type or classi_cd."})
 
 
-@app.route("/api/benchmark/meta")
+@app.route("/<county_slug>/api/benchmark/meta")
 def api_benchmark_meta():
     """Return available property types and use codes with ≥10 parcels (for filter dropdowns)."""
     prop_types_raw = query("""
@@ -4033,7 +4271,7 @@ def _row_confidence(data_source, assessed_value=None, market_value=None):
     return "partial"
 
 
-@app.route("/api/search_filter")
+@app.route("/<county_slug>/api/search_filter")
 @limiter.limit(_LIMIT_HEAVY)
 def api_search_filter():
     """Filtered parcel search behind the Search page's optional filter panel.
@@ -4322,7 +4560,7 @@ def api_search_filter():
     })
 
 
-@app.route("/api/estimate_acq/<geo_id>")
+@app.route("/<county_slug>/api/estimate_acq/<geo_id>")
 @limiter.limit(_LIMIT_HEAVY)
 def api_estimate_acq(geo_id):
     """
@@ -4484,7 +4722,7 @@ def api_estimate_acq(geo_id):
 
 
 
-@app.route("/api/address_search")
+@app.route("/<county_slug>/api/address_search")
 @limiter.limit(_LIMIT_TYPEAHEAD)
 def api_address_search():
     """
@@ -4531,7 +4769,7 @@ def api_address_search():
 
 
 
-@app.route("/api/peer_benchmark_local/<geo_id>")
+@app.route("/<county_slug>/api/peer_benchmark_local/<geo_id>")
 @limiter.limit(_LIMIT_HEAVY)
 def api_peer_benchmark_local(geo_id):
     """
@@ -4745,7 +4983,7 @@ def api_peer_benchmark_local(geo_id):
     })
 
 
-@app.route("/api/peer_benchmark_sf/<geo_id>")
+@app.route("/<county_slug>/api/peer_benchmark_sf/<geo_id>")
 @limiter.limit(_LIMIT_HEAVY)
 def api_peer_benchmark_sf(geo_id):
     """
@@ -4999,7 +5237,7 @@ def _fetch_news(query):
         return None
 
 
-@app.route("/api/news")
+@app.route("/<county_slug>/api/news")
 def api_news():
     """Real, property-type-aware Travis County property-tax news.
 
@@ -5032,7 +5270,7 @@ def api_news():
     return jsonify({"ok": True, "items": items, "query_type": ptype or "generic"})
 
 
-@app.route("/api/geocode/<geo_id>")
+@app.route("/<county_slug>/api/geocode/<geo_id>")
 @limiter.limit(_LIMIT_EXTERNAL)
 def api_geocode(geo_id):
     """Return {lat, lng} for a parcel — for the satellite map.
@@ -5080,7 +5318,7 @@ def api_geocode(geo_id):
         return jsonify({"ok": False, "error": "geocode_failed", "detail": str(e)[:100]})
 
 
-@app.route("/api/peer_set/<geo_id>")
+@app.route("/<county_slug>/api/peer_set/<geo_id>")
 @limiter.limit(_LIMIT_HEAVY)
 def api_peer_set(geo_id):
     """Task 7 — up to 5 comparable parcels for the Submarket Position section.
@@ -5384,7 +5622,7 @@ def api_peer_set(geo_id):
 
 
 # ── On-demand billing fetch ────────────────────────────────────────────────────
-@app.route("/api/billing/<geo_id>")
+@app.route("/<county_slug>/api/billing/<geo_id>")
 @limiter.limit(_LIMIT_EXTERNAL)
 def api_billing(geo_id):
     """Fetch + cache 2021-2024 billing data for one parcel from the portal.
@@ -5566,7 +5804,7 @@ def _use_code_expr_for_view(view):
     return use_code_case_sql("p.classi_cd", fallback)
 
 
-@app.route("/parcels")
+@app.route("/<county_slug>/parcels")
 def parcel_list():
     """
     Drill-through parcel list (Task 5).
@@ -5645,7 +5883,7 @@ def parcel_list():
     )
 
 
-@app.route("/compare")
+@app.route("/<county_slug>/compare")
 @limiter.limit(_LIMIT_HEAVY)
 def compare_parcels():
     """
@@ -5731,7 +5969,7 @@ def compare_parcels():
     return render_template("compare.html", parcels=parcels, error=None)
 
 
-@app.route("/info")
+@app.route("/<county_slug>/info")
 def info():
     """Informational reference page -- topic sections (starting with Homestead
     Exemptions) filtered by state / county. Static content today (Texas /
@@ -5740,7 +5978,7 @@ def info():
     return render_template("info.html")
 
 
-@app.route("/about")
+@app.route("/<county_slug>/about")
 def about():
     return render_template("about.html")
 
@@ -5749,22 +5987,22 @@ def about():
 # Popup, Footer Notice", July 2026. Static legal content, no DB/network
 # involved -- same undecorated (global-rate-limit-only) treatment as /about,
 # /info, /styleguide above.
-@app.route("/terms")
+@app.route("/<county_slug>/terms")
 def terms():
     return render_template("terms.html")
 
 
-@app.route("/privacy")
+@app.route("/<county_slug>/privacy")
 def privacy():
     return render_template("privacy.html")
 
 
-@app.route("/disclaimer")
+@app.route("/<county_slug>/disclaimer")
 def disclaimer():
     return render_template("disclaimer.html")
 
 
-@app.route("/styleguide")
+@app.route("/<county_slug>/styleguide")
 def styleguide():
     """Design-system reference: renders every token and component.
     Single source of truth for the visual language — review here before

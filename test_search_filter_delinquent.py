@@ -50,7 +50,11 @@ from tax_logic.classify import label_case_sql
 APP_PY = open("app.py").read()
 
 START_MARKER = "\ndef api_search_filter():"
-END_MARKER = "\n\n\n@app.route(\"/api/estimate_acq/<geo_id>\")"
+# DALLAS-GATE-1 Part 2: route path now carries a leading /<county_slug>
+# segment (app.py's real, current decorator text) -- marker updated to
+# match; the slice boundary logic itself (find api_search_filter's real
+# source between two literal markers) is unchanged.
+END_MARKER = "\n\n\n@app.route(\"/<county_slug>/api/estimate_acq/<geo_id>\")"
 
 start = APP_PY.index(START_MARKER)
 end = APP_PY.index(END_MARKER, start)

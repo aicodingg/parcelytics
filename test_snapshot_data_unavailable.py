@@ -174,7 +174,10 @@ def test_real_compute_snapshot_data_returns_data_unavailable_when_stale():
     stub = _StaleQueryStub(table_batch_id=3, latest_batch_id=5)
     ns["query"] = stub
 
-    result = ns["_compute_snapshot_data"]("overall")
+    # DALLAS-GATE-1 Part 2: _compute_snapshot_data() now takes county_code
+    # as a real 2nd param (no longer a hardcoded "TRAVIS" literal inside the
+    # function) -- test call sites updated to match the real new signature.
+    result = ns["_compute_snapshot_data"]("overall", "TRAVIS")
 
     check("stale scenario: data_unavailable is True", result["data_unavailable"] is True, result)
     check("stale scenario: a real, honest reason string is present",
@@ -204,7 +207,7 @@ def test_real_compute_snapshot_data_returns_real_rows_when_fresh():
     ns = _build_real_namespace(source)
     ns["query"] = _FreshQueryStub()
 
-    result = ns["_compute_snapshot_data"]("overall")
+    result = ns["_compute_snapshot_data"]("overall", "TRAVIS")
 
     check("fresh scenario: data_unavailable is False", result["data_unavailable"] is False, result)
     check("fresh scenario: real breakdown row came through", len(result["rows"]) == 1, result["rows"])
@@ -236,7 +239,7 @@ def test_real_freshness_gate_empty_table_case():
         raise AssertionError(f"unexpected query: {sql!r}")
 
     ns["query"] = empty_table_stub
-    result = ns["_compute_snapshot_data"]("residential")
+    result = ns["_compute_snapshot_data"]("residential", "TRAVIS")
 
     check("empty-table scenario: data_unavailable is True", result["data_unavailable"] is True, result)
     check("empty-table scenario: reason names 'has not been generated yet'",

@@ -256,7 +256,9 @@ def _load_real_app_functions():
         ("\ndef build_tax_calendar", "\ndef generate_property_narrative"),
         ("\ndef combine_confidence_tiers", "\nCERTIFIED_TIER_DATA_SOURCES = frozenset("),
         ("\nCERTIFIED_TIER_DATA_SOURCES = frozenset(", "\ndef _row_confidence"),
-        ("\ndef _row_confidence", "\n@app.route(\"/api/search_filter\")"),
+        # DALLAS-GATE-1 Part 2: route now carries a leading /<county_slug>
+        # segment -- marker updated to match app.py's real current text.
+        ("\ndef _row_confidence", "\n@app.route(\"/<county_slug>/api/search_filter\")"),
     ]:
         start = src.index(start_marker)
         end = src.index(next_marker, start)

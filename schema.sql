@@ -368,6 +368,30 @@ CREATE INDEX IF NOT EXISTS idx_billing_geo        ON tax_billing(geo_id);
 CREATE INDEX IF NOT EXISTS idx_rate_year          ON county_tax_rate(tax_year);
 CREATE INDEX IF NOT EXISTS idx_rate_entity        ON county_tax_rate(entity_code);
 
+-- DALLAS-GATE-1 Part 3a: two real, confirmed loader-only index gaps, same
+-- reactive pattern as this file's other post-incident index waves above.
+-- Neither loader filters by geo_id (tax_billing) or tax_year (quarantine)
+-- at these call sites, so tax_billing's/tax_billing_quarantine's existing
+-- composite PK -- (county_code, geo_id, tax_year), leading with
+-- county_code per the partitioning migration -- cannot serve either query
+-- as an index range scan; both currently fall back to a sequential scan.
+--   idx_billing_year        -- load_tax_current.py:134 (new_only mode):
+--                               "SELECT geo_id, tax_year FROM tax_billing
+--                               WHERE tax_year = 2025 AND data_source IS
+--                               NOT NULL" -- tax_year alone, no geo_id.
+--                               Same shape at backfill_tax_billing_2025_
+--                               confidence.py's UPDATE_VERIFIED_SQL /
+--                               UPDATE_DERIVED_SQL / UPDATE_NO_USABLE_
+--                               TOTAL_SQL (all filter by tax_year = 2025,
+--                               not by geo_id).
+--   idx_quarantine_geo       -- quarantine_contamination.py:397 and :445
+--                               (restore() the CLASS_A_TRACKED_EXCEPTIONS
+--                               path): "SELECT count(*) FROM
+--                               tax_billing_quarantine WHERE geo_id =
+--                               ANY(%s)" -- geo_id alone, no tax_year.
+CREATE INDEX IF NOT EXISTS idx_billing_year       ON tax_billing(tax_year);
+CREATE INDEX IF NOT EXISTS idx_quarantine_geo     ON tax_billing_quarantine(geo_id);
+
 -- Search page filter system (/api/search_filter) — approved, reviewed DDL.
 -- Full selectivity/composite-column reasoning per index: see
 -- task_staging/search_filters/proposed_indexes.sql. Summary:
