@@ -100,6 +100,8 @@ assert "BILLING-DIAG-3" in FUNC_SRC, "sanity: slice must contain the BILLING-DIA
 assert "BILLING-DIAG-4" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-4 flush() fix"
 assert FUNC_SRC.count("sentry_sdk.flush") == 3, \
     "sanity: exactly 3 flush() calls expected (breadcrumb, warning branch, exception handler)"
+assert "BILLING-DIAG-5" in FUNC_SRC, "sanity: slice must contain the BILLING-DIAG-5 print() diagnostic"
+assert "flush=True" in FUNC_SRC, "sanity: the BILLING-DIAG-5 print() must force immediate stdout delivery"
 
 HTTP_OK = 0
 HTTP_NOT_FOUND = 404
@@ -235,6 +237,15 @@ def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc
     def fake_upsert_billing_rows(conn, records):
         upsert_calls.append(records)
 
+    print_calls = []
+
+    def fake_print(*args, **kwargs):
+        # BILLING-DIAG-5: records the message text and whether flush=True was
+        # passed, the same way FakeSentry records flush() calls -- this is
+        # the real regression guard for BILLING-DIAG-5's own requirement
+        # (immediate stdout delivery via flush=True, not a bare print()).
+        print_calls.append({"args": args, "kwargs": kwargs})
+
     def fake_jsonify(payload):
         return payload
 
@@ -250,6 +261,7 @@ def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc
         "upsert_billing_rows": fake_upsert_billing_rows,
         "jsonify": fake_jsonify,
         "sentry_sdk": fake_sentry,
+        "print": fake_print,
         "HTTP_OK": HTTP_OK,
         "HTTP_NOT_FOUND": HTTP_NOT_FOUND,
         "HTTP_NETWORK_ERR": HTTP_NETWORK_ERR,
@@ -271,6 +283,7 @@ def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc
         "sentry_flush_calls": fake_sentry.flush_calls,
         "sentry_exceptions": fake_sentry.exceptions,
         "sentry_calls": fake_sentry.calls,
+        "print_calls": print_calls,
         "conn_closed": fake_conn.closed,
         "execute_log": fake_conn.execute_log,
     }
@@ -282,6 +295,24 @@ def info_msgs(messages):
 
 def warning_msgs(messages):
     return [m for m in messages if m[1] == "warning"]
+
+
+def check_diag5_print(label_prefix, r, expect_geo_id=None, expect_substrings=None):
+    """BILLING-DIAG-5: assert the parallel print() diagnostic fired exactly
+    once, with flush=True, and (optionally) that its message contains the
+    expected geo_id / status substrings."""
+    ok = True
+    ok &= check(f"{label_prefix}: print() called exactly once", len(r["print_calls"]) == 1)
+    if r["print_calls"]:
+        call = r["print_calls"][0]
+        ok &= check(f"{label_prefix}: print() used flush=True", call["kwargs"].get("flush") is True)
+        msg = call["args"][0] if call["args"] else ""
+        ok &= check(f"{label_prefix}: print() message tagged BILLING-DIAG-5", "BILLING-DIAG-5" in msg)
+        if expect_geo_id:
+            ok &= check(f"{label_prefix}: print() message names the real geo_id", expect_geo_id in msg)
+        for sub in (expect_substrings or []):
+            ok &= check(f"{label_prefix}: print() message contains '{sub}'", sub in msg)
+    return ok
 
 
 def every_capture_immediately_flushed(calls):
@@ -318,6 +349,7 @@ all_ok &= check("no capture_exception call (no exception occurred)", r["sentry_e
 all_ok &= check("BILLING-DIAG-4: breadcrumb's capture_message() is immediately followed by flush()",
                 every_capture_immediately_flushed(r["sentry_calls"]))
 all_ok &= check("exactly 1 flush() call total (just the breadcrumb's)", len(r["sentry_flush_calls"]) == 1)
+all_ok &= check_diag5_print("Test 1", r, expect_geo_id="0100030105", expect_substrings=["html_is_none=False", "status=0"])
 all_ok &= check("route returns status ok", r["payload"]["status"] == "ok")
 all_ok &= check("connection closed in finally", r["conn_closed"] is True)
 
@@ -335,6 +367,7 @@ all_ok &= check("BILLING-DIAG-3 info breadcrumb still sent (exactly 1)",
                 len(info_msgs(r["sentry_messages"])) == 1)
 all_ok &= check("BILLING-DIAG-4: breadcrumb's capture_message() is immediately followed by flush()",
                 every_capture_immediately_flushed(r["sentry_calls"]))
+all_ok &= check_diag5_print("Test 2", r, expect_geo_id="0254402034", expect_substrings=["attempts_made=2"])
 
 # ── 3. Both attempts fail (network error) — the real, live bug's exact shape
 print("Test 3: fetch_html fails BOTH attempts (reproduces the live bug's exact symptom)")
@@ -355,6 +388,8 @@ all_ok &= check("sentry_sdk.flush() called twice (BILLING-DIAG-4: breadcrumb + w
                 len(r["sentry_flush_calls"]) == 2)
 all_ok &= check("BILLING-DIAG-4: every capture_message() is immediately followed by flush()",
                 every_capture_immediately_flushed(r["sentry_calls"]))
+all_ok &= check_diag5_print("Test 3", r, expect_geo_id="0100030105",
+                             expect_substrings=["html_is_none=True", "status=-1", "attempts_made=2"])
 all_ok &= check("route STILL returns a clean status:ok (not an exception) — matches live evidence exactly",
                 r["payload"]["status"] == "ok" and r["payload"]["rows"] == [])
 all_ok &= check("connection closed in finally even on total fetch failure", r["conn_closed"] is True)
@@ -369,6 +404,7 @@ all_ok &= check("BILLING-DIAG-3 info breadcrumb still sent (fires unconditionall
                 len(info_msgs(r["sentry_messages"])) == 1)
 all_ok &= check("BILLING-DIAG-4: breadcrumb's capture_message() is immediately followed by flush()",
                 every_capture_immediately_flushed(r["sentry_calls"]))
+all_ok &= check_diag5_print("Test 4", r, expect_geo_id="9999999999", expect_substrings=["attempts_made=1"])
 all_ok &= check("no upsert call", r["upsert_calls"] == [])
 
 # ── 5. WAF/block-page scenario (BILLING-DIAG-2's own new hypothesis) ─────
@@ -387,6 +423,8 @@ all_ok &= check("sentry_sdk.flush() called twice (BILLING-DIAG-4: breadcrumb + w
                 len(r["sentry_flush_calls"]) == 2)
 all_ok &= check("BILLING-DIAG-4: every capture_message() is immediately followed by flush()",
                 every_capture_immediately_flushed(r["sentry_calls"]))
+all_ok &= check_diag5_print("Test 5", r, expect_geo_id="0100030105",
+                             expect_substrings=["html_is_none=True", "attempts_made=2"])
 all_ok &= check("route still returns a clean status:ok/rows:[]",
                 r["payload"]["status"] == "ok" and r["payload"]["rows"] == [])
 
@@ -413,6 +451,7 @@ all_ok &= check("sentry_sdk.flush() called twice (BILLING-DIAG-4: breadcrumb + e
                 len(r["sentry_flush_calls"]) == 2)
 all_ok &= check("BILLING-DIAG-4: every capture_message()/capture_exception() is immediately followed by flush()",
                 every_capture_immediately_flushed(r["sentry_calls"]))
+all_ok &= check_diag5_print("Test 6", r, expect_geo_id="0100030105", expect_substrings=["html_is_none=False"])
 all_ok &= check("connection still closed in finally even on this exception path", r["conn_closed"] is True)
 
 print()

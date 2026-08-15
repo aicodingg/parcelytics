@@ -5930,6 +5930,27 @@ def api_billing(geo_id):
             # delivery before a gunicorn worker recycles) applies identically
             # here and was simply missed when this breadcrumb was added.
             sentry_sdk.flush(timeout=2)
+            # BILLING-DIAG-5: TEMPORARY, second/parallel diagnostic channel.
+            # The BILLING-DIAG-3 breadcrumb above still never appeared in
+            # Sentry even after BILLING-DIAG-4's real, confirmed flush() fix
+            # deployed -- Sentry's own UI, Inbound Data Filters, and this
+            # app's own sentry_sdk.init() call have all been checked directly
+            # and ruled out as the cause. Rather than keep debugging Sentry's
+            # delivery path, use a channel already proven reliable this same
+            # session (Render's real Application Logs, via plain stdout --
+            # the "Sentry error monitoring: ENABLED" startup line and every
+            # real HTTP access log line both show up there every time).
+            # flush=True forces immediate stdout delivery, the print()
+            # equivalent of the flush() fix already applied to the Sentry
+            # call above. Does NOT replace the Sentry breadcrumb -- both
+            # channels run in parallel, no working code removed. Remove once
+            # BILLING-DIAG-5 is resolved.
+            print(
+                f"BILLING-DIAG-5: geo_id={geo_id} post-retry-loop "
+                f"html_is_none={html is None} status={status} "
+                f"attempts_made={_attempt + 1}",
+                flush=True,
+            )
             if html is not None and status == HTTP_OK:
                 receipts = parse_receipts(html)
                 target   = [r for r in receipts if r["tax_year"] in _BILLING_TARGET_YEARS]
