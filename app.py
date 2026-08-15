@@ -1756,6 +1756,31 @@ def index():
     return render_template("index.html", q=q, error=error)
 
 
+@app.route("/healthz")
+@limiter.exempt
+def healthz():
+    """DB-free liveness check (POST-PARTITION-INCIDENT-1-AUDIT, adjacent
+    item). Deliberately touches NO database connection, NO query() call --
+    returns 200 the instant the process can run Python at all. Exists
+    specifically so a health checker can distinguish "the gunicorn process
+    itself is alive" from "the database is slow/down" -- Render's current
+    health check (if pointed at "/", per its own real DB-heavy index()
+    handler above) cannot make that distinction today, and would report a
+    healthy process as unhealthy during exactly the kind of DB slowdown
+    this audit exists to catch (a false "process is dead" signal during a
+    real query-timeout incident, potentially triggering an unwanted
+    restart mid-incident instead of leaving the process up to investigate).
+    Exempted from Flask-Limiter (@limiter.exempt) since a health checker
+    may poll this frequently and should never be throttled.
+
+    NOTE: this route alone does not change what Render actually checks --
+    Render's Health Check Path is a separate setting on the service itself
+    (Render Dashboard -> service -> Settings -> Health & Alerts), and
+    updating it to "/healthz" is a deliberate dashboard change left for
+    Diego to make himself, not something this code change can do."""
+    return jsonify({"ok": True}), 200
+
+
 @app.route("/search")
 def search_page():
     """Task 13 — dedicated search page with a US coverage map (visual only).
