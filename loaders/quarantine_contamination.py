@@ -326,21 +326,35 @@ def run(conn, dry_run=True, include_orphans=False):
         "56 rows deleted during the original incident response) -- quarantined "
         "rather than deleted for reversibility/auditability."
     )
+    # DALLAS-GATE-4: county_code added to both RETURNING and the INSERT's
+    # column/SELECT lists. This path carries forward whatever county_code
+    # the row already has in tax_billing (no new value assigned here) --
+    # unlike the other 4 tax_billing writers fixed this round, this
+    # function never picks a county, it just moves existing rows. Real,
+    # MORE severe than an ON CONFLICT mismatch: this INSERT has no ON
+    # CONFLICT clause at all, so the failure mode against the live,
+    # already-migrated schema is a straight NOT NULL violation on
+    # tax_billing_quarantine.county_code (NOT NULL post-migration per
+    # migrate_county_partitioning.py's TABLE_SPECS), not the "no unique or
+    # exclusion constraint matching" error the ON CONFLICT-based fixes in
+    # the other 4 files guard against.
     insert_sql = f"""
         WITH moved AS (
             DELETE FROM tax_billing
             WHERE {_CONTAMINATION_WHERE} {exclude_clause}
-            RETURNING geo_id, tax_year, billing_num, owner_name, total_tax,
-                      total_paid, total_due, is_delinquent, first_delinquent_yr,
-                      cause_number, exemption_codes, data_source, confidence_level
+            RETURNING county_code, geo_id, tax_year, billing_num, owner_name,
+                      total_tax, total_paid, total_due, is_delinquent,
+                      first_delinquent_yr, cause_number, exemption_codes,
+                      data_source, confidence_level
         )
         INSERT INTO tax_billing_quarantine
-            (geo_id, tax_year, billing_num, owner_name, total_tax, total_paid,
-             total_due, is_delinquent, first_delinquent_yr, cause_number,
-             exemption_codes, data_source, confidence_level, incident_ref, reason)
-        SELECT geo_id, tax_year, billing_num, owner_name, total_tax, total_paid,
-               total_due, is_delinquent, first_delinquent_yr, cause_number,
-               exemption_codes, data_source, confidence_level, %s, %s
+            (county_code, geo_id, tax_year, billing_num, owner_name, total_tax,
+             total_paid, total_due, is_delinquent, first_delinquent_yr,
+             cause_number, exemption_codes, data_source, confidence_level,
+             incident_ref, reason)
+        SELECT county_code, geo_id, tax_year, billing_num, owner_name, total_tax,
+               total_paid, total_due, is_delinquent, first_delinquent_yr,
+               cause_number, exemption_codes, data_source, confidence_level, %s, %s
         FROM moved
     """
     with conn.cursor() as cur:
@@ -370,9 +384,11 @@ def restore_class_a(conn, geo_ids=None, dry_run=True):
     Reuses run()'s own transaction pattern in reverse: DELETE ... RETURNING
     ... INSERT ... SELECT ... FROM deleted, one transaction, same
     before/after row-count sanity check. Restores the row to tax_billing
-    exactly as it was quarantined -- same 13 real tax_billing columns,
-    dropping only the 3 quarantine-specific bookkeeping columns
-    (quarantined_at, incident_ref, reason).
+    exactly as it was quarantined -- same 14 real tax_billing columns
+    (DALLAS-GATE-4: county_code added, carried forward from whatever value
+    the row already had in tax_billing_quarantine -- this function never
+    assigns a new county_code), dropping only the 3 quarantine-specific
+    bookkeeping columns (quarantined_at, incident_ref, reason).
 
     geo_ids defaults to CLASS_A_TRACKED_EXCEPTIONS (the full named list) --
     pass an explicit subset only if you deliberately want to restore fewer
@@ -413,28 +429,40 @@ def restore_class_a(conn, geo_ids=None, dry_run=True):
               "(no --dry-run) to execute.")
         return n_before
 
+    # DALLAS-GATE-4: county_code added to RETURNING/INSERT/SELECT (carried
+    # forward from whatever value the row already has in
+    # tax_billing_quarantine -- this function never assigns a new
+    # county_code), and the defensive ON CONFLICT target corrected from the
+    # old, dropped (geo_id, tax_year) constraint shape to the live,
+    # migrated (county_code, geo_id, tax_year) one. Without this, restoring
+    # against the live schema would hard-fail with Postgres's real "there
+    # is no unique or exclusion constraint matching the ON CONFLICT
+    # specification" error -- the same failure mode already diagnosed and
+    # fixed once in scrape_billing_history.py during DALLAS-GATE-2.
     restore_sql = """
         WITH restored AS (
             DELETE FROM tax_billing_quarantine
             WHERE geo_id = ANY(%s)
-            RETURNING geo_id, tax_year, billing_num, owner_name, total_tax,
-                      total_paid, total_due, is_delinquent, first_delinquent_yr,
-                      cause_number, exemption_codes, data_source, confidence_level
+            RETURNING county_code, geo_id, tax_year, billing_num, owner_name,
+                      total_tax, total_paid, total_due, is_delinquent,
+                      first_delinquent_yr, cause_number, exemption_codes,
+                      data_source, confidence_level
         )
         INSERT INTO tax_billing
-            (geo_id, tax_year, billing_num, owner_name, total_tax, total_paid,
-             total_due, is_delinquent, first_delinquent_yr, cause_number,
-             exemption_codes, data_source, confidence_level)
-        SELECT geo_id, tax_year, billing_num, owner_name, total_tax, total_paid,
-               total_due, is_delinquent, first_delinquent_yr, cause_number,
-               exemption_codes, data_source, confidence_level
+            (county_code, geo_id, tax_year, billing_num, owner_name, total_tax,
+             total_paid, total_due, is_delinquent, first_delinquent_yr,
+             cause_number, exemption_codes, data_source, confidence_level)
+        SELECT county_code, geo_id, tax_year, billing_num, owner_name, total_tax,
+               total_paid, total_due, is_delinquent, first_delinquent_yr,
+               cause_number, exemption_codes, data_source, confidence_level
         FROM restored
         -- Defensive ON CONFLICT: should never fire (a quarantined row's
-        -- (geo_id, tax_year) has no live counterpart by construction -- it
-        -- was DELETEd from tax_billing when quarantined in the first
-        -- place), but guards against a hand-run INSERT elsewhere having
-        -- since re-populated the same key while this row sat in quarantine.
-        ON CONFLICT (geo_id, tax_year) DO NOTHING
+        -- (county_code, geo_id, tax_year) has no live counterpart by
+        -- construction -- it was DELETEd from tax_billing when quarantined
+        -- in the first place), but guards against a hand-run INSERT
+        -- elsewhere having since re-populated the same key while this row
+        -- sat in quarantine.
+        ON CONFLICT (county_code, geo_id, tax_year) DO NOTHING
     """
     with conn.cursor() as cur:
         cur.execute(restore_sql, (geo_ids,))

@@ -48,34 +48,51 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from loaders.db import get_conn
-from loaders.scrape_billing_history import ensure_columns as ensure_billing_cols
+from loaders.scrape_billing_history import ensure_columns as ensure_billing_cols, DEFAULT_COUNTY
 
 DATA_SOURCE = "taxcur_current"
 
+# DALLAS-GATE-4: every query below scoped to a single county_code (default
+# DEFAULT_COUNTY = "TRAVIS", imported from scrape_billing_history.py rather
+# than re-declared here -- single source of truth, matches this round's
+# other fixes' reasoning). These are UPDATEs with no unique-constraint
+# ON CONFLICT target, so unlike the other 4 tax_billing writers fixed this
+# round, an unscoped run here would NOT hard-fail against the live schema
+# today -- but it would silently reach across every county's rows on a
+# future re-run once Dallas data exists, since geo_id/tax_year alone is no
+# longer a safe correlation key once geo_ids can collide across counties.
+# The COUNT_SQL dry-run queries are scoped identically so --dry-run's
+# reported counts always match what --run would actually touch, and the
+# tax_billing_entity EXISTS/join correlations are also scoped by
+# county_code (not just geo_id/tax_year) for the same real,
+# forward-looking-correctness reason as load_pir_billing_2021_full.py's
+# verify_sanity_parcels() fix.
 COUNT_SQL = {
     "verified": """
         SELECT COUNT(*) FROM tax_billing
-        WHERE tax_year = 2025 AND data_source IS NULL
+        WHERE tax_year = 2025 AND data_source IS NULL AND county_code = %s
           AND total_tax IS NOT NULL AND total_tax != 0
     """,
     "derived": """
         SELECT COUNT(*) FROM tax_billing tb
-        WHERE tb.tax_year = 2025 AND tb.data_source IS NULL
+        WHERE tb.tax_year = 2025 AND tb.data_source IS NULL AND tb.county_code = %s
           AND (tb.total_tax IS NULL OR tb.total_tax = 0)
           AND EXISTS (
               SELECT 1 FROM tax_billing_entity tbe
               WHERE tbe.geo_id = tb.geo_id AND tbe.tax_year = 2025
+                AND tbe.county_code = tb.county_code
               GROUP BY tbe.geo_id, tbe.tax_year
               HAVING SUM(tbe.amount_due) > 0
           )
     """,
     "no_usable_total": """
         SELECT COUNT(*) FROM tax_billing tb
-        WHERE tb.tax_year = 2025 AND tb.data_source IS NULL
+        WHERE tb.tax_year = 2025 AND tb.data_source IS NULL AND tb.county_code = %s
           AND (tb.total_tax IS NULL OR tb.total_tax = 0)
           AND NOT EXISTS (
               SELECT 1 FROM tax_billing_entity tbe
               WHERE tbe.geo_id = tb.geo_id AND tbe.tax_year = 2025
+                AND tbe.county_code = tb.county_code
               GROUP BY tbe.geo_id, tbe.tax_year
               HAVING SUM(tbe.amount_due) > 0
           )
@@ -85,16 +102,16 @@ COUNT_SQL = {
 UPDATE_VERIFIED_SQL = """
     UPDATE tax_billing
     SET data_source = %s, confidence_level = 'verified'
-    WHERE tax_year = 2025 AND data_source IS NULL
+    WHERE tax_year = 2025 AND data_source IS NULL AND county_code = %s
       AND total_tax IS NOT NULL AND total_tax != 0
 """
 
 UPDATE_DERIVED_SQL = """
     WITH entity_sums AS (
-        SELECT geo_id, tax_year, SUM(amount_due) AS total_due_sum
+        SELECT county_code, geo_id, tax_year, SUM(amount_due) AS total_due_sum
         FROM tax_billing_entity
-        WHERE tax_year = 2025
-        GROUP BY geo_id, tax_year
+        WHERE tax_year = 2025 AND county_code = %s
+        GROUP BY county_code, geo_id, tax_year
         HAVING SUM(amount_due) > 0
     )
     UPDATE tax_billing tb
@@ -104,6 +121,7 @@ UPDATE_DERIVED_SQL = """
         confidence_level = 'derived'
     FROM entity_sums es
     WHERE tb.geo_id = es.geo_id AND tb.tax_year = es.tax_year
+      AND tb.county_code = es.county_code
       AND tb.tax_year = 2025 AND tb.data_source IS NULL
       AND (tb.total_tax IS NULL OR tb.total_tax = 0)
 """
@@ -111,7 +129,7 @@ UPDATE_DERIVED_SQL = """
 UPDATE_NO_USABLE_TOTAL_SQL = """
     UPDATE tax_billing tb
     SET data_source = %s
-    WHERE tb.tax_year = 2025 AND tb.data_source IS NULL
+    WHERE tb.tax_year = 2025 AND tb.data_source IS NULL AND tb.county_code = %s
       AND (tb.total_tax IS NULL OR tb.total_tax = 0)
 """
 
@@ -120,6 +138,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
                          help="Report counts only, write nothing")
+    parser.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=(
+            f"county_code every query is scoped to (default: {DEFAULT_COUNTY}). "
+            "DALLAS-GATE-4: mirrors scrape_billing_history.py's own --county "
+            "convention -- these are UPDATEs with no ON CONFLICT target, so "
+            "unscoped they wouldn't hard-fail today, but would silently touch "
+            "every county's rows on a future re-run once Dallas data exists."
+        ),
+    )
     args = parser.parse_args()
 
     conn = get_conn()
@@ -129,10 +157,11 @@ def main():
         with conn.cursor() as cur:
             counts = {}
             for label, sql in COUNT_SQL.items():
-                cur.execute(sql)
+                cur.execute(sql, (args.county,))
                 counts[label] = cur.fetchone()[0]
 
-        print("  Rows this backfill would affect (data_source IS NULL, tax_year=2025):")
+        print(f"  Rows this backfill would affect (data_source IS NULL, tax_year=2025, "
+              f"county_code={args.county}):")
         for label, n in counts.items():
             print(f"    {label}: {n:,}")
         print(f"    TOTAL: {sum(counts.values()):,}")
@@ -142,12 +171,12 @@ def main():
             return
 
         with conn.cursor() as cur:
-            cur.execute(UPDATE_VERIFIED_SQL, (DATA_SOURCE,))
+            cur.execute(UPDATE_VERIFIED_SQL, (DATA_SOURCE, args.county))
             n_verified = cur.rowcount
-            cur.execute(UPDATE_DERIVED_SQL, (DATA_SOURCE,))
+            cur.execute(UPDATE_DERIVED_SQL, (args.county, DATA_SOURCE))
             n_derived = cur.rowcount
             # Run last: only touches rows the two passes above didn't already claim.
-            cur.execute(UPDATE_NO_USABLE_TOTAL_SQL, (DATA_SOURCE,))
+            cur.execute(UPDATE_NO_USABLE_TOTAL_SQL, (DATA_SOURCE, args.county))
             n_no_total = cur.rowcount
         conn.commit()
 
@@ -161,8 +190,8 @@ def main():
             for geo_id in ("0100030105", "0100030109"):
                 cur.execute("""
                     SELECT total_tax, data_source, confidence_level
-                    FROM tax_billing WHERE geo_id = %s AND tax_year = 2025
-                """, (geo_id,))
+                    FROM tax_billing WHERE geo_id = %s AND tax_year = 2025 AND county_code = %s
+                """, (geo_id, args.county))
                 row = cur.fetchone()
                 print(f"    {geo_id}: {row}")
     finally:

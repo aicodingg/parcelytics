@@ -31,6 +31,20 @@ import psycopg2.extras
 # Only accept historical years; refuse to overwrite 2025 data from this loader
 VALID_YEARS = {2021, 2022, 2023, 2024}
 
+# DALLAS-GATE-4: tax_billing is a county_code-leading composite-PK table per
+# migrate_county_partitioning.py's TABLE_SPECS (old_pk ["geo_id","tax_year"]
+# -> new_pk ["county_code","geo_id","tax_year"]) -- already migrated live in
+# production (DALLAS-GATE-1). Before this fix, billing_sql/entity_sql below
+# neither wrote county_code (a real NOT NULL column on the live table) nor
+# targeted the real live unique constraint in their ON CONFLICT clauses
+# (still named the old (geo_id, tax_year) / (geo_id, tax_year, entity_code)
+# columns) -- every INSERT here would hard-fail against the live, migrated
+# table with Postgres's real "there is no unique or exclusion constraint
+# matching the ON CONFLICT specification" error. Same real bug, same real
+# fix pattern as loaders/scrape_billing_history.py's own _UPSERT_SQL
+# (DALLAS-GATE-2), mirrored here rather than reinvented (DALLAS-GATE-3/-4).
+DEFAULT_COUNTY = "TRAVIS"  # matches parcel_resolver.py's own DEFAULT_COUNTY convention
+
 
 def _f(v):
     try:
@@ -60,18 +74,18 @@ def inspect(filepath):
     print("Key columns to verify: PARCEL, TAXYEAR, TOTAL_TAX, TOTAL_DUE, ENTITY1…ENTITYn")
 
 
-def load_file(conn, filepath, dry_run=False):
+def load_file(conn, filepath, dry_run=False, county_code=DEFAULT_COUNTY):
     """Load one billing file. Returns (rows_written, years_seen)."""
     print(f"  Loading {os.path.basename(filepath)} ({os.path.getsize(filepath)/1e6:.0f} MB)…")
     t0 = time.time()
 
     billing_sql = """
         INSERT INTO tax_billing
-            (geo_id, tax_year, billing_num, owner_name,
+            (county_code, geo_id, tax_year, billing_num, owner_name,
              total_tax, total_paid, total_due,
              is_delinquent, exemption_codes)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (geo_id, tax_year) DO UPDATE
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE
             SET billing_num     = EXCLUDED.billing_num,
                 owner_name      = EXCLUDED.owner_name,
                 total_tax       = EXCLUDED.total_tax,
@@ -82,9 +96,9 @@ def load_file(conn, filepath, dry_run=False):
     """
 
     entity_sql = """
-        INSERT INTO tax_billing_entity (geo_id, tax_year, entity_code, amount_due, amount_paid)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (geo_id, tax_year, entity_code) DO UPDATE
+        INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE
             SET amount_due  = EXCLUDED.amount_due,
                 amount_paid = EXCLUDED.amount_paid
     """
@@ -128,7 +142,7 @@ def load_file(conn, filepath, dry_run=False):
             is_delinquent = bool(total_due and total_due > 0.01)
 
             billing_rows.append((
-                geo_id, tax_year, billing_num, owner_name,
+                county_code, geo_id, tax_year, billing_num, owner_name,
                 total_tax, total_paid, total_due, is_delinquent, exemptions
             ))
 
@@ -137,7 +151,7 @@ def load_file(conn, filepath, dry_run=False):
                 due      = _f(row.get(f"DUE{i}", ""))
                 paid     = _f(row.get(f"PAID{i}", ""))
                 if ent_code and (due or paid):
-                    entity_rows.append((geo_id, tax_year, ent_code, due, paid))
+                    entity_rows.append((county_code, geo_id, tax_year, ent_code, due, paid))
 
             if not dry_run and len(billing_rows) >= 3000:
                 with conn.cursor() as cur:
@@ -257,6 +271,16 @@ def main():
                         help="Count rows without writing to DB")
     parser.add_argument("--skip-metrics", action="store_true",
                         help="Skip updating parcel_metrics coverage after load")
+    parser.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=(
+            f"county_code written to every upserted row (default: {DEFAULT_COUNTY}). "
+            "DALLAS-GATE-4: mirrors scrape_billing_history.py's own --county "
+            "convention -- same real scope boundary applies (this loader's "
+            "own file-driven load has no per-row county signal today, so "
+            "the whole file is written under one county_code)."
+        ),
+    )
     args = parser.parse_args()
 
     files = config.PIR_BILLING_FILES
@@ -281,7 +305,7 @@ def main():
             if not os.path.exists(path):
                 print(f"  WARNING: {path} not found — skipping")
                 continue
-            n, years = load_file(conn, path, dry_run=args.dry_run)
+            n, years = load_file(conn, path, dry_run=args.dry_run, county_code=args.county)
             total += n
             all_years |= years
 

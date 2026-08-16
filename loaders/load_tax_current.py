@@ -30,7 +30,10 @@ from loaders.db import get_conn, execute_schema
 # Reused, not reimplemented: scrape_billing_history.py already added
 # data_source/confidence_level to tax_billing and knows how to ensure those
 # columns exist (same migration load_pir_billing_2021_full.py also reuses).
-from loaders.scrape_billing_history import ensure_columns as ensure_billing_cols
+# DALLAS-GATE-4: DEFAULT_COUNTY imported from the same real source
+# scrape_billing_history.py already established (DALLAS-GATE-2), single
+# source of truth rather than a second, independent "TRAVIS" constant.
+from loaders.scrape_billing_history import ensure_columns as ensure_billing_cols, DEFAULT_COUNTY
 
 import psycopg2.extras
 
@@ -80,7 +83,7 @@ def _i(v):
         return None
 
 
-def load(conn, dry_run=False, new_only=False):
+def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
     """
     dry_run=True (July 2026, per Diego's "is a live rerun safe" question):
     parses and classifies every row exactly as a real load would, but never
@@ -131,9 +134,17 @@ def load(conn, dry_run=False, new_only=False):
         print("  --new-only: fetching existing tagged (geo_id, tax_year) keys "
               "(read-only SELECT, no writes)…")
         with conn.cursor() as cur:
+            # DALLAS-GATE-4: county_code added -- this loader writes ONE
+            # county per invocation (county_code param), so scoping the
+            # already-tagged lookup to that same county is real, forward-
+            # looking correctness (a bare geo_id/tax_year key could
+            # otherwise wrongly skip/not-skip a row based on another
+            # county's already-tagged state once geo_ids can collide
+            # across counties).
             cur.execute(
                 "SELECT geo_id, tax_year FROM tax_billing "
-                "WHERE tax_year = 2025 AND data_source IS NOT NULL"
+                "WHERE tax_year = 2025 AND data_source IS NOT NULL AND county_code = %s",
+                (county_code,)
             )
             already_tagged_keys = {(r[0], r[1]) for r in cur.fetchall()}
         print(f"    {len(already_tagged_keys):,} already-tagged rows will be skipped entirely")
@@ -141,14 +152,27 @@ def load(conn, dry_run=False, new_only=False):
     print(f"  Loading TaxCurOpenData ({os.path.getsize(path)/1e6:.0f} MB)…")
     t0 = time.time()
 
+    # DALLAS-GATE-4: tax_billing/tax_billing_entity are county_code-leading
+    # composite-PK tables per migrate_county_partitioning.py's TABLE_SPECS --
+    # already migrated live in production (DALLAS-GATE-1). Before this fix,
+    # billing_sql/entity_sql below neither wrote county_code (a real NOT
+    # NULL column on the live tables) nor targeted the real live unique
+    # constraint in their ON CONFLICT clauses (still named the old
+    # (geo_id, tax_year) / (geo_id, tax_year, entity_code) columns) -- every
+    # INSERT here would hard-fail against the live, migrated tables with
+    # Postgres's real "there is no unique or exclusion constraint matching
+    # the ON CONFLICT specification" error. This is the primary 2025
+    # current-year billing loader, the most heavily-used of the 5 fixed this
+    # round. Same real fix pattern as scrape_billing_history.py's own
+    # _UPSERT_SQL (DALLAS-GATE-2), mirrored here (DALLAS-GATE-3/-4).
     billing_sql = """
         INSERT INTO tax_billing
-            (geo_id, tax_year, billing_num, owner_name,
+            (county_code, geo_id, tax_year, billing_num, owner_name,
              total_tax, total_paid, total_due,
              is_delinquent, exemption_codes,
              data_source, confidence_level)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (geo_id, tax_year) DO UPDATE
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE
             SET billing_num   = EXCLUDED.billing_num,
                 owner_name    = EXCLUDED.owner_name,
                 total_tax     = EXCLUDED.total_tax,
@@ -161,9 +185,9 @@ def load(conn, dry_run=False, new_only=False):
     """
 
     entity_sql = """
-        INSERT INTO tax_billing_entity (geo_id, tax_year, entity_code, amount_due, amount_paid)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (geo_id, tax_year, entity_code) DO UPDATE
+        INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE
             SET amount_due  = EXCLUDED.amount_due,
                 amount_paid = EXCLUDED.amount_paid
     """
@@ -264,7 +288,7 @@ def load(conn, dry_run=False, new_only=False):
                 paid     = _f(row.get(f"PAID{i}", ""))
                 if ent_code and (due or paid):
                     row_entities.append((ent_code, due, paid))
-                    entity_rows.append((geo_id, tax_year, ent_code, due, paid))
+                    entity_rows.append((county_code, geo_id, tax_year, ent_code, due, paid))
 
             # Confidence tagging + total_tax correction, computed once here
             # instead of re-derived by every reader (app.py's property_detail(),
@@ -292,7 +316,7 @@ def load(conn, dry_run=False, new_only=False):
             final_by_key[(geo_id, tax_year)] = confidence_level
 
             billing_rows.append((
-                geo_id, tax_year, billing_num, owner_name,
+                county_code, geo_id, tax_year, billing_num, owner_name,
                 total_tax, total_tax,  # total_paid ≈ total_tax if not delinquent
                 total_due, is_delinquent, exemptions,
                 DATA_SOURCE, confidence_level
@@ -419,21 +443,30 @@ if __name__ == "__main__":
                          help="Skip any (geo_id, tax_year) already tagged with a data_source "
                               "-- only add genuinely new rows, never touch already-tagged ones. "
                               "Combine with --dry-run to preview what would be added first.")
+    parser.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=(
+            f"county_code written to every upserted row (default: {DEFAULT_COUNTY}). "
+            "DALLAS-GATE-4: mirrors scrape_billing_history.py's own --county convention. "
+            "This is the primary 2025 current-year billing loader -- most heavily-used "
+            "of the 5 tax_billing writers fixed this round."
+        ),
+    )
     args = parser.parse_args()
 
     if args.dry_run and args.new_only:
         print("  *** --dry-run --new-only: opening a READ-ONLY connection (one SELECT, to "
               "fetch already-tagged keys) -- no writes, no commit, no schema/column migration ***")
         conn = get_conn()
-        load(conn, dry_run=True, new_only=True)
+        load(conn, dry_run=True, new_only=True, county_code=args.county)
         conn.close()
     elif args.dry_run:
         print("  *** --dry-run: no DB connection will be opened, nothing will be written ***")
-        load(conn=None, dry_run=True)
+        load(conn=None, dry_run=True, county_code=args.county)
     else:
         conn = get_conn()
         execute_schema(conn)
         ensure_billing_cols(conn)  # adds data_source/confidence_level if not already present
-        load(conn, new_only=args.new_only)
+        load(conn, new_only=args.new_only, county_code=args.county)
         load_delinquent(conn)
         conn.close()

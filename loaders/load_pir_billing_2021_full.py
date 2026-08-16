@@ -254,7 +254,11 @@ from loaders.load_pir_billing import update_coverage_level
 # Reused: scrape_billing_history.py already added data_source/confidence_level
 # to tax_billing and knows how to ensure those columns exist. Don't
 # reimplement that migration a third time.
-from loaders.scrape_billing_history import ensure_columns as ensure_billing_cols
+# DALLAS-GATE-4: DEFAULT_COUNTY imported from the same real source
+# scrape_billing_history.py already established (DALLAS-GATE-2) rather than
+# re-declaring a second, independent "TRAVIS" constant that could drift --
+# same real value/convention, single source of truth.
+from loaders.scrape_billing_history import ensure_columns as ensure_billing_cols, DEFAULT_COUNTY
 
 TAX_YEAR = 2021
 DATA_SOURCE = "pir_billing_2021_full"     # distinct from 'portal_scrape' and
@@ -609,12 +613,23 @@ def reconcile_geo_ids(conn, by_geo):
     return matched, unmatched
 
 
+# DALLAS-GATE-4: tax_billing/tax_billing_entity are county_code-leading
+# composite-PK tables per migrate_county_partitioning.py's TABLE_SPECS --
+# already migrated live in production (DALLAS-GATE-1). Before this fix,
+# BILLING_SQL/ENTITY_SQL below neither wrote county_code (a real NOT NULL
+# column on the live tables) nor targeted the real live unique constraint in
+# their ON CONFLICT clauses (still named the old (geo_id, tax_year) /
+# (geo_id, tax_year, entity_code) columns) -- every INSERT here would
+# hard-fail against the live, migrated tables with Postgres's real "there is
+# no unique or exclusion constraint matching the ON CONFLICT specification"
+# error. Same real bug, same real fix pattern as scrape_billing_history.py's
+# own _UPSERT_SQL (DALLAS-GATE-2), mirrored here (DALLAS-GATE-3/-4).
 BILLING_SQL = """
     INSERT INTO tax_billing
-        (geo_id, tax_year, total_tax, total_paid, data_source, confidence_level)
-    VALUES (%(geo_id)s, %(tax_year)s, %(total_tax)s, %(total_paid)s,
+        (county_code, geo_id, tax_year, total_tax, total_paid, data_source, confidence_level)
+    VALUES (%(county_code)s, %(geo_id)s, %(tax_year)s, %(total_tax)s, %(total_paid)s,
             %(data_source)s, %(confidence_level)s)
-    ON CONFLICT (geo_id, tax_year) DO UPDATE
+    ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE
         SET total_tax        = EXCLUDED.total_tax,
             total_paid       = EXCLUDED.total_paid,
             data_source      = EXCLUDED.data_source,
@@ -629,28 +644,29 @@ BILLING_SQL = """
 # task report for the explicit tradeoff discussion.
 
 ENTITY_SQL = """
-    INSERT INTO tax_billing_entity (geo_id, tax_year, entity_code, amount_due, amount_paid)
-    VALUES (%(geo_id)s, %(tax_year)s, %(entity_code)s, %(amount_due)s, %(amount_paid)s)
-    ON CONFLICT (geo_id, tax_year, entity_code) DO UPDATE
+    INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)
+    VALUES (%(county_code)s, %(geo_id)s, %(tax_year)s, %(entity_code)s, %(amount_due)s, %(amount_paid)s)
+    ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE
         SET amount_due  = EXCLUDED.amount_due,
             amount_paid = EXCLUDED.amount_paid
 """
 
 
-def write_to_db(conn, matched):
+def write_to_db(conn, matched, county_code=DEFAULT_COUNTY):
     billing_rows = []
     entity_rows = []
     for geo_id, entities in matched.items():
         total_due = sum(v["due"] for v in entities.values())
         total_paid = sum(v["paid"] for v in entities.values())
         billing_rows.append({
-            "geo_id": geo_id, "tax_year": TAX_YEAR,
+            "county_code": county_code, "geo_id": geo_id, "tax_year": TAX_YEAR,
             "total_tax": round(total_due, 2), "total_paid": round(total_paid, 2),
             "data_source": DATA_SOURCE, "confidence_level": CONFIDENCE_LEVEL,
         })
         for code, v in entities.items():
             entity_rows.append({
-                "geo_id": geo_id, "tax_year": TAX_YEAR, "entity_code": code,
+                "county_code": county_code, "geo_id": geo_id, "tax_year": TAX_YEAR,
+                "entity_code": code,
                 "amount_due": round(v["due"], 2), "amount_paid": round(v["paid"], 2),
             })
 
@@ -659,11 +675,16 @@ def write_to_db(conn, matched):
     return n_billing, n_entity
 
 
-def verify_sanity_parcels(conn):
+def verify_sanity_parcels(conn, county_code=DEFAULT_COUNTY):
     """Diego's explicit verification requirement: re-query the two known
     sanity-check parcels after load and confirm exact totals. Prints
     PASS/FAIL -- does not raise, so a --dry-run caller can still see full
-    stats even if this hasn't run yet."""
+    stats even if this hasn't run yet.
+
+    DALLAS-GATE-4: county_code added as a real, forward-looking read-side
+    predicate -- Travis-only-safe today (these two geo_ids only exist for
+    TRAVIS right now), but a lone geo_id filter would become ambiguous the
+    moment a second county's parcels can share a geo_id value."""
     expected = {
         "0100030105": 64459.78,
         "0100030109": 1192820.09,
@@ -673,8 +694,8 @@ def verify_sanity_parcels(conn):
     with conn.cursor() as cur:
         for geo_id, exp in expected.items():
             cur.execute(
-                "SELECT total_tax FROM tax_billing WHERE geo_id = %s AND tax_year = %s",
-                (geo_id, TAX_YEAR),
+                "SELECT total_tax FROM tax_billing WHERE geo_id = %s AND tax_year = %s AND county_code = %s",
+                (geo_id, TAX_YEAR, county_code),
             )
             row = cur.fetchone()
             actual = float(row[0]) if row and row[0] is not None else None
@@ -735,6 +756,13 @@ def main():
     parser.add_argument("--limit", type=int, default=None,
                          help="Smoke-test: stop after N data rows (implies partial "
                               "results -- always combine with --dry-run)")
+    parser.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=(
+            f"county_code written to every upserted row (default: {DEFAULT_COUNTY}). "
+            "DALLAS-GATE-4: mirrors scrape_billing_history.py's own --county convention."
+        ),
+    )
     args = parser.parse_args()
 
     filepath = config.PIR_2021_FULL_XLSX
@@ -808,14 +836,14 @@ def main():
         ensure_billing_cols(conn)
 
         print("  Writing to database…")
-        n_billing, n_entity = write_to_db(conn, matched)
+        n_billing, n_entity = write_to_db(conn, matched, county_code=args.county)
         print(f"    {n_billing:,} tax_billing rows, {n_entity:,} tax_billing_entity rows upserted")
 
         if not args.skip_metrics:
             update_coverage_level(conn, {TAX_YEAR})
             print("\nRun python3 loaders/compute_metrics.py to recompute all derived metrics.")
 
-        all_pass = verify_sanity_parcels(conn)
+        all_pass = verify_sanity_parcels(conn, county_code=args.county)
         if not all_pass:
             print("\n  *** SANITY CHECK FAILED -- do not trust this load without investigating. ***")
         else:
