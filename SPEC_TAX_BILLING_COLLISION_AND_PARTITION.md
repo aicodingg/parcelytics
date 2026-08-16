@@ -75,15 +75,28 @@ aggregate row is still last-write-wins lossy). This is a real, mechanistic
 argument for treating both tables as sharing the risk — not a confirmed
 dollar figure for `tax_billing_entity` specifically.
 
-**Recommendation carried into this brief's scope, not yet done:** before
-finalizing a re-keying design, extend `investigate_taxcur_m0_collision.py`
-(or a close variant) to also measure `tax_billing_entity`'s real collision
-exposure directly — a cheap, deterministic file-scan extension of work
-already built, not new research. Report the real collision-group count and
-dollar exposure at the entity grain before committing to a single combined
-re-key design for both tables. Do not assume the `tax_billing_entity` numbers
-mirror `tax_billing`'s 3,384/$5.79M — they may differ meaningfully depending
-on how many colliding accounts share identical entity codes.
+**Recommendation carried into this brief's scope — now DONE (M0-EXTENSION-1,
+2026-08-16), real numbers recorded, not re-derived here:** the recommended
+extension of `investigate_taxcur_m0_collision.py` has been built and run —
+`investigate_taxcur_m0_entity_collision.py` (repo root, gitignored the same
+way) — against the real, current `TaxCurOpenData (1).csv`. The
+`tax_billing_entity` numbers do NOT mirror `tax_billing`'s 3,384/$5.79M, as
+this section originally cautioned they might not: they are real, larger, and
+meaningfully different in kind, not just magnitude. Full results, the
+concentration analysis, and the two-figure dollar-exposure methodology (a
+"mirrored M0" figure vs. the decision-relevant real last-write-wins loss
+figure, kept deliberately separate) are recorded in
+`KNOWN_LIMITATIONS.md`'s own new entry, "`tax_billing_entity` has its own,
+larger real collision loss" (M0-EXTENSION-1), immediately following the
+original `tax_billing` M0 entry. Headline figures, for reference without
+re-reading that entry: 14,989 real entity-grain collision pairs (2025-only,
+3,148 of the 3,384 prefix groups carry a real entity-level collision, 236
+are pure coexist), real last-write-wins loss $170,061,400.28 (106,297
+overwrite events) — roughly 29x `tax_billing`'s own $5,794,968.90 figure,
+confirmed driven by shared taxing entities compounding across large
+multi-unit collision groups, not a measurement discrepancy. Whoever picks up
+§2's actual re-key/partitioning design work below has these real numbers in
+hand and does not need to re-run or re-derive this measurement.
 
 ## 2. Combined scope, per Fable's "one migration, not three"
 

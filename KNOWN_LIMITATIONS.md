@@ -228,6 +228,73 @@ this entry — this section exists only to formally record Migration Step
 M0's result per the spec's own requirement ("record the result either
 way").
 
+### `tax_billing_entity` has its own, larger real collision loss — CONFIRMED, measurement only (M0-EXTENSION-1, `SPEC_TAX_BILLING_COLLISION_AND_PARTITION.md` §1)
+
+**Extends the `tax_billing` entry directly above, one grain down.** The
+original Migration Step M0 measured collision loss at the `(geo_id, tax_year)`
+grain `tax_billing` itself upserts on — it did not separately measure
+`tax_billing_entity`, which upserts on the finer
+`(county_code, geo_id, tax_year, entity_code)` grain
+(`load_tax_current.py`'s `entity_sql`, `ON CONFLICT (county_code, geo_id,
+tax_year, entity_code) DO UPDATE`). A prefix-level collision in `tax_billing`
+only produces a *real* loss in `tax_billing_entity` if the colliding accounts
+also share the same `entity_code` for at least one entity — if their entity
+codes are fully disjoint, the rows simply coexist under the same `geo_id`
+with no loss at that grain, even though `tax_billing`'s own single aggregate
+row for that prefix is still lossy. `SPEC_TAX_BILLING_COLLISION_AND_PARTITION.md`
+§1 flagged this as a real, mechanistic-but-unmeasured risk rather than an
+assumption; M0-EXTENSION-1 measured it directly.
+
+**Result: CONFIRMED — nonzero, and larger than `tax_billing`'s own figure.**
+Of the 3,384 prefix-level collision groups found by the original M0
+(2025-only), 3,148 (93%) carry at least one real entity-grain collision;
+236 (7%) are pure coexist (no entity-level loss despite the shared prefix).
+
+Script: `investigate_taxcur_m0_entity_collision.py` (repo root, gitignored
+like the original M0 script). Run:
+```
+python3 investigate_taxcur_m0_entity_collision.py --path "TaxCurOpenData (1).csv" --tax-year 2025
+```
+
+| Scope | Prefix-level collision groups (matches M0 exactly) | Entity-grain collision pairs | Real collision / pure coexist | Real last-write-wins loss (file-order-as-written = DB upsert order) |
+|---|---:|---:|---:|---:|
+| **2025 only** | 3,384 | **14,989** | 3,148 real / 236 coexist | **$170,061,400.28** (106,297 overwrite events) |
+| All tax years in file | 3,694 | 16,116 | 3,383 real / 311 coexist | $190,318,642.90 |
+
+A second, "mirrored M0 methodology" dollar figure was also computed for
+2025-only ($192,672,634.58 — combined `amount_due` across every row in a
+colliding entity pair, the same way M0 summed `TOTAL_TAX` across every
+account in a colliding prefix) but is **not** the headline figure here: it is
+confirmed inflated by a real effect verified against the raw source data —
+large multi-unit collision prefixes (e.g. the same 1,210-account condo
+complex on prefix `0259410216` M0 itself flagged as its largest group) share
+a small set of common taxing entities across nearly every account, so summing
+"all rows in a colliding pair" multiply-counts a shared population rather
+than isolating real risk. The real last-write-wins loss figure above (what a
+load would actually overwrite, using file order as the real DB upsert order)
+is the decision-relevant number. Concentration check confirms this is a real,
+broad exposure rather than one outlier: the single largest contributing
+prefix (`0315410104`) is 22% of total 2025 real loss; the top 10 prefixes are
+36.7%; the top 50 are 61.4%; the remaining ~3,098 colliding prefixes still
+account for the other 38.6%.
+
+**Direct comparison to `tax_billing`'s own $5,794,968.90 (2025-only)
+figure:** `tax_billing_entity`'s real loss is **~29x larger**
+($170,061,400.28 vs. $5,794,968.90). Confirmed reason, not a measurement
+discrepancy: `tax_billing` upserts one aggregate row per colliding prefix, so
+its own loss figure is bounded by that prefix's own `TOTAL_TAX`; each
+colliding prefix can instead produce *multiple* real entity-grain collision
+pairs (one per shared `entity_code`), each carrying its own real dollar loss,
+so the entity-level total compounds across every shared taxing entity within
+a colliding group.
+
+**Decision, per the same spec discipline as the original M0 entry
+(measurement only, not a fix):** this is now a real, quantified input to the
+same future migration brief referenced above — `SPEC_TAX_BILLING_COLLISION_AND_PARTITION.md`
+§2 already scopes `tax_billing_entity`'s own re-keying/partitioning decision
+alongside `tax_billing`'s. **Not attempted here.** No loader, schema, or
+app.py change accompanies this entry.
+
 ### Address search: parcels with blank situs_address are reachable only by account number (July 2026)
 
 `search_parcels_by_address()` (`app.py`, backing both the `/` route and
