@@ -108,6 +108,73 @@ All other real numbers land close to this document's own earlier estimates
 measured vs. a rough parcel-count-times-six-years estimate in the same range) --
 the original estimation approach in Section 4.1 held up well against real data.
 
+### 1.3 REAL CORRECTION (2026-08-16, DALLAS-GATE-5, per Fable's HARRIS-SCALE-1
+architectural review) — the "3-5x combined" scale assumption was wrong
+
+Section 4.1's own reasoning (line 154) and this section's original note above
+(lines 86-104) both sized Dallas+Harris **combined** at roughly 3-5x Travis's
+scale, and both treated tax_billing_entity's revisit-trigger crossing as
+something to re-measure "once real Dallas data exists" -- i.e. safely later.
+Fable's own real architectural review found this wrong, and directly, honestly
+owned the original estimate as its own: real, live external verification of
+HCAD's actual published parcel count, combined with Travis's own real measured
+entities-per-parcel ratio, shows the correction is not cosmetic.
+
+**The real, corrected finding:** Harris's own confirmed, real HCAD figure --
+~1.9M parcels (per this project's own County Public Profile research, see the
+Harris County Profile entry) -- is **~3.67x Travis's measured `parcel` count
+(517,614/517,655) by itself**, not as a share of a combined 3-5x multiplier.
+That means the original combined estimate for BOTH counties together likely
+undercounted the real three-county total once Dallas is added on top of
+Harris's own real number.
+
+Applying this corrected scale specifically to `tax_billing_entity` (this
+document's own already-flagged highest-risk table, §1.2 above): the 20-30M-row
+native-partitioning revisit trigger (§4.1, condition (b)(i)) now projects to
+fire at **Dallas onboarding itself** -- roughly **27-28M combined rows** --
+not "sometime before Harris" as this section originally assumed. This is
+inside the existing trigger band with **zero Harris rows loaded yet**.
+
+**Real, current sizing captured live against production this session
+(DALLAS-GATE-5), for use as a concrete baseline rather than a re-derived
+estimate:**
+
+```
+tax_billing_entity: 10,770,184 rows, 1494 MB total (701 MB table + 793 MB index)
+-> ~145 bytes/row including indexes, real, current baseline
+```
+
+Applied to the ~27-28M-row Dallas-onboarding projection: roughly **3.9-4GB**
+for this one table alone -- a real, concrete database-sizing input, not
+previously captured in this document.
+
+**Real, honest uncertainty preserved here, not resolved:** a separate, earlier
+extrapolation (flagged during `HARRIS-ONBOARD-1`) suggested Harris ALONE could
+approach ~39.5M rows in this table, using Travis's own entities-per-parcel
+ratio applied to Harris's real parcel count. That figure remains a rough ratio
+estimate, not a real measurement. Fable's own review specifically noted Harris
+likely has a **higher** entities-per-parcel ratio than Travis, given Harris's
+real, known MUD/utility-district density -- meaning that ~39.5M figure is more
+plausibly a **floor than a ceiling**. Do not round either projection (the
+~27-28M Dallas-onboarding figure or the ~39.5M Harris-alone figure) into false
+precision; both remain estimates pending real Dallas/Harris source data.
+
+**What this changes, and what it doesn't:** Section 4.1's core recommendation
+-- lightweight `county_code`-leading columns/indexes over native partitioning,
+for the schema as a whole -- is unchanged; every other table still comfortably
+sits under the trigger even at this corrected scale. What changes is the
+**timing**: `tax_billing_entity`'s own trigger re-evaluation is no longer safe
+to defer past Dallas onboarding, and per Fable's own "one migration, not
+three" sequencing recommendation, this table's real native-partitioning
+decision is now combined with its own already-pending, separately-flagged M0
+collision-resolution work (`SPEC_UNIT_MODEL_AND_INGEST_GATE.md` §3.7 /
+§7; `KNOWN_LIMITATIONS.md`'s recorded 3,384-collision-group finding on
+`tax_billing`) into one promoted brief, rather than migrating this large,
+still-growing table multiple separate times as Dallas and then Harris
+onboard. See the promoted brief this correction produced (DALLAS-GATE-5 Part
+2) for the combined scope. Actually implementing native partitioning remains
+its own, separate, future migration brief -- not decided or executed here.
+
 ---
 
 ## 2. `county_code` convention — real prior art found, not invented
