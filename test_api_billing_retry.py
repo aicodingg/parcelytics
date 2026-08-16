@@ -47,6 +47,27 @@ dedicated fixture test on `upsert_billing_rows()` itself (Fable's
 verification requirement #1); this file covers api_billing()'s own
 orchestration of it.
 
+BILLING-DIAG-8 (FINAL): with DIAG-7's write path confirmed correct via live
+evidence (a genuinely fresh parcel showed the real-write log line firing
+correctly), the route's response was STILL empty for a parcel that, per an
+unscoped SQL check, already had real, correct, authoritative data for all 4
+target years from OTHER sources (pir_billing_YYYY_full, not portal_scrape).
+_UPSERT_SQL's own ON CONFLICT ... WHERE clause correctly refused to
+overwrite that better data -- a legitimate no-op, NOT a bug, and NOT
+touched by this fix. The real, final gap: `already_fetched` (step 1) and
+the response SELECT (step 3) both filtered too narrowly on
+`data_source = 'portal_scrape'`, so (a) a parcel with better existing data
+was treated as never-fetched, causing a wasteful, benefit-free portal
+re-fetch on every page view, and (b) that better data never displayed
+through this endpoint at all. Fix: step 1 widened to
+`data_source = 'portal_scrape' OR tax_year BETWEEN 2021 AND 2024` (the
+`data_source = 'portal_scrape'` clause is UNCHANGED and still alone covers
+the sentinel row, tax_year=9999, exactly as before); step 3's
+`data_source = 'portal_scrape'` filter is simply REMOVED (the year-range +
+county_code filters already do all the real scoping, and already naturally
+exclude the sentinel). `_UPSERT_SQL`'s own ON CONFLICT ... WHERE protection
+in loaders/scrape_billing_history.py is NOT part of this fix.
+
 Sandbox has no Flask/psycopg2 (confirmed unavailable, same constraint as
 every other slice-and-exec test in this codebase). Uses the same technique
 already established here: extract api_billing()'s REAL source text out of
@@ -83,6 +104,20 @@ What these tests check:
      is NOT called, a sentinel INSERT (tax_year=9999) IS written and
      committed, and the permanent write-path log line still fires (with
      rows_written=0, sentinel_written=True).
+  8. BILLING-DIAG-8(a): a parcel with real, existing data from a BETTER
+     source (e.g. pir_billing_2021_full) for all 4 target years:
+     already_fetched=True, NO portal fetch attempted, the response returns
+     that real existing data (not empty, not filtered out for having the
+     "wrong" data_source).
+  9. BILLING-DIAG-8(b): a parcel with NO data from any source (real DB
+     state, not just no portal_scrape rows): already_fetched=False, a
+     portal fetch IS attempted exactly as before this fix.
+  10. BILLING-DIAG-8(c): a parcel with ONLY a portal_scrape sentinel row
+      (tax_year=9999, no real target-year data from any source -- the exact
+      shape of the 79 real production cases found in BILLING-DIAG-7):
+      already_fetched=True (unaffected, same as before this fix), NO
+      portal fetch attempted, response returns an empty rows list (sentinel
+      correctly excluded by the year-range filter).
 
 Run: python3 test_api_billing_retry.py
 """
@@ -120,6 +155,24 @@ assert FUNC_SRC.count('"api_billing write:') == 2, \
     "sanity: exactly 2 permanent write-path log lines expected (real-write branch + sentinel branch)"
 assert "written = upsert_billing_rows(conn, records)" in FUNC_SRC, \
     "sanity: must use upsert_billing_rows()'s real return value, not discard it"
+# BILLING-DIAG-8: already_fetched (step 1) widened to also count real data
+# from any OTHER source for the target years; the data_source='portal_scrape'
+# clause is UNCHANGED (still alone covers the sentinel row, tax_year=9999).
+assert "AND (data_source = 'portal_scrape' OR tax_year BETWEEN 2021 AND 2024)" in FUNC_SRC, \
+    "sanity: already_fetched check must be widened to any data_source for the target years (BILLING-DIAG-8)"
+# The final response SELECT (step 3) must no longer filter on data_source at
+# all -- checked by confirming the OLD filter line's exact text (used only
+# there, never in step 1's parenthesized OR-clause) is gone.
+assert "\"  AND data_source = 'portal_scrape' \"" not in FUNC_SRC, \
+    "sanity: the final response SELECT's data_source='portal_scrape' filter must be REMOVED (BILLING-DIAG-8)"
+assert "SELECT tax_year, total_tax, total_paid, data_source, confidence_level " in FUNC_SRC, \
+    "sanity: final SELECT must still select all 5 real columns, including data_source (so callers can " \
+    "tell a portal_scrape row from a better-sourced one)"
+assert "AND tax_year BETWEEN 2021 AND 2024 " in FUNC_SRC and "AND county_code = %s " in FUNC_SRC, \
+    "sanity: final SELECT must keep its real year-range + county_code scoping"
+# _UPSERT_SQL's own ON CONFLICT ... WHERE protection lives in a different
+# file (loaders/scrape_billing_history.py) and is NOT part of this slice --
+# nothing to assert on it here; see that file's own test coverage.
 
 HTTP_OK = 0
 HTTP_NOT_FOUND = 404
@@ -192,6 +245,63 @@ class FakeConn:
         self.closed = True
 
 
+class SmartFakeCursor:
+    """BILLING-DIAG-8: SQL-aware fake cursor for the already_fetched/response
+    SELECT widening tests (8-10 below). Reacts to the REAL, real SQL text
+    api_billing() actually executes (not a reimplementation of its logic)
+    against a scripted set of `existing_rows` standing in for real DB state --
+    so if the widened SQL shape in app.py regresses, these tests fail on the
+    real query text, not on a mirrored copy of the query's intent."""
+    def __init__(self, log, existing_rows):
+        self.log = log
+        self.existing_rows = existing_rows
+        self._last_sql = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        self.log.append((sql, params))
+        self._last_sql = sql
+
+    def fetchone(self):
+        # Step 1: the already_fetched COUNT check.
+        if self._last_sql and "SELECT COUNT(*) AS cnt" in self._last_sql:
+            cnt = sum(
+                1 for row in self.existing_rows
+                if row["data_source"] == "portal_scrape" or 2021 <= row["tax_year"] <= 2024
+            )
+            return {"cnt": cnt}
+        return {"cnt": 0}
+
+    def fetchall(self):
+        # Step 3: the final response SELECT.
+        if self._last_sql and "data_source, confidence_level" in self._last_sql:
+            rows = [dict(r) for r in self.existing_rows if 2021 <= r["tax_year"] <= 2024]
+            return sorted(rows, key=lambda r: r["tax_year"])
+        return []
+
+
+class SmartFakeConn:
+    def __init__(self, existing_rows):
+        self.execute_log = []
+        self.existing_rows = existing_rows
+        self.commits = 0
+        self.closed = False
+
+    def cursor(self, cursor_factory=None):
+        return SmartFakeCursor(self.execute_log, self.existing_rows)
+
+    def commit(self):
+        self.commits += 1
+
+    def close(self):
+        self.closed = True
+
+
 class FakeSentry:
     def __init__(self):
         self.messages = []
@@ -209,7 +319,7 @@ class FakeSentry:
 
 
 def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc=None,
-                     parse_receipts_result=None):
+                     parse_receipts_result=None, existing_rows=None):
     """
     fetch_sequence: list of (html, status) tuples, one per fetch_html() call.
 
@@ -218,6 +328,14 @@ def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc
 
     parse_receipts_result: override what fake parse_receipts() returns, so
     the empty-target/sentinel branch (Test 7) can be exercised.
+
+    existing_rows: BILLING-DIAG-8 (Tests 8-10). When provided (a list of
+    dicts with geo_id/tax_year/total_tax/total_paid/data_source/
+    confidence_level), the connection is a SmartFakeConn seeded with this
+    real DB state instead of the plain FakeConn used by Tests 1-7 -- lets
+    the already_fetched/response-SELECT widening be exercised against real
+    pre-existing rows, not just the always-empty-DB assumption those
+    earlier tests make.
     """
     fetch_calls = []
 
@@ -252,7 +370,12 @@ def run_api_billing(geo_id, fetch_sequence, boom_on_sql_substring=None, boom_exc
         def cursor(self, cursor_factory=None):
             return BoomCursor(self.execute_log)
 
-    fake_conn = BoomConn() if boom_exc is not None else FakeConn()
+    if existing_rows is not None:
+        fake_conn = SmartFakeConn(existing_rows)
+    elif boom_exc is not None:
+        fake_conn = BoomConn()
+    else:
+        fake_conn = FakeConn()
     fake_sentry = FakeSentry()
 
     namespace = {
@@ -381,7 +504,11 @@ print("Test 6: a real exception after a successful fetch (e.g. a dropped/reaped 
 boom = RuntimeError("server closed the connection unexpectedly")
 r = run_api_billing(
     "0100030105", [(REAL_PAGE, HTTP_OK)],
-    boom_on_sql_substring="BETWEEN 2021 AND 2024",  # the final SELECT in step 3
+    # BILLING-DIAG-8: "BETWEEN 2021 AND 2024" is no longer unique to the
+    # step-3 final SELECT -- the widened step-1 already_fetched check (see
+    # the sanity asserts above) now also contains that substring. "ORDER BY
+    # tax_year" remains unique to step 3's real SQL text.
+    boom_on_sql_substring="ORDER BY tax_year",  # the final SELECT in step 3
     boom_exc=boom,
 )
 all_ok &= check("fetch_html succeeded (1 call) — the exception happens AFTER the fetch",
@@ -420,6 +547,65 @@ all_ok &= check("sentinel log reports rows_written=0, sentinel_written=True, com
                 and "commit_confirmed=True" in str(write_prints[0]["args"][0]))
 all_ok &= check("route returns status:ok, cached:False, rows:[]",
                 r["payload"]["status"] == "ok" and r["payload"]["rows"] == [])
+
+# ── 8. BILLING-DIAG-8(a): better-source existing data skips the fetch ──────
+print("Test 8: parcel has real, existing data from a BETTER source (not portal_scrape) "
+      "for all 4 target years — already_fetched=True, no portal fetch, that data returned")
+BETTER_SOURCE_ROWS = [
+    {"geo_id": "0121230106", "tax_year": 2021, "total_tax": 12000.00, "total_paid": 12000.00,
+     "data_source": "pir_billing_2021_full", "confidence_level": "high"},
+    {"geo_id": "0121230106", "tax_year": 2022, "total_tax": 12500.00, "total_paid": 12500.00,
+     "data_source": "pir_billing_2022_full", "confidence_level": "high"},
+    {"geo_id": "0121230106", "tax_year": 2023, "total_tax": 13100.00, "total_paid": 13100.00,
+     "data_source": "pir_billing_2023_full", "confidence_level": "high"},
+    {"geo_id": "0121230106", "tax_year": 2024, "total_tax": 13800.00, "total_paid": 13800.00,
+     "data_source": "pir_billing_2024_full", "confidence_level": "high"},
+]
+r = run_api_billing("0121230106", [], existing_rows=BETTER_SOURCE_ROWS)
+all_ok &= check("already_fetched is True (route reports cached:True)", r["payload"]["cached"] is True)
+all_ok &= check("fetch_html NEVER called — no wasteful re-fetch against better existing data",
+                r["fetch_calls"] == [])
+all_ok &= check("upsert_billing_rows NEVER called (no write attempted at all)", r["upsert_calls"] == [])
+all_ok &= check("no permanent write-path log line (write path never entered)",
+                find_print_by_tag(r["print_calls"], "api_billing write:") == [])
+all_ok &= check("no Sentry noise", r["sentry_messages"] == [] and r["sentry_exceptions"] == [])
+all_ok &= check("response returns all 4 real rows from the better source, not empty",
+                len(r["payload"]["rows"]) == 4)
+all_ok &= check("returned rows carry the REAL data_source (not silently relabeled 'portal_scrape')",
+                all(row["data_source"] == f"pir_billing_{row['tax_year']}_full" for row in r["payload"]["rows"]))
+all_ok &= check("rows are ordered by tax_year", [row["tax_year"] for row in r["payload"]["rows"]] == [2021, 2022, 2023, 2024])
+all_ok &= check("route returns status ok", r["payload"]["status"] == "ok")
+
+# ── 9. BILLING-DIAG-8(b): genuinely no data anywhere still fetches ─────────
+print("Test 9: parcel has NO data from any source (real empty DB state) — "
+      "already_fetched=False, a portal fetch IS attempted exactly as before")
+r = run_api_billing("0100030199", [(REAL_PAGE, HTTP_OK)], existing_rows=[])
+all_ok &= check("already_fetched is False (route reports cached:False)", r["payload"]["cached"] is False)
+all_ok &= check("fetch_html WAS called exactly once — preserved, unwasted-fetch behavior",
+                len(r["fetch_calls"]) == 1)
+all_ok &= check("upsert_billing_rows WAS called (the real write path still runs)",
+                len(r["upsert_calls"]) == 1)
+all_ok &= check("exactly 1 permanent write-path log line",
+                len(find_print_by_tag(r["print_calls"], "api_billing write:")) == 1)
+all_ok &= check("route returns status ok", r["payload"]["status"] == "ok")
+
+# ── 10. BILLING-DIAG-8(c): portal-scrape-only sentinel case is unaffected ──
+print("Test 10: parcel has ONLY a portal_scrape sentinel row (tax_year=9999, no real "
+      "target-year data from any source — the exact shape of the 79 real production cases) "
+      "— unaffected by this fix, behaves exactly as before")
+SENTINEL_ONLY_ROWS = [
+    {"geo_id": "0100030105", "tax_year": 9999, "total_tax": None, "total_paid": None,
+     "data_source": "portal_scrape", "confidence_level": "partial"},
+]
+r = run_api_billing("0100030105", [], existing_rows=SENTINEL_ONLY_ROWS)
+all_ok &= check("already_fetched is True (sentinel alone still counts, unchanged from before this fix)",
+                r["payload"]["cached"] is True)
+all_ok &= check("fetch_html NEVER called (sentinel correctly prevents re-fetch, same as pre-DIAG-8)",
+                r["fetch_calls"] == [])
+all_ok &= check("upsert_billing_rows NEVER called", r["upsert_calls"] == [])
+all_ok &= check("response rows is empty (sentinel, tax_year=9999, correctly excluded by the year-range filter)",
+                r["payload"]["rows"] == [])
+all_ok &= check("route returns status ok", r["payload"]["status"] == "ok")
 
 print()
 if all_ok:

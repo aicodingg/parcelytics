@@ -5830,11 +5830,43 @@ def api_billing(geo_id):
     county_code = g.county_code
     conn = get_db()
     try:
-        # 1. Already fetched? (real data or sentinel both count)
+        # 1. Already fetched? (real data from ANY source, or sentinel, both count)
+        #
+        # BILLING-DIAG-8: this check used to require data_source =
+        # 'portal_scrape' specifically. Real, live evidence on a genuinely
+        # fresh parcel (0121230106) showed the write path executing
+        # correctly (receipts_parsed=13 target_matched=4 rows_written=4
+        # commit_confirmed=True per BILLING-DIAG-7's own log line) while
+        # this route's response stayed empty -- an unscoped SQL check found
+        # why: that parcel already had real, correct, authoritative data
+        # for all 4 target years from pir_billing_YYYY_full sources, and
+        # _UPSERT_SQL's own ON CONFLICT ... WHERE clause correctly refused
+        # to overwrite it with a portal scrape (a legitimate no-op, not a
+        # bug -- that WHERE clause is NOT touched by this fix). The real
+        # gap was here: a parcel with better existing data was treated as
+        # never-fetched, so this route re-attempted a wasteful live portal
+        # fetch on every single page view, for zero benefit (the write
+        # could never win against the conflict guard anyway).
+        #
+        # Widened to: data_source = 'portal_scrape' (unchanged -- still
+        # covers both real portal rows for the target years AND the
+        # sentinel row, tax_year=9999, exactly as before) OR tax_year
+        # BETWEEN 2021 AND 2024 (new -- any OTHER source's real row for a
+        # target year now also counts as covered). A parcel with only
+        # partial other-source coverage (e.g. 2021 only) is treated as
+        # fully covered too, same as a parcel with full coverage --
+        # consistent with the brief's own framing ("existing data for
+        # 2021-2024 should be treated as already covered, skipping the
+        # wasteful re-fetch"), flagged here as a real simplification: this
+        # will not attempt to backfill the missing years for a
+        # partially-covered parcel. A parcel with genuinely no row at all
+        # (no sentinel, no other-source data) still evaluates to False,
+        # exactly as before.
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT COUNT(*) AS cnt FROM tax_billing "
-                "WHERE geo_id = %s AND data_source = 'portal_scrape' AND county_code = %s",
+                "WHERE geo_id = %s AND county_code = %s "
+                "  AND (data_source = 'portal_scrape' OR tax_year BETWEEN 2021 AND 2024)",
                 (geo_id, county_code)
             )
             already_fetched = cur.fetchone()["cnt"] > 0
@@ -6004,14 +6036,23 @@ def api_billing(geo_id):
             # year receipts", a different real case than "no account at
             # all" — worth its own look but out of BILLING-DIAG-1's scope).
 
-        # 3. Return 2021-2024 portal_scrape rows (sentinel excluded by year range)
+        # 3. Return 2021-2024 rows from ANY data_source (sentinel excluded by
+        # year range regardless of source -- tax_year=9999 is outside
+        # BETWEEN 2021 AND 2024 no matter what).
+        #
+        # BILLING-DIAG-8: this used to also filter on data_source =
+        # 'portal_scrape', so real, correct, existing data from other
+        # sources (e.g. pir_billing_YYYY_full) never displayed through this
+        # endpoint even when it was sitting right there in the table --
+        # same root cause as the already_fetched widening above. Removing
+        # that filter is the whole fix; the year-range + county_code
+        # filters are unchanged and still do all the real scoping work.
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT tax_year, total_tax, total_paid, data_source, confidence_level "
                 "FROM tax_billing "
                 "WHERE geo_id = %s "
                 "  AND tax_year BETWEEN 2021 AND 2024 "
-                "  AND data_source = 'portal_scrape' "
                 "  AND county_code = %s "
                 "ORDER BY tax_year",
                 (geo_id, county_code)
