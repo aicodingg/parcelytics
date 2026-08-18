@@ -34,6 +34,7 @@ Exits non-zero and prints a diagnosis if any scenario fails.
 import sys
 import os
 import json
+import re
 
 sys.path.insert(0, os.path.dirname(__file__))
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -878,6 +879,153 @@ def check_multi_unit_panel_absent(html, label):
     return True
 
 
+def check_homeowner_section_order(html, label):
+    """PARCEL-REORG-1 (2026-08-16) regression guard: Homeowner mode's real,
+    agreed 6-section structure (5 named in the brief + "More Resources" for
+    the items with no assigned home, per Diego's own answers) must appear in
+    this exact top-to-bottom order in rendered output. Each section is
+    marked by a real, visible `<div class="section-hdr"...>Label</div>`
+    (not a code comment) -- this checks the ACTUAL rendered markup, not the
+    template source, so it would catch a real ordering regression, not just
+    confirm the headers exist somewhere.
+
+    "At a Glance" intentionally has no explicit position check against the
+    Tax Calendar strip: per Diego's explicit answer to this brief's own
+    clarifying question ("No, keep it near the top"), the Tax Calendar was
+    deliberately left in its original position (right after the page
+    header, before the first section-hdr at all) rather than forced into a
+    literal last-of-6 "Key Dates" slot -- so it has no section-hdr of its
+    own to check here, by design, not omission.
+    """
+    labels = ["At a Glance", "Your Tax Bill, This Year", "How We Got Here",
+              "How This Parcel Compares", "More Resources"]
+    positions = []
+    for l in labels:
+        marker = f'>{l}</div>'
+        idx = html.find(marker)
+        if idx == -1:
+            print(f"FAIL [{label}] expected section header {l!r} not found in rendered output")
+            return False
+        positions.append(idx)
+    if positions != sorted(positions):
+        print(f"FAIL [{label}] section headers present but out of order: "
+              f"found at positions {list(zip(labels, positions))}, expected ascending")
+        return False
+    # Tax Calendar strip's own real container id (tax_calendar_strip() macro,
+    # near the top of the file) must still appear BEFORE "At a Glance" --
+    # confirms it was genuinely left near the top, not accidentally swept
+    # into the reorder along with everything else.
+    tc_idx = html.find('Property Tax Calendar</span>')
+    if tc_idx != -1 and tc_idx > positions[0]:
+        print(f"FAIL [{label}] Tax Calendar strip found AFTER 'At a Glance' header -- "
+              f"expected it kept near the top, per Diego's explicit PARCEL-REORG-1 answer")
+        return False
+    return True
+
+
+def check_investor_section_order(html, label):
+    """PARCEL-REORG-1 (2026-08-16) regression guard, Investor mode's own
+    reorg + nav-bar rebuild. Same real, rendered-output check as
+    check_homeowner_section_order above (not template source) -- same 5
+    labels (Investor mode has no separate "More Resources" content of its
+    own beyond Post-Acquisition Estimator + News, folded into the same 5th
+    header per this session's report), same Tax Calendar-stays-near-top
+    assertion, PLUS a nav-bar check Homeowner mode doesn't need (it has no
+    scroll-spy nav): the rebuilt #sectionNavBar must contain exactly 5
+    section-nav-link anchors, each pointing at a real section-anchor id that
+    actually exists earlier in the same rendered output (catches a stale
+    href / missing anchor-id mismatch, the exact class of bug the old
+    Overview/History/Projection/Position nav had after JOHNNY-FEEDBACK-2 cut
+    the collapsible Overview block this brief's own investigation found).
+    """
+    labels = ["At a Glance", "Your Tax Bill, This Year", "How We Got Here",
+              "How This Parcel Compares", "More Resources"]
+    positions = []
+    for l in labels:
+        marker = f'>{l}</div>'
+        idx = html.find(marker)
+        if idx == -1:
+            print(f"FAIL [{label}] expected section header {l!r} not found in rendered output")
+            return False
+        positions.append(idx)
+    if positions != sorted(positions):
+        print(f"FAIL [{label}] section headers present but out of order: "
+              f"found at positions {list(zip(labels, positions))}, expected ascending")
+        return False
+    # Tax Calendar check, deliberately WEAKER than Homeowner's own version
+    # above: Investor mode's real, pre-existing Tax Calendar position (the
+    # tax_calendar_strip() wrapper) already sat AFTER the KPI cards/Value
+    # Trend chart -- i.e., after where "At a Glance" now starts -- not at
+    # the literal top of the branch the way Homeowner's did. Its markup was
+    # left byte-for-byte untouched at that same relative position (per
+    # Diego's "keep it near the top" answer, applied literally: don't move
+    # it), so asserting it precedes "At a Glance" here would fail on an
+    # honest, disclosed difference between the two modes' original layouts,
+    # not a real regression. The real, meaningful assertion for Investor is
+    # that it still lands within/near the "At a Glance" section -- well
+    # before "Your Tax Bill, This Year" -- not pushed down into a later
+    # section by the reorg.
+    tc_idx = html.find('Property Tax Calendar</span>')
+    if tc_idx != -1 and tc_idx > positions[1]:
+        print(f"FAIL [{label}] Tax Calendar strip found AFTER 'Your Tax Bill, This Year' header -- "
+              f"expected it kept near the top (within/near 'At a Glance'), per Diego's explicit "
+              f"PARCEL-REORG-1 answer")
+        return False
+    # Nav-bar anchor/id consistency.
+    nav_ids = ["sectionAtGlance", "sectionTaxBill", "sectionHowWeGotHere",
+               "sectionCompares", "sectionMoreResources"]
+    nav_start = html.find('id="sectionNavBar"')
+    if nav_start == -1:
+        print(f"FAIL [{label}] #sectionNavBar not found in rendered output")
+        return False
+    nav_end = html.find("</div>", nav_start)
+    nav_html = html[nav_start:nav_end]
+    found_hrefs = re.findall(r'href="#(\w+)"', nav_html)
+    if found_hrefs != nav_ids:
+        print(f"FAIL [{label}] #sectionNavBar hrefs {found_hrefs} != expected {nav_ids}")
+        return False
+    for anchor_id in nav_ids:
+        if f'id="{anchor_id}"' not in html:
+            print(f"FAIL [{label}] nav links to #{anchor_id} but no matching id=\"{anchor_id}\" "
+                  f"anchor exists in rendered output")
+            return False
+    return True
+
+
+def check_value_trend_chart_in_how_we_got_here(html, label):
+    """PARCEL-REORG-2 (2026-08-16) regression guard, Issue 3: the Value Trend
+    chart (canvas id="valueTrendChart") used to sit at the very top of "At a
+    Glance", before the KPI cards even finished and above the nav bar -- a
+    leftover from a July 2026 round that predated PARCEL-REORG-1's 5-section
+    structure. Diego's real, explicit call (found during live review): it
+    belongs in "How We Got Here" instead, next to the Value History table.
+    This is a real, rendered-output position check (section header markers
+    exist only post-render, same technique as check_investor_section_order
+    above), not a template-source grep -- it would have caught the original
+    bug (chart present, just in the wrong section).
+    """
+    at_glance = html.find('>At a Glance</div>')
+    tax_bill = html.find('>Your Tax Bill, This Year</div>')
+    how_we_got_here = html.find('>How We Got Here</div>')
+    compares = html.find('>How This Parcel Compares</div>')
+    chart_idx = html.find('id="valueTrendChart"')
+    if -1 in (at_glance, tax_bill, how_we_got_here, compares, chart_idx):
+        print(f"FAIL [{label}] one or more markers missing for Value Trend chart "
+              f"position check (at_glance={at_glance}, tax_bill={tax_bill}, "
+              f"how_we_got_here={how_we_got_here}, compares={compares}, chart={chart_idx})")
+        return False
+    if at_glance < chart_idx < tax_bill:
+        print(f"FAIL [{label}] Value Trend chart (id=\"valueTrendChart\") is still inside "
+              f"'At a Glance' -- PARCEL-REORG-2 Issue 3 regression")
+        return False
+    if not (how_we_got_here < chart_idx < compares):
+        print(f"FAIL [{label}] Value Trend chart (id=\"valueTrendChart\") is not within "
+              f"'How We Got Here' bounds (found at {chart_idx}, section spans "
+              f"{how_we_got_here}-{compares})")
+        return False
+    return True
+
+
 # ── Scenarios ────────────────────────────────────────────────────────────────
 def check_suspicious_comments(template_path):
     """
@@ -988,6 +1136,22 @@ def run():
         # modes, so reuse this loop for the Helpful Links check too rather
         # than a separate scenario list.
         ok = check_helpful_links(html, label, ctx.get("mode")) and ok
+        # PARCEL-REORG-1: both modes' new section order, checked on every
+        # scenario already in this loop (real reuse of the existing scenario
+        # matrix, same pattern as check_possessive_voice and
+        # check_helpful_links above -- not a separate scenario list).
+        # Investor mode's reorg + nav-bar rebuild landed in the same round as
+        # Homeowner's (see this session's final report) -- both get their
+        # own real, rendered-output section-order assertion now.
+        if ctx.get("mode") == "homeowner":
+            ok = check_homeowner_section_order(html, label) and ok
+        else:
+            ok = check_investor_section_order(html, label) and ok
+            # PARCEL-REORG-2 Issue 3: Value Trend chart must render inside
+            # "How We Got Here", not "At a Glance" -- see that check's own
+            # docstring. Investor-only (Homeowner mode has no separate Value
+            # Trend chart card of its own; not implicated by this issue).
+            ok = check_value_trend_chart_in_how_we_got_here(html, label) and ok
 
         if ok:
             print(f"PASS [{label}]")

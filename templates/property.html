@@ -619,6 +619,10 @@
   {% endif %}
 {% endmacro %}
 
+
+{# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
+<div class="section-hdr" style="margin-top:24px;">At a Glance</div>
+
 {# ── Two-Year Card Redesign (July 2026, per Diego): replaces the single row of
    three 2025-only cards with two labeled sections — "2025 — Verified" (real,
    certified figures) and "2026 — Preliminary" (TCAD's preliminary appraisal
@@ -769,6 +773,7 @@
   </div>
 </div>
 
+
 {# ── 2026 — Certified/Preliminary (M4-2026-PRELIM-SNAPSHOT Part 1 fix: now
    branches on is_2026_certified instead of hardcoding "Preliminary" for
    every parcel, regardless of this parcel's real data_source) ─────────── #}
@@ -876,6 +881,91 @@
   </div>
 </div>
 
+
+{# ── Multi-unit panel (Migration M2, SPEC_UNIT_MODEL_AND_INGEST_GATE.md
+   §3.5, July 2026). `units` is only non-None when app.py's property_detail()
+   found more than one real TCAD unit (prop_id) sharing this geo_id — a
+   condo regime, a multi-improvement account, etc. Every KPI card and the
+   Value History table above show the SUMMED total across all of them
+   (parcel_rollup.py's SUM() aggregation); this panel is what shows the
+   individual units that sum came from, so a visitor isn't shown one
+   blended number with no indication it's a sum of several. Same partial
+   (units, units_tax_year) in both Homeowner and Investor branches. #}
+{% if units %}
+<div class="card mb-4">
+  <div class="card-header">
+    This Account Includes {{ units|length }} Units
+    <span class="text-muted" style="font-size:12px; font-weight:400;">({{ units_tax_year }} values — the figures above on this page are the sum of these rows)</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm mb-0" style="font-size:13px;">
+        <thead>
+          <tr>
+            <th>Unit (prop_id)</th>
+            <th>Owner</th>
+            <th>Address</th>
+            <th class="text-end">Market Value</th>
+            <th class="text-end">Assessed Value</th>
+            <th class="text-end">Taxable Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in units %}
+          <tr>
+            <td>{{ u.prop_id }}</td>
+            <td>{{ u.owner_name or '—' }}</td>
+            <td>{{ u.situs_address or '—' }}</td>
+            <td class="text-end">{{ "${:,.0f}".format(u.market_value) if u.market_value is not none else '—' }}</td>
+            <td class="text-end">{{ "${:,.0f}".format(u.assessed_value) if u.assessed_value is not none else '—' }}</td>
+            <td class="text-end">{{ "${:,.0f}".format(u.taxable_value) if u.taxable_value is not none else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+  {# Missing-imagery fallback fix (July 2026, per Diego — parcel 0438011527):
+     this card used to be `display:none` in the HTML and only ever unhidden by
+     the JS below once /api/geocode/<geo_id> came back with real coordinates —
+     so on any parcel where geocoding failed, the card simply never appeared:
+     no placeholder, no explanation, indistinguishable from the section not
+     existing at all. Same "always show a labeled state instead of silently
+     hiding something" convention already used everywhere else on this page
+     (na-cell "—", confidence badges, "No exemptions are currently applied,"
+     etc.) — the card container and header now always render; only the
+     content underneath switches between the map and an honest fallback.
+     Why imagery can be missing (see /api/geocode in app.py): (1) the parcel
+     has no cached latitude/longitude AND no situs_address on file to geocode
+     from ("no_address"); (2) the free U.S. Census onelineaddress geocoder
+     doesn't confidently match the address on file ("no_match") — plausible
+     for a sparse/rural address like this parcel's; or (3) the geocode request
+     itself times out or errors ("geocode_failed"). Not distinguished in the
+     fallback copy below since the endpoint's own error detail isn't surfaced
+     to this script today — flagged, not fixed, out of scope for this round. #}
+  <div class="card h-100">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Satellite View</span>
+      <span class="text-muted" style="font-size:11px; font-weight:400;">Imagery: Esri</span>
+    </div>
+    <div class="card-body p-0" style="display:flex;">
+      <div id="hoSatMap" style="display:none; flex:1 1 auto; min-height:320px; width:100%; border-radius:0 0 8px 8px;"></div>
+      <div id="hoSatFallback" class="d-flex flex-column align-items-center justify-content-center text-center text-muted"
+           style="flex:1 1 auto; min-height:320px; width:100%; padding:20px; border-radius:0 0 8px 8px;">
+        <div style="font-size:14px; font-weight:600; margin-bottom:4px;">Satellite image not available</div>
+        <div style="font-size:12px; max-width:280px;">We couldn't locate this property on the map — this can happen for parcels whose address our geocoder can't confidently match.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
+<div class="section-hdr" style="margin-top:24px;">Your Tax Bill, This Year</div>
+
 {# ── 2026: Preliminary → Certified comparison (JOHNNY-FEEDBACK-2 Part 4,
    July 2026) ─────────────────────────────────────────────────────────────
    Homeowner-mode counterpart to Investor mode's "2026: Preliminary →
@@ -979,307 +1069,6 @@
 </div>
 {% endif %}
 
-{# ── Bill-Change Waterfall: MOVED (July 2026, per Diego's "Property Page
-   Polish Round" item 6) — Homeowner mode has no literal "Property Details"
-   card (that's Investor-mode-only markup), so this was relocated to the
-   closest structural analog: below the first two-column foundational-info
-   row (Helpful Links + Your Exemptions + neighborhood comparison, with the
-   Satellite View map on the right — the Homeowner-mode counterpart to
-   Investor mode's Property Info/Current Values/News/Improvement Detail
-   row), instead of sitting directly under the KPI cards. Same reasoning as
-   the Investor-mode move: lead with foundational context before the
-   "why did my bill change" narrative. See below the neighborhood-comparison
-   row's closing div (marked "row" in a trailing HTML comment) for the
-   relocated block -- content/logic unchanged, position only.
-   BUG FIX (July 2026, per Fable review P0-1): an earlier version of this
-   comment spelled out the OTHER comment's own closing delimiter inline as
-   an example, which closed THIS comment early instead of describing it --
-   Jinja comments have no nesting or escaping, so any occurrence of the
-   two-character close sequence anywhere in the comment body ends it
-   immediately, even quoted or inside backticks. That premature close
-   leaked the rest of this sentence as literal visible text on every
-   homeowner-mode page load, right above Helpful Links. Fixed by describing
-   the delimiter in prose instead of spelling it out literally -- this
-   comment intentionally contains neither Jinja delimiter character
-   sequence anywhere in its body, including in this explanation. See
-   verify_property_html_render.py for the two regression guards this
-   incident produced: rendered output must never contain a raw template
-   delimiter as visible text, and a known-good parcel's page must contain
-   the waterfall's container id. #}
-
-{# ── Left: links + exemptions + neighborhood · Right: satellite ──────── #}
-{# Mobile-stacking reorder (July 2026, Small Polish Batch item 1, per Sam's
-   beta feedback + Diego's confirmed Option B): on phones this row stacks
-   vertically in DOM order, which put three text cards (Helpful Links, Your
-   Exemptions, How You Compare) ahead of the Satellite View image -- Sam's
-   feedback was that the satellite image sat too far down the page. Diego
-   confirmed keeping the desktop two-column visual layout exactly as-is (no
-   change lg and up) and using Bootstrap's flexbox `order-*` utilities to
-   move Satellite View first in the MOBILE/tablet stacking order only.
-   `order-1`/`order-2` apply below the lg breakpoint (row is display:flex);
-   `order-lg-1`/`order-lg-2` re-assert the original left-right desktop order
-   at lg and up, so large screens render byte-for-byte the same as before. #}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
-<div class="row g-3 mb-4">
-<div class="col-lg-7 order-2 order-lg-1">
-
-{# ── Helpful links (kept near the top for quick action) ──────────────── #}
-<div class="card mb-3"><div class="card-header">Helpful Links</div>
-  <div class="card-body">
-    <div class="row" style="font-size:14px; line-height:2;">
-      <div class="col-sm-6">
-        {# Coherence fix (July 2026, per Fable review finding 4): this link used to
-           show unconditionally, even on non-residential parcels where a homestead
-           exemption cannot legally apply -- the same contradiction the KPI-card
-           gating fix addressed a few nights ago, just not caught here too. Reuses
-           the exact same is_residential check (set once, line 31), not a new one. #}
-        {% if is_residential %}
-        <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">Apply for a homestead exemption ↗</a><br>
-        {% endif %}
-        <a href="https://traviscad.org/protests" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a>
-      </div>
-      <div class="col-sm-6">
-        <a href="https://tax-office.traviscountytx.gov" target="_blank" rel="noopener noreferrer">Pay your property taxes ↗</a><br>
-        <a href="https://traviscad.org/contact" target="_blank" rel="noopener noreferrer">Contact TCAD ↗</a>
-      </div>
-    </div>
-    {# Direct TCAD property-detail link — shown on every parcel page, both
-       modes (Bug fix: this card previously had no equivalent in Homeowner
-       mode at all — the only other copy of this link lived inside the
-       Property Info card, which sits entirely inside the investor-only
-       {% else %} branch of the top-level mode split, lines 387–2187).
-       Deep-links via parcel.prop_id (TCAD's internal short numeric ID) when
-       available: https://travis.prodigycad.com/property-detail/<prop_id>/<year>.
-       Mapping confirmed by live-navigating the actual TCAD portal for 3 known
-       parcels (see Property Info card comment for full mapping detail).
-       Falls back to the generic property-search page when prop_id is missing.
-       Open County Interactive Map (JOHNNY-FEEDBACK-2 Part 1a, relocated from
-       the now-removed Documents & Sources panel -- JOHNNY-FEEDBACK-1's
-       original placement, commit 37735a3): same honest copy (confirmed live
-       this round: travis.prodigycad.com/maps is a client-side SPA with no
-       parcel-specific deep-linking), added as a second line in this same
-       bordered footer rather than a new UI element, right below the
-       parcel-specific TCAD deep link above -- both are "go look at TCAD"
-       links, this one just isn't scoped to this one parcel. #}
-    <div class="mt-2 pt-2" style="font-size:12px; border-top:1px solid var(--border, #e5e7eb);">
-      {% if parcel.prop_id %}
-      <a href="https://travis.prodigycad.com/property-detail/{{ parcel.prop_id }}/2026"
-         target="_blank" rel="noopener noreferrer"
-         style="color:var(--accent, #94B0DA); text-decoration:none;">View this property on TCAD ↗</a>
-      {% else %}
-      <a href="https://traviscad.org/propertysearch/"
-         target="_blank" rel="noopener noreferrer"
-         style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on TCAD ↗</a>
-      {% endif %}
-      <br>
-      <a href="https://travis.prodigycad.com/maps" target="_blank" rel="noopener noreferrer"
-         title="Opens the county's map tool itself, not this specific parcel — the map has no way to link directly to one parcel"
-         style="color:var(--accent, #94B0DA); text-decoration:none;">Open County Interactive Map ↗</a>
-    </div>
-  </div>
-</div>
-
-{# ── Section 2 — Your Exemptions ─────────────────────────────────────── #}
-{# Possessive-voice fix (July 2026, per Diego's Copy review — Homeowner mode,
-   item 1): title and lead sentence were hardcoded second-person with no
-   is_residential check. Real case this bit: an LLC-owned commercial parcel
-   can genuinely carry non-homestead exemption codes (Freeport, Pollution
-   Control, etc. — see _exmap above), so this card isn't even homestead-
-   specific, unlike the "No exemptions" branch below (line 649) which was
-   already correctly gated. #}
-<div class="card mb-3"><div class="card-header">{% if is_residential %}Your Exemptions{% else %}Exemptions{% endif %}</div>
-  <div class="card-body">
-    {% if excodes_list %}
-    <p class="mb-2">{% if is_residential %}You have{% else %}This property has{% endif %} <strong>{{ excodes_list | length }}</strong> exemption{{ "s" if excodes_list|length != 1 }} applied{% if is_residential %} to this property{% endif %}{% if excodes_year == 2026 %} <span class="text-muted" style="font-size:12px;">(as of the 2026 preliminary roll)</span>{% endif %}:</p>
-    <table class="table table-sm mb-0" style="max-width:420px;">
-      <tbody>
-        {% for code in excodes_list %}
-        <tr>
-          <td style="font-weight:600;">{{ _exmap.get(code, code) }}</td>
-          <td class="text-muted">{{ code }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    {# Coherence fix (July 2026, per Fable review finding 4): the homestead-apply
-       suggestion below used to show unconditionally, including on non-residential
-       parcels where it can't legally apply -- the same gate already used on the
-       KPI-level savings card (is_residential, set once at line 31), reused here
-       rather than reimplemented. #}
-    <p class="mb-0">No exemptions are currently applied.
-      {% if is_residential %}If this is your primary residence, you may qualify for a homestead exemption —
-      <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">visit traviscad.org to apply ↗</a>.
-      {% else %}This parcel is classified {{ bench_label or "non-residential" }}, so the homestead exemption (which requires an owner-occupied primary residence) doesn't apply here.
-      {% endif %}</p>
-    {% endif %}
-    {% if is_residential and not has_hs and hs_potential_savings %}
-    {# Estimated tier only — a modeled "what if you filed" figure, never blended
-       with a real/verified number. Gated on has_hs (not excodes_list) so a
-       parcel with some OTHER exemption but no Homestead specifically still
-       gets this note. Reuses the same dashed-border "estimated" treatment
-       already used for the 5-Year Tax Projection card.
-       Models TWO exemption types now (tax_logic/texas.py estimate_homestead_savings,
-       updated for the Homestead Accuracy brief): the $140,000 mandatory school
-       exemption (unchanged), PLUS a confirmed 20% local-option exemption for
-       Travis County / City of Austin / Central Health specifically when they
-       bill this parcel — sourced to Travis County's FY2026 Taxpayer Impact
-       Statement and TCAD chief-appraiser-sourced reporting, not guessed. Other
-       entities' optional status is unconfirmed and stays unmodeled. #}
-    {% set _lo = hs_potential_savings.local_option_entities %}
-    <div class="projection-card mt-3 p-3" style="border-radius:8px;">
-      <div class="d-flex align-items-center gap-2 mb-1">
-        <span class="badge-estimated" style="font-size:10px;">Estimated</span>
-        <span style="font-size:12.5px; font-weight:600;">Potential Homestead Savings</span>
-      </div>
-      {# Density fix (July 2026, per Diego, live look at 0121230106 -- "same
-         crowding problem" as the KPI-row card above): split into short,
-         labeled lines instead of two stacked full-sentence paragraphs, and
-         moved the §23.23(c) timing explanation to a hover ⓘ, same pattern
-         used there. The exemption-methodology detail (school $ figure,
-         which entities carry the confirmed local-option exemption, the
-         "other entities not modeled" and "not a verified figure" caveats)
-         is substantive, not filler, so it's kept -- just condensed and
-         moved to a single small-print line instead of two long sentences. #}
-      <p class="mb-1" style="font-size:13px;">
-        This year: <strong>~${{ "{:,.0f}".format(hs_potential_savings.estimated_annual_savings) }}/yr</strong> from filing —
-        based on the school district's ${{ "{:,.0f}".format(hs_potential_savings.school_hs_exemption) }} mandatory exemption{% if _lo %}, plus the confirmed 20% local-option exemption ($5,000 min) from {{ _lo | join(', ') }}{% endif %}, at your current assessed value and 2025 rates.
-      </p>
-      {% if hs_potential_savings.cap_savings_estimated %}
-      <p class="mb-1" style="font-size:13px;">
-        Starting next year: <strong>+~${{ "{:,.0f}".format(hs_potential_savings.cap_savings_estimated) }}/yr</strong> more, from the 10% value-growth cap
-        <span title="Tax Code §23.23(c): the cap doesn't protect your first (filing) year -- it takes effect the following January, so this part starts a year later than the exemption savings above." style="cursor:help; font-size:11px; color:var(--text-3);">ⓘ</span>.
-      </p>
-      {% endif %}
-      <p class="mb-0 text-muted" style="font-size:11px; line-height:1.4;">
-        Other entities may offer unmodeled optional exemptions. Modeled estimate, not a verified figure — separate from any real exemption shown elsewhere on this page.
-      </p>
-    </div>
-    {% endif %}
-  </div>
-</div>
-
-{# ── Section 3 — How you compare to your neighborhood ────────────────── #}
-{# Median-comparison mislabeling fix (July 2026): benchmark_by_year is built
-   in app.py from bench_label = property_type_label(classi_cd, state_cd1) —
-   the parcel's REAL category — so this was already comparing a commercial
-   parcel to the Commercial median, not a residential one. Confirmed: the
-   query was always correct; the copy just always said "home"/"your
-   neighborhood" regardless of what was actually being compared, which is
-   what made the Commercial median ($1,374,858 for 1201 S Lamar) read as if
-   it were a residential figure. Fix is copy-only — no query change. #}
-{% set _b25 = benchmark_by_year.get(2025) if benchmark_by_year else none %}
-{% if _b25 and _b25.median_market_value and mv25 %}
-{% set _med = _b25.median_market_value %}
-{% set _ratio = mv25 / _med %}
-{% if _ratio > 1.1 %}{% set _cmp = "higher than" %}{% set _taxcmp = "higher than" %}
-{% elif _ratio < 0.9 %}{% set _cmp = "lower than" %}{% set _taxcmp = "lower than" %}
-{% else %}{% set _cmp = "about the same as" %}{% set _taxcmp = "about the same as" %}{% endif %}
-{% set _peer_group = "the typical home" if is_residential else ("the typical " ~ bench_label ~ " property") %}
-{# Relabel fix (July 2026, per Fable review P1-11): "How You Compare to Your
-   Neighborhood" named a comparison this card doesn't actually make --
-   benchmark_by_year (app.py) comes from `county_benchmark WHERE
-   property_type_label = bench_label`, a COUNTYWIDE population by broad
-   property type, with no neighborhood_cd filter anywhere in that query. The
-   card's own body text already says so correctly ("in Travis County",
-   "county median") -- only the Homeowner-mode title claimed a
-   neighborhood-scoped comparison that was never actually happening, the same
-   title-vs-body contradiction already fixed elsewhere on this page (Submarket
-   Position, Peer Set). The non-residential branch already got this right
-   ("{{ bench_label }} Peers", no neighborhood claim) -- this brings the
-   residential title in line with the same honesty standard. #}
-<div class="card mb-3"><div class="card-header">{% if is_residential %}How You Compare Countywide{% else %}How You Compare to {{ bench_label }} Peers{% endif %}</div>
-  <div class="card-body">
-    <p class="mb-2">{% if is_residential %}Your home's{% else %}This property's{% endif %} value is <strong>{{ _cmp }}</strong> {{ _peer_group }} in Travis County
-      (county median: <strong>${{ "{:,.0f}".format(_med) }}</strong>).</p>
-    <p class="mb-0">Because property taxes are based on value, {% if is_residential %}your{% else %}the{% endif %} tax bill is likely <strong>{{ _taxcmp }}</strong> similar {% if is_residential %}homes{% else %}properties{% endif %}.</p>
-  </div>
-</div>
-{% endif %}
-
-</div>{# /col-lg-7 #}
-<div class="col-lg-5 order-1 order-lg-2">
-  {# Missing-imagery fallback fix (July 2026, per Diego — parcel 0438011527):
-     this card used to be `display:none` in the HTML and only ever unhidden by
-     the JS below once /api/geocode/<geo_id> came back with real coordinates —
-     so on any parcel where geocoding failed, the card simply never appeared:
-     no placeholder, no explanation, indistinguishable from the section not
-     existing at all. Same "always show a labeled state instead of silently
-     hiding something" convention already used everywhere else on this page
-     (na-cell "—", confidence badges, "No exemptions are currently applied,"
-     etc.) — the card container and header now always render; only the
-     content underneath switches between the map and an honest fallback.
-     Why imagery can be missing (see /api/geocode in app.py): (1) the parcel
-     has no cached latitude/longitude AND no situs_address on file to geocode
-     from ("no_address"); (2) the free U.S. Census onelineaddress geocoder
-     doesn't confidently match the address on file ("no_match") — plausible
-     for a sparse/rural address like this parcel's; or (3) the geocode request
-     itself times out or errors ("geocode_failed"). Not distinguished in the
-     fallback copy below since the endpoint's own error detail isn't surfaced
-     to this script today — flagged, not fixed, out of scope for this round. #}
-  <div class="card h-100">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span>Satellite View</span>
-      <span class="text-muted" style="font-size:11px; font-weight:400;">Imagery: Esri</span>
-    </div>
-    <div class="card-body p-0" style="display:flex;">
-      <div id="hoSatMap" style="display:none; flex:1 1 auto; min-height:320px; width:100%; border-radius:0 0 8px 8px;"></div>
-      <div id="hoSatFallback" class="d-flex flex-column align-items-center justify-content-center text-center text-muted"
-           style="flex:1 1 auto; min-height:320px; width:100%; padding:20px; border-radius:0 0 8px 8px;">
-        <div style="font-size:14px; font-weight:600; margin-bottom:4px;">Satellite image not available</div>
-        <div style="font-size:12px; max-width:280px;">We couldn't locate this property on the map — this can happen for parcels whose address our geocoder can't confidently match.</div>
-      </div>
-    </div>
-  </div>
-</div>
-</div>{# /row #}
-
-{# ── Multi-unit panel (Migration M2, SPEC_UNIT_MODEL_AND_INGEST_GATE.md
-   §3.5, July 2026). `units` is only non-None when app.py's property_detail()
-   found more than one real TCAD unit (prop_id) sharing this geo_id — a
-   condo regime, a multi-improvement account, etc. Every KPI card and the
-   Value History table above show the SUMMED total across all of them
-   (parcel_rollup.py's SUM() aggregation); this panel is what shows the
-   individual units that sum came from, so a visitor isn't shown one
-   blended number with no indication it's a sum of several. Same partial
-   (units, units_tax_year) in both Homeowner and Investor branches. #}
-{% if units %}
-<div class="card mb-4">
-  <div class="card-header">
-    This Account Includes {{ units|length }} Units
-    <span class="text-muted" style="font-size:12px; font-weight:400;">({{ units_tax_year }} values — the figures above on this page are the sum of these rows)</span>
-  </div>
-  <div class="card-body p-0">
-    <div class="table-responsive">
-      <table class="table table-sm mb-0" style="font-size:13px;">
-        <thead>
-          <tr>
-            <th>Unit (prop_id)</th>
-            <th>Owner</th>
-            <th>Address</th>
-            <th class="text-end">Market Value</th>
-            <th class="text-end">Assessed Value</th>
-            <th class="text-end">Taxable Value</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for u in units %}
-          <tr>
-            <td>{{ u.prop_id }}</td>
-            <td>{{ u.owner_name or '—' }}</td>
-            <td>{{ u.situs_address or '—' }}</td>
-            <td class="text-end">{{ "${:,.0f}".format(u.market_value) if u.market_value is not none else '—' }}</td>
-            <td class="text-end">{{ "${:,.0f}".format(u.assessed_value) if u.assessed_value is not none else '—' }}</td>
-            <td class="text-end">{{ "${:,.0f}".format(u.taxable_value) if u.taxable_value is not none else '—' }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-{% endif %}
-
 {# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief;
    relocated July 2026 per "Property Page Polish Round" item 6 — see the
    comment left at its original position, right after the KPI cards, for
@@ -1342,20 +1131,6 @@
 </div>
 {% endif %}
 
-{# ── Section 4 — Your value over time ────────────────────────────────── #}
-<div class="card mb-4"><div class="card-header">{% if is_residential %}Your Home's Value Over Time{% else %}This Property's Value Over Time{% endif %}</div>
-  <div class="card-body">
-    <p class="text-muted mb-3" style="font-size:13px;">Here's how {% if is_residential %}your home's{% else %}this property's{% endif %} value has changed over the past 6 years.</p>
-    <canvas id="hoValueChart" height="90"></canvas>
-  </div>
-</div>
-
-{{ value_taxable_gap_chart(history, true, is_residential) }}
-
-{# ── Section 5 — Who gets your tax money ─────────────────────────────── #}
-{# Possessive-voice fix (July 2026, per Diego's Copy review — Homeowner mode,
-   item 1): card title and the "You Paid" column header below were hardcoded
-   second-person, same bug as the "What you paid in taxes" KPI card above. #}
 {% if entity_detail and entity_detail | selectattr('amount_due') | list %}
 <div class="card mb-4"><div class="card-header">{% if is_residential %}Where Your 2025 Tax Dollars Went{% else %}Where This Property's 2025 Tax Dollars Went{% endif %}</div>
   <div class="card-body">
@@ -1466,7 +1241,135 @@
     </div>
   </div>
 </div>
+{% endif %}
 
+{# ── Section 2 — Your Exemptions ─────────────────────────────────────── #}
+{# Possessive-voice fix (July 2026, per Diego's Copy review — Homeowner mode,
+   item 1): title and lead sentence were hardcoded second-person with no
+   is_residential check. Real case this bit: an LLC-owned commercial parcel
+   can genuinely carry non-homestead exemption codes (Freeport, Pollution
+   Control, etc. — see _exmap above), so this card isn't even homestead-
+   specific, unlike the "No exemptions" branch below (line 649) which was
+   already correctly gated. #}
+<div class="card mb-3"><div class="card-header">{% if is_residential %}Your Exemptions{% else %}Exemptions{% endif %}</div>
+  <div class="card-body">
+    {% if excodes_list %}
+    <p class="mb-2">{% if is_residential %}You have{% else %}This property has{% endif %} <strong>{{ excodes_list | length }}</strong> exemption{{ "s" if excodes_list|length != 1 }} applied{% if is_residential %} to this property{% endif %}{% if excodes_year == 2026 %} <span class="text-muted" style="font-size:12px;">(as of the 2026 preliminary roll)</span>{% endif %}:</p>
+    <table class="table table-sm mb-0" style="max-width:420px;">
+      <tbody>
+        {% for code in excodes_list %}
+        <tr>
+          <td style="font-weight:600;">{{ _exmap.get(code, code) }}</td>
+          <td class="text-muted">{{ code }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    {# Coherence fix (July 2026, per Fable review finding 4): the homestead-apply
+       suggestion below used to show unconditionally, including on non-residential
+       parcels where it can't legally apply -- the same gate already used on the
+       KPI-level savings card (is_residential, set once at line 31), reused here
+       rather than reimplemented. #}
+    <p class="mb-0">No exemptions are currently applied.
+      {% if is_residential %}If this is your primary residence, you may qualify for a homestead exemption —
+      <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">visit traviscad.org to apply ↗</a>.
+      {% else %}This parcel is classified {{ bench_label or "non-residential" }}, so the homestead exemption (which requires an owner-occupied primary residence) doesn't apply here.
+      {% endif %}</p>
+    {% endif %}
+    {% if is_residential and not has_hs and hs_potential_savings %}
+    {# Estimated tier only — a modeled "what if you filed" figure, never blended
+       with a real/verified number. Gated on has_hs (not excodes_list) so a
+       parcel with some OTHER exemption but no Homestead specifically still
+       gets this note. Reuses the same dashed-border "estimated" treatment
+       already used for the 5-Year Tax Projection card.
+       Models TWO exemption types now (tax_logic/texas.py estimate_homestead_savings,
+       updated for the Homestead Accuracy brief): the $140,000 mandatory school
+       exemption (unchanged), PLUS a confirmed 20% local-option exemption for
+       Travis County / City of Austin / Central Health specifically when they
+       bill this parcel — sourced to Travis County's FY2026 Taxpayer Impact
+       Statement and TCAD chief-appraiser-sourced reporting, not guessed. Other
+       entities' optional status is unconfirmed and stays unmodeled. #}
+    {% set _lo = hs_potential_savings.local_option_entities %}
+    <div class="projection-card mt-3 p-3" style="border-radius:8px;">
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <span class="badge-estimated" style="font-size:10px;">Estimated</span>
+        <span style="font-size:12.5px; font-weight:600;">Potential Homestead Savings</span>
+      </div>
+      {# Density fix (July 2026, per Diego, live look at 0121230106 -- "same
+         crowding problem" as the KPI-row card above): split into short,
+         labeled lines instead of two stacked full-sentence paragraphs, and
+         moved the §23.23(c) timing explanation to a hover ⓘ, same pattern
+         used there. The exemption-methodology detail (school $ figure,
+         which entities carry the confirmed local-option exemption, the
+         "other entities not modeled" and "not a verified figure" caveats)
+         is substantive, not filler, so it's kept -- just condensed and
+         moved to a single small-print line instead of two long sentences. #}
+      <p class="mb-1" style="font-size:13px;">
+        This year: <strong>~${{ "{:,.0f}".format(hs_potential_savings.estimated_annual_savings) }}/yr</strong> from filing —
+        based on the school district's ${{ "{:,.0f}".format(hs_potential_savings.school_hs_exemption) }} mandatory exemption{% if _lo %}, plus the confirmed 20% local-option exemption ($5,000 min) from {{ _lo | join(', ') }}{% endif %}, at your current assessed value and 2025 rates.
+      </p>
+      {% if hs_potential_savings.cap_savings_estimated %}
+      <p class="mb-1" style="font-size:13px;">
+        Starting next year: <strong>+~${{ "{:,.0f}".format(hs_potential_savings.cap_savings_estimated) }}/yr</strong> more, from the 10% value-growth cap
+        <span title="Tax Code §23.23(c): the cap doesn't protect your first (filing) year -- it takes effect the following January, so this part starts a year later than the exemption savings above." style="cursor:help; font-size:11px; color:var(--text-3);">ⓘ</span>.
+      </p>
+      {% endif %}
+      <p class="mb-0 text-muted" style="font-size:11px; line-height:1.4;">
+        Other entities may offer unmodeled optional exemptions. Modeled estimate, not a verified figure — separate from any real exemption shown elsewhere on this page.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Delinquency (July 2026, per Diego's "Delinquency Data Freshness" Cowork
+   brief) — NEW in Homeowner mode. Investigated before building: Homeowner
+   mode had NO delinquency surface at all before this (confirmed via a full
+   sweep of this branch, lines 371-1290 -- Investor mode's own "Delinquency"
+   card, a few lines above this file's mode split, was the only place this
+   ever showed). Diego's brief assumed a panel already existed in both modes
+   to add a date to; it didn't in Homeowner mode, so this is a new card, not
+   just a date added to an existing one -- flagged to Diego mid-brief, who
+   confirmed building it. Ported from Investor mode's card (same delinquent
+   dict, same fields: total_due, first_delinquent_yr, cause_number) into
+   Homeowner's plain-language/possessive voice, same pattern already used
+   for the Value-vs-Taxable chart port earlier this session (reuse the
+   logic, change only the framing). Same as-of-date copy convention as
+   Investor mode's card (see that card's own comment for the sourcing
+   writeup on delinquent_export_date / TAX_DELQ_EXPORT_DATE). #}
+{% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
+<div class="card mb-4 delinquency-card">
+  <div class="card-header">{% if is_residential %}Unpaid Taxes on Your Home{% else %}Unpaid Taxes on This Property{% endif %}</div>
+  <div class="card-body p-3">
+    <p class="mb-2">
+      {% if is_residential %}Your home has{% else %}This property has{% endif %}
+      <strong style="color: var(--up);">${{ "{:,.2f}".format(delinquent.total_due) }}</strong>
+      in unpaid property taxes on record{% if delinquent.first_delinquent_yr %}, dating back to {{ delinquent.first_delinquent_yr }}{% endif %}.
+      {% if delinquent.cause_number %}This account is in active collections (Cause # {{ delinquent.cause_number }}).{% endif %}
+      Delinquent taxes become a lien on the property and transfer to the buyer at closing unless negotiated otherwise.
+    </p>
+    <p class="mb-0 text-muted" style="font-size:11.5px;">
+      As of {{ delinquent_export_date.strftime('%B %-d, %Y') }} — Travis County Tax Office snapshot. This balance may have grown since then due to ongoing statutory penalty and interest (Tax Code §33.01); verify the exact current amount with the <a href="https://tax-office.traviscountytx.gov/properties/taxes/delinquent/penalties-interest" target="_blank" rel="noopener noreferrer">Travis County Tax Office ↗</a> before relying on it.
+    </p>
+  </div>
+</div>
+{% endif %}
+
+{# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
+<div class="section-hdr" style="margin-top:24px;">How We Got Here</div>
+
+{# ── Section 4 — Your value over time ────────────────────────────────── #}
+<div class="card mb-4"><div class="card-header">{% if is_residential %}Your Home's Value Over Time{% else %}This Property's Value Over Time{% endif %}</div>
+  <div class="card-body">
+    <p class="text-muted mb-3" style="font-size:13px;">Here's how {% if is_residential %}your home's{% else %}this property's{% endif %} value has changed over the past 6 years.</p>
+    <canvas id="hoValueChart" height="90"></canvas>
+  </div>
+</div>
+
+{{ value_taxable_gap_chart(history, true, is_residential) }}
+
+{% if entity_detail and entity_detail | selectattr('amount_due') | list %}
 {# ── Your tax rate & bill, last 5 years ──────────────────────────────── #}
 {# Possessive-voice fix (July 2026, per Diego's Copy review — Homeowner mode,
    item 1): card title was hardcoded second-person, same bug pattern as the
@@ -1564,38 +1467,105 @@
 </div>
 {% endif %}
 
-{# ── Delinquency (July 2026, per Diego's "Delinquency Data Freshness" Cowork
-   brief) — NEW in Homeowner mode. Investigated before building: Homeowner
-   mode had NO delinquency surface at all before this (confirmed via a full
-   sweep of this branch, lines 371-1290 -- Investor mode's own "Delinquency"
-   card, a few lines above this file's mode split, was the only place this
-   ever showed). Diego's brief assumed a panel already existed in both modes
-   to add a date to; it didn't in Homeowner mode, so this is a new card, not
-   just a date added to an existing one -- flagged to Diego mid-brief, who
-   confirmed building it. Ported from Investor mode's card (same delinquent
-   dict, same fields: total_due, first_delinquent_yr, cause_number) into
-   Homeowner's plain-language/possessive voice, same pattern already used
-   for the Value-vs-Taxable chart port earlier this session (reuse the
-   logic, change only the framing). Same as-of-date copy convention as
-   Investor mode's card (see that card's own comment for the sourcing
-   writeup on delinquent_export_date / TAX_DELQ_EXPORT_DATE). #}
-{% if delinquent and delinquent.total_due and delinquent.total_due > 0 %}
-<div class="card mb-4 delinquency-card">
-  <div class="card-header">{% if is_residential %}Unpaid Taxes on Your Home{% else %}Unpaid Taxes on This Property{% endif %}</div>
-  <div class="card-body p-3">
-    <p class="mb-2">
-      {% if is_residential %}Your home has{% else %}This property has{% endif %}
-      <strong style="color: var(--up);">${{ "{:,.2f}".format(delinquent.total_due) }}</strong>
-      in unpaid property taxes on record{% if delinquent.first_delinquent_yr %}, dating back to {{ delinquent.first_delinquent_yr }}{% endif %}.
-      {% if delinquent.cause_number %}This account is in active collections (Cause # {{ delinquent.cause_number }}).{% endif %}
-      Delinquent taxes become a lien on the property and transfer to the buyer at closing unless negotiated otherwise.
-    </p>
-    <p class="mb-0 text-muted" style="font-size:11.5px;">
-      As of {{ delinquent_export_date.strftime('%B %-d, %Y') }} — Travis County Tax Office snapshot. This balance may have grown since then due to ongoing statutory penalty and interest (Tax Code §33.01); verify the exact current amount with the <a href="https://tax-office.traviscountytx.gov/properties/taxes/delinquent/penalties-interest" target="_blank" rel="noopener noreferrer">Travis County Tax Office ↗</a> before relying on it.
-    </p>
+{# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
+<div class="section-hdr" style="margin-top:24px;">How This Parcel Compares</div>
+
+{# ── Section 3 — How you compare to your neighborhood ────────────────── #}
+{# Median-comparison mislabeling fix (July 2026): benchmark_by_year is built
+   in app.py from bench_label = property_type_label(classi_cd, state_cd1) —
+   the parcel's REAL category — so this was already comparing a commercial
+   parcel to the Commercial median, not a residential one. Confirmed: the
+   query was always correct; the copy just always said "home"/"your
+   neighborhood" regardless of what was actually being compared, which is
+   what made the Commercial median ($1,374,858 for 1201 S Lamar) read as if
+   it were a residential figure. Fix is copy-only — no query change. #}
+{% set _b25 = benchmark_by_year.get(2025) if benchmark_by_year else none %}
+{% if _b25 and _b25.median_market_value and mv25 %}
+{% set _med = _b25.median_market_value %}
+{% set _ratio = mv25 / _med %}
+{% if _ratio > 1.1 %}{% set _cmp = "higher than" %}{% set _taxcmp = "higher than" %}
+{% elif _ratio < 0.9 %}{% set _cmp = "lower than" %}{% set _taxcmp = "lower than" %}
+{% else %}{% set _cmp = "about the same as" %}{% set _taxcmp = "about the same as" %}{% endif %}
+{% set _peer_group = "the typical home" if is_residential else ("the typical " ~ bench_label ~ " property") %}
+{# Relabel fix (July 2026, per Fable review P1-11): "How You Compare to Your
+   Neighborhood" named a comparison this card doesn't actually make --
+   benchmark_by_year (app.py) comes from `county_benchmark WHERE
+   property_type_label = bench_label`, a COUNTYWIDE population by broad
+   property type, with no neighborhood_cd filter anywhere in that query. The
+   card's own body text already says so correctly ("in Travis County",
+   "county median") -- only the Homeowner-mode title claimed a
+   neighborhood-scoped comparison that was never actually happening, the same
+   title-vs-body contradiction already fixed elsewhere on this page (Submarket
+   Position, Peer Set). The non-residential branch already got this right
+   ("{{ bench_label }} Peers", no neighborhood claim) -- this brings the
+   residential title in line with the same honesty standard. #}
+<div class="card mb-3"><div class="card-header">{% if is_residential %}How You Compare Countywide{% else %}How You Compare to {{ bench_label }} Peers{% endif %}</div>
+  <div class="card-body">
+    <p class="mb-2">{% if is_residential %}Your home's{% else %}This property's{% endif %} value is <strong>{{ _cmp }}</strong> {{ _peer_group }} in Travis County
+      (county median: <strong>${{ "{:,.0f}".format(_med) }}</strong>).</p>
+    <p class="mb-0">Because property taxes are based on value, {% if is_residential %}your{% else %}the{% endif %} tax bill is likely <strong>{{ _taxcmp }}</strong> similar {% if is_residential %}homes{% else %}properties{% endif %}.</p>
   </div>
 </div>
 {% endif %}
+
+{# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
+<div class="section-hdr" style="margin-top:24px;">More Resources</div>
+
+{# ── Helpful links (PARCEL-REORG-1: moved to "More resources", bottom of page) ── #}
+<div class="card mb-3"><div class="card-header">Helpful Links</div>
+  <div class="card-body">
+    <div class="row" style="font-size:14px; line-height:2;">
+      <div class="col-sm-6">
+        {# Coherence fix (July 2026, per Fable review finding 4): this link used to
+           show unconditionally, even on non-residential parcels where a homestead
+           exemption cannot legally apply -- the same contradiction the KPI-card
+           gating fix addressed a few nights ago, just not caught here too. Reuses
+           the exact same is_residential check (set once, line 31), not a new one. #}
+        {% if is_residential %}
+        <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">Apply for a homestead exemption ↗</a><br>
+        {% endif %}
+        <a href="https://traviscad.org/protests" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a>
+      </div>
+      <div class="col-sm-6">
+        <a href="https://tax-office.traviscountytx.gov" target="_blank" rel="noopener noreferrer">Pay your property taxes ↗</a><br>
+        <a href="https://traviscad.org/contact" target="_blank" rel="noopener noreferrer">Contact TCAD ↗</a>
+      </div>
+    </div>
+    {# Direct TCAD property-detail link — shown on every parcel page, both
+       modes (Bug fix: this card previously had no equivalent in Homeowner
+       mode at all — the only other copy of this link lived inside the
+       Property Info card, which sits entirely inside the investor-only
+       {% else %} branch of the top-level mode split, lines 387–2187).
+       Deep-links via parcel.prop_id (TCAD's internal short numeric ID) when
+       available: https://travis.prodigycad.com/property-detail/<prop_id>/<year>.
+       Mapping confirmed by live-navigating the actual TCAD portal for 3 known
+       parcels (see Property Info card comment for full mapping detail).
+       Falls back to the generic property-search page when prop_id is missing.
+       Open County Interactive Map (JOHNNY-FEEDBACK-2 Part 1a, relocated from
+       the now-removed Documents & Sources panel -- JOHNNY-FEEDBACK-1's
+       original placement, commit 37735a3): same honest copy (confirmed live
+       this round: travis.prodigycad.com/maps is a client-side SPA with no
+       parcel-specific deep-linking), added as a second line in this same
+       bordered footer rather than a new UI element, right below the
+       parcel-specific TCAD deep link above -- both are "go look at TCAD"
+       links, this one just isn't scoped to this one parcel. #}
+    <div class="mt-2 pt-2" style="font-size:12px; border-top:1px solid var(--border, #e5e7eb);">
+      {% if parcel.prop_id %}
+      <a href="https://travis.prodigycad.com/property-detail/{{ parcel.prop_id }}/2026"
+         target="_blank" rel="noopener noreferrer"
+         style="color:var(--accent, #94B0DA); text-decoration:none;">View this property on TCAD ↗</a>
+      {% else %}
+      <a href="https://traviscad.org/propertysearch/"
+         target="_blank" rel="noopener noreferrer"
+         style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on TCAD ↗</a>
+      {% endif %}
+      <br>
+      <a href="https://travis.prodigycad.com/maps" target="_blank" rel="noopener noreferrer"
+         title="Opens the county's map tool itself, not this specific parcel — the map has no way to link directly to one parcel"
+         style="color:var(--accent, #94B0DA); text-decoration:none;">Open County Interactive Map ↗</a>
+    </div>
+  </div>
+</div>
 
 {# ── Post-Acquisition Tax Estimator (July 2026, per Diego — new in Homeowner
    mode) ───────────────────────────────────────────────────────────────────
@@ -1781,6 +1751,11 @@
     {% endif %}
   </div>
 </div>
+
+
+<div id="sectionAtGlance" class="section-anchor"></div>
+{# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
+<div class="section-hdr" style="margin-top:24px;">At a Glance</div>
 
 {# ── CoStar KPI headline cards — Two-Year Restructure (July 2026, per Diego) ──
    REPLACES the prior single row of 4 cards (Market Value / YoY Value Change /
@@ -2081,7 +2056,6 @@
 
 </div>
 {% endif %}
-
 {# ── Bill-Change Waterfall MOVED (July 2026, Property Page Polish Round item
    6, per Diego's live review of 0100030105/0100030804): this card used to
    render right here -- immediately after the KPI cards, before the section
@@ -2092,34 +2066,25 @@
    Acquisition Tax Estimator) -- see that location for the actual card
    markup, unchanged in content/logic, only moved. #}
 
-{# ── Value Trend chart RELOCATED here (July 2026, Small Polish Batch item
-   5a, per Sam's beta feedback + Diego's confirmed decision): used to sit
-   deep in the full-width tables section, 5th item within an already-late
-   section (below Rate Environment / Entity Split / History tables). Diego
-   confirmed moving it to right after the KPI cards, before the Bill-Change
-   Waterfall (which -- per the comment just above -- itself now renders
-   further down, after Property Details) so it's visible immediately.
-   Mirrors where Homeowner mode's own analogous value chart already sits,
-   early on the page. Card content/JS unchanged -- same canvas
-   id="valueTrendChart", same Chart.js config (1.75px lines, minimal
-   gridlines, white tooltips -- existing convention, not reinvented). #}
-{% if history %}
-<div class="card mb-4">
-  <div class="card-header">
-    Value Trend
-  </div>
-  <div class="card-body">
-    <canvas id="valueTrendChart" height="120"></canvas>
-  </div>
-</div>
-{% endif %}
-
-{# ── Scroll-anchor section nav (Task 4) ───────────────────────────────────── #}
+{# ── Value Trend chart MOVED OUT of "At a Glance" (PARCEL-REORG-2, 2026-08-16,
+   real Issue 3 per Diego's live review): used to sit right here, at the very
+   top of "At a Glance," before the KPI cards even finished and above the nav
+   bar -- a leftover from a July 2026 round that predates PARCEL-REORG-1's
+   5-section structure and never got revisited when that structure landed.
+   Diego's real, explicit call: a multi-year trend/forecast chart belongs in
+   "How We Got Here" (Value History table, Value/Taxable gap chart, Annual
+   Trends per PARCEL-REORG-1's own report), not "At a Glance," which should
+   stay a current-snapshot section. Moved to sit directly next to the Value
+   History table -- see that section for the actual card markup, unchanged
+   in content/JS, only position moved (same canvas id="valueTrendChart",
+   same Chart.js config). #}
+{# ── Scroll-anchor section nav (PARCEL-REORG-1, 2026-08-16): rebuilt to match the new 5-section structure -- old anchors (Overview/History/Projection/Position) replaced with sectionAtGlance/sectionTaxBill/sectionHowWeGotHere/sectionCompares/sectionMoreResources, one per new section header below (see the matching IntersectionObserver anchors array in the scripts block, also updated). Also removes a pre-existing duplicate id="sectionProjection" bug (two identical anchor divs used to render back-to-back) as a byproduct of rebuilding every anchor from scratch, not a separately-scoped fix. #}
 <div id="sectionNavBar" class="section-nav-bar mb-2">
-  <a class="section-nav-link active" href="#sectionOverview">Overview</a>
-  <a class="section-nav-link" href="#sectionHistory">History</a>
-  <a class="section-nav-link" href="#sectionProjection">Projection</a>
-  <a class="section-nav-link" href="#sectionPosition">Position</a>
+  <a class="section-nav-link active" href="#sectionAtGlance">At a Glance</a>
+  <a class="section-nav-link" href="#sectionTaxBill">Tax Bill</a>
+  <a class="section-nav-link" href="#sectionHowWeGotHere">History</a>
+  <a class="section-nav-link" href="#sectionCompares">Compares</a>
+  <a class="section-nav-link" href="#sectionMoreResources">Resources</a>
 </div>
 
 {# id="sectionOverview" moved onto this wrapper (July 2026 Cowork brief item 1):
@@ -2129,11 +2094,34 @@
    giving the Tax Calendar strip (which also satisfies this brief's own "near the
    top of the Overview tab" placement ask) the id instead, rather than leaving it
    broken or re-adding an empty anchor div with no content. #}
-<div id="sectionOverview">
+<div>
   {{ tax_calendar_strip(tax_calendar) }}
 </div>
-
-<div class="row g-4">
+{# ── Real Issue 2 fix (PARCEL-REORG-3, 2026-08-17, per Diego's live
+   screenshot re-verification after PARCEL-REORG-2's own attempted fix):
+   confirmed root cause via direct CSS inspection, not the column-length
+   guess PARCEL-REORG-2 made -- this ".row.g-4" carried no align-items
+   utility class, so Bootstrap's own flex default (align-items: stretch)
+   was in effect. That stretches BOTH col-lg-4/col-lg-8's own column <div>s
+   to match the taller sibling's height -- but neither column's content is
+   a single flex-grow element, it's a stack of plain ".card.mb-4" divs with
+   no height:100%/flex-grow of their own, so the shorter column's last card
+   ends at its own natural height while its surrounding column <div> stays
+   stretched -- real, empty space in exactly the shorter column, extending
+   down to match the taller one. This is the textbook Bootstrap symptom for
+   exactly what Diego's screenshot showed (a card with a clean bottom
+   border, empty white space below it in the same column). Real, minimal
+   fix: align-items-start on the row -- the column <div>s stop stretching
+   entirely, each renders at its own natural height, and the row's overall
+   height becomes simply the taller column's real height with no forced
+   empty space in the shorter one. Real, honest caveat: PARCEL-REORG-2's own
+   Improvement-Detail-move fix (still in place, unrelated to this specific
+   root cause) narrowed the two columns' raw text-length gap, but text
+   length was always an imperfect proxy for real rendered pixel height --
+   this fix addresses the actual layout mechanism the screenshot evidence
+   pointed to, independent of that separate, still-real content-length
+   difference. #}
+<div class="row g-4 align-items-start">
 
 {# ── Left column ─────────────────────────────────────────────────────── #}
 <div class="col-lg-4">
@@ -2898,34 +2886,33 @@
   </div>
   {% endif %}
 
-  {# ── Property-tax & county news (real feed; never fabricated) ─────────── #}
-  <div class="card mb-4" id="newsCard">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span>Property Tax &amp; County News</span>
-      <span class="text-muted" style="font-size:11px; font-weight:400;">Travis County · live feed</span>
-    </div>
-    <div class="card-body p-0">
-      <div id="newsBody" class="p-3 text-muted" style="font-size:12.5px;">Loading news…</div>
-    </div>
-    <div class="card-footer text-muted" style="font-size:10.5px;">
-      Headlines via Google News for “Travis County property tax” / Travis Central Appraisal District.
-      Dates and sources as published; links open the original source in a new tab. Updated hourly.
-    </div>
-  </div>
 
+</div>{# /col-lg-8 — insight report #}
+</div>{# /row — top two-column section #}
   {# ── Improvement Detail — TCAD-pattern grouped block (Part 4 redesign) ──────
-     MOVED BACK into the col-lg-8 right column, directly after Property Tax &
-     County News (July 2026, per Diego — partial reversal of last round's
-     full-width move). Full-width technically fixed "constrained to one
-     column" but created its own problem: Satellite View (col-lg-4, left) is
-     visually taller than this column's own content (Property Info, Current
-     Values, Delinquency, News), leaving a real empty gap under News in THIS
-     column specifically — full-width Improvement Detail sat below both
-     columns and did nothing to close that gap, just added its own separate
-     block of white space underneath. Placing it here, directly after News,
-     targets the actual gap. Content/logic UNCHANGED from either prior
-     version — same imp_det data, same TCAD-pattern header grid, same
-     collapsible component table.
+     MOVED OUT of the col-lg-8 right column, to full width right after the
+     two-column Overview row closes (PARCEL-REORG-2, 2026-08-16, real Issue 2
+     per Diego's live screenshot of parcel 0424000715): measured via the
+     render harness that col-lg-8 (Insight Report + Investment Snapshot +
+     this card) ran roughly 2x the visible length of col-lg-4 (Property
+     Info/Current Values/Delinquency/Satellite/Helpful Links) on a modest
+     mock parcel -- with Insight Report's own narrative text alone already
+     ~6x col-lg-4's total length, this table's contribution (a compact
+     TCAD-style grid + table) was the smaller of the two drivers, but
+     moving it out is the real, safe lever available here without
+     restructuring Insight Report's narrative content, which is out of
+     this brief's scope. Disclosed plainly in this round's report: this
+     narrows the col-lg-4/col-lg-8 gap, it does not fully close it --
+     Insight Report's own length remains the dominant remaining driver,
+     and further narrowing (e.g. trimming that narrative) is Diego's own
+     call, not decided here.
+     PRIOR HISTORY (kept for context, not still accurate as a description
+     of the current fix): an earlier full-width move was tried and
+     reverted specifically because it "did nothing to close the gap" on
+     its own at the time -- this round's own measurement confirms why:
+     Insight Report alone, not this table, was always the larger driver.
+     Content/logic UNCHANGED from any prior version — same imp_det data,
+     same TCAD-pattern header grid, same collapsible component table.
      REDESIGNED — was a single flat component table. Restructured into TCAD's
      "per-improvement header block, then a table of that improvement's
      components" pattern, using Parcelytics' existing card/grid conventions
@@ -3030,9 +3017,6 @@
   </style>
   {% endif %}
 
-</div>{# /col-lg-8 — insight report #}
-</div>{# /row — top two-column section #}
-
 {# ── Multi-unit panel (Migration M2, SPEC_UNIT_MODEL_AND_INGEST_GATE.md
    §3.5, July 2026) — Investor-mode instance of the same partial rendered
    in the Homeowner branch above; see that comment for the full rationale. #}
@@ -3072,6 +3056,10 @@
   </div>
 </div>
 {% endif %}
+
+<div id="sectionTaxBill" class="section-anchor"></div>
+{# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
+<div class="section-hdr" style="margin-top:24px;">Your Tax Bill, This Year</div>
 
 {# ── Bill-Change Waterfall (July 2026, per Diego's outside-review brief;
    MOVED July 2026, Property Page Polish Round item 6, per Diego's live
@@ -3160,46 +3148,180 @@
   </div>
 </div>
 {% endif %}
-
-{# ── Post-Acquisition Tax Estimator (Task 1) ─────────────────────────── #}
-{# Buyer-type field fix (July 2026, per Diego): removed the Buyer Type toggle
-   from THIS (Investor) card — the mode already implies an investor buyer, so
-   asking again was redundant. Now rendered via the shared macro (defined
-   above, outside both mode branches) with show_buyer_toggle=false. Homeowner
-   mode calls the same macro with show_buyer_toggle=true — see that branch's
-   own call for why the toggle stays meaningful there. #}
-{{ post_acq_estimator_card(entity_detail, current, parcel, false) }}
-
-{# ── Overview narrative — REMOVED (July 2026, per Diego's Copy review —
-   Investor mode, item 1): this collapsed <details> duplicated the Investor
-   Insight Report above at lower quality -- generate_property_narrative()
-   (app.py) covers the same three topics (value trajectory, assessment
-   ratio/tax burden, risk flags) as the Insight Report's Appreciation/Tax
-   Burden/risk paragraphs, but as flat concatenated sentences with none of
-   the Insight Report's later-added depth (uneven-vs-steady growth
-   detection, peer-growth comparison, conditional strong/moderate/flat
-   framing) -- confirmed by reading both functions/blocks side by side, not
-   assumed from the section names alone. Diego offered two options: cut it,
-   or repurpose it as the PDF export's plain-language abstract. Repurposing
-   safely isn't a same-session change: export_due_diligence_pdf() (app.py)
-   deliberately queries its OWN minimal dataset rather than sharing
-   property_detail()'s full pipeline (see that route's own docstring judgment
-   call), and generate_property_narrative() needs metrics_by_year/
-   benchmark_by_year/projections, none of which the PDF route currently
-   fetches -- wiring it in means either new queries in that route or trimming
-   the function's own dependencies, both real scope changes to a route whose
-   own docstring already flags "no live DB here to verify a refactor against"
-   as the reason it stayed decoupled. Cut here (the concrete complaint,
-   verifiable safe with this session's tools); generate_property_narrative()
-   is left defined in app.py, unused for now, as the natural building block
-   for that PDF-abstract option — flagged for Diego rather than built blind. #}
-
 {# ── Full-width section: all tables + metrics ──────────────────────────────── #}
 <div class="row mt-2">
 <div class="col-12">
+  {# ── Entity Amount Horizontal Bar (Task 4) ─────────────────────────── #}
+  {% set _ent_sorted = entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
+  {% if _ent_sorted %}
+  {% set _total_tax_bar = _ent_sorted | sum(attribute='amount_due') | float %}
+  <div class="card mb-4">
+    <div class="card-header">2025 Tax Burden — Entity Split</div>
+    <div class="card-body pt-3 pb-2">
+      {% for e in _ent_sorted %}
+        {% if e.amount_due and _total_tax_bar > 0 %}
+        {% set _pct = e.amount_due | float / _total_tax_bar * 100 %}
+        <div class="entity-bar-row">
+          <span class="entity-bar-code">{{ e.entity_code }}</span>
+          <div class="entity-bar-track"><div class="entity-bar-fill" style="width:{{ '{:.1f}'.format(_pct) }}%;"></div></div>
+          <span class="entity-bar-pct">{{ '{:.1f}'.format(_pct) }}%</span>
+          <span class="entity-bar-amt">${{ '{:,.0f}'.format(e.amount_due | float) }}</span>
+        </div>
+        {% endif %}
+      {% endfor %}
+      <div class="d-flex justify-content-end mt-2 pt-2" style="border-top:1px solid var(--border-strong); font-family:var(--font-mono); font-size:12.5px; font-weight:700;">
+        Total: ${{ '{:,.0f}'.format(_total_tax_bar) }}
+      </div>
+    </div>
+    <div class="card-footer">2025 billing by taxing entity, ranked by share of total. From Travis County Tax Office open data.</div>
+  </div>
+  {% endif %}
+  {# ── Phase 2: Risk Indicators ────────────────────────────────────── #}
+  <div class="section-hdr">Risk Indicators</div>
+  {% if metrics_by_year %}
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Risk Indicators</span>
+    </div>
+    <div class="card-body">
+      {% set has_risk = false %}
 
-  {# ── 1. Historical Tax Rates by Entity ───────────────────────────── #}
-  <div id="sectionHistory" class="section-anchor"></div>
+      {# Large value jump #}
+      {% set jump_year = namespace(yr=none, pct=none) %}
+      {% for yr, m in metrics_by_year.items() %}
+        {% if m.risk_large_value_jump and jump_year.yr is none %}
+          {% set jump_year.yr = yr %}{% set jump_year.pct = m.risk_large_value_jump_pct %}
+        {% endif %}
+      {% endfor %}
+      {% if jump_year.yr is not none %}
+        {% set has_risk = true %}
+        <div class="risk-block warn">
+          <div class="risk-icon">!</div>
+          <div>
+            <div class="risk-title">Large Value Jump</div>
+            <p class="risk-desc">
+              Market value changed by {{ "{:.0f}%".format(jump_year.pct) }} in {{ jump_year.yr }},
+              flagged as unusually large. Verify against comparable sales before using
+              this value in underwriting.
+            </p>
+          </div>
+        </div>
+      {% endif %}
+
+      {# Cap Step-Up Exposure -- renamed + retuned from "Homestead Cap Expiry
+         Risk" / risk_homestead_cap_expiry (Issue 2, "Homestead-Cap Data
+         Integrity: Full Fix Set" Cowork brief, July 2026). The OLD title
+         said "Expiry Risk" but the copy always described step-up-on-sale
+         exposure (a buyer losing the cap at purchase) -- genuinely the
+         wrong name for what this card actually explains, exactly the
+         confusion Diego flagged. cap_step_up_exposure additionally requires
+         a materially-sized relative (>=22%, tuned to the real top-quartile
+         percentile) AND dollar (>=$500 estimated) gap, not just any
+         assessed<market row -- see compute_metrics.py's own comment for
+         the full tuning writeup. #}
+      {% if m25 and m25.cap_step_up_exposure %}
+        {% set has_risk = true %}
+        <div class="risk-block warn">
+          <div class="risk-icon">!</div>
+          <div>
+            <div class="risk-title">
+              Cap Step-Up Exposure
+              <span class="badge-verified ms-1">Verified</span>
+            </div>
+            <p class="risk-desc">
+              This parcel carries a real, materially-sized homestead cap per 2025 Certified
+              data — assessed value is meaningfully below market value. A buyer loses this
+              benefit at purchase and the assessed value resets to full market, increasing
+              the annual tax bill. Factor this into acquisition underwriting.
+              {% if insights and insights.hs_history_year is defined %}
+                Cap activity consistent with AJR records back to {{ insights.hs_history_year }}.
+              {% endif %}
+            </p>
+          </div>
+        </div>
+      {% endif %}
+
+      {# Cap Expiry Signal -- the NEW, genuinely distinct signal (Issue 2):
+         protection actually ENDING, not just "cap is working." HS was
+         active on the 2025 certified roll but is absent from the 2026
+         preliminary exemption flags. Copy is deliberately tentative --
+         2026 preliminary's exemption_codes field is only 52.8% populated
+         (vs. 55.1% on 2025 certified, per data_coverage.py), so this can
+         also just mean the preliminary file hasn't caught up yet, not a
+         real loss. Re-derive against certified-vs-certified once 2026
+         certifies (per Diego's brief). #}
+      {% if m25 and m25.cap_expiry_signal %}
+        {% set has_risk = true %}
+        <div class="risk-block warn">
+          <div class="risk-icon">?</div>
+          <div>
+            <div class="risk-title">
+              Possible Homestead Exemption Change
+              <span class="badge-estimated ms-1">Tentative</span>
+            </div>
+            <p class="risk-desc">
+              This parcel had an active homestead exemption on the 2025 certified roll, but
+              the county's 2026 preliminary file no longer shows one. This sometimes reflects
+              file incompleteness in the preliminary export rather than a real change — it
+              will be confirmed once TCAD's 2026 roll certifies. Worth a direct check with the
+              owner or TCAD before treating this as a confirmed exemption loss.
+            </p>
+          </div>
+        </div>
+      {% endif %}
+
+      {# Delinquency — sourced from tax_delinquent via parcel_metrics #}
+      {% if m25 and m25.risk_delinquent %}
+        {% set has_risk = true %}
+        <div class="risk-block error">
+          <div class="risk-icon">!</div>
+          <div>
+            <div class="risk-title" style="color: var(--up);">Delinquent Taxes</div>
+            <p class="risk-desc">
+              This parcel has unpaid taxes on record. Delinquent taxes are a lien on the
+              property and transfer to the buyer at closing unless negotiated otherwise.
+            </p>
+          </div>
+        </div>
+      {% endif %}
+
+      {# Data incomplete #}
+      {% set any_incomplete = namespace(val=false) %}
+      {% for yr, m in metrics_by_year.items() %}
+        {% if m.risk_data_incomplete %}{% set any_incomplete.val = true %}{% endif %}
+      {% endfor %}
+      {% if any_incomplete.val %}
+        {% set has_risk = true %}
+        <div class="risk-block info">
+          <div class="risk-icon">i</div>
+          <div>
+            <div class="risk-title">Incomplete Market Value Data</div>
+            <p class="risk-desc">
+              One or more years have a market value of zero or null — a known anomaly
+              in AJR source files for some parcels. Growth metrics for those years
+              may be unreliable.
+            </p>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if not has_risk %}
+        <div class="risk-block ok">
+          <div class="risk-icon">✓</div>
+          <div>
+            <div class="risk-title" style="color: var(--down);">No risk indicators flagged</div>
+            <p class="risk-desc">No large value jumps, delinquencies, or data anomalies found for this parcel.</p>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+<div id="sectionHowWeGotHere" class="section-anchor"></div>
+{# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
+<div class="section-hdr" style="margin-top:24px;">How We Got Here</div>
+
   {% if entity_detail %}
   <div class="section-hdr">Rate Environment</div>
   <div class="card mb-4">
@@ -3343,54 +3465,23 @@
     </div>
   </div>
   {% endif %}
-
-  {# ── Entity Amount Horizontal Bar (Task 4) ─────────────────────────── #}
-  {% set _ent_sorted = entity_detail | selectattr('amount_due') | list | sort(attribute='amount_due', reverse=True) %}
-  {% if _ent_sorted %}
-  {% set _total_tax_bar = _ent_sorted | sum(attribute='amount_due') | float %}
+  {# ── Value Trend chart (PARCEL-REORG-2, 2026-08-16, Issue 3) -- moved here
+     from the top of "At a Glance" (see that location's own comment for the
+     full move rationale). Placed directly next to the Value History table
+     it visually summarizes, per Diego's own suggested default placement.
+     Content/JS completely unchanged -- same canvas id="valueTrendChart",
+     same Chart.js config (see the scripts block for the actual chart-init
+     code, also unmoved -- it targets the canvas by id, not by position). #}
+  {% if history %}
   <div class="card mb-4">
-    <div class="card-header">2025 Tax Burden — Entity Split</div>
-    <div class="card-body pt-3 pb-2">
-      {% for e in _ent_sorted %}
-        {% if e.amount_due and _total_tax_bar > 0 %}
-        {% set _pct = e.amount_due | float / _total_tax_bar * 100 %}
-        <div class="entity-bar-row">
-          <span class="entity-bar-code">{{ e.entity_code }}</span>
-          <div class="entity-bar-track"><div class="entity-bar-fill" style="width:{{ '{:.1f}'.format(_pct) }}%;"></div></div>
-          <span class="entity-bar-pct">{{ '{:.1f}'.format(_pct) }}%</span>
-          <span class="entity-bar-amt">${{ '{:,.0f}'.format(e.amount_due | float) }}</span>
-        </div>
-        {% endif %}
-      {% endfor %}
-      <div class="d-flex justify-content-end mt-2 pt-2" style="border-top:1px solid var(--border-strong); font-family:var(--font-mono); font-size:12.5px; font-weight:700;">
-        Total: ${{ '{:,.0f}'.format(_total_tax_bar) }}
-      </div>
+    <div class="card-header">
+      Value Trend
     </div>
-    <div class="card-footer">2025 billing by taxing entity, ranked by share of total. From Travis County Tax Office open data.</div>
+    <div class="card-body">
+      <canvas id="valueTrendChart" height="120"></canvas>
+    </div>
   </div>
   {% endif %}
-
-  {# ── "2025 Tax by Entity — Rate, Amount & Share" detail table REMOVED
-         (July 2026, Small Polish Batch item 5b, per Sam's beta feedback +
-         Diego's confirmed decision): field-by-field comparison confirmed
-         every column here duplicated data already shown directly above --
-         Tax Rate duplicates the Historical Tax Rates by Entity table
-         ("Rate Environment" section, 2025 Rate column); Amount Due and
-         Share both duplicate the Entity Amount Horizontal Bar ("2025 Tax
-         Burden — Entity Split") immediately above, which already shows the
-         dollar amount and percentage per entity. Genuinely redundant, not a
-         distinct-precision table (Claude's original design-brief read was
-         reconsidered and overturned here). Gated before removal on the PDF
-         "Tax Due Diligence" export (app.py export_due_diligence_pdf(),
-         ~line 2818): confirmed its "2025 Entity-Level Tax Breakdown" table
-         (~line 3206) runs its own independent entity_detail query and its
-         own reportlab table construction -- it does not read, reference, or
-         reuse this HTML table's markup, macro, or Jinja logic in any way
-         (see that route's own docstring: "queries its own minimal data set
-         rather than reusing property_detail()'s full pipeline"). Removing
-         this table has zero effect on the PDF export. #}
-
-  {# ── 2. Unified Current & Preliminary Values ──────────────────────── #}
   <div class="section-hdr">Value History <span class="section-hdr-badge">2021–2026</span></div>
   {% if current or current_2026 %}
   <div class="card mb-4">
@@ -3729,7 +3820,6 @@
     </div>
   </div>
   {% endif %}
-
   {# ── 2b. 2026 Preliminary → Certified comparison (task
      M4-2026-PRELIM-SNAPSHOT, Part 3, July 2026) ───────────────────────────
      Only shown once this parcel's live 2026 row has actually transitioned
@@ -3831,7 +3921,6 @@
     {% endif %}
   </div>
   {% endif %}
-
   {# ── 3. History table — now 6-year when 2026 preliminary is loaded ── #}
   {% set _hist_years = history | map(attribute='tax_year') | list %}
   {% set _has_2026 = 2026 in _hist_years %}
@@ -4020,7 +4109,6 @@
       </div>
     </div>
   </div>
-
   {# ── Value Trend chart RELOCATED (July 2026, Small Polish Batch item 5a,
      per Sam's beta feedback + Diego's confirmed decision): this card used to
      render here, deep in the full-width tables section (5th item within an
@@ -4212,7 +4300,6 @@
     </div>
   </div>
   {% endif %}
-
   {# ── Annual Trends (CoStar-style) ───────────────────────────────── #}
   {% if annual_trends %}
   <div class="card mb-4">
@@ -4266,154 +4353,10 @@
   </div>
   {% endif %}
 
-  {# Value Trend chart moved above (Part 4 redesign) — now sits directly under
-     the Value History table instead of here. See the card right after that
-     table for the live canvas#valueTrendChart + its Chart.js JS block below. #}
+<div id="sectionCompares" class="section-anchor"></div>
+{# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
+<div class="section-hdr" style="margin-top:24px;">How This Parcel Compares</div>
 
-  {# ── Phase 2: Risk Indicators ────────────────────────────────────── #}
-  <div class="section-hdr">Risk Indicators</div>
-  {% if metrics_by_year %}
-  <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span>Risk Indicators</span>
-    </div>
-    <div class="card-body">
-      {% set has_risk = false %}
-
-      {# Large value jump #}
-      {% set jump_year = namespace(yr=none, pct=none) %}
-      {% for yr, m in metrics_by_year.items() %}
-        {% if m.risk_large_value_jump and jump_year.yr is none %}
-          {% set jump_year.yr = yr %}{% set jump_year.pct = m.risk_large_value_jump_pct %}
-        {% endif %}
-      {% endfor %}
-      {% if jump_year.yr is not none %}
-        {% set has_risk = true %}
-        <div class="risk-block warn">
-          <div class="risk-icon">!</div>
-          <div>
-            <div class="risk-title">Large Value Jump</div>
-            <p class="risk-desc">
-              Market value changed by {{ "{:.0f}%".format(jump_year.pct) }} in {{ jump_year.yr }},
-              flagged as unusually large. Verify against comparable sales before using
-              this value in underwriting.
-            </p>
-          </div>
-        </div>
-      {% endif %}
-
-      {# Cap Step-Up Exposure -- renamed + retuned from "Homestead Cap Expiry
-         Risk" / risk_homestead_cap_expiry (Issue 2, "Homestead-Cap Data
-         Integrity: Full Fix Set" Cowork brief, July 2026). The OLD title
-         said "Expiry Risk" but the copy always described step-up-on-sale
-         exposure (a buyer losing the cap at purchase) -- genuinely the
-         wrong name for what this card actually explains, exactly the
-         confusion Diego flagged. cap_step_up_exposure additionally requires
-         a materially-sized relative (>=22%, tuned to the real top-quartile
-         percentile) AND dollar (>=$500 estimated) gap, not just any
-         assessed<market row -- see compute_metrics.py's own comment for
-         the full tuning writeup. #}
-      {% if m25 and m25.cap_step_up_exposure %}
-        {% set has_risk = true %}
-        <div class="risk-block warn">
-          <div class="risk-icon">!</div>
-          <div>
-            <div class="risk-title">
-              Cap Step-Up Exposure
-              <span class="badge-verified ms-1">Verified</span>
-            </div>
-            <p class="risk-desc">
-              This parcel carries a real, materially-sized homestead cap per 2025 Certified
-              data — assessed value is meaningfully below market value. A buyer loses this
-              benefit at purchase and the assessed value resets to full market, increasing
-              the annual tax bill. Factor this into acquisition underwriting.
-              {% if insights and insights.hs_history_year is defined %}
-                Cap activity consistent with AJR records back to {{ insights.hs_history_year }}.
-              {% endif %}
-            </p>
-          </div>
-        </div>
-      {% endif %}
-
-      {# Cap Expiry Signal -- the NEW, genuinely distinct signal (Issue 2):
-         protection actually ENDING, not just "cap is working." HS was
-         active on the 2025 certified roll but is absent from the 2026
-         preliminary exemption flags. Copy is deliberately tentative --
-         2026 preliminary's exemption_codes field is only 52.8% populated
-         (vs. 55.1% on 2025 certified, per data_coverage.py), so this can
-         also just mean the preliminary file hasn't caught up yet, not a
-         real loss. Re-derive against certified-vs-certified once 2026
-         certifies (per Diego's brief). #}
-      {% if m25 and m25.cap_expiry_signal %}
-        {% set has_risk = true %}
-        <div class="risk-block warn">
-          <div class="risk-icon">?</div>
-          <div>
-            <div class="risk-title">
-              Possible Homestead Exemption Change
-              <span class="badge-estimated ms-1">Tentative</span>
-            </div>
-            <p class="risk-desc">
-              This parcel had an active homestead exemption on the 2025 certified roll, but
-              the county's 2026 preliminary file no longer shows one. This sometimes reflects
-              file incompleteness in the preliminary export rather than a real change — it
-              will be confirmed once TCAD's 2026 roll certifies. Worth a direct check with the
-              owner or TCAD before treating this as a confirmed exemption loss.
-            </p>
-          </div>
-        </div>
-      {% endif %}
-
-      {# Delinquency — sourced from tax_delinquent via parcel_metrics #}
-      {% if m25 and m25.risk_delinquent %}
-        {% set has_risk = true %}
-        <div class="risk-block error">
-          <div class="risk-icon">!</div>
-          <div>
-            <div class="risk-title" style="color: var(--up);">Delinquent Taxes</div>
-            <p class="risk-desc">
-              This parcel has unpaid taxes on record. Delinquent taxes are a lien on the
-              property and transfer to the buyer at closing unless negotiated otherwise.
-            </p>
-          </div>
-        </div>
-      {% endif %}
-
-      {# Data incomplete #}
-      {% set any_incomplete = namespace(val=false) %}
-      {% for yr, m in metrics_by_year.items() %}
-        {% if m.risk_data_incomplete %}{% set any_incomplete.val = true %}{% endif %}
-      {% endfor %}
-      {% if any_incomplete.val %}
-        {% set has_risk = true %}
-        <div class="risk-block info">
-          <div class="risk-icon">i</div>
-          <div>
-            <div class="risk-title">Incomplete Market Value Data</div>
-            <p class="risk-desc">
-              One or more years have a market value of zero or null — a known anomaly
-              in AJR source files for some parcels. Growth metrics for those years
-              may be unreliable.
-            </p>
-          </div>
-        </div>
-      {% endif %}
-
-      {% if not has_risk %}
-        <div class="risk-block ok">
-          <div class="risk-icon">✓</div>
-          <div>
-            <div class="risk-title" style="color: var(--down);">No risk indicators flagged</div>
-            <p class="risk-desc">No large value jumps, delinquencies, or data anomalies found for this parcel.</p>
-          </div>
-        </div>
-      {% endif %}
-    </div>
-  </div>
-  {% endif %}
-
-  <div id="sectionProjection" class="section-anchor"></div>
-  <div id="sectionProjection" class="section-anchor"></div>
   {# ── 5. Tax Projection — Scenario Bands (Task 3) ──────────────── #}
   {# scenario-band-task3 #}
   <div class="section-hdr">6-Year Projection <span class="section-hdr-badge">Estimates Only</span></div>
@@ -4520,8 +4463,6 @@
     </div>
   </div>
   {% endif %}
-
-  <div id="sectionPosition" class="section-anchor"></div>
   {# ── 6. Submarket Position ────────────────────────────────────────── #}
   {% if benchmark_by_year and bench_label %}
   <div class="section-hdr">Submarket Position</div>
@@ -4691,7 +4632,6 @@
     </div>
   </div>
   {% endif %}
-
   {# ── Peer Set — up to 5 comparable parcels (Task 7) ─────────────────── #}
   {# Exact-use-code filter fix (July 2026, per Diego): api_peer_set() now
      requires the subject's exact classi_cd, not just its broad classify.py
@@ -4740,7 +4680,6 @@
       </div>
     </div>
   </div>
-
   {# ── Per-SF Peer Benchmark (Task B) ─────────────────────────────────── #}
   <div id="peerBenchSfSection" class="mb-4" style="display:none;">
     <div class="section-hdr">Per-SF Peer Benchmark</div>
@@ -4779,7 +4718,6 @@
       </div>
     </div>
   </div>
-
   {# ── Peer Benchmark (Task 3) ─────────────────────────────────────────── #}
   <div id="peerBenchSection" class="mb-4" style="display:none;">
     <div class="section-hdr">Peer Set Position</div>
@@ -4797,6 +4735,33 @@
 
 </div>{# /col-12 full-width tables #}
 </div>{# /row full-width #}
+
+<div id="sectionMoreResources" class="section-anchor"></div>
+{# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
+<div class="section-hdr" style="margin-top:24px;">More Resources</div>
+
+  {# ── Property-tax & county news (real feed; never fabricated) ─────────── #}
+  <div class="card mb-4" id="newsCard">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Property Tax &amp; County News</span>
+      <span class="text-muted" style="font-size:11px; font-weight:400;">Travis County · live feed</span>
+    </div>
+    <div class="card-body p-0">
+      <div id="newsBody" class="p-3 text-muted" style="font-size:12.5px;">Loading news…</div>
+    </div>
+    <div class="card-footer text-muted" style="font-size:10.5px;">
+      Headlines via Google News for “Travis County property tax” / Travis Central Appraisal District.
+      Dates and sources as published; links open the original source in a new tab. Updated hourly.
+    </div>
+  </div>
+{# ── Post-Acquisition Tax Estimator (Task 1) ─────────────────────────── #}
+{# Buyer-type field fix (July 2026, per Diego): removed the Buyer Type toggle
+   from THIS (Investor) card — the mode already implies an investor buyer, so
+   asking again was redundant. Now rendered via the shared macro (defined
+   above, outside both mode branches) with show_buyer_toggle=false. Homeowner
+   mode calls the same macro with show_buyer_toggle=true — see that branch's
+   own call for why the toggle stays meaningful there. #}
+{{ post_acq_estimator_card(entity_detail, current, parcel, false) }}
 
 {% endif %}{# /mode == investor #}
 
@@ -6335,7 +6300,10 @@ function ordinalSuffix(n) {
 // task4-sticky-nav-js
 (function () {
   const nav = document.getElementById('sectionNavBar');
-  const anchors = ['sectionOverview','sectionHistory','sectionProjection','sectionPosition'];
+  // PARCEL-REORG-1 (2026-08-16): updated to match the rebuilt nav's new
+  // 5-section anchors (see the sectionNavBar markup above for the matching
+  // <a href="#..."> links).
+  const anchors = ['sectionAtGlance','sectionTaxBill','sectionHowWeGotHere','sectionCompares','sectionMoreResources'];
   const links   = nav ? nav.querySelectorAll('.section-nav-link') : [];
 
   // Sticky: add .stuck class to nav when page scrolls past it
