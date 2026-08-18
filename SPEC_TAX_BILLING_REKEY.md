@@ -508,3 +508,445 @@ weakened by, the resolver seam's separate, unrelated timeline.
 **Real, required next step, per this brief's own instruction:** this
 document goes to Fable for architectural review before any implementation
 brief is written or any code is touched.
+
+---
+
+## 7. REAL CORRECTION (2026-08-17, Fable's architectural review + a resolved
+live portal check, TAX-BILLING-REKEY-2)
+
+Same pattern as `SPEC_COUNTY_PARTITIONING.md` §9/§10: sections 0-6 above are
+left unedited — this section records what Fable's review found and what
+changed as a result, not a silent rewrite of the original design. Fable's
+review covered five real questions (Q1-Q5); several are corrections to the
+original design, not confirmations, and are recorded as such below. One
+gating question — whether the county portal exposes real sub-account numbers
+— was resolved live, this session, against production-reachable
+infrastructure, **not from this sandbox** (this sandbox has no live network
+access to the county portal; this is the same disclosed limitation §1.1/§5
+already carried). The result is reported here as a given, real fact per
+Diego's own explicit instruction, not independently re-derived or
+re-verified by this document.
+
+### 7.1 Q1 — key sizing/scoping correction
+
+**Real, confirmed correction, not a refinement:** `account_id` becomes
+`VARCHAR(20)` (not `VARCHAR(14)`) — Dallas's own real tax accounts run 17
+characters (confirmed via direct DCAD investigation, per Fable's review),
+so a Travis-derived 14-character assumption baked into the column's own type
+would either truncate or reject real Dallas data the moment it loads. Widened
+to match `geo_id`'s own existing `VARCHAR(20)` convention rather than picking
+a new, narrower bound that would just need widening again at the next county.
+
+**`county_code` joins both new tables' primary keys from birth, not added
+later:**
+
+```sql
+CREATE TABLE IF NOT EXISTS tax_billing_account (
+    county_code     VARCHAR(20)  NOT NULL DEFAULT 'TRAVIS',
+    account_id      VARCHAR(20)  NOT NULL,      -- full source-native account number
+    tax_year        SMALLINT     NOT NULL,
+    geo_id          VARCHAR(20)  NOT NULL,       -- derived, see below -- never stored as an assumption
+    billing_num     VARCHAR(30),
+    owner_name      TEXT,
+    total_tax       NUMERIC(14,2),
+    total_paid      NUMERIC(14,2),
+    total_due       NUMERIC(14,2),
+    is_delinquent   BOOLEAN      DEFAULT FALSE,
+    cause_number    VARCHAR(50),
+    exemption_codes VARCHAR(50),
+    data_source     VARCHAR(32),
+    confidence_level VARCHAR(16),
+    PRIMARY KEY (county_code, account_id, tax_year)
+);
+CREATE INDEX IF NOT EXISTS idx_tba_geo_year ON tax_billing_account(county_code, geo_id, tax_year);
+
+CREATE TABLE IF NOT EXISTS tax_billing_account_entity (
+    county_code  VARCHAR(20) NOT NULL DEFAULT 'TRAVIS',
+    account_id   VARCHAR(20) NOT NULL,
+    tax_year     SMALLINT    NOT NULL,
+    geo_id       VARCHAR(20) NOT NULL,
+    entity_code  VARCHAR(10) NOT NULL,
+    amount_due   NUMERIC(14,2),
+    amount_paid  NUMERIC(14,2),
+    PRIMARY KEY (county_code, account_id, tax_year, entity_code)
+);
+CREATE INDEX IF NOT EXISTS idx_tbae_geo_year ON tax_billing_account_entity(county_code, geo_id, tax_year);
+```
+
+(Supersedes §1.2's original `CREATE TABLE` blocks — those used `VARCHAR(14)`
+and did not lead with `county_code`; both corrected here per Fable's review,
+not left as a second, conflicting schema for a future reader to reconcile.)
+
+**The 10-char-prefix→`geo_id` relationship becomes derived logic in the
+rollup, never a stored assumption on the unit rows.** §1.2's original schema
+comment described `geo_id` as "`account_id[:10]`, denormalized per-year" —
+correct for Travis, where the tax office's own convention genuinely is a
+10-character account prefix plus a 4-digit sub-account suffix, but **not
+proven as a cross-county rule**. Per Fable's own finding, prefix semantics
+are Travis-specific until proven otherwise per county — Dallas's 17-character
+accounts are not confirmed to follow the same "first N characters = parent
+`geo_id`" structure at all. Real, corrected design: each loader computes
+`geo_id` using **its own county's real, confirmed mapping rule** (Travis:
+`account_id[:10]`; Dallas/Harris: whatever their own real account-numbering
+convention turns out to be, once real source data exists to confirm it) and
+writes the *result* into the `geo_id` column — the column stores a fact
+established at write time by county-specific logic, not a hardcoded
+`SUBSTRING` assumption baked into the rollup's own SQL. `tax_billing_rollup.py`
+groups by the stored `geo_id` column; it does not itself compute prefixes.
+**Not decided here:** Dallas's/Harris's own real account→`geo_id` mapping
+rule — that needs real source data to confirm, the same way Travis's own
+14-digit/10-char relationship needed `load_pir_billing_2021_full.py`'s
+full-file scan to confirm rather than assume (§1.1).
+
+**Correction to the document's own framing, not just the schema:** §1.2
+originally described the lack of a synthetic ID as a "deliberate departure
+from the `prop_unit` precedent." Per Fable's review, this was imprecise
+framing, not a real design disagreement — `prop_unit` also uses a natural
+key (`prop_id`), not an invented one; TCAD assigns `prop_id`, it doesn't
+originate in this codebase. The real, shared principle both designs follow
+is **"store the source's true grain under the source's own native key,"**
+which `prop_id` and `account_id` both satisfy identically. The original
+document's "departure" language is retired in favor of this framing;
+`account_id` is not an exception to the `prop_unit` precedent, it's a second,
+consistent application of the exact same principle.
+
+### 7.2 Q2 — partitioning correction: born partitioned, real overrule of §2's own verdict
+
+**Real overrule, not a refinement of §2's reasoning.** §2 recommended
+deferring native partitioning for `tax_billing_entity`, revisiting "at Harris
+onboarding." Fable's review overrules this **specifically for the two new
+unit-grain tables** (`tax_billing_account`, `tax_billing_account_entity`),
+on real, concrete grounds §2 didn't weigh: partitioning an *empty* table
+costs nothing — no data to migrate, no lock contention, no downtime — while
+re-partitioning a table that has since grown to real, populated multi-million-
+row scale is the exact second-rebuild cost `SPEC_TAX_BILLING_COLLISION_AND_PARTITION.md`'s
+own "one migration, not three" rule exists to prevent. Deferring
+partitioning on a table born *during* this same migration would recreate the
+identical problem this whole promoted brief was written to close — just one
+layer down, on the new tables instead of the old ones.
+
+**Real, corrected design:** `tax_billing_account` and
+`tax_billing_account_entity` are born **natively partitioned by
+`county_code`** (`PARTITION BY LIST (county_code)`, with a `TRAVIS` partition
+created at migration time and a documented procedure for adding a `DALLAS`/
+`HARRIS` partition at each county's own onboarding). **Fable's own stated
+minimum acceptable fallback, recorded here in case native partitioning proves
+impractical at actual implementation time for a reason this design-only
+document can't anticipate:** at minimum, `county_code` leading the PK (as
+§7.1 already establishes) plus a **written one-way partitioning plan** — a
+concrete, dated commitment for exactly when and how these two tables convert
+to native partitioning, not an open-ended "someday." This is intentionally a
+stricter bar than §4.1's schema-wide lightweight-by-default recommendation;
+it does not overrule §4.1 for the rest of the schema, only for these two
+tables, born at the moment this exact lesson was learned.
+
+**The legacy derived tables — `tax_billing`, `tax_billing_entity` — stay
+unpartitioned, unchanged from §2/§3's own reasoning.** They're rebuildable by
+construction (the whole point of the derived-rollup design, §1.5): if a
+future decision partitions them too, the rollup can simply be re-run against
+a repartitioned target, at negligible marginal cost over the unit-layer
+migration itself. Nothing about §7.1/§7.2's corrections changes that.
+
+**§2's own row-count uncertainty is reframed, not resolved by fiat:** the
+real corrected `tax_billing_account_entity` population still isn't measured
+by this document (§5's own preserved uncertainty stands) — what changes is
+that this document no longer treats that unmeasured number as a **precondition
+for a partitioning verdict**. The verdict (native partitioning, born now) is
+decided on the empty-table-costs-nothing/re-migration-costs-everything
+reasoning above, which holds regardless of the exact row count. The real
+pre-migration count remains valuable and still-needed — not as an input this
+decision depends on, but as **the number the billing conservation gate's own
+G3-equivalent check (§7.5) will be calibrated against**, a concrete, load-
+bearing use for that measurement this document didn't have before.
+
+### 7.3 Q3 — the portal check, resolved; design (a) chosen; the real, complete writer closed set
+
+**The live check, reported here as a given fact per Diego's explicit
+instruction — not reproducible from this sandbox (no live network access to
+the county portal, same disclosed limitation as §1.1/§5):**
+
+```python
+from loaders.scrape_billing_history import fetch_html
+html, status = fetch_html('0259410216', timeout=15)
+# real status: 0 (HTTP_OK), real length: 23727
+# only real 14-digit number found anywhere on the page: '02594102160000'
+# — exactly the synthetic geo_id+"0000" account used to REQUEST the page
+```
+
+Run against `0259410216` — the real, largest known collision group (1,210
+sub-accounts) — deliberately the highest-leverage real test case available:
+if any parcel's portal page were going to reveal distinct sub-account
+numbers, the one with 1,210 of them is where it would show. It didn't.
+**Real, definitive result: the portal does not expose distinct, real
+sub-account numbers anywhere in the page it returns for a given `geo_id`.**
+This resolves §1.1's own flagged open question and §5's corresponding bullet:
+the portal-scrape write path (`scrape_billing_history.py`) has no
+account-number field available in its own source **at all**, confirmed live,
+not just absent from what this sandbox could inspect statically.
+
+**Per Fable's own stated logic, this resolves Q3 in favor of design (a):
+`scrape_billing_history.py`'s write path gets its own real, separate table**
+— not tag-based cohabitation inside `tax_billing` alongside the rollup's own
+writes, which §1.4's original design left as an open ordering question
+between the rollup and a portal-scrape sentinel row. That question is now
+retired, not answered — it doesn't arise under design (a), because the two
+write paths no longer share a table at all.
+
+```sql
+-- Portal-scrape receipts: geo_id-native grain (the portal has no finer
+-- identity to offer -- confirmed live, not assumed). Kept structurally
+-- separate from tax_billing_account's real account-grain data so the two
+-- sources' own real, different grains are never silently conflated in one
+-- shared table again.
+CREATE TABLE IF NOT EXISTS tax_billing_portal_scrape (
+    county_code   VARCHAR(20)  NOT NULL DEFAULT 'TRAVIS',
+    geo_id        VARCHAR(20)  NOT NULL,
+    tax_year      SMALLINT     NOT NULL,
+    total_paid    NUMERIC(14,2),
+    data_source   VARCHAR(32)  NOT NULL DEFAULT 'portal_scrape',
+    confidence_level VARCHAR(16),
+    scraped_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (county_code, geo_id, tax_year)
+);
+```
+
+Table name is Cowork's own call per the brief — `tax_billing_portal_scrape`
+chosen to name the real, distinct source explicitly, matching this
+codebase's existing convention of naming tables after what they structurally
+are (`tax_billing_quarantine`, `parcel_2026_preliminary_snapshot`), not a
+generic name that would invite a future reader to wonder whether it's
+interchangeable with `tax_billing_account`.
+
+**Real, explicit read-layer requirement this design didn't need before:**
+`tax_billing_rollup.py` must now also read `tax_billing_portal_scrape` and
+explicitly prefer/union it against `tax_billing_account`-derived rows by
+source, rather than the rollup only ever reading one unit-grain source. Not
+designed in full here (the actual preference logic — e.g., does a real
+`taxcur_current` account-grain row always outrank a `portal_scrape` row for
+the same `(geo_id, tax_year)`, or does `data_source`'s existing
+verified/derived/portal_scrape hierarchy already answer this) is real,
+concrete work for the implementation brief, not resolved by this amendment —
+flagged rather than guessed at.
+
+**Real, mandatory addition per Fable's own instruction: the complete, closed
+set of `tax_billing`-family writers, enumerated directly from source, not
+from memory of what §1.1/§1.4 already named.** A fresh, repo-wide grep for
+every real `INSERT`/`UPDATE`/`DELETE` against `tax_billing`/
+`tax_billing_entity` (excluding test files and one-off validation scripts —
+`test_dallas_gate_4_county_code.py`, `test_migrate_county_partitioning.py`,
+`test_upsert_billing_rows_commit.py`, `loaders/test_pir_loaders.py`,
+`validate_coverage_sql.py`, all of which touch only synthetic `TEST_`/fake-
+year rows, never real data) finds **eight** real production writers, not the
+four §1.1 named:
+
+| # | File | Table(s) | `county_code`-aware? | Notes |
+|---|---|---|---|---|
+| 1 | `loaders/load_tax_current.py` | `tax_billing`, `tax_billing_entity` | Yes (DALLAS-GATE-4) | 2025 current-year, primary writer |
+| 2 | `loaders/load_pir_billing.py` | `tax_billing`, `tax_billing_entity` | Yes (DALLAS-GATE-4) | Same CSV shape, other vintages |
+| 3 | `loaders/load_pir_billing_2021_full.py` | `tax_billing`, `tax_billing_entity` | Yes (DALLAS-GATE-4) | Own `BILLING_SQL`/`ENTITY_SQL`, not shared with #5 |
+| 4 | `loaders/scrape_billing_history.py` (`upsert_billing_rows()`) | `tax_billing` | Yes (DALLAS-GATE-2) | Called by its own CLI **and** live by `api_billing()` (app.py) — same function, two callers |
+| 5 | `app.py` `api_billing()` — direct sentinel INSERT | `tax_billing` | Yes | Separate from #4's call to the same function; both live in the same route |
+| 6 | `loaders/backfill_tax_billing_2025_confidence.py` | `tax_billing` | N/A (`UPDATE` only) | Tags `data_source`/`confidence_level` on existing rows; no `INSERT`, no grain/collision exposure |
+| 7 | `loaders/quarantine_contamination.py` | `tax_billing` | Yes | `DELETE` (quarantine) + `INSERT` (restore), both real writers of the table |
+| 8 | **`loaders/pir_xlsx_common.py`** (`BILLING_SQL`/`ENTITY_SQL`, via `run_cli()`) | `tax_billing`, `tax_billing_entity` | **No — real, live, unpatched bug** | See below |
+
+**Real, urgent finding this enumeration surfaced, separate from but directly
+relevant to this design:** `loaders/pir_xlsx_common.py` — the shared module
+backing `load_pir_billing_2022.py`/`_2023.py`/`_2024.py` (confirmed via
+import grep: all three call `pir_xlsx_common.run_cli()`) — still writes with
+the **pre-migration** `ON CONFLICT (geo_id, tax_year)` /
+`(geo_id, tax_year, entity_code)` targets and **no `county_code` column in
+either INSERT at all**. This is the identical failure mode DALLAS-GATE-2/3/4
+already found and fixed in `scrape_billing_history.py`, `load_tax_current.py`,
+and `load_pir_billing.py` — "there is no unique or exclusion constraint
+matching the ON CONFLICT specification" against the real, live, already-
+migrated schema — but `pir_xlsx_common.py` was never in scope for those
+briefs and was missed. **Real, honest disclosure: this means
+`load_pir_billing_2022.py`/`_2023.py`/`_2024.py` are live-broken against
+production today**, the same way the other three loaders were before their
+own DALLAS-GATE fixes, for as long as this has gone unaudited. **Out of
+scope for this amendment to fix** — this is a design document, not a hotfix
+brief — but too urgent and too directly on-point (it's the exact class of
+bug Q3's own investigation was already looking for) to leave undisclosed
+until the actual re-key implementation brief. **Real, recommended next
+step, separate from TAX-BILLING-REKEY's own sequence:** a short, standalone
+hotfix brief mirroring DALLAS-GATE-3/4's own pattern, for
+`pir_xlsx_common.py` specifically, before any 2022/2023/2024 PIR reload is
+attempted.
+
+**AC5-style grep-test definition, real and concrete, to replace §1.4's own
+looser "mirrors `verify_parcel_filters_canonical.py`'s pattern" description:**
+a regression test asserting that the file set matching
+`grep -rl "INSERT INTO tax_billing\b\|UPDATE tax_billing\b\|DELETE FROM tax_billing\b\|INSERT INTO tax_billing_entity\b\|UPDATE tax_billing_entity\b"`
+across the whole repo (app.py + `loaders/*.py`, explicitly excluding
+`test_*.py` and `validate_*.py`) equals exactly the 8-file closed set above
+— named explicitly in the test, not inferred — so a future new writer
+(the `pir_xlsx_common.py` class of gap) cannot be added without the test
+failing until it's deliberately reviewed and added to the named set.
+
+### 7.4 Q4 — sequencing correction: this migration is now on the Dallas critical path
+
+**Real correction, not a restatement of §4's own conclusion.** §4 argued
+this re-key "should still land before Dallas rows exist," as a
+recommendation. Per §7.2's own partitioning fold-in, that recommendation
+is upgraded to a **formal prerequisite**: because the new unit tables are
+now born natively partitioned by `county_code` (§7.2), and because Dallas
+onboarding is precisely the event that would create that table's first
+non-`TRAVIS` partition, this migration cannot be deferred past Dallas
+onboarding without either (a) Dallas data landing in a not-yet-repartitioned
+`tax_billing_account`/`_entity`, recreating the exact "migrate the same
+growing table twice" cost this whole promoted brief exists to prevent, or
+(b) Dallas onboarding itself blocking on this re-key anyway, just later and
+under more time pressure. **This document now states directly: TAX-BILLING-
+REKEY is a Dallas onboarding prerequisite**, alongside `DATA_LIFECYCLE.md`'s
+own named Source Registry/County Profile/Classification Map prerequisites
+and the separate Dallas hard gate (`SPEC_COUNTY_PARTITIONING.md` §10.4) —
+not merely "recommended to land first."
+
+**Real, additional reason, per Fable's own review, not previously in this
+document:** this re-key changes the real baseline numbers the Dallas gate's
+own conservation checks (and the new billing conservation gate, §7.5) will
+be calibrated against — the $5,794,968.90/$170,061,400.28 recovered-dollar
+figures, the corrected `tax_billing_account_entity` row count (§7.2), the
+account-grain population itself. Landing this re-key **after** Dallas data
+already loaded would mean re-baselining every one of those checks twice —
+once against Travis-only data, once again after Dallas's own rows change
+the totals — a real, avoidable duplicate-work cost on top of the storage/
+migration duplication §7.2 already named. Both reasons point the same
+direction independently; recorded together because either alone would be
+sufficient grounds, but Fable's review surfaced the calibration one this
+document didn't have.
+
+**§4's own resolver-seam finding is unchanged by this correction** — the
+seam still doesn't touch these tables, still isn't wired into app.py, and
+this migration still doesn't depend on it. What changed is *only* the
+strength of the Dallas-timing conclusion (recommendation → prerequisite),
+not the resolver-seam reasoning that sits alongside it.
+
+### 7.5 Q5 — four real, mandatory additions
+
+**1. A billing conservation gate, mirroring `loaders/ingest_gate.py`'s
+G1-G6 pattern, ships inside this same migration — not optional, not
+deferred to a later brief.** Real, proposed check set, named `BG1`-`BG4` to
+avoid colliding with the existing appraisal-side `G1`-`G6` numbering:
+
+- **BG1 — source ledger conservation** (mirrors G1): every line of the
+  source billing file (`TaxCurOpenData`, PIR exports) is classified into
+  exactly one bucket (accepted / skipped-no-account / skipped-wrong-year /
+  ...); bucket counts must sum to the file's real total line count.
+- **BG2 — account coverage** (mirrors G2/G5): the count of distinct real
+  `account_id`s the source file scan says should exist for a given
+  `(county_code, tax_year)` must exactly equal the count that landed a
+  `tax_billing_account` row for that same scope.
+- **BG3 — dollar conservation** (mirrors G3, the real conservation check
+  Diego's brief specifically calls for): `SUM(TOTAL_TAX)` computed directly
+  from the source file must exactly equal `SUM(total_tax)` in
+  `tax_billing_account`, which must exactly equal `SUM(total_tax)` in the
+  rolled-up `tax_billing` — zero tolerance, same standard G3 already holds
+  the appraisal side to.
+- **BG4 — rollup integrity** (mirrors G4): independently re-derives
+  `tax_billing`'s `SUM()`/`COUNT()` from `tax_billing_account` rows itself,
+  rather than trusting `tax_billing_rollup.py`'s own output — the same
+  "the gate doesn't trust the module it's checking" discipline G4 already
+  established.
+- **Skip ledger, `ingest_audit` rows, exit-1 on failure**: same shape as
+  the existing gate — every skipped/rejected source row gets a real,
+  attributed reason (not silently dropped), every gate run writes a real
+  `ingest_audit` row, and `compute_metrics`-equivalent downstream steps
+  (here: nothing currently reads `tax_billing`/`tax_billing_entity` as a
+  *gate*, but the same "don't proceed past a failed gate" discipline
+  applies to whatever loader orchestration calls the rollup) refuse to run
+  past a failed gate.
+- **Deliberate-corruption fixture tests**, mirroring
+  `loaders/test_ingest_gate.py`'s own two-deliberate-corruption-case
+  pattern: a fixture that reproduces the exact last-write-wins loss
+  mechanism M0/M0-EXTENSION-1 measured (two accounts sharing a `geo_id`
+  prefix, second one overwriting the first under the *old* `(geo_id,
+  tax_year)`-keyed write path) must make BG2/BG3 fail loudly under the old
+  behavior and pass cleanly under the new unit-layer write path — proving
+  the gate would have caught the real, already-measured $170M/$5.8M loss,
+  not just asserting it does in prose.
+
+**Real, pre-committed, falsifiable expectation, per Diego's own instruction
+— written into the design now, not left to be discovered at implementation
+time:** once the unit layer is backfilled from the same retained source
+files M0/M0-EXTENSION-1 already scanned, the gate's own re-derived
+recovered-dollar figures (the real difference between what the old
+last-write-wins pipeline would have kept vs. what the new unit-layer
+pipeline actually captures) **must equal $5,794,968.90 (`tax_billing`) and
+$170,061,400.28 (`tax_billing_entity`) exactly** — the same real,
+already-measured M0/M0-EXTENSION-1 figures this entire document has treated
+as fixed inputs throughout. This is a real, measured post-condition the
+implementation brief must report against, not an assumption this design
+gets to claim credit for in advance.
+
+**2. Rule 3 machinery engages — a real, named PM/Marketing Director
+follow-through item.** Per `BUILD_WORKFLOW.md`'s Rule 3 ("public numbers
+come from a verified reference, not a live page") and `DATA_LIFECYCLE.md`
+§Stage 5's Published Metrics Log (the only county-level figures marketing,
+press, or Diego may cite externally), any public, published billing-derived
+figure built on the pre-fix pipeline — the effective-tax-rate metric
+specifically named in `SPEC_UNIT_MODEL_AND_INGEST_GATE.md` §3.7's own
+original rationale for measuring this in the first place, plus any Case
+File/Quick Fact number that cites a billing total — is now, by construction,
+computed from data this migration will have materially changed. **Real,
+concrete follow-through, named now rather than rediscovered post-migration:**
+after this re-key lands and the billing conservation gate (above) passes, a
+Rule 3 verified-stats refresh must run before any previously-published
+billing-derived figure is cited again, and the Published Metrics Log gains
+a superseding entry per `DATA_LIFECYCLE.md` §4's own "a sealed vintage is
+never edited — it is superseded" rule, with a dated changelog note if any
+externally-cited figure moves beyond rounding. This is a real PM/Marketing
+Director coordination item, not an engineering one — named here so it
+doesn't get rediscovered in a panic after the migration ships.
+
+**3. Hosting math must include this migration.** The real, new unit
+tables' projected footprint — **~11M rows across `tax_billing_account` and
+`tax_billing_account_entity` combined, plus their indexes**, per Diego's own
+given figure for this fold-in — needs to be added to the same
+`pg_total_relation_size` capacity snapshot already requested as part of the
+Harris scale review, so the Dallas tier-checkpoint decision is made against
+the real, post-re-key baseline, not today's pre-re-key numbers. **Real,
+honest flag, not silently smoothed over:** this document's own §7.2
+preserves an unresolved question about whether `tax_billing_account_entity`'s
+true post-correction population significantly exceeds today's collision-
+lossy `tax_billing_entity` count (§2's "1.5-2x" range would put it at
+16-21M rows on its own, above the ~11M-rows-combined figure given for this
+fold-in). Both numbers are recorded here rather than one silently
+overriding the other: **~11M is the figure to use for the immediate
+capacity-snapshot fold-in as instructed**, but whoever runs that snapshot
+should treat it as provisional pending BG2/BG3's own real, measured
+post-backfill row count (above), the same way §2 already flags the broader
+row-count question as real and open. No existing document in this repo
+names a "`pg_total_relation_size` capacity snapshot" artifact yet — this is
+the first place that request is written down in the codebase itself, not a
+citation to a pre-existing section.
+
+**4. This section itself is the record that the portal account-number
+question (§1.1's own flagged uncertainty) is resolved.** Design (a) —
+`scrape_billing_history.py`'s write path gets its own real, separate table
+(§7.3) — is the chosen, real path forward. §1.1's original "not decided
+here" language on this specific question is superseded by §7.3; every other
+"not decided here" item in §1.1/§5 stands unchanged.
+
+### 7.6 What this amendment does NOT do
+
+- Does not create any table, run any migration, or touch any live database —
+  same boundary as §6.
+- Does not independently verify the live portal check (§7.3) — reported as
+  a given fact per explicit instruction, not reproduced from this sandbox.
+- Does not fix `loaders/pir_xlsx_common.py`'s real, live `county_code` bug
+  (§7.3) — flagged for a separate, urgent hotfix brief, not fixed here.
+- Does not design the `tax_billing_rollup.py` read-layer source-preference
+  logic between `tax_billing_account` and `tax_billing_portal_scrape` in
+  full (§7.3) — flagged as real, concrete implementation-brief work.
+- Does not determine Dallas's or Harris's own real account→`geo_id` mapping
+  rule (§7.1) — needs real source data, not assumed from Travis's own
+  convention.
+- Does not resolve which of the ~11M-vs-16-21M row-count figures (§7.5
+  item 3) is closer to correct — both recorded, neither silently preferred.
+
+**Real, required next step, unchanged and now doubly true:** per Fable's own
+review, only after this amendment is complete does the actual implementation
+brief get written — informed by this fully-corrected design, not the
+original §0-§6 alone.
