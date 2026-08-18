@@ -6299,6 +6299,26 @@ function ordinalSuffix(n) {
 // ── Task 4: Sticky section nav + active link tracking ────────────────────────
 // task4-sticky-nav-js
 (function () {
+  // PARCEL-REORG-5 (2026-08-17): real, verified per-spec browser behavior --
+  // history.scrollRestoration defaults to "auto" in every evergreen browser,
+  // and was never set anywhere in this codebase (grep-confirmed, repo-wide,
+  // before this change). "auto" means the browser reserves the right to run
+  // its OWN scroll-position bookkeeping around history-API calls, including
+  // (per the current HTML Standard's session-history "scroll to the
+  // fragment" steps) around history.pushState() itself when the URL's
+  // fragment changes -- which is exactly what our own click handler below
+  // does on every nav click. Setting this to "manual" once, page-wide, is
+  // the same standard opt-out real SPA routers (React Router, etc.) use to
+  // stop the browser's own native scroll logic from fighting an app's own
+  // explicit scroll management. This alone is not proven to be PARCEL-
+  // REORG-5's root cause (no live browser in this sandbox to confirm it),
+  // but it removes one whole, real, previously-never-addressed class of
+  // browser-vs-app scroll conflict, at effectively zero risk (this page has
+  // no actual multi-page back/forward scroll-memory behavior to preserve).
+  if ('scrollRestoration' in history) {
+    history.scrollRestoration = 'manual';
+  }
+
   const nav = document.getElementById('sectionNavBar');
   // PARCEL-REORG-1 (2026-08-16): updated to match the rebuilt nav's new
   // 5-section anchors (see the sectionNavBar markup above for the matching
@@ -6370,12 +6390,44 @@ function ordinalSuffix(n) {
   // location.hash-based test proved reliable.
   //
   // Real, honest disclosure (per PARCEL-REORG-4's own explicit
-  // requirement): this sandbox has no live browser, so this fix is
-  // verified here only as far as Jinja-render/parse correctness and
-  // static-logic review go -- it has NOT been exercised against the real,
-  // running app. A non-deterministic bug needs repeated, real, live
-  // re-testing (not one run) before this can be called fixed -- see the
-  // final report for exactly what real verification this still needs.
+  // requirement, and reaffirmed by PARCEL-REORG-5's own finding that this
+  // exact fix, deployed at 33055f2, tested 12/12 locally but 9/9 FAILED on
+  // real production): this sandbox has no live browser. PARCEL-REORG-5's
+  // own real, live production instrumentation proved window.scrollTo() WAS
+  // genuinely called with the correct target, and the URL hash correctly
+  // updated via history.pushState -- yet scroll still ended at 0 within
+  // 500ms, meaning something running AFTER this handler was resetting it.
+  //
+  // PARCEL-REORG-5 real update: this codebase's only history.pushState()
+  // call is this one (grep-confirmed, repo-wide) -- so nothing in THIS
+  // code fights itself. But per the HTML Standard, a pushState() call that
+  // changes the URL's fragment can trigger the browser's OWN native
+  // "scroll to the fragment" processing (separate from, and not
+  // necessarily synchronous with, our own scrollTo call above it) --
+  // real, documented, inconsistently-timed-across-browsers behavior, and a
+  // plausible fit for "our scrollTo demonstrably ran, yet the final
+  // position was still overridden." Two real, standard, low-risk changes
+  // in response: (1) history.scrollRestoration = 'manual' is now set once
+  // above, the standard way real SPA routers opt out of the browser's own
+  // scroll bookkeeping around history-API calls; (2) below, pushState now
+  // runs FIRST and the scroll now runs AFTER, deferred two animation
+  // frames (double rAF -- one frame is sometimes not enough to run after a
+  // browser's own native post-pushState processing; two is the standard,
+  // conservative pattern for "run after literally everything else this
+  // tick and the next"), with position re-read fresh at scroll time rather
+  // than reused from click time, in case anything shifts layout in
+  // between.
+  //
+  // Real, honest disclosure: this is a well-grounded HYPOTHESIS based on
+  // real, verified evidence (Plausible's actual live script was fetched
+  // and read in full this round -- confirmed it does NOT call scrollTo or
+  // touch scroll position anywhere, ruling it out directly rather than
+  // leaving it an open suspect) and real browser-platform behavior -- NOT
+  // a confirmed root cause, since this sandbox cannot run a live browser
+  // to prove it. Needs the same real, repeated, live PRODUCTION re-testing
+  // PARCEL-REORG-5 itself used (the exact scrollTo-instrumentation
+  // technique from that brief is the fastest way to confirm or rule this
+  // out) before being called fixed.
   if (links.length) {
     links.forEach(function (link) {
       link.addEventListener('click', function (e) {
@@ -6384,13 +6436,19 @@ function ordinalSuffix(n) {
         const target = document.getElementById(hash.slice(1));
         if (!target) return;
         e.preventDefault();
-        const top = target.getBoundingClientRect().top + window.scrollY;
-        window.scrollTo({ top: top, behavior: 'auto' });
         if (window.history && history.pushState) {
           history.pushState(null, '', hash);
         } else {
           location.hash = hash;
         }
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            const fresh = document.getElementById(hash.slice(1));
+            if (!fresh) return;
+            const top = fresh.getBoundingClientRect().top + window.scrollY;
+            window.scrollTo({ top: top, behavior: 'auto' });
+          });
+        });
       });
     });
   }
