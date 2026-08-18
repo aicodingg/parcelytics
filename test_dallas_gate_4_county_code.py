@@ -6,6 +6,14 @@ rigor as BILLING-DIAG-7's test_upsert_billing_rows_commit.py -- prove the
 real SQL text includes county_code correctly, and that ON CONFLICT targets
 match the real, live constraints."
 
+EXTENDED (PIR-XLSX-HOTFIX-1, real, urgent, same severity class as this
+file's original 5): a 6th writer, loaders/pir_xlsx_common.py, was found
+live-broken by TAX-BILLING-REKEY-2's own real writer enumeration -- the
+identical failure mode as the original 5, just never in scope for the
+briefs that found and fixed those. File 6's section below follows this
+file's own established pattern exactly (same string/regex-against-real-
+shipping-source technique, same rigor), not a separate ad hoc test file.
+
 Technique: direct string-membership/regex assertions against each file's
 REAL, shipping source text -- same rigor as test_api_billing_retry.py's own
 sanity-assert block, chosen over the slice-and-exec technique (used
@@ -211,6 +219,60 @@ check("none of the 3 real UPDATE SQL constants contain an ON CONFLICT clause "
           (src[src.index('UPDATE_VERIFIED_SQL = """') + len('UPDATE_VERIFIED_SQL = """'):src.index('"""', src.index('UPDATE_VERIFIED_SQL = """') + len('UPDATE_VERIFIED_SQL = """'))],
            src[src.index('UPDATE_DERIVED_SQL = """') + len('UPDATE_DERIVED_SQL = """'):src.index('"""', src.index('UPDATE_DERIVED_SQL = """') + len('UPDATE_DERIVED_SQL = """'))],
            src[src.index('UPDATE_NO_USABLE_TOTAL_SQL = """') + len('UPDATE_NO_USABLE_TOTAL_SQL = """'):src.index('"""', src.index('UPDATE_NO_USABLE_TOTAL_SQL = """') + len('UPDATE_NO_USABLE_TOTAL_SQL = """'))])))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 6: loaders/pir_xlsx_common.py (PIR-XLSX-HOTFIX-1)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/pir_xlsx_common.py")
+src = open("loaders/pir_xlsx_common.py").read()
+
+check("DEFAULT_COUNTY imported from scrape_billing_history.py (single source of truth)",
+      "from loaders.scrape_billing_history import DEFAULT_COUNTY" in src)
+check("BILLING_SQL INSERT column list includes county_code",
+      re.search(r"INSERT INTO tax_billing\s*\n\s*\(county_code, geo_id, tax_year", src) is not None)
+check("BILLING_SQL VALUES clause includes %(county_code)s",
+      "VALUES (%(county_code)s, %(geo_id)s, %(tax_year)s" in src)
+check("BILLING_SQL ON CONFLICT targets the live (county_code, geo_id, tax_year)",
+      "ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE" in src)
+check("ENTITY_SQL INSERT column list includes county_code",
+      "INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)" in src)
+check("ENTITY_SQL VALUES clause includes %(county_code)s",
+      "VALUES (%(county_code)s, %(geo_id)s, %(tax_year)s, %(entity_code)s" in src)
+check("ENTITY_SQL ON CONFLICT targets the live (county_code, geo_id, tax_year, entity_code)",
+      "ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE" in src)
+check("no stale ON CONFLICT (geo_id, tax_year) target remains",
+      "ON CONFLICT (geo_id, tax_year)" not in src)
+check("no stale ON CONFLICT (geo_id, tax_year, entity_code) target remains",
+      "ON CONFLICT (geo_id, tax_year, entity_code)" not in src)
+check("write_to_db() signature threads county_code=DEFAULT_COUNTY",
+      "def write_to_db(conn, matched, tax_year, data_source, confidence_level, county_code=DEFAULT_COUNTY):" in src)
+check("write_to_db()'s billing_rows dict includes county_code",
+      '"county_code": county_code, "geo_id": geo_id, "tax_year": tax_year,' in src)
+check("check_portal_scrape_divergence() signature threads county_code=DEFAULT_COUNTY "
+      "(forward-looking read-side fix, mirrors DALLAS-GATE-4's identical fix to "
+      "load_pir_billing_2021_full.py's sibling verify_sanity_parcels())",
+      "def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00, county_code=DEFAULT_COUNTY):" in src)
+check("check_portal_scrape_divergence()'s SELECT scopes by county_code",
+      "FROM tax_billing WHERE tax_year = %s AND geo_id = ANY(%s) AND county_code = %s" in src)
+check("verify_sanity_parcels() signature threads county_code=DEFAULT_COUNTY "
+      "(forward-looking read-side fix)",
+      "def verify_sanity_parcels(conn, tax_year, expected, county_code=DEFAULT_COUNTY):" in src)
+check("verify_sanity_parcels()'s SELECT scopes by county_code",
+      "SELECT total_tax FROM tax_billing WHERE geo_id = %s AND tax_year = %s AND county_code = %s" in src)
+check("--county CLI flag added to run_cli(), default DEFAULT_COUNTY",
+      '"--county", default=DEFAULT_COUNTY' in src)
+check("run_cli()'s check_portal_scrape_divergence() call passes county_code=args.county",
+      "check_portal_scrape_divergence(conn, matched, tax_year, county_code=args.county)" in src)
+check("run_cli()'s write_to_db() call passes county_code=args.county",
+      "county_code=args.county)" in src and "write_to_db(conn, matched, tax_year, data_source, confidence_level," in src)
+check("run_cli()'s verify_sanity_parcels() call passes county_code=args.county",
+      "verify_sanity_parcels(conn, tax_year, sanity_expected, county_code=args.county)" in src)
+check("reconcile_geo_ids() deliberately left untouched (matches DALLAS-GATE-4's own "
+      "precedent: load_pir_billing_2021_full.py's identical function was not scoped "
+      "by county_code either -- an identity-existence check against the full `parcel` "
+      "table, not a billing-grain write, same real reasoning both places)",
+      "SELECT geo_id FROM parcel" in src and "def reconcile_geo_ids(conn, by_geo):" in src)
 
 
 # ─────────────────────────────────────────────────────────────────────────

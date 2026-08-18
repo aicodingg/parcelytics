@@ -56,6 +56,25 @@ import zipfile
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 
+# PIR-XLSX-HOTFIX-1 (real, urgent, same severity class as DALLAS-GATE-4):
+# BILLING_SQL/ENTITY_SQL below neither wrote county_code (a real NOT NULL
+# column on the live, already-migrated tax_billing/tax_billing_entity
+# tables) nor targeted the real live unique constraint in their ON CONFLICT
+# clauses (still named the old (geo_id, tax_year) / (geo_id, tax_year,
+# entity_code) columns) -- every INSERT here would hard-fail against the
+# live, migrated tables with Postgres's real "there is no unique or
+# exclusion constraint matching the ON CONFLICT specification" error. This
+# module backs load_pir_billing_2022.py/_2023.py/_2024.py (see module
+# docstring) -- all three were live-broken against production until this
+# fix, the same failure mode DALLAS-GATE-2/-3/-4 already found and fixed in
+# scrape_billing_history.py, load_tax_current.py, load_pir_billing.py, and
+# load_pir_billing_2021_full.py, but this specific shared module was never
+# in scope for those briefs and was missed -- surfaced instead by
+# TAX-BILLING-REKEY-2's own real writer enumeration. DEFAULT_COUNTY imported
+# from the same real source those fixes already established (single source
+# of truth), not a second, independent "TRAVIS" constant.
+from loaders.scrape_billing_history import DEFAULT_COUNTY  # noqa: E402
+
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
 # Entity slots 1-10. Field name per slot is looked up dynamically from the
@@ -463,10 +482,10 @@ def reconcile_geo_ids(conn, by_geo):
 
 BILLING_SQL = """
     INSERT INTO tax_billing
-        (geo_id, tax_year, total_tax, total_paid, data_source, confidence_level)
-    VALUES (%(geo_id)s, %(tax_year)s, %(total_tax)s, %(total_paid)s,
+        (county_code, geo_id, tax_year, total_tax, total_paid, data_source, confidence_level)
+    VALUES (%(county_code)s, %(geo_id)s, %(tax_year)s, %(total_tax)s, %(total_paid)s,
             %(data_source)s, %(confidence_level)s)
-    ON CONFLICT (geo_id, tax_year) DO UPDATE
+    ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE
         SET total_tax        = EXCLUDED.total_tax,
             total_paid       = EXCLUDED.total_paid,
             data_source      = EXCLUDED.data_source,
@@ -481,19 +500,26 @@ BILLING_SQL = """
 # penalty/interest) is preserved rather than silently destroyed.
 
 ENTITY_SQL = """
-    INSERT INTO tax_billing_entity (geo_id, tax_year, entity_code, amount_due, amount_paid)
-    VALUES (%(geo_id)s, %(tax_year)s, %(entity_code)s, %(amount_due)s, %(amount_paid)s)
-    ON CONFLICT (geo_id, tax_year, entity_code) DO UPDATE
+    INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)
+    VALUES (%(county_code)s, %(geo_id)s, %(tax_year)s, %(entity_code)s, %(amount_due)s, %(amount_paid)s)
+    ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE
         SET amount_due  = EXCLUDED.amount_due,
             amount_paid = EXCLUDED.amount_paid
 """
 
 
-def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00):
+def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00, county_code=DEFAULT_COUNTY):
     """DESIGN NOTE (per Diego's build brief, judgment call flagged): before
     this loader's unconditional upsert overwrites tax_billing for a
     (geo_id, tax_year), check whether a portal_scrape row already there
     disagrees with the new PIR total by more than `tolerance` dollars.
+
+    PIR-XLSX-HOTFIX-1: county_code added as a real, forward-looking
+    read-side predicate, mirroring DALLAS-GATE-4's own identical fix to
+    load_pir_billing_2021_full.py's sibling verify_sanity_parcels() --
+    Travis-only-safe today (no second county's data exists yet), but a
+    lone geo_id filter would become ambiguous the moment a second county's
+    parcels can share a geo_id value.
 
     This is the investigation's core finding applied at scale: PIR's
     TXBASTAX/TXTAXDUE is base tax billed; portal_scrape can legitimately
@@ -525,8 +551,8 @@ def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00):
     with conn.cursor() as cur:
         cur.execute(
             "SELECT geo_id, data_source, confidence_level, total_tax "
-            "FROM tax_billing WHERE tax_year = %s AND geo_id = ANY(%s)",
-            (tax_year, geo_ids),
+            "FROM tax_billing WHERE tax_year = %s AND geo_id = ANY(%s) AND county_code = %s",
+            (tax_year, geo_ids, county_code),
         )
         existing = {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
 
@@ -547,7 +573,7 @@ def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00):
     return divergences
 
 
-def write_to_db(conn, matched, tax_year, data_source, confidence_level):
+def write_to_db(conn, matched, tax_year, data_source, confidence_level, county_code=DEFAULT_COUNTY):
     from loaders.db import batch_upsert
     billing_rows = []
     entity_rows = []
@@ -555,13 +581,13 @@ def write_to_db(conn, matched, tax_year, data_source, confidence_level):
         total_due = sum(v["due"] for v in entities.values())
         total_paid = sum(v["paid"] for v in entities.values())
         billing_rows.append({
-            "geo_id": geo_id, "tax_year": tax_year,
+            "county_code": county_code, "geo_id": geo_id, "tax_year": tax_year,
             "total_tax": round(total_due, 2), "total_paid": round(total_paid, 2),
             "data_source": data_source, "confidence_level": confidence_level,
         })
         for code, v in entities.items():
             entity_rows.append({
-                "geo_id": geo_id, "tax_year": tax_year, "entity_code": code,
+                "county_code": county_code, "geo_id": geo_id, "tax_year": tax_year, "entity_code": code,
                 "amount_due": round(v["due"], 2), "amount_paid": round(v["paid"], 2),
             })
 
@@ -570,19 +596,24 @@ def write_to_db(conn, matched, tax_year, data_source, confidence_level):
     return n_billing, n_entity
 
 
-def verify_sanity_parcels(conn, tax_year, expected):
+def verify_sanity_parcels(conn, tax_year, expected, county_code=DEFAULT_COUNTY):
     """expected: {geo_id: expected_total_or_None}. None means "no
     independently-confirmed figure for this parcel/year -- report what's
     found, don't grade it" (this applies to 0100030109 for 2023/2024, which
     the investigation didn't independently confirm against a known-good
-    total the way it did for 0100030105 and for both parcels in 2022)."""
+    total the way it did for 0100030105 and for both parcels in 2022).
+
+    PIR-XLSX-HOTFIX-1: county_code added as a real, forward-looking
+    read-side predicate -- same rationale as check_portal_scrape_divergence()
+    above and DALLAS-GATE-4's identical fix to load_pir_billing_2021_full.py's
+    own verify_sanity_parcels()."""
     print(f"\n  Sanity-check parcel verification ({tax_year}):")
     all_pass = True
     with conn.cursor() as cur:
         for geo_id, exp in expected.items():
             cur.execute(
-                "SELECT total_tax FROM tax_billing WHERE geo_id = %s AND tax_year = %s",
-                (geo_id, tax_year),
+                "SELECT total_tax FROM tax_billing WHERE geo_id = %s AND tax_year = %s AND county_code = %s",
+                (geo_id, tax_year, county_code),
             )
             row = cur.fetchone()
             actual = float(row[0]) if row and row[0] is not None else None
@@ -673,6 +704,18 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
     parser.add_argument("--limit", type=int, default=None,
                          help="Smoke-test: stop after N data rows (implies partial "
                               "results -- always combine with --dry-run)")
+    parser.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=(
+            f"county_code written to every upserted row (default: {DEFAULT_COUNTY}). "
+            "PIR-XLSX-HOTFIX-1: mirrors every other tax_billing-family loader's "
+            "own --county convention (load_pir_billing.py, "
+            "load_pir_billing_2021_full.py, load_tax_current.py, "
+            "scrape_billing_history.py) -- same real scope boundary applies "
+            "(this loader's own file-driven load has no per-row county signal "
+            "today, so the whole file is written under one county_code)."
+        ),
+    )
     args = parser.parse_args()
 
     filepath = getattr(config, config_attr, filepath_default) if config_attr else filepath_default
@@ -720,7 +763,7 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
 
         print(f"\n  Checking for prior portal_scrape totals that diverge from this "
               f"file's PIR totals…")
-        divergences = check_portal_scrape_divergence(conn, matched, tax_year)
+        divergences = check_portal_scrape_divergence(conn, matched, tax_year, county_code=args.county)
         print(f"    {len(divergences):,} parcels have a prior total_tax that differs "
               f"from the new PIR total by more than $1.00.")
         if divergences:
@@ -756,7 +799,8 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
         ensure_billing_cols(conn)
 
         print("  Writing to database…")
-        n_billing, n_entity = write_to_db(conn, matched, tax_year, data_source, confidence_level)
+        n_billing, n_entity = write_to_db(conn, matched, tax_year, data_source, confidence_level,
+                                           county_code=args.county)
         print(f"    {n_billing:,} tax_billing rows, {n_entity:,} tax_billing_entity rows upserted")
 
         if not args.skip_metrics:
@@ -764,7 +808,7 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
             update_coverage_level(conn, {tax_year})
             print("\nRun python3 loaders/compute_metrics.py to recompute all derived metrics.")
 
-        all_pass = verify_sanity_parcels(conn, tax_year, sanity_expected)
+        all_pass = verify_sanity_parcels(conn, tax_year, sanity_expected, county_code=args.county)
         if not all_pass:
             print("\n  *** SANITY CHECK FAILED -- do not trust this load without investigating. ***")
         else:

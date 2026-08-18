@@ -43,14 +43,70 @@ def is_valid_tax_year(tax_year):
     return MIN_VALID_TAX_YEAR <= tax_year <= max_valid
 
 
+def _warn_if_county_code_missing(conn):
+    """Real, preventative fix (PIR-XLSX-HOTFIX-1 follow-up, Aug 17 2026): a
+    real, live incident this session -- Diego ran a loader expecting a
+    meaningful test, silently hit a stale local database via the
+    DATABASE_URL-unset fallback, and got a confusing, out-of-context
+    "column county_code does not exist" error 80 seconds into an unrelated
+    437K-row parse, with nothing pointing at "wrong database" as the real
+    cause. county_code became a real, NOT NULL, leading-PK column on
+    tax_billing/tax_billing_entity/parcel/... once
+    migrate_county_partitioning.py ran against production (DALLAS-GATE-1) --
+    a database that predates that migration will fail the same confusing way
+    the moment ANY of this codebase's county_code-aware SQL runs, which is
+    effectively every real tax_billing-family read/write as of DALLAS-GATE-4/
+    PIR-XLSX-HOTFIX-1. One cheap information_schema lookup per connection;
+    WARNS rather than raises -- must not block execute_schema() from
+    bootstrapping a genuinely fresh, pre-migration database where
+    tax_billing may not exist at all yet."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = 'tax_billing'"
+        )
+        table_exists = cur.fetchone() is not None
+        if not table_exists:
+            return  # fresh/empty DB -- not this check's concern, execute_schema()'s job
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'tax_billing' AND column_name = 'county_code'"
+        )
+        has_county_code = cur.fetchone() is not None
+    if not has_county_code:
+        print(
+            "  [db] *** WARNING: this database's tax_billing table exists but has no "
+            "county_code column -- it predates migrate_county_partitioning.py's real, "
+            "already-run-in-production migration. Any tax_billing-family loader will "
+            "fail with 'column county_code does not exist' the moment it touches this "
+            "table. Run migrate_county_partitioning.py against this database first, or "
+            "connect to a database that's already been migrated (check DATABASE_URL). ***"
+        )
+
+
 def get_conn():
-    return psycopg2.connect(
+    # PIR-XLSX-HOTFIX-1 follow-up: unmissable connection-identity banner --
+    # see config.py's own DB_SOURCE comment for the real incident this
+    # responds to. Printed BEFORE connecting so it's visible even if the
+    # connection itself fails.
+    print(
+        f"  [db] connecting to {config.DB_USER}@{config.DB_HOST}:{config.DB_PORT}"
+        f"/{config.DB_NAME}  (source: {config.DB_SOURCE})"
+    )
+    if config.DB_SOURCE == "local-fallback-defaults":
+        print(
+            "  [db] *** DATABASE_URL is not set in this shell -- this is the LOCAL "
+            "fallback database, not production. If you meant to test against "
+            "production, set DATABASE_URL first. ***"
+        )
+    conn = psycopg2.connect(
         host=config.DB_HOST,
         port=config.DB_PORT,
         dbname=config.DB_NAME,
         user=config.DB_USER,
         password=config.DB_PASS,
     )
+    _warn_if_county_code_missing(conn)
+    return conn
 
 
 def execute_schema(conn):

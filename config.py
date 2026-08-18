@@ -33,6 +33,22 @@ DATABASE_URL = _database_url or (
     f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 )
 
+# PIR-XLSX-HOTFIX-1 follow-up (real, preventative, Aug 17 2026): a real,
+# live incident this session showed a bare `DATABASE_URL` env var, unset in
+# a local shell, silently falls through to the local-dev defaults above with
+# NO visible signal at all -- Diego ran a loader expecting to test something
+# meaningful, silently hit a stale local database that predates the
+# county-partitioning migration, and got a confusing, out-of-context
+# "column county_code does not exist" error 80 seconds into an unrelated
+# 437K-row parse, with nothing in the loader's own output pointing at "you're
+# on the wrong database" as the real cause. DB_SOURCE records which path was
+# taken so loaders/db.py's get_conn() (the one, canonical connection helper
+# every loader/migration script uses -- NOT app.py's own separate get_db(),
+# which is request-scoped and deliberately left alone here) can print an
+# explicit, unmissable banner on every real connection, instead of the
+# database identity being a silent, easy-to-forget implementation detail.
+DB_SOURCE = "env:DATABASE_URL" if _database_url else "local-fallback-defaults"
+
 # ── Data files ────────────────────────────────────────────────────────────────
 DATA_DIR = os.environ.get(
     "DATA_DIR",
