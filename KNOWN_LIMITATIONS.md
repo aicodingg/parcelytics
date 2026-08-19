@@ -709,3 +709,50 @@ original problem this fix solved.
 account reissue between two years correctly resolves to each year's own real
 value, not a cross-contaminated one). Live-verified via `ingest_gate.py` on both
 local and production databases, before/after numbers as stated above.
+
+## UI / Frontend Issues
+
+### Investor-mode section nav: click-to-scroll unreliable (real, open, low-severity)
+
+The sticky section nav bar on `/parcel/<geo_id>` (Investor mode) — "At a
+Glance | Tax Bill | History | Compares | Resources" — updates the URL hash
+correctly on click, but does not reliably scroll the page to the target
+section. Confirmed via direct, repeated production testing: `window.scrollTo()`
+itself does not move the page on this route in production, in any form
+tested, including a genuine physical-style click (not just script-triggered).
+Native mouse-wheel scrolling and every section's content are fully accessible
+and unaffected — this only affects the nav bar's own jump-to-section
+convenience.
+
+**Real, complete list of hypotheses tested and eliminated (nine rounds,
+2026-08-17):** native `<a href="#id">` anchor-jump reliability; explicit
+`getBoundingClientRect()` + `window.scrollTo()` position-read-and-scroll
+(reliable locally, 12/12, but fails 100% on production);
+`history.pushState`/native browser fragment-scroll timing conflicts;
+`history.scrollRestoration` set to `manual`; double-`requestAnimationFrame`
+deferred scroll with fresh position re-read; Cloudflare Rocket Loader
+(directly ruled out — no script-tag signature present); CSS `overflow-anchor`
+scroll anchoring (tested directly against production, no effect); CSS
+`scroll-snap-type` (confirmed `none`); element `position` context (confirmed
+`static`); the Cloudflare/Render proxy layer itself (confirmed via
+Cloudflare's own developer documentation to be Render's baseline,
+non-configurable DDoS-protection passthrough only — packet-level, does not
+touch response content — not a customer-configurable Cloudflare zone at all,
+no Auto Minify/Transform Rules/Workers exist for this domain); script-triggered
+vs. genuine physical-style clicks (both fail identically).
+
+**Real, environment-specific note:** this bug is 100% reproducible on
+production and does not reproduce locally at all (12/12 local success vs.
+0/12+ production success across every fix attempt) — a genuine, real, still-
+unexplained local/production divergence, not random or intermittent behavior.
+
+**Real, one remaining untested lead:** manual inspection via Chrome DevTools'
+own Event Listener/Performance panel during an actual, human-operated click
+on the live production page — this would surface any real, active listener
+(including from a browser extension or something outside this codebase) that
+script-based testing cannot see. Not yet attempted; needs a human directly at
+the keyboard with DevTools open, not remote/automated testing.
+
+**Status: parked, not actively being worked.** Revisit if the above manual
+DevTools session becomes available, or if this bug's real symptom changes in
+a way that suggests a new, different cause.
