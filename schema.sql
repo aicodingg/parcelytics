@@ -670,6 +670,110 @@ CREATE TABLE IF NOT EXISTS tax_billing_quarantine (
     PRIMARY KEY (geo_id, tax_year)
 );
 
+-- ── tax_billing_account / tax_billing_account_entity / tax_billing_portal_scrape
+-- (TAX-BILLING-REKEY-3, Aug 2026) ───────────────────────────────────────────
+-- Unit-grain re-key of tax_billing/tax_billing_entity, per
+-- SPEC_TAX_BILLING_REKEY.md §7.1-§7.3 (Fable's architectural review,
+-- corrected schema -- supersedes §1.2's original VARCHAR(14)/non-leading-
+-- county_code draft). Same "store the source's true grain under the
+-- source's own native key" principle prop_unit/prop_unit_tax_year already
+-- established -- account_id is the real 14-20-digit tax-office account
+-- number (VARCHAR(20), not VARCHAR(14): Dallas's own real accounts run 17
+-- characters, confirmed via DCAD investigation per Fable's review, so a
+-- Travis-derived 14-char bound would truncate/reject real Dallas data).
+--
+-- geo_id is DERIVED, per-county, at loader write time (Travis:
+-- account_id[:10], confirmed by load_pir_billing_2021_full.py's own
+-- full-file scan; Dallas/Harris: their own real mapping rule, not yet
+-- confirmed) -- it is stored as a fact established by the loader, never
+-- computed by this schema or by tax_billing_rollup.py via a hardcoded
+-- SUBSTRING assumption.
+--
+-- Natively partitioned by county_code FROM CREATION (§7.2, a real overrule
+-- of §2's own original "defer partitioning" verdict) -- partitioning an
+-- EMPTY table costs nothing; re-partitioning a table that has since grown
+-- to real multi-million-row scale is the exact "migrate the same table
+-- twice" cost SPEC_TAX_BILLING_COLLISION_AND_PARTITION.md's "one migration,
+-- not three" rule exists to prevent. This is a real, deliberate departure
+-- from §4.1's schema-wide "stay unpartitioned until a real trigger"
+-- default -- scoped ONLY to these two brand-new tables, born at the exact
+-- moment this lesson was learned. The legacy derived tables (tax_billing,
+-- tax_billing_entity) stay unpartitioned, unchanged -- they're rebuildable
+-- by construction (the whole point of the derived-rollup design), so a
+-- future repartitioning decision costs nothing extra there either.
+CREATE TABLE IF NOT EXISTS tax_billing_account (
+    county_code      VARCHAR(20)  NOT NULL DEFAULT 'TRAVIS',
+    account_id       VARCHAR(20)  NOT NULL,      -- full source-native account number
+    tax_year         SMALLINT     NOT NULL,
+    geo_id           VARCHAR(20)  NOT NULL,      -- derived per-county at write time, see above
+    billing_num      VARCHAR(30),
+    owner_name       TEXT,
+    total_tax        NUMERIC(14,2),
+    total_paid       NUMERIC(14,2),
+    total_due        NUMERIC(14,2),
+    is_delinquent    BOOLEAN      DEFAULT FALSE,
+    cause_number     VARCHAR(50),
+    exemption_codes  VARCHAR(50),
+    data_source      VARCHAR(32),
+    confidence_level VARCHAR(16),
+    PRIMARY KEY (county_code, account_id, tax_year)
+) PARTITION BY LIST (county_code);
+
+CREATE TABLE IF NOT EXISTS tax_billing_account_travis
+    PARTITION OF tax_billing_account FOR VALUES IN ('TRAVIS');
+-- To onboard a new county: CREATE TABLE tax_billing_account_dallas
+--   PARTITION OF tax_billing_account FOR VALUES IN ('DALLAS');  -- (and same for _entity)
+
+CREATE INDEX IF NOT EXISTS idx_tba_geo_year ON tax_billing_account(county_code, geo_id, tax_year);
+
+CREATE TABLE IF NOT EXISTS tax_billing_account_entity (
+    county_code  VARCHAR(20) NOT NULL DEFAULT 'TRAVIS',
+    account_id   VARCHAR(20) NOT NULL,
+    tax_year     SMALLINT    NOT NULL,
+    geo_id       VARCHAR(20) NOT NULL,
+    entity_code  VARCHAR(10) NOT NULL,
+    amount_due   NUMERIC(14,2),
+    amount_paid  NUMERIC(14,2),
+    PRIMARY KEY (county_code, account_id, tax_year, entity_code)
+) PARTITION BY LIST (county_code);
+
+CREATE TABLE IF NOT EXISTS tax_billing_account_entity_travis
+    PARTITION OF tax_billing_account_entity FOR VALUES IN ('TRAVIS');
+
+CREATE INDEX IF NOT EXISTS idx_tbae_geo_year ON tax_billing_account_entity(county_code, geo_id, tax_year);
+
+-- Portal-scrape receipts: geo_id-native grain -- the county portal has no
+-- finer identity to offer (confirmed LIVE, not assumed: fetch_html() run
+-- against 0259410216, the real largest known collision group at 1,210
+-- sub-accounts -- the highest-leverage real test case available -- found
+-- the only 14-digit number anywhere on the returned page is the synthetic
+-- geo_id+"0000" account used to REQUEST the page itself; no distinct real
+-- sub-account numbers are exposed anywhere). Per §7.3 design (a): kept
+-- structurally separate from tax_billing_account's real account-grain data
+-- so the two sources' genuinely different grains are never silently
+-- conflated in one shared table again (this is the real fix for the open
+-- "does a portal-scrape sentinel block a later rollup write, or vice
+-- versa" ordering question §1.4's original draft left unresolved -- it
+-- doesn't arise under design (a), because the two write paths no longer
+-- share a table at all).
+CREATE TABLE IF NOT EXISTS tax_billing_portal_scrape (
+    county_code       VARCHAR(20)  NOT NULL DEFAULT 'TRAVIS',
+    geo_id            VARCHAR(20)  NOT NULL,
+    tax_year          SMALLINT     NOT NULL,
+    total_paid        NUMERIC(14,2),
+    data_source       VARCHAR(32)  NOT NULL DEFAULT 'portal_scrape',
+    confidence_level  VARCHAR(16),
+    scraped_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (county_code, geo_id, tax_year)
+);
+
+-- Provenance on the legacy derived tables, same pattern as
+-- parcel_tax_year.unit_count: NULL = legacy row, not yet rolled up from the
+-- unit layer; 1 = single sub-account, values identical to that one account;
+-- >1 = true multi-sub-account geo_id, values are SUM() across accounts.
+ALTER TABLE tax_billing        ADD COLUMN IF NOT EXISTS account_count SMALLINT;
+ALTER TABLE tax_billing_entity ADD COLUMN IF NOT EXISTS account_count SMALLINT;
+
 -- ── parcel_2026_preliminary_snapshot (Task M4-2026-PRELIM-SNAPSHOT, Part 2,
 -- July 2026) ──────────────────────────────────────────────────────────────
 -- Permanent, standalone retention of the ORIGINAL 2026 Preliminary Export

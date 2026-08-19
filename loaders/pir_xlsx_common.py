@@ -74,6 +74,19 @@ from collections import defaultdict
 # from the same real source those fixes already established (single source
 # of truth), not a second, independent "TRAVIS" constant.
 from loaders.scrape_billing_history import DEFAULT_COUNTY  # noqa: E402
+import tax_billing_rollup  # noqa: E402
+
+# TAX-BILLING-REKEY-3: this shared module now writes tax_billing_account/
+# tax_billing_account_entity (keyed by the real full TXACCNUM, post
+# finding-2(b) dedup) instead of tax_billing/tax_billing_entity directly --
+# same redirect as load_pir_billing_2021_full.py, and it fixes
+# PIR-XLSX-HOTFIX-1's remaining urgent gap as a byproduct: the new target
+# tables are county_code-leading composite-PK tables from birth, so there is
+# no longer an old, unmigrated ON CONFLICT target for this module to hit.
+# tax_billing/tax_billing_entity are populated separately by
+# tax_billing_rollup.py (called from run_cli() below). Mirrors
+# load_pir_billing_2021_full.py's own identical redirect and its retirement
+# of the old per-geo_id summing step -- see that file's module docstring.
 
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
@@ -437,14 +450,18 @@ def load_and_aggregate(filepath, tax_year, progress_every=100_000, row_limit=Non
             else:
                 n_magnitude_fallback += 1
 
-    by_geo = defaultdict(lambda: defaultdict(lambda: {"due": 0.0, "paid": 0.0}))
+    # TAX-BILLING-REKEY-3: the old per-geo_id summing step is RETIRED here
+    # too -- see load_pir_billing_2021_full.py's identical retirement and
+    # module docstring for the full rationale (this shared module inherited
+    # the same Tier-2 bug that file's own investigation first found).
+    by_account = {
+        accnum: (total, entities, geo_id)
+        for accnum, (total, row_no, entities, geo_id) in best_by_accnum.items()
+    }
+
     accnums_per_geo = defaultdict(set)
     for accnum, (total, row_no, entities, geo_id) in best_by_accnum.items():
         accnums_per_geo[geo_id].add(accnum)
-        for code, due, paid in entities:
-            by_geo[geo_id][code]["due"] += due
-            by_geo[geo_id][code]["paid"] += paid
-
     multi_account_geos = {g: accs for g, accs in accnums_per_geo.items() if len(accs) > 1}
 
     n_duplicate_accounts = n_majority_vote + n_magnitude_fallback
@@ -460,49 +477,57 @@ def load_and_aggregate(filepath, tax_year, progress_every=100_000, row_limit=Non
         "n_exact_duplicate_resolutions": n_excess_rows,
         "n_majority_vote_resolutions": n_majority_vote,
         "n_magnitude_fallback_resolutions": n_magnitude_fallback,
-        "n_distinct_geo_ids": len(by_geo),
+        "n_distinct_geo_ids": len(accnums_per_geo),
         "n_multi_account_geo_ids": len(multi_account_geos),
         "elapsed_s": time.time() - t0,
     }
-    return by_geo, stats, dup_review_rows
+    return by_account, stats, dup_review_rows
 
 
-def reconcile_geo_ids(conn, by_geo):
-    """Split by_geo into (matched, unmatched) against the real `parcel`
-    table. Never silently drops -- unmatched geo_ids and their count are
-    returned for explicit reporting. Needs a live DB connection -- cannot
-    run in an environment without one (see run_cli's handling below)."""
+def reconcile_geo_ids(conn, by_account):
+    """Split by_account (accnum -> (total, entities, geo_id)) into
+    (matched, unmatched) by whether each account's geo_id exists in the real
+    `parcel` table. Never silently drops -- unmatched accounts and their
+    count are returned for explicit reporting. Needs a live DB connection --
+    cannot run in an environment without one (see run_cli's handling below).
+    TAX-BILLING-REKEY-3: per-account now, not per-geo_id -- see
+    load_pir_billing_2021_full.py's identical function."""
     with conn.cursor() as cur:
         cur.execute("SELECT geo_id FROM parcel")
         real_geo_ids = {r[0] for r in cur.fetchall()}
-    matched = {g: v for g, v in by_geo.items() if g in real_geo_ids}
-    unmatched = {g: v for g, v in by_geo.items() if g not in real_geo_ids}
+    matched = {a: v for a, v in by_account.items() if v[2] in real_geo_ids}
+    unmatched = {a: v for a, v in by_account.items() if v[2] not in real_geo_ids}
     return matched, unmatched
 
 
+# TAX-BILLING-REKEY-3: retargeted to tax_billing_account/_account_entity,
+# keyed by the real account_id (the full TXACCNUM). No ON CONFLICT
+# collision is possible at this grain. tax_billing/tax_billing_entity are
+# populated separately, from this table, by tax_billing_rollup.py (called
+# from run_cli() below). Still no WHERE guard on this upsert (unchanged
+# reasoning): this IS the strongest available PIR source for these years,
+# so it should unconditionally supersede whatever prior account-grain row
+# was there before, if any. See check_portal_scrape_divergence() below for
+# how the specific, real discrepancy this brief investigated (base tax vs.
+# actual-paid-with-penalty/interest) is preserved rather than silently
+# destroyed.
 BILLING_SQL = """
-    INSERT INTO tax_billing
-        (county_code, geo_id, tax_year, total_tax, total_paid, data_source, confidence_level)
-    VALUES (%(county_code)s, %(geo_id)s, %(tax_year)s, %(total_tax)s, %(total_paid)s,
+    INSERT INTO tax_billing_account
+        (county_code, account_id, geo_id, tax_year, total_tax, total_paid, data_source, confidence_level)
+    VALUES (%(county_code)s, %(account_id)s, %(geo_id)s, %(tax_year)s, %(total_tax)s, %(total_paid)s,
             %(data_source)s, %(confidence_level)s)
-    ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE
+    ON CONFLICT (county_code, account_id, tax_year) DO UPDATE
         SET total_tax        = EXCLUDED.total_tax,
             total_paid       = EXCLUDED.total_paid,
             data_source      = EXCLUDED.data_source,
             confidence_level = EXCLUDED.confidence_level
 """
-# No WHERE guard on the upsert, same rationale as 2021: this PIR bulk export
-# is the strongest available source for these years (comprehensive Tax
-# Office export, verified byte-for-byte against sanity-check parcels), so it
-# should unconditionally supersede whatever was there before. See
-# check_portal_scrape_divergence() below for how the specific, real
-# discrepancy this brief investigated (base tax vs. actual-paid-with-
-# penalty/interest) is preserved rather than silently destroyed.
 
 ENTITY_SQL = """
-    INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)
-    VALUES (%(county_code)s, %(geo_id)s, %(tax_year)s, %(entity_code)s, %(amount_due)s, %(amount_paid)s)
-    ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE
+    INSERT INTO tax_billing_account_entity
+        (county_code, account_id, geo_id, tax_year, entity_code, amount_due, amount_paid)
+    VALUES (%(county_code)s, %(account_id)s, %(geo_id)s, %(tax_year)s, %(entity_code)s, %(amount_due)s, %(amount_paid)s)
+    ON CONFLICT (county_code, account_id, tax_year, entity_code) DO UPDATE
         SET amount_due  = EXCLUDED.amount_due,
             amount_paid = EXCLUDED.amount_paid
 """
@@ -543,8 +568,22 @@ def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00, coun
     Returns: [(geo_id, old_data_source, old_confidence, old_total,
                new_total, delta, delta_pct), ...] for every (geo_id, year)
     where a differing prior row existed beyond `tolerance`.
+
+    TAX-BILLING-REKEY-3: `matched` is now {account_id: (total, entities,
+    geo_id)}, not {geo_id: entities} -- this function sums every matched
+    account sharing a geo_id in Python first (a live preview of what
+    tax_billing_rollup.py will compute), then compares that summed total
+    against tax_billing's EXISTING row (read BEFORE this run's
+    tax_billing_account write + rollup happen) -- same comparison this
+    function always made, just computed from the new account-grain input
+    shape instead of an already-summed one.
     """
-    geo_ids = list(matched.keys())
+    new_totals_by_geo = {}
+    for account_id, (total, entities, geo_id) in matched.items():
+        new_totals_by_geo.setdefault(geo_id, 0.0)
+        new_totals_by_geo[geo_id] += sum(v["due"] for v in entities.values())
+
+    geo_ids = list(new_totals_by_geo.keys())
     if not geo_ids:
         return []
     divergences = []
@@ -556,14 +595,13 @@ def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00, coun
         )
         existing = {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
 
-    for geo_id, entities in matched.items():
+    for geo_id, new_total in new_totals_by_geo.items():
         prior = existing.get(geo_id)
         if not prior:
             continue
         old_source, old_confidence, old_total = prior
         if old_total is None:
             continue
-        new_total = sum(v["due"] for v in entities.values())
         delta = float(new_total) - float(old_total)
         if abs(delta) <= tolerance:
             continue
@@ -574,20 +612,25 @@ def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00, coun
 
 
 def write_to_db(conn, matched, tax_year, data_source, confidence_level, county_code=DEFAULT_COUNTY):
+    """matched: {account_id: (total, entities, geo_id)} -- one row per real
+    account, no summing (TAX-BILLING-REKEY-3, see load_and_aggregate's
+    retired Tier 2)."""
     from loaders.db import batch_upsert
     billing_rows = []
     entity_rows = []
-    for geo_id, entities in matched.items():
+    for account_id, (total, entities, geo_id) in matched.items():
         total_due = sum(v["due"] for v in entities.values())
         total_paid = sum(v["paid"] for v in entities.values())
         billing_rows.append({
-            "county_code": county_code, "geo_id": geo_id, "tax_year": tax_year,
+            "county_code": county_code, "account_id": account_id, "geo_id": geo_id,
+            "tax_year": tax_year,
             "total_tax": round(total_due, 2), "total_paid": round(total_paid, 2),
             "data_source": data_source, "confidence_level": confidence_level,
         })
         for code, v in entities.items():
             entity_rows.append({
-                "county_code": county_code, "geo_id": geo_id, "tax_year": tax_year, "entity_code": code,
+                "county_code": county_code, "account_id": account_id, "geo_id": geo_id,
+                "tax_year": tax_year, "entity_code": code,
                 "amount_due": round(v["due"], 2), "amount_paid": round(v["paid"], 2),
             })
 
@@ -631,6 +674,8 @@ def verify_sanity_parcels(conn, tax_year, expected, county_code=DEFAULT_COUNTY):
 
 
 def write_review_log(dup_review_rows, unmatched, divergences, path):
+    """unmatched: {account_id: (total, entities, geo_id)} -- TAX-BILLING-
+    REKEY-3: logged per-account now, not per-geo_id."""
     import csv
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
@@ -641,11 +686,11 @@ def write_review_log(dup_review_rows, unmatched, divergences, path):
         for accnum, method, kept_row, kept_total, n_occ, cluster_size, other_totals in dup_review_rows:
             others = "; ".join(f"{t:.2f}" for t in other_totals)
             w.writerow([accnum, method, kept_row, f"{kept_total:.2f}", n_occ, others])
-        w.writerow(["=== geo_ids in file with no match in parcel table ===", "", "", "", "", ""])
-        w.writerow(["geo_id", "n_entities_billed", "total_due", "", "", ""])
-        for geo_id, entities in sorted(unmatched.items()):
-            total = sum(v["due"] for v in entities.values())
-            w.writerow([geo_id, len(entities), f"{total:.2f}", "", "", ""])
+        w.writerow(["=== accounts in file whose geo_id has no match in parcel table ===", "", "", "", "", ""])
+        w.writerow(["account_id", "geo_id", "n_entities_billed", "total_due", "", ""])
+        for account_id, (total, entities, geo_id) in sorted(unmatched.items()):
+            total_due = sum(v["due"] for v in entities.values())
+            w.writerow([account_id, geo_id, len(entities), f"{total_due:.2f}", "", ""])
         w.writerow(["=== prior portal_scrape total diverged from new PIR total "
                      "(old figure preserved here, not silently discarded) ===",
                      "", "", "", "", ""])
@@ -732,7 +777,7 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
     print(f"Loading {filepath} ({os.path.getsize(filepath)/1e6:.0f} MB)…")
     if args.limit:
         print(f"  *** --limit {args.limit:,} set -- PARTIAL run, results are a preview only ***")
-    by_geo, stats, dup_review_rows = load_and_aggregate(filepath, tax_year, row_limit=args.limit)
+    by_account, stats, dup_review_rows = load_and_aggregate(filepath, tax_year, row_limit=args.limit)
 
     print("\n  Parse + aggregation summary:")
     for k, v in stats.items():
@@ -756,10 +801,10 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
     from loaders.db import get_conn
     conn = get_conn()
     try:
-        matched, unmatched = reconcile_geo_ids(conn, by_geo)
-        print(f"\n  geo_id reconciliation against live `parcel` table:")
-        print(f"    matched:   {len(matched):,}")
-        print(f"    unmatched: {len(unmatched):,}  (skipped -- see review log)")
+        matched, unmatched = reconcile_geo_ids(conn, by_account)
+        print(f"\n  account geo_id reconciliation against live `parcel` table:")
+        print(f"    matched accounts:   {len(matched):,}")
+        print(f"    unmatched accounts: {len(unmatched):,}  (skipped -- see review log)")
 
         print(f"\n  Checking for prior portal_scrape totals that diverge from this "
               f"file's PIR totals…")
@@ -776,21 +821,27 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
 
         if args.dry_run:
             total_due_all = sum(
-                sum(e["due"] for e in ents.values()) for ents in matched.values()
+                sum(e["due"] for e in entities.values())
+                for total, entities, geo_id in matched.values()
             )
-            print(f"\n  DRY RUN -- would write {len(matched):,} tax_billing rows, "
-                  f"total ${total_due_all:,.2f} across all matched parcels.")
+            print(f"\n  DRY RUN -- would write {len(matched):,} tax_billing_account rows, "
+                  f"total ${total_due_all:,.2f} across all matched accounts.")
+            # TAX-BILLING-REKEY-3: sum matched accounts per geo_id for the
+            # preview -- see load_pir_billing_2021_full.py's identical logic.
+            by_geo_preview = {}
+            for account_id, (total, entities, geo_id) in matched.items():
+                by_geo_preview.setdefault(geo_id, 0.0)
+                by_geo_preview[geo_id] += sum(e["due"] for e in entities.values())
             for geo_id, exp in sanity_expected.items():
-                ents = matched.get(geo_id)
-                total = sum(e["due"] for e in ents.values()) if ents else None
+                total = by_geo_preview.get(geo_id)
                 if exp is None:
                     print(f"    [INFO] {geo_id}: no independently-confirmed expected "
-                          f"figure -- would write "
+                          f"figure -- would roll up to "
                           f"{'$' + format(total, ',.2f') if total is not None else 'NOT FOUND'}")
                     continue
                 ok = total is not None and abs(total - exp) < 0.01
                 print(f"    [{'PASS' if ok else 'FAIL'}] {geo_id}: expected "
-                      f"${exp:,.2f}, would write "
+                      f"${exp:,.2f}, would roll up to "
                       f"{'$' + format(total, ',.2f') if total is not None else 'NOT FOUND'}")
             return
 
@@ -801,7 +852,14 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
         print("  Writing to database…")
         n_billing, n_entity = write_to_db(conn, matched, tax_year, data_source, confidence_level,
                                            county_code=args.county)
-        print(f"    {n_billing:,} tax_billing rows, {n_entity:,} tax_billing_entity rows upserted")
+        print(f"    {n_billing:,} tax_billing_account rows, {n_entity:,} tax_billing_account_entity rows upserted")
+
+        # TAX-BILLING-REKEY-3: roll up before update_coverage_level (JOINs
+        # tax_billing directly) or verify_sanity_parcels (reads
+        # tax_billing.total_tax) run.
+        rollup_result = tax_billing_rollup.run(conn, tax_year=tax_year)
+        print(f"  tax_billing_rollup: {rollup_result['tax_billing_rows']:,} tax_billing rows, "
+              f"{rollup_result['tax_billing_entity_rows']:,} tax_billing_entity rows")
 
         if not args.skip_metrics:
             from loaders.load_pir_billing import update_coverage_level

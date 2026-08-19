@@ -5862,14 +5862,28 @@ def api_billing(geo_id):
         # partially-covered parcel. A parcel with genuinely no row at all
         # (no sentinel, no other-source data) still evaluates to False,
         # exactly as before.
+        # TAX-BILLING-REKEY-3 (§7.3 design (a)): portal-scrape rows
+        # (including this route's own sentinel) now live in
+        # tax_billing_portal_scrape, not tax_billing directly -- tax_billing
+        # only picks them up once tax_billing_rollup.py's merge step runs
+        # (a loader-orchestration step, not triggered synchronously by this
+        # route). "Already fetched" must therefore check BOTH tables: a real
+        # portal row or sentinel in tax_billing_portal_scrape (this route's
+        # own write path), OR a real other-source row already in tax_billing
+        # (unchanged from BILLING-DIAG-8's own widening).
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT COUNT(*) AS cnt FROM tax_billing "
-                "WHERE geo_id = %s AND county_code = %s "
-                "  AND (data_source = 'portal_scrape' OR tax_year BETWEEN 2021 AND 2024)",
-                (geo_id, county_code)
+                "SELECT "
+                "  (EXISTS (SELECT 1 FROM tax_billing_portal_scrape "
+                "           WHERE geo_id = %s AND county_code = %s)) "
+                "  OR "
+                "  (EXISTS (SELECT 1 FROM tax_billing "
+                "           WHERE geo_id = %s AND county_code = %s "
+                "             AND tax_year BETWEEN 2021 AND 2024)) "
+                "  AS already_fetched",
+                (geo_id, county_code, geo_id, county_code)
             )
-            already_fetched = cur.fetchone()["cnt"] > 0
+            already_fetched = cur.fetchone()["already_fetched"]
 
         # 2. Portal fetch (only if not cached)
         if not already_fetched:
@@ -5953,7 +5967,6 @@ def api_billing(geo_id):
                         {
                             "geo_id":     geo_id,
                             "tax_year":   r["tax_year"],
-                            "total_tax":  r["payment_amount"],
                             "total_paid": r["payment_amount"],
                             "county_code": county_code,
                         }
@@ -5977,10 +5990,16 @@ def api_billing(geo_id):
                         flush=True,
                     )
                 else:
-                    # Portal has this account but no 2021-2024 receipts — sentinel
+                    # Portal has this account but no 2021-2024 receipts —
+                    # sentinel. TAX-BILLING-REKEY-3: redirected to
+                    # tax_billing_portal_scrape, the same real table this
+                    # route's own successful-fetch branch above now writes
+                    # to (via upsert_billing_rows()) -- both the sentinel and
+                    # real portal rows are this loader's own write path, per
+                    # §7.3 design (a), and belong in the same table.
                     with conn.cursor() as cur:
                         cur.execute(
-                            "INSERT INTO tax_billing "
+                            "INSERT INTO tax_billing_portal_scrape "
                             "  (county_code, geo_id, tax_year, data_source, confidence_level) "
                             "VALUES (%s, %s, %s, 'portal_scrape', 'partial') "
                             "ON CONFLICT (county_code, geo_id, tax_year) DO NOTHING",
@@ -6047,15 +6066,34 @@ def api_billing(geo_id):
         # same root cause as the already_fetched widening above. Removing
         # that filter is the whole fix; the year-range + county_code
         # filters are unchanged and still do all the real scoping work.
+        # TAX-BILLING-REKEY-3: unioned with tax_billing_portal_scrape --
+        # a real fetch this same request just performed lands there, not in
+        # tax_billing (which only picks it up once tax_billing_rollup.py's
+        # merge step next runs, a loader-orchestration step this live route
+        # does not trigger). Without this union, a first-ever fetch would
+        # write real data and then immediately return an empty `rows` list
+        # for it -- a real regression the read side must account for, not
+        # just the write side. tax_billing's own row for a given
+        # (geo_id, tax_year) always wins when both exist (mirrors
+        # tax_billing_rollup.py's own account-grain-always-wins policy) --
+        # a portal_scrape row only shows here when tax_billing has nothing
+        # yet for that year.
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT tax_year, total_tax, total_paid, data_source, confidence_level "
-                "FROM tax_billing "
-                "WHERE geo_id = %s "
-                "  AND tax_year BETWEEN 2021 AND 2024 "
-                "  AND county_code = %s "
+                "WITH tb AS ("
+                "  SELECT tax_year, total_tax, total_paid, data_source, confidence_level "
+                "  FROM tax_billing "
+                "  WHERE geo_id = %s AND county_code = %s AND tax_year BETWEEN 2021 AND 2024"
+                "), ps AS ("
+                "  SELECT tax_year, total_paid AS total_tax, total_paid, data_source, confidence_level "
+                "  FROM tax_billing_portal_scrape "
+                "  WHERE geo_id = %s AND county_code = %s AND tax_year BETWEEN 2021 AND 2024"
+                ") "
+                "SELECT * FROM tb "
+                "UNION ALL "
+                "SELECT * FROM ps WHERE ps.tax_year NOT IN (SELECT tax_year FROM tb) "
                 "ORDER BY tax_year",
-                (geo_id, county_code)
+                (geo_id, county_code, geo_id, county_code)
             )
             rows = [dict(r) for r in cur.fetchall()]
 

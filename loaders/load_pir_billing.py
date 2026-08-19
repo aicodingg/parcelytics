@@ -26,6 +26,7 @@ import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn, execute_schema
+import tax_billing_rollup
 import psycopg2.extras
 
 # Only accept historical years; refuse to overwrite 2025 data from this loader
@@ -79,13 +80,17 @@ def load_file(conn, filepath, dry_run=False, county_code=DEFAULT_COUNTY):
     print(f"  Loading {os.path.basename(filepath)} ({os.path.getsize(filepath)/1e6:.0f} MB)…")
     t0 = time.time()
 
+    # TAX-BILLING-REKEY-3: retargeted to tax_billing_account/_account_entity,
+    # keyed by the real account_id (raw_parcel -- see below), mirroring
+    # load_tax_current.py's own identical redirect. tax_billing/
+    # tax_billing_entity are populated separately by tax_billing_rollup.py.
     billing_sql = """
-        INSERT INTO tax_billing
-            (county_code, geo_id, tax_year, billing_num, owner_name,
+        INSERT INTO tax_billing_account
+            (county_code, account_id, geo_id, tax_year, billing_num, owner_name,
              total_tax, total_paid, total_due,
              is_delinquent, exemption_codes)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, account_id, tax_year) DO UPDATE
             SET billing_num     = EXCLUDED.billing_num,
                 owner_name      = EXCLUDED.owner_name,
                 total_tax       = EXCLUDED.total_tax,
@@ -96,9 +101,10 @@ def load_file(conn, filepath, dry_run=False, county_code=DEFAULT_COUNTY):
     """
 
     entity_sql = """
-        INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE
+        INSERT INTO tax_billing_account_entity
+            (county_code, account_id, geo_id, tax_year, entity_code, amount_due, amount_paid)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, account_id, tax_year, entity_code) DO UPDATE
             SET amount_due  = EXCLUDED.amount_due,
                 amount_paid = EXCLUDED.amount_paid
     """
@@ -123,6 +129,7 @@ def load_file(conn, filepath, dry_run=False, county_code=DEFAULT_COUNTY):
             geo_id = raw_parcel[:10].strip() if raw_parcel else None
             if not geo_id:
                 continue
+            account_id = raw_parcel  # TAX-BILLING-REKEY-3: real per-account key
 
             tax_year = _i(row.get("TAXYEAR", ""))
             if tax_year not in VALID_YEARS:
@@ -142,7 +149,7 @@ def load_file(conn, filepath, dry_run=False, county_code=DEFAULT_COUNTY):
             is_delinquent = bool(total_due and total_due > 0.01)
 
             billing_rows.append((
-                county_code, geo_id, tax_year, billing_num, owner_name,
+                county_code, account_id, geo_id, tax_year, billing_num, owner_name,
                 total_tax, total_paid, total_due, is_delinquent, exemptions
             ))
 
@@ -151,7 +158,7 @@ def load_file(conn, filepath, dry_run=False, county_code=DEFAULT_COUNTY):
                 due      = _f(row.get(f"DUE{i}", ""))
                 paid     = _f(row.get(f"PAID{i}", ""))
                 if ent_code and (due or paid):
-                    entity_rows.append((county_code, geo_id, tax_year, ent_code, due, paid))
+                    entity_rows.append((county_code, account_id, geo_id, tax_year, ent_code, due, paid))
 
             if not dry_run and len(billing_rows) >= 3000:
                 with conn.cursor() as cur:
@@ -311,9 +318,17 @@ def main():
 
         print(f"\nPIR billing load complete — {total:,} rows, years: {sorted(all_years)}")
 
-        if not args.dry_run and not args.skip_metrics and all_years:
-            update_coverage_level(conn, all_years)
-            print("\nRun python3 loaders/compute_metrics.py to recompute all derived metrics.")
+        if not args.dry_run and all_years:
+            # TAX-BILLING-REKEY-3: tax_billing/tax_billing_entity are now
+            # pure derived rollups -- roll up before update_coverage_level
+            # reads them (that function JOINs tax_billing directly).
+            for yr in sorted(all_years):
+                result = tax_billing_rollup.run(conn, tax_year=yr)
+                print(f"  tax_billing_rollup ({yr}): {result['tax_billing_rows']:,} tax_billing rows, "
+                      f"{result['tax_billing_entity_rows']:,} tax_billing_entity rows")
+            if not args.skip_metrics:
+                update_coverage_level(conn, all_years)
+                print("\nRun python3 loaders/compute_metrics.py to recompute all derived metrics.")
     finally:
         conn.close()
 

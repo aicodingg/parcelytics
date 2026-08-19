@@ -64,15 +64,27 @@ from loaders.compute_metrics     import (
 )
 from loaders import ingest_gate
 import parcel_rollup
+import tax_billing_rollup
 import config
 
 
 def reset_parcel_tables(conn):
-    """Truncate parcel and parcel_tax_year (and the M2 unit-layer tables) so we can reload cleanly."""
-    print("  Truncating parcel, parcel_tax_year, prop_unit, prop_unit_tax_year, ingest_audit…")
+    """Truncate parcel and parcel_tax_year (and the M2 unit-layer tables) so we can reload cleanly.
+
+    TAX-BILLING-REKEY-3: tax_billing_account/_account_entity/_portal_scrape
+    added -- these are the real, unit-grain ingestion tables now; truncating
+    tax_billing/tax_billing_entity alone (their derived-rollup targets)
+    without also truncating the source tables would leave stale
+    account-grain rows behind for the next load to (harmlessly, since every
+    write is its own ON CONFLICT target) upsert over, but would make a
+    --reset run's row counts misleading.
+    """
+    print("  Truncating parcel, parcel_tax_year, prop_unit, prop_unit_tax_year, "
+          "tax_billing_account(_entity), tax_billing_portal_scrape, ingest_audit…")
     with conn.cursor() as cur:
         cur.execute(
-            "TRUNCATE TABLE tax_billing_entity, tax_billing, tax_delinquent, "
+            "TRUNCATE TABLE tax_billing_account_entity, tax_billing_account, "
+            "tax_billing_portal_scrape, tax_billing_entity, tax_billing, tax_delinquent, "
             "ingest_audit, prop_unit_tax_year, parcel_tax_year, prop_unit, parcel CASCADE"
         )
     conn.commit()
@@ -174,6 +186,14 @@ def main():
     if not args.skip_tax:
         print("\n[7/11] TaxCurOpenData (billing)…")
         load_tax(conn)
+        # TAX-BILLING-REKEY-3: load_tax() (loaders/load_tax_current.py's
+        # load()) now writes tax_billing_account/_account_entity, not
+        # tax_billing/tax_billing_entity directly -- roll up here, since
+        # run_all.py calls load() directly (not that file's own __main__,
+        # which has its own rollup call for standalone runs).
+        rollup_result = tax_billing_rollup.run(conn, tax_year=2025)
+        print(f"  tax_billing_rollup (2025): {rollup_result['tax_billing_rows']:,} tax_billing rows, "
+              f"{rollup_result['tax_billing_entity_rows']:,} tax_billing_entity rows")
         print("\n[8/11] TaxDelqOpenData (delinquent)…")
         load_delinquent(conn)
     else:
@@ -221,6 +241,14 @@ def main():
                 else:
                     print(f"  WARNING: PIR billing file not found: {path}")
             if all_years:
+                # TAX-BILLING-REKEY-3: roll up before update_coverage_level
+                # (JOINs tax_billing directly) -- pir_billing_load_file()
+                # now writes tax_billing_account/_account_entity only.
+                for yr in sorted(all_years):
+                    rollup_result = tax_billing_rollup.run(conn, tax_year=yr)
+                    print(f"  tax_billing_rollup ({yr}): {rollup_result['tax_billing_rows']:,} "
+                          f"tax_billing rows, {rollup_result['tax_billing_entity_rows']:,} "
+                          f"tax_billing_entity rows")
                 update_coverage_level(conn, all_years)
         else:
             print("\n[11/11] PIR billing: no files configured yet — skipping.")

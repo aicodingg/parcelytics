@@ -13,6 +13,22 @@ Data integrity note:
   Stored with data_source='portal_scrape' and confidence_level='partial'.
   Do NOT overwrite rows that have better data (taxcur / pir_billing).
 
+TAX-BILLING-REKEY-3 (§7.3 design (a)): this loader now writes
+tax_billing_portal_scrape, NOT tax_billing directly. Real, live-confirmed
+finding this design is built on (fetch_html() run against 0259410216, the
+largest known collision group at 1,210 sub-accounts): the county portal
+exposes NO distinct real sub-account numbers anywhere on the page it
+returns for a given geo_id -- the only 14-digit number found anywhere on
+the page is the synthetic geo_id+"0000" account used to REQUEST the page
+itself. This source has no account-number field to re-key against at all,
+so unlike the four PARCEL/TXACCNUM-keyed writers, it keeps writing at
+geo_id grain -- just to its own real, separate table now, so its genuinely
+weaker/different-grain data can never again be silently commingled with
+tax_billing_account's real per-account data in one shared table.
+tax_billing_rollup.py reads tax_billing_portal_scrape and merges it into
+tax_billing on top of the account-grain rollup, per an account-always-wins
+policy -- see that module's own docstring.
+
 Rate limit:  0.5–1.0 s between requests — single-threaded, polite scraping only.
 Checkpoint:  writes loaders/.scrape_checkpoint.json every 1,000 parcels.
 
@@ -158,7 +174,17 @@ def parse_receipts(html: str) -> list[dict]:
 
 # ── database ──────────────────────────────────────────────────────────────────
 
-# Add data_source and confidence_level columns if they don't exist yet
+# TAX-BILLING-REKEY-3: tax_billing_portal_scrape already carries
+# data_source/confidence_level from its own CREATE TABLE (schema.sql) --
+# this ALTER TABLE against tax_billing is retained only as a defensive
+# no-op safety net for any environment whose schema.sql hasn't been
+# reapplied yet (mirrors the same "CREATE TABLE IF NOT EXISTS defensively
+# at several real call sites" discipline tax_billing_quarantine's own
+# comment documents). tax_billing itself no longer needs these columns
+# ALTERed by this loader specifically -- they were added here originally
+# because this was, pre-rekey, the first writer to need them; that
+# historical reason no longer applies, but the ALTER is harmless to leave
+# as a defensive default.
 _ENSURE_COLS_SQL = """
 ALTER TABLE tax_billing
     ADD COLUMN IF NOT EXISTS data_source      VARCHAR(32),
@@ -183,21 +209,27 @@ ALTER TABLE tax_billing
 # this the moment DALLAS-GATE-1's migration landed on production, until now.
 DEFAULT_COUNTY = "TRAVIS"  # matches parcel_resolver.py's own DEFAULT_COUNTY convention
 
-# Upsert: insert or update ONLY if the existing row has no better data source.
-# Rows loaded from 'taxcur' or 'pir_billing' are preserved as-is.
+# TAX-BILLING-REKEY-3 (§7.3 design (a)): retargeted from tax_billing to
+# tax_billing_portal_scrape -- its own real, separate table, since the
+# portal has no account-number field to re-key against at all (confirmed
+# live, see module docstring). Unconditional upsert here (no WHERE guard):
+# this table is exclusively this loader's own write path now, so there is
+# no other, better-quality writer for it to protect itself against --
+# unlike the old tax_billing target, which also received real
+# taxcur/pir_billing rows this loader had to avoid clobbering. That
+# protection now lives in tax_billing_rollup.py's own PORTAL_MERGE_SQL
+# (account-grain rollup always wins over a portal_scrape row for the same
+# key) instead of here.
 _UPSERT_SQL = """
-INSERT INTO tax_billing
-    (county_code, geo_id, tax_year, total_tax, total_paid, data_source, confidence_level)
+INSERT INTO tax_billing_portal_scrape
+    (county_code, geo_id, tax_year, total_paid, data_source, confidence_level)
 VALUES
-    (%(county_code)s, %(geo_id)s, %(tax_year)s, %(total_tax)s, %(total_paid)s,
+    (%(county_code)s, %(geo_id)s, %(tax_year)s, %(total_paid)s,
      'portal_scrape', 'partial')
 ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE
-    SET total_tax         = EXCLUDED.total_tax,
-        total_paid        = EXCLUDED.total_paid,
+    SET total_paid        = EXCLUDED.total_paid,
         data_source       = EXCLUDED.data_source,
         confidence_level  = EXCLUDED.confidence_level
-    WHERE (tax_billing.data_source IS NULL
-        OR tax_billing.data_source = 'portal_scrape')
 """
 
 
@@ -302,6 +334,15 @@ def upsert_billing_rows(conn, records: list[dict]) -> int:
     own CLI batch loop below, and app.py's api_billing() route) were updated
     to supply it. Records missing the key will raise a KeyError from
     execute_batch before anything is written, not silently skip the column.
+
+    TAX-BILLING-REKEY-3: writes tax_billing_portal_scrape now, not
+    tax_billing directly -- see _UPSERT_SQL's own comment and the module
+    docstring. Records no longer need a "total_tax" key (portal_scrape has
+    no total_tax column -- it's a real, separate figure only
+    tax_billing_account/tax_billing carries); an extra "total_tax" key in a
+    caller's record dict is harmless (ignored by execute_batch, since
+    _UPSERT_SQL no longer references %(total_tax)s) but no longer
+    necessary.
     """
     if not records:
         return 0
@@ -649,7 +690,6 @@ def main() -> None:
                 {
                     "geo_id":    geo_id,
                     "tax_year":  r["tax_year"],
-                    "total_tax": r["payment_amount"],
                     "total_paid": r["payment_amount"],
                     "county_code": args.county,
                 }

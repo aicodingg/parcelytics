@@ -17,6 +17,18 @@ Columns (confirmed from inspection):
 
 The PARCEL field is the 14-digit tax office account. To join to TCAD geo_id:
   geo_id = PARCEL[:10].strip()  (the 14-digit = 10-char geo_id + '0000')
+
+TAX-BILLING-REKEY-3: this loader now writes tax_billing_account /
+tax_billing_account_entity (the real per-account grain, keyed by the full
+PARCEL value, which was previously parsed into raw_parcel and then
+discarded once geo_id was derived from it) instead of writing
+tax_billing/tax_billing_entity directly. tax_billing/tax_billing_entity are
+now pure derived-rollup tables, written ONLY by tax_billing_rollup.py -- see
+that module's docstring for why (this is the fix for the real, measured
+$5,794,968.90/$170,061,400.28-a-year loss the old geo_id-keyed
+last-write-wins upsert caused whenever more than one real taxing account
+shared a geo_id). __main__ below calls tax_billing_rollup.run() once the
+account-grain rows are written.
 """
 import argparse
 import csv
@@ -34,6 +46,7 @@ from loaders.db import get_conn, execute_schema
 # scrape_billing_history.py already established (DALLAS-GATE-2), single
 # source of truth rather than a second, independent "TRAVIS" constant.
 from loaders.scrape_billing_history import ensure_columns as ensure_billing_cols, DEFAULT_COUNTY
+import tax_billing_rollup
 
 import psycopg2.extras
 
@@ -131,18 +144,18 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
                 "new_only=True requires a DB connection (to fetch already-tagged "
                 "keys) even in dry-run mode -- pass a real conn, or drop new_only."
             )
-        print("  --new-only: fetching existing tagged (geo_id, tax_year) keys "
+        print("  --new-only: fetching existing tagged (account_id, tax_year) keys "
               "(read-only SELECT, no writes)…")
         with conn.cursor() as cur:
             # DALLAS-GATE-4: county_code added -- this loader writes ONE
             # county per invocation (county_code param), so scoping the
             # already-tagged lookup to that same county is real, forward-
-            # looking correctness (a bare geo_id/tax_year key could
-            # otherwise wrongly skip/not-skip a row based on another
-            # county's already-tagged state once geo_ids can collide
-            # across counties).
+            # looking correctness. TAX-BILLING-REKEY-3: keyed by account_id
+            # now, not geo_id -- tax_billing_account is the real ingestion-
+            # grain table post-rekey; tax_billing itself is a derived
+            # rollup and no longer the source of truth for "already loaded."
             cur.execute(
-                "SELECT geo_id, tax_year FROM tax_billing "
+                "SELECT account_id, tax_year FROM tax_billing_account "
                 "WHERE tax_year = 2025 AND data_source IS NOT NULL AND county_code = %s",
                 (county_code,)
             )
@@ -165,14 +178,23 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
     # current-year billing loader, the most heavily-used of the 5 fixed this
     # round. Same real fix pattern as scrape_billing_history.py's own
     # _UPSERT_SQL (DALLAS-GATE-2), mirrored here (DALLAS-GATE-3/-4).
+    # TAX-BILLING-REKEY-3: retargeted from tax_billing/tax_billing_entity to
+    # tax_billing_account/tax_billing_account_entity, keyed by the real,
+    # full account_id (raw_parcel -- previously parsed then discarded once
+    # geo_id was derived from it, see the loop below). No ON CONFLICT
+    # collision is possible at this grain -- every real account gets its
+    # own row, by construction -- which is what actually stops the real,
+    # measured $170M/$5.8M-a-year loss the old geo_id-keyed upsert caused.
+    # tax_billing/tax_billing_entity are populated separately, from this
+    # table, by tax_billing_rollup.py (called in __main__ below).
     billing_sql = """
-        INSERT INTO tax_billing
-            (county_code, geo_id, tax_year, billing_num, owner_name,
+        INSERT INTO tax_billing_account
+            (county_code, account_id, geo_id, tax_year, billing_num, owner_name,
              total_tax, total_paid, total_due,
              is_delinquent, exemption_codes,
              data_source, confidence_level)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, account_id, tax_year) DO UPDATE
             SET billing_num   = EXCLUDED.billing_num,
                 owner_name    = EXCLUDED.owner_name,
                 total_tax     = EXCLUDED.total_tax,
@@ -185,9 +207,10 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
     """
 
     entity_sql = """
-        INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE
+        INSERT INTO tax_billing_account_entity
+            (county_code, account_id, geo_id, tax_year, entity_code, amount_due, amount_paid)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, account_id, tax_year, entity_code) DO UPDATE
             SET amount_due  = EXCLUDED.amount_due,
                 amount_paid = EXCLUDED.amount_paid
     """
@@ -243,12 +266,16 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
                 max_entity = max(max_entity, int(h[6:]))
 
         for lineno, row in enumerate(reader, 1):
-            # Derive geo_id: first 10 chars of the 14-digit PARCEL field
+            # Derive geo_id: first 10 chars of the 14-digit PARCEL field.
+            # TAX-BILLING-REKEY-3: raw_parcel is no longer discarded after
+            # this -- it becomes account_id, the real per-account key
+            # tax_billing_account/_entity are keyed by below.
             raw_parcel = row.get("PARCEL", "").strip().strip('"')
             geo_id = raw_parcel[:10].strip() if raw_parcel else None
             if not geo_id:
                 n_skipped_no_parcel += 1
                 continue
+            account_id = raw_parcel
 
             tax_year = _i(row.get("TAXYEAR", ""))
 
@@ -261,7 +288,7 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
                 n_skipped_wrong_year += 1
                 continue
 
-            if already_tagged_keys is not None and (geo_id, tax_year) in already_tagged_keys:
+            if already_tagged_keys is not None and (account_id, tax_year) in already_tagged_keys:
                 n_skipped_already_tagged += 1
                 continue
 
@@ -288,7 +315,7 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
                 paid     = _f(row.get(f"PAID{i}", ""))
                 if ent_code and (due or paid):
                     row_entities.append((ent_code, due, paid))
-                    entity_rows.append((county_code, geo_id, tax_year, ent_code, due, paid))
+                    entity_rows.append((county_code, account_id, geo_id, tax_year, ent_code, due, paid))
 
             # Confidence tagging + total_tax correction, computed once here
             # instead of re-derived by every reader (app.py's property_detail(),
@@ -313,10 +340,15 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
             # Last-occurrence-in-file-order wins, same as Postgres's own
             # ON CONFLICT DO UPDATE across this loader's sequential,
             # file-order batches -- see final_by_key's declaration above.
-            final_by_key[(geo_id, tax_year)] = confidence_level
+            # TAX-BILLING-REKEY-3: keyed by (account_id, tax_year), not
+            # (geo_id, tax_year) -- a real collision here now only means the
+            # SAME account appeared twice in the source file (a genuine
+            # duplicate row), never "two different accounts share a
+            # geo_id" (that's no longer a collision at all, by design).
+            final_by_key[(account_id, tax_year)] = confidence_level
 
             billing_rows.append((
-                county_code, geo_id, tax_year, billing_num, owner_name,
+                county_code, account_id, geo_id, tax_year, billing_num, owner_name,
                 total_tax, total_tax,  # total_paid ≈ total_tax if not delinquent
                 total_due, is_delinquent, exemptions,
                 DATA_SOURCE, confidence_level
@@ -379,9 +411,9 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
     print(f"    RAW confidence tally (per source row -- inflated by any duplicate "
           f"(geo_id, tax_year) rows in the source file):")
     print(f"      verified={n_verified:,}  derived={n_derived:,}  no_usable_total={n_no_usable_total:,}")
-    print(f"    DISTINCT (geo_id, tax_year) keys -- what would ACTUALLY exist in "
-          f"tax_billing after a real load, this is the number to compare against "
-          f"the live table's row count:")
+    print(f"    DISTINCT (account_id, tax_year) keys -- what would ACTUALLY exist in "
+          f"tax_billing_account after a real load (tax_billing itself is now a "
+          f"derived rollup -- see tax_billing_rollup.py):")
     print(f"      {n_distinct_keys:,} distinct keys "
           f"({n_duplicate_key_rows:,} raw rows were duplicates of an already-seen key)")
     print(f"      verified={final_verified:,}  derived={final_derived:,}  no_usable_total={final_none:,}")
@@ -468,5 +500,14 @@ if __name__ == "__main__":
         execute_schema(conn)
         ensure_billing_cols(conn)  # adds data_source/confidence_level if not already present
         load(conn, new_only=args.new_only, county_code=args.county)
+        # TAX-BILLING-REKEY-3: tax_billing/tax_billing_entity are now pure
+        # derived rollups -- roll up the account-grain rows this run just
+        # wrote (or left in place, for --new-only) before this loader exits,
+        # same as run_all.py's own post-loaders rollup step.
+        result = tax_billing_rollup.run(conn, tax_year=EXPECTED_TAX_YEAR)
+        print(f"  tax_billing_rollup: {result['tax_billing_rows']:,} tax_billing rows, "
+              f"{result['tax_billing_entity_rows']:,} tax_billing_entity rows, "
+              f"{result['portal_scrape_merged_rows']:,} portal_scrape rows merged "
+              f"(tax_year={EXPECTED_TAX_YEAR})")
         load_delinquent(conn)
         conn.close()

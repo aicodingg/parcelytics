@@ -268,11 +268,23 @@ check("run_cli()'s write_to_db() call passes county_code=args.county",
       "county_code=args.county)" in src and "write_to_db(conn, matched, tax_year, data_source, confidence_level," in src)
 check("run_cli()'s verify_sanity_parcels() call passes county_code=args.county",
       "verify_sanity_parcels(conn, tax_year, sanity_expected, county_code=args.county)" in src)
-check("reconcile_geo_ids() deliberately left untouched (matches DALLAS-GATE-4's own "
+# UPDATE (TAX-BILLING-REKEY-3): reconcile_geo_ids()'s own county-code
+# scoping question below is unaffected by that migration (it's still an
+# identity-existence check against `parcel`, not a billing-grain write --
+# same reasoning as when this check was first written). Its PARAMETER
+# NAME changed as a real, intentional, disclosed consequence of that
+# migration though: pir_xlsx_common.py retired its old by-geo_id
+# TXACCNUM-sum-and-collapse step (the exact last-write-wins collision
+# mechanism the rekey exists to eliminate) in favor of per-account
+# handling, so the function now takes `by_account`, not `by_geo`. This
+# assertion is updated to match the real, current signature rather than
+# left silently stale against a parameter name that no longer exists.
+check("reconcile_geo_ids() deliberately left unscoped by county_code (matches DALLAS-GATE-4's own "
       "precedent: load_pir_billing_2021_full.py's identical function was not scoped "
       "by county_code either -- an identity-existence check against the full `parcel` "
-      "table, not a billing-grain write, same real reasoning both places)",
-      "SELECT geo_id FROM parcel" in src and "def reconcile_geo_ids(conn, by_geo):" in src)
+      "table, not a billing-grain write, same real reasoning both places; signature's "
+      "by_geo -> by_account rename is TAX-BILLING-REKEY-3's own real, disclosed change)",
+      "SELECT geo_id FROM parcel" in src and "def reconcile_geo_ids(conn, by_account):" in src)
 
 
 # ─────────────────────────────────────────────────────────────────────────
