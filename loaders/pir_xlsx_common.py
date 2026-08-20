@@ -328,6 +328,37 @@ def extract_entities(row):
     return out
 
 
+# TAX-BILLING-REKEY-4 (urgent fix, found during live M7 backfill against the
+# real 2022 source file): identical bug and identical fix as
+# load_pir_billing_2021_full.py's own _sum_entities() -- see that function's
+# docstring for the full rationale (entities is extract_entities()'s own
+# LIST-of-tuples shape from parse time through to write/report time;
+# TAX-BILLING-REKEY-3 retired the old by_geo[geo_id][code]-DICT this module
+# used to build, but check_portal_scrape_divergence()/write_to_db()/
+# write_review_log()/the dry-run preview here were never updated to stop
+# calling .values()/.items() against it). Confirmed live:
+# AttributeError: 'list' object has no attribute 'values', raised from
+# check_portal_scrape_divergence() against the real 2022 file
+# (DiegoPIR2022.xlsx). Duplicated here rather than imported from
+# load_pir_billing_2021_full.py -- these two files already keep parallel,
+# independently-maintained copies of extract_entities() and every other
+# shared-shape helper (that file predates this shared module, per its own
+# docstring), so this follows the same existing convention rather than
+# introducing a new cross-file dependency.
+def _sum_entities(entities):
+    """entities: [(code, due, paid), ...] (extract_entities()'s own shape).
+    Returns {code: {"due": float, "paid": float}}, summing same-code slots
+    (a single account's TXENTCOD1..TXENTCOD10 slots can repeat the same
+    entity_code -- write_to_db()'s ENTITY_SQL upsert needs one row per
+    distinct code, not one row per slot)."""
+    out = {}
+    for code, due, paid in entities:
+        agg = out.setdefault(code, {"due": 0.0, "paid": 0.0})
+        agg["due"] += due
+        agg["paid"] += paid
+    return out
+
+
 def _cluster_by_similarity(occurrences, tolerance=1.00):
     """occurrences: [(row_no, total, entities), ...] all belonging to one
     TXACCNUM. Single-linkage cluster by total-amount similarity. Unchanged
@@ -533,6 +564,34 @@ ENTITY_SQL = """
 """
 
 
+def _compute_new_totals_by_geo(matched):
+    """TAX-BILLING-REKEY-4: pure extraction of check_portal_scrape_divergence()'s
+    totals-by-geo computation, so it can be fixture-tested without a live DB
+    connection (mirrors _build_billing_and_entity_rows() in
+    load_pir_billing_2021_full.py, done for the same reason: this exact
+    computation's DB-coupled predecessor is what silently carried the
+    'list' object has no attribute 'values' bug past sandbox testing and
+    into a live crash -- see AttributeError against the old dict-style
+    accessor on `entities` at this call site, confirmed live by Diego,
+    tax years 2021 and 2022).
+
+    matched: {account_id: (total, entities, geo_id), ...} -- entities is
+    extract_entities()'s raw [(code, due, paid), ...] list, unchanged by
+    TAX-BILLING-REKEY-3's account-grain restructuring (only the outer
+    matched/by_account container shape changed; entities itself was always
+    a flat tuple list, never a dict).
+
+    Returns {geo_id: summed_total_due, ...}, summing every matched
+    account's total due for accounts sharing a geo_id -- a live Python
+    preview of what tax_billing_rollup.py will later compute in Postgres.
+    """
+    new_totals_by_geo = {}
+    for account_id, (total, entities, geo_id) in matched.items():
+        new_totals_by_geo.setdefault(geo_id, 0.0)
+        new_totals_by_geo[geo_id] += sum(due for code, due, paid in entities)
+    return new_totals_by_geo
+
+
 def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00, county_code=DEFAULT_COUNTY):
     """DESIGN NOTE (per Diego's build brief, judgment call flagged): before
     this loader's unconditional upsert overwrites tax_billing for a
@@ -578,10 +637,7 @@ def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00, coun
     function always made, just computed from the new account-grain input
     shape instead of an already-summed one.
     """
-    new_totals_by_geo = {}
-    for account_id, (total, entities, geo_id) in matched.items():
-        new_totals_by_geo.setdefault(geo_id, 0.0)
-        new_totals_by_geo[geo_id] += sum(v["due"] for v in entities.values())
+    new_totals_by_geo = _compute_new_totals_by_geo(matched)
 
     geo_ids = list(new_totals_by_geo.keys())
     if not geo_ids:
@@ -611,28 +667,63 @@ def check_portal_scrape_divergence(conn, matched, tax_year, tolerance=1.00, coun
     return divergences
 
 
-def write_to_db(conn, matched, tax_year, data_source, confidence_level, county_code=DEFAULT_COUNTY):
-    """matched: {account_id: (total, entities, geo_id)} -- one row per real
-    account, no summing (TAX-BILLING-REKEY-3, see load_and_aggregate's
-    retired Tier 2)."""
-    from loaders.db import batch_upsert
+def _build_billing_and_entity_rows(matched, tax_year, data_source, confidence_level, county_code=DEFAULT_COUNTY):
+    """TAX-BILLING-REKEY-4: pure extraction of write_to_db()'s row-building
+    logic, so it can be fixture-tested without a live DB connection (mirrors
+    load_pir_billing_2021_full.py's own _build_billing_and_entity_rows(),
+    added for the same file/reason there). This is the REAL WRITE PATH --
+    the same list-vs-dict shape bug that crashed check_portal_scrape_
+    divergence() and write_review_log() live was present here too, just not
+    yet exercised live because this runs after those two in run_cli()'s
+    ordering.
+
+    matched: {account_id: (total, entities, geo_id)} -- one row per real
+    account, no summing across accounts (TAX-BILLING-REKEY-3, see
+    load_and_aggregate's retired Tier 2). entities is extract_entities()'s
+    raw [(code, due, paid), ...] list; same-entity-code slots within one
+    account are grouped/summed via _sum_entities(), not flattened, since a
+    single account's TXENTCOD1..TXENTCOD10 slots can legitimately repeat a
+    code (the old dict-based +=-accumulating code anticipated this) and
+    ENTITY_SQL's ON CONFLICT key is (county_code, account_id, tax_year,
+    entity_code) -- feeding duplicate-key rows in one batch risks either a
+    Postgres "cannot affect row a second time" error or a silent last-
+    slot-wins undercount.
+
+    Returns (billing_rows, entity_rows) -- lists of dicts ready for
+    batch_upsert() against BILLING_SQL / ENTITY_SQL.
+    """
     billing_rows = []
     entity_rows = []
     for account_id, (total, entities, geo_id) in matched.items():
-        total_due = sum(v["due"] for v in entities.values())
-        total_paid = sum(v["paid"] for v in entities.values())
+        # TAX-BILLING-REKEY-4: entities is [(code, due, paid), ...] -- see
+        # _sum_entities()'s own docstring.
+        total_due = sum(due for code, due, paid in entities)
+        total_paid = sum(paid for code, due, paid in entities)
         billing_rows.append({
             "county_code": county_code, "account_id": account_id, "geo_id": geo_id,
             "tax_year": tax_year,
             "total_tax": round(total_due, 2), "total_paid": round(total_paid, 2),
             "data_source": data_source, "confidence_level": confidence_level,
         })
-        for code, v in entities.items():
+        for code, v in _sum_entities(entities).items():
             entity_rows.append({
                 "county_code": county_code, "account_id": account_id, "geo_id": geo_id,
                 "tax_year": tax_year, "entity_code": code,
                 "amount_due": round(v["due"], 2), "amount_paid": round(v["paid"], 2),
             })
+    return billing_rows, entity_rows
+
+
+def write_to_db(conn, matched, tax_year, data_source, confidence_level, county_code=DEFAULT_COUNTY):
+    """matched: {account_id: (total, entities, geo_id)} -- one row per real
+    account, no summing (TAX-BILLING-REKEY-3, see load_and_aggregate's
+    retired Tier 2). Row-building logic lives in the pure
+    _build_billing_and_entity_rows() above (TAX-BILLING-REKEY-4) so it can
+    be fixture-tested without a live DB connection; this wrapper just calls
+    it and upserts."""
+    from loaders.db import batch_upsert
+    billing_rows, entity_rows = _build_billing_and_entity_rows(
+        matched, tax_year, data_source, confidence_level, county_code=county_code)
 
     n_billing = batch_upsert(conn, BILLING_SQL, billing_rows)
     n_entity = batch_upsert(conn, ENTITY_SQL, entity_rows)
@@ -689,7 +780,8 @@ def write_review_log(dup_review_rows, unmatched, divergences, path):
         w.writerow(["=== accounts in file whose geo_id has no match in parcel table ===", "", "", "", "", ""])
         w.writerow(["account_id", "geo_id", "n_entities_billed", "total_due", "", ""])
         for account_id, (total, entities, geo_id) in sorted(unmatched.items()):
-            total_due = sum(v["due"] for v in entities.values())
+            # TAX-BILLING-REKEY-4: entities is [(code, due, paid), ...]
+            total_due = sum(due for code, due, paid in entities)
             w.writerow([account_id, geo_id, len(entities), f"{total_due:.2f}", "", ""])
         w.writerow(["=== prior portal_scrape total diverged from new PIR total "
                      "(old figure preserved here, not silently discarded) ===",
@@ -820,8 +912,9 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
         print(f"    review log written: {review_path}")
 
         if args.dry_run:
+            # TAX-BILLING-REKEY-4: entities is [(code, due, paid), ...]
             total_due_all = sum(
-                sum(e["due"] for e in entities.values())
+                sum(due for code, due, paid in entities)
                 for total, entities, geo_id in matched.values()
             )
             print(f"\n  DRY RUN -- would write {len(matched):,} tax_billing_account rows, "
@@ -831,7 +924,7 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
             by_geo_preview = {}
             for account_id, (total, entities, geo_id) in matched.items():
                 by_geo_preview.setdefault(geo_id, 0.0)
-                by_geo_preview[geo_id] += sum(e["due"] for e in entities.values())
+                by_geo_preview[geo_id] += sum(due for code, due, paid in entities)
             for geo_id, exp in sanity_expected.items():
                 total = by_geo_preview.get(geo_id)
                 if exp is None:
