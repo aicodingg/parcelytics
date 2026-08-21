@@ -39,9 +39,20 @@ import tempfile
 import types
 
 # ── point to the app source ──────────────────────────────────────────────────
-APP_DIR = os.path.join(os.path.dirname(__file__), "..",
-                       "mnt", "Claude Files", "parcel_app")
-sys.path.insert(0, APP_DIR)
+# FILE-ARCH-2: the previous path here (dirname(__file__)/../mnt/Claude Files/
+# parcel_app) was a bogus, nonexistent fragment -- it looks like a leftover
+# artifact from a prior session that accidentally baked its own sandbox
+# mount path (mnt/Claude Files/parcel_app) into committed code, rather than
+# pointing at the real repo root. Confirmed broken independent of this
+# migration: running this file directly raised
+# "ModuleNotFoundError: No module named 'config'" before this fix, since the
+# real repo root never actually landed on sys.path. Fixed to the same,
+# real, established convention every other loader/test file in this repo
+# uses (e.g. loaders/test_ingest_gate.py, loaders/db.py) -- a purely
+# relative path to this file's own parent directory, with no dependency on
+# "Claude Files" or any external data root at all, so it remains correct
+# both before and after the physical data/code reorganization.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 PASS = "\033[92m✓\033[0m"
 FAIL = "\033[91m✗\033[0m"

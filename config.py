@@ -49,39 +49,110 @@ DATABASE_URL = _database_url or (
 # database identity being a silent, easy-to-forget implementation detail.
 DB_SOURCE = "env:DATABASE_URL" if _database_url else "local-fallback-defaults"
 
-# ── Data files ────────────────────────────────────────────────────────────────
-DATA_DIR = os.environ.get(
-    "DATA_DIR",
-    os.path.expanduser("~/Desktop/Claude Files")
+# ── Data files (FILE-ARCH-2, Aug 21 2026) ───────────────────────────────────
+# Real, structural change: the old DATA_DIR pointed at a single flat folder
+# (~/Desktop/Claude Files) holding the git repo AND every raw data file
+# loose, side by side -- the exact anti-pattern FILE-ARCH-1/Fable's review
+# named and FILE-ARCH-2 physically corrects. The new real, approved layout
+# (see that brief) is a dedicated ~/Parcelytics/ root, external to the repo
+# entirely, with data organized as:
+#     data/<county>/<source_slug>/{current, archive/<vintage>, canary}
+# where <source_slug> must match that county's real Source Registry row
+# 1:1 -- a folder without a registry row, or a row without a folder, is
+# meant to be a visible, checkable anomaly, not silently reconciled.
+#
+# PARCELYTICS_DATA_ROOT replaces DATA_DIR as the one real env-var-
+# overridable root, defaulting to the new location. Every county/source
+# path below is derived from root + registry slug via the two small
+# helpers below -- one real path convention, so a future move (or a
+# sandbox/local split) is a config change here, not another migration.
+PARCELYTICS_DATA_ROOT = os.environ.get(
+    "PARCELYTICS_DATA_ROOT",
+    os.path.expanduser("~/Parcelytics/data")
 )
 
+# Back-compat alias: DATA_DIR is deliberately NOT kept pointed at the old
+# location -- any real caller still reading DATA_DIR directly (rather than
+# the slug-based paths below) is exactly the kind of untracked reference
+# FILE-ARCH-2's own Step 1 enumeration exists to catch. Kept only as an
+# equality alias so a missed reference fails by pointing at the new (empty,
+# at least until Diego's own manual data move finishes) location instead of
+# silently resolving against the retired folder.
+DATA_DIR = PARCELYTICS_DATA_ROOT
+
+
+def _county_source(county, slug, *parts):
+    """Real, single path-construction helper -- every county/source path in
+    this file goes through this or _travis() below, never a hand-built
+    os.path.join(DATA_DIR, ...) again. `slug` must match that county's own
+    real Source Registry row (see FILE-ARCH-2's own binding rule)."""
+    return os.path.join(PARCELYTICS_DATA_ROOT, county, slug, *parts)
+
+
+def _travis(slug, *parts):
+    return _county_source("travis", slug, *parts)
+
+
+# Real Travis source_slugs, derived from Travis's own Source Registry entry
+# (4 real rows: CAD certified appraisal export, CAD preliminary appraisal
+# export, Tax office billing data, Adopted tax rates) -- no separate
+# Registry row exists for AJR specifically, so the 2021-2024 AJR/EARS
+# files (the real, historical stand-in used before the full certified
+# export pipeline covered those years) nest under certified_roll, the same
+# registry row, rather than inventing an unregistered "ajr" slug.
+#
+# Real, honest disclosure: the actual multi-GB certified/preliminary
+# export folders (2022-2026) do not currently exist in this connected
+# folder or anywhere this session can reach -- Diego confirmed they live
+# externally and will move them into the archive/<year> folders below
+# himself. The paths are written now, against the real destination
+# layout, so no second config edit is needed once that move happens.
 AJR_FILES = {
-    2021: os.path.join(DATA_DIR, "2021EARS092521/20210925_000416_PTD.csv"),
-    2022: os.path.join(DATA_DIR, "227EARS092822 (2)/extracted/227EARS092822.csv"),
-    2023: os.path.join(DATA_DIR, "227EARS082923 (2)/extracted/227EARS083023.csv"),
-    2024: os.path.join(DATA_DIR, "227EARS082824 (2)/ears_extracted/227EARS082824.csv"),
+    2021: _travis("certified_roll", "archive", "2021", "20210925_000416_PTD.csv"),
+    2022: _travis("certified_roll", "archive", "2022", "extracted", "227EARS092822.csv"),
+    2023: _travis("certified_roll", "archive", "2023", "extracted", "227EARS083023.csv"),
+    2024: _travis("certified_roll", "archive", "2024", "ears_extracted", "227EARS082824.csv"),
     # 2025 AJR is intentionally omitted — use Certified Export instead
 }
 
-CERT_DIR      = os.path.join(DATA_DIR, "2025 Certified Appraisal Export Supp 0_07202025")
-CERT_DIR_2022 = os.path.join(DATA_DIR, "2022_Certified_Export")
-CERT_DIR_2023 = os.path.join(DATA_DIR, "2023_Certified_Export")
-CERT_DIR_2024 = os.path.join(DATA_DIR, "2024_Certified_Export")
-CERT_DIR_2026 = os.path.join(DATA_DIR, "2026_Certified_Export")
-PRELIM_2026_DIR = os.path.join(DATA_DIR, "2026 Preliminary Appraisal Export Supp 0_06092026 (1)")
+CERT_2021_PDF = _travis("certified_roll", "archive", "2021",
+                         "2021 CERTIFIED APPRAISAL ROLL as of Supp 0_GEO.pdf")
+
+CERT_DIR      = _travis("certified_roll", "archive", "2025")
+CERT_DIR_2022 = _travis("certified_roll", "archive", "2022")
+CERT_DIR_2023 = _travis("certified_roll", "archive", "2023")
+CERT_DIR_2024 = _travis("certified_roll", "archive", "2024")
+CERT_DIR_2026 = _travis("certified_roll", "archive", "2026")
+PRELIM_2026_DIR = _travis("preliminary_roll", "archive", "2026")
 
 # ── Raw Vault (DATA_LIFECYCLE.md Stage 0 / Phase 1 backfill, Aug 2026) ──────
 # vault/{county}/{year}/{source}/{date}/ per the lifecycle doc's own
-# convention. Colocated with DATA_DIR (same disk as the source files today)
-# rather than inside the parcel_app git repo -- see vault_backfill.py's
-# module docstring for why raw, multi-GB source exports do not belong in a
-# git-tracked source repo. Meant to eventually also live at an offsite
-# backup location (DATA_LIFECYCLE.md Stage 0: "local plus the offsite
-# backup location") -- that second copy is not built by this brief.
-VAULT_DIR = os.path.join(DATA_DIR, "vault")
-TAX_CUR_CSV  = os.path.join(DATA_DIR, "TaxCurOpenData (1).csv")
-TAX_DELQ_CSV = os.path.join(DATA_DIR, "TaxDelqOpenData.csv")
-TAX_RATES_XL = os.path.join(DATA_DIR, "2025RatesHistory1990-2025.xlsx")
+# convention. Real, honest disclosure: FILE-ARCH-1/2's own approved
+# structure does not name a location for the Vault at all -- it predates
+# that brief. Placed here at data/_vault/ (a sibling of the per-county
+# folders, not nested inside any one county/source_slug, since the Vault's
+# own convention is already county/source-scoped one level down) as a
+# reasonable extension of the same root, NOT a Fable-confirmed placement --
+# flag for Diego/Fable to confirm or relocate, same as any other real,
+# undecided judgment call in this file.
+VAULT_DIR = os.path.join(PARCELYTICS_DATA_ROOT, "_vault")
+TAX_CUR_CSV  = _travis("tax_billing", "current", "TaxCurOpenData (1).csv")
+TAX_DELQ_CSV = _travis("tax_billing", "current", "TaxDelqOpenData.csv")
+TAX_RATES_XL = _travis("rates", "current", "2025RatesHistory1990-2025.xlsx")
+
+# Real, single source of truth for the 4 real Travis PIR billing xlsx
+# files (2021 Revised + 2022/2023/2024) -- previously each of
+# load_pir_billing_2022.py / _2023.py / _2024.py and
+# check_geo_ids_in_pir_source.py independently hardcoded their own
+# DATA_DIR-relative join (a real Step 1 finding, beyond config.py's own
+# already-known line). All 4 real call sites now import and read this dict
+# instead, so a future move touches this one dict, not 4 separate files.
+PIR_BILLING_XLSX = {
+    2021: _travis("tax_billing", "archive", "2021", "DiegoPIR2021 Revised.xlsx"),
+    2022: _travis("tax_billing", "archive", "2022", "DiegoPIR2022.xlsx"),
+    2023: _travis("tax_billing", "archive", "2023", "DiegoPIR2023.xlsx"),
+    2024: _travis("tax_billing", "archive", "2024", "DiegoPIR2024.xlsx"),
+}
 
 # ── PIR / Open Records Requests ──────────────────────────────────────────────
 # Populate these when files arrive, then run:
@@ -92,10 +163,10 @@ TAX_RATES_XL = os.path.join(DATA_DIR, "2025RatesHistory1990-2025.xlsx")
 #
 # TCAD PIR Ref. R010172-062126: taxable_value, land_value, imprv_value for 2021–2024
 PIR_TCAD_FILES = {
-    # 2021: os.path.join(DATA_DIR, "pir_tcad_2021.csv"),
-    # 2022: os.path.join(DATA_DIR, "pir_tcad_2022.csv"),
-    # 2023: os.path.join(DATA_DIR, "pir_tcad_2023.csv"),
-    # 2024: os.path.join(DATA_DIR, "pir_tcad_2024.csv"),
+    # 2021: _travis("tax_billing", "archive", "2021", "pir_tcad_2021.csv"),
+    # 2022: _travis("tax_billing", "archive", "2022", "pir_tcad_2022.csv"),
+    # 2023: _travis("tax_billing", "archive", "2023", "pir_tcad_2023.csv"),
+    # 2024: _travis("tax_billing", "archive", "2024", "pir_tcad_2024.csv"),
 }
 
 # Travis County Tax Office 2021 PIR response, full per-entity export (received
@@ -107,16 +178,16 @@ PIR_TCAD_FILES = {
 # column layout is completely different. See that script's module docstring
 # for the full investigation writeup (geo_id mapping, duplicate-account
 # handling, field semantics) before touching this loader.
-PIR_2021_FULL_XLSX = os.path.join(DATA_DIR, "DiegoPIR2021 Revised.xlsx")
+PIR_2021_FULL_XLSX = PIR_BILLING_XLSX[2021]
 
 # Travis County Tax Office (sent Jun 21 2026): historical billing for 2021–2024
 # Each file is expected to be TaxCurOpenData-format with TAXYEAR column present.
 # If the office sends one multi-year file instead, list it once with any key (e.g. 0).
 PIR_BILLING_FILES = {
-    # 2021: os.path.join(DATA_DIR, "TaxCurOpenData_2021.csv"),
-    # 2022: os.path.join(DATA_DIR, "TaxCurOpenData_2022.csv"),
-    # 2023: os.path.join(DATA_DIR, "TaxCurOpenData_2023.csv"),
-    # 2024: os.path.join(DATA_DIR, "TaxCurOpenData_2024.csv"),
+    # 2021: _travis("tax_billing", "archive", "2021", "TaxCurOpenData_2021.csv"),
+    # 2022: _travis("tax_billing", "archive", "2022", "TaxCurOpenData_2022.csv"),
+    # 2023: _travis("tax_billing", "archive", "2023", "TaxCurOpenData_2023.csv"),
+    # 2024: _travis("tax_billing", "archive", "2024", "TaxCurOpenData_2024.csv"),
 }
 
 # ── Feature flags ─────────────────────────────────────────────────────────────
