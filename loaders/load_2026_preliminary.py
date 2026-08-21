@@ -61,6 +61,7 @@ from loaders import ingest_gate  # noqa: F401 — AC5 wiring marker; see load_ce
                                   # module note for why this isn't also called inline here
                                   # (avoids a second full read of a multi-GB source file —
                                   # run_all.py's explicit gate step is the real enforcement point)
+from loaders.scrape_billing_history import DEFAULT_COUNTY  # PARCEL-ROLLUP-HOTFIX-1
 import parcel_rollup
 
 import psycopg2.extras
@@ -74,7 +75,7 @@ PRELIM_DIR = os.path.join(
 
 
 # ── Step 1: PROP.TXT → parcel (identity upsert, unchanged) + prop_unit ──────
-def load_prop_txt(conn):
+def load_prop_txt(conn, county_code=DEFAULT_COUNTY):
     path = os.path.join(PRELIM_DIR, "PROP.TXT")
     if not os.path.exists(path):
         print(f"  ERROR: {path} not found"); return 0
@@ -103,7 +104,9 @@ def load_prop_txt(conn):
     for rec in ears_format.iter_prop_records(path):
         parcel_rows.append((rec["geo_id"], rec["prop_id"], rec["prop_type_cd"],
                              rec["owner_id"], rec["owner_name"]))
-        unit_rows.append((rec["prop_id"], rec["geo_id"], rec["prop_type_cd"], None,
+        # PARCEL-ROLLUP-HOTFIX-1: county_code first, matching PROP_UNIT_UPSERT_SQL's
+        # real column order.
+        unit_rows.append((county_code, rec["prop_id"], rec["geo_id"], rec["prop_type_cd"], None,
                            rec["owner_id"], rec["owner_name"], TAX_YEAR, TAX_YEAR))
         if rec["prop_id"] and rec["geo_id"]:
             pid_to_geo[rec["prop_id"]] = rec["geo_id"]
@@ -129,7 +132,7 @@ def _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows):
 
 
 # ── Step 2: PROP_ENT.TXT → prop_unit_tax_year for 2026 ──────────────────────
-def load_prop_ent_txt(conn, pid_to_geo):
+def load_prop_ent_txt(conn, pid_to_geo, county_code=DEFAULT_COUNTY):
     path = os.path.join(PRELIM_DIR, "PROP_ENT.TXT")
     if not os.path.exists(path):
         print(f"  ERROR: {path} not found"); return 0
@@ -148,6 +151,7 @@ def load_prop_ent_txt(conn, pid_to_geo):
         if geo_id is None:
             n_no_geo += 1
         rows_to_insert.append((
+            county_code,  # PARCEL-ROLLUP-HOTFIX-1: matching PROP_UNIT_TAX_YEAR_UPSERT_SQL's real column order
             agg["prop_id"], TAX_YEAR, geo_id,
             agg["market_value"], agg["assessed_value"], agg["taxable_value"],
             None, None, None,
@@ -436,7 +440,7 @@ def run_county_comparison(conn):
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-def load(conn, skip_qa=False):
+def load(conn, skip_qa=False, county_code=DEFAULT_COUNTY):
     if not os.path.isdir(PRELIM_DIR):
         print(f"  ERROR: Preliminary data directory not found:\n  {PRELIM_DIR}")
         return
@@ -447,13 +451,13 @@ def load(conn, skip_qa=False):
     print(f"  Tax year: {TAX_YEAR}, data_source: '{DATA_SRC}'")
     print(f"{'='*72}\n")
 
-    _, pid_to_geo = load_prop_txt(conn)
-    load_prop_ent_txt(conn, pid_to_geo)
+    _, pid_to_geo = load_prop_txt(conn, county_code=county_code)
+    load_prop_ent_txt(conn, pid_to_geo, county_code=county_code)
     load_land_and_imprv(conn)
     load_sb12(conn)
 
     print("  Rolling up prop_unit_tax_year → parcel_tax_year for 2026…")
-    result = parcel_rollup.run(conn, tax_year=TAX_YEAR)
+    result = parcel_rollup.run(conn, tax_year=TAX_YEAR, county_code=county_code)
     print(f"    → prop_id repaired: {result['prop_id_repaired']:,}, "
           f"parcel_tax_year rows: {result['parcel_tax_year_rows']:,}")
 
@@ -465,7 +469,17 @@ def load(conn, skip_qa=False):
 
 
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code written to every real prop_unit/prop_unit_tax_year row "
+             f"(default: {DEFAULT_COUNTY}). PARCEL-ROLLUP-HOTFIX-1: mirrors "
+             f"scrape_billing_history.py's own --county convention.",
+    )
+    args = ap.parse_args()
+
     conn = get_conn()
     execute_schema(conn)
-    load(conn)
+    load(conn, county_code=args.county)
     conn.close()

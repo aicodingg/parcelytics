@@ -355,12 +355,24 @@ def land_totals(path=None, lines=None):
 # has no geo_id of its own, only prop_unit's single latest-known value).
 # That deeper gap is unchanged and is still open follow-up work -- see
 # KNOWN_LIMITATIONS.md's "item 3: account-tracking granularity gap".
+# PARCEL-ROLLUP-HOTFIX-1 (real, urgent -- found live by verify_county_
+# scoping.py's own MC-2 audit): county_code added. prop_unit is a real,
+# already-migrated, county_code-leading-PK table in production
+# (migrate_county_partitioning.py's own TABLE_SPECS: new_pk=["county_code",
+# "prop_id"]) -- this shared UPSERT had zero county_code awareness despite
+# that, the pre-migration shape. Confirmed NOT (yet) silently corrupting
+# data (county_code is NOT NULL with no default and zero live rows are
+# NULL, meaning this SQL hasn't actually run to completion since the
+# migration finished), but the very next real caller run would hard-fail
+# on the NOT NULL violation. county_code is placed first in the column
+# list, matching DALLAS-GATE-4's own established convention for every
+# other real fix of this exact bug class.
 PROP_UNIT_UPSERT_SQL = """
     INSERT INTO prop_unit
-        (prop_id, geo_id, prop_type_cd, situs_address, owner_id, owner_name,
+        (county_code, prop_id, geo_id, prop_type_cd, situs_address, owner_id, owner_name,
          first_seen_year, last_seen_year)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    ON CONFLICT (prop_id) DO UPDATE
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (county_code, prop_id) DO UPDATE
         SET geo_id          = CASE
                                   WHEN EXCLUDED.last_seen_year >= prop_unit.last_seen_year
                                   THEN EXCLUDED.geo_id
@@ -394,6 +406,15 @@ def resolve_prop_unit_conflict(existing, incoming):
     behavior) -- only a row for a year that is actually >= the most
     recent year already seen may set geo_id. All other columns' logic
     (COALESCE / LEAST / GREATEST) is unchanged from before this fix.
+
+    PARCEL-ROLLUP-HOTFIX-1 disclosure: this pure mirror intentionally does
+    NOT take a county_code argument, unlike PROP_UNIT_UPSERT_SQL itself.
+    county_code is part of the real, live conflict KEY (ON CONFLICT
+    (county_code, prop_id)), not a value this conflict-resolution logic
+    ever computes or mutates -- existing/incoming here are always
+    understood to already share the same county_code (that's what made
+    them conflict in the first place), so there is nothing for this
+    function's own COALESCE/LEAST/GREATEST logic to do with it.
     """
     return {
         "geo_id": (incoming["geo_id"]
@@ -407,12 +428,16 @@ def resolve_prop_unit_conflict(existing, incoming):
         "last_seen_year": max(existing["last_seen_year"], incoming["last_seen_year"]),
     }
 
+# PARCEL-ROLLUP-HOTFIX-1: same real gap, same fix, on prop_unit_tax_year
+# (also a real, already-migrated, county_code-leading-PK table:
+# new_pk=["county_code", "prop_id", "tax_year"]). Same not-yet-triggered
+# NOT NULL disclosure as PROP_UNIT_UPSERT_SQL above.
 PROP_UNIT_TAX_YEAR_UPSERT_SQL = """
     INSERT INTO prop_unit_tax_year
-        (prop_id, tax_year, geo_id, market_value, assessed_value, taxable_value,
+        (county_code, prop_id, tax_year, geo_id, market_value, assessed_value, taxable_value,
          hs_cap_loss, land_value, imprv_value, exemption_codes, data_source)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    ON CONFLICT (prop_id, tax_year) DO UPDATE
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (county_code, prop_id, tax_year) DO UPDATE
         SET geo_id          = EXCLUDED.geo_id,
             market_value    = EXCLUDED.market_value,
             assessed_value  = EXCLUDED.assessed_value,

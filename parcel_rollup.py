@@ -48,6 +48,11 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 import config  # noqa: E402  (repo-root import, same pattern as parcel_filters.py callers)
 
+# PARCEL-ROLLUP-HOTFIX-1: DEFAULT_COUNTY imported from the same real source
+# every other real writer in this codebase uses (mirrors load_tax_current.py's
+# own DALLAS-GATE-4 import), not redeclared locally.
+from loaders.scrape_billing_history import DEFAULT_COUNTY  # noqa: E402
+
 
 # ── Production SQL (executed against Postgres; not exercised by fixture
 #    tests in this sandbox — see loaders/test_parcel_rollup.py's module
@@ -99,6 +104,27 @@ import config  # noqa: E402  (repo-root import, same pattern as parcel_filters.p
 # WHERE clause — grouping them together under a NULL geo_id key would
 # silently merge unrelated properties into one bogus "NULL" parcel_tax_year
 # row, which is worse than omitting them.
+#
+# PARCEL-ROLLUP-HOTFIX-1 (real, urgent -- found live by verify_county_
+# scoping.py's own MC-2 audit): county_code added throughout. This module
+# had ZERO county_code awareness despite prop_unit / prop_unit_tax_year /
+# parcel / parcel_tax_year all being real, already-migrated, county_code-
+# leading-PK tables in production (migrate_county_partitioning.py's own
+# TABLE_SPECS) -- every real INSERT here was still the pre-migration
+# shape. Confirmed NOT (yet) silently corrupting data: county_code is
+# NOT NULL with no default on all 4 tables, and zero live rows have a
+# NULL county_code, meaning this module hasn't actually run to completion
+# since the migration finished (a loaded gun, not yet fired) -- but the
+# very next real run_all.py run would hard-fail on the NOT NULL
+# violation. Both CTEs are scoped to ONE county_code per real invocation
+# (y.county_code = %(county_code)s), matching every other real writer's
+# one-county-per-call convention -- since prop_unit_tax_year's own
+# geo_id is only unique WITHIN a county post-migration, scoping the CTEs
+# this way keeps COALESCE(y.geo_id, u.geo_id) collision-free exactly as
+# it was before any second county's data existed. The u/y join also now
+# carries county_code (u.county_code = y.county_code) so a future second
+# county's prop_unit rows can never be joined against this county's
+# prop_unit_tax_year rows by a coincidentally-matching prop_id.
 ROLLUP_SQL = """
     WITH base AS (
         SELECT COALESCE(y.geo_id, u.geo_id) AS geo_id, y.tax_year,
@@ -111,8 +137,9 @@ ROLLUP_SQL = """
                MIN(y.data_source)    AS data_source,
                COUNT(*)              AS unit_count
         FROM prop_unit_tax_year y
-        LEFT JOIN prop_unit u ON u.prop_id = y.prop_id
+        LEFT JOIN prop_unit u ON u.prop_id = y.prop_id AND u.county_code = y.county_code
         WHERE y.tax_year = %(tax_year)s
+          AND y.county_code = %(county_code)s
           AND COALESCE(y.geo_id, u.geo_id) IS NOT NULL
         GROUP BY COALESCE(y.geo_id, u.geo_id), y.tax_year
     ),
@@ -120,20 +147,21 @@ ROLLUP_SQL = """
         SELECT COALESCE(y.geo_id, u.geo_id) AS geo_id, y.tax_year,
                string_agg(DISTINCT code, ',' ORDER BY code) AS exemption_codes
         FROM prop_unit_tax_year y
-        LEFT JOIN prop_unit u ON u.prop_id = y.prop_id
+        LEFT JOIN prop_unit u ON u.prop_id = y.prop_id AND u.county_code = y.county_code
         LEFT JOIN LATERAL unnest(string_to_array(y.exemption_codes, ',')) AS code ON TRUE
         WHERE y.tax_year = %(tax_year)s
+          AND y.county_code = %(county_code)s
           AND COALESCE(y.geo_id, u.geo_id) IS NOT NULL
         GROUP BY COALESCE(y.geo_id, u.geo_id), y.tax_year
     )
     INSERT INTO parcel_tax_year
-        (geo_id, tax_year, market_value, assessed_value, taxable_value,
+        (county_code, geo_id, tax_year, market_value, assessed_value, taxable_value,
          hs_cap_loss, land_value, imprv_value, exemption_codes, data_source, unit_count)
-    SELECT base.geo_id, base.tax_year, base.market_value, base.assessed_value,
+    SELECT %(county_code)s, base.geo_id, base.tax_year, base.market_value, base.assessed_value,
            base.taxable_value, base.hs_cap_loss, base.land_value, base.imprv_value,
            codes.exemption_codes, base.data_source, base.unit_count
     FROM base JOIN codes ON codes.geo_id = base.geo_id AND codes.tax_year = base.tax_year
-    ON CONFLICT (geo_id, tax_year) DO UPDATE
+    ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE
         SET market_value    = EXCLUDED.market_value,
             assessed_value  = EXCLUDED.assessed_value,
             taxable_value   = EXCLUDED.taxable_value,
@@ -145,70 +173,89 @@ ROLLUP_SQL = """
             unit_count      = EXCLUDED.unit_count
 """
 
-DISTINCT_YEARS_SQL = "SELECT DISTINCT tax_year FROM prop_unit_tax_year ORDER BY tax_year"
+# PARCEL-ROLLUP-HOTFIX-1: scoped by county_code -- without this, rollup_
+# all_years() would iterate over tax_years present for ANY county, not
+# just the one being rolled up, and attempt (harmless but wasteful, and
+# semantically wrong) rollups for years that don't exist for this county.
+DISTINCT_YEARS_SQL = (
+    "SELECT DISTINCT tax_year FROM prop_unit_tax_year "
+    "WHERE county_code = %(county_code)s ORDER BY tax_year"
+)
 
+# PARCEL-ROLLUP-HOTFIX-1: county_code added to both the subquery's own
+# GROUP BY (so MIN(prop_id) is computed within one county, never across
+# counties once a second county's prop_unit rows exist) and the outer
+# UPDATE's WHERE (so this never touches another county's parcel rows).
 PROP_ID_REPAIR_SQL = """
     UPDATE parcel p
     SET prop_id = rep.min_prop_id
     FROM (
         SELECT geo_id, MIN(prop_id) AS min_prop_id
         FROM prop_unit
+        WHERE county_code = %(county_code)s
         GROUP BY geo_id
     ) rep
     WHERE p.geo_id = rep.geo_id
+      AND p.county_code = %(county_code)s
       AND (p.prop_id IS DISTINCT FROM rep.min_prop_id)
 """
 
 
 # ── DB-facing wrappers (production code path — requires a live conn) ────
-def rollup_tax_year(conn, tax_year):
-    """(Re)compute every parcel_tax_year row for one tax_year. Idempotent."""
+def rollup_tax_year(conn, tax_year, county_code=DEFAULT_COUNTY):
+    """(Re)compute every parcel_tax_year row for one tax_year, scoped to one
+    county_code per call (PARCEL-ROLLUP-HOTFIX-1). Idempotent."""
     with conn.cursor() as cur:
-        cur.execute(ROLLUP_SQL, {"tax_year": tax_year})
+        cur.execute(ROLLUP_SQL, {"tax_year": tax_year, "county_code": county_code})
         rowcount = cur.rowcount
     conn.commit()
     return rowcount
 
 
-def distinct_tax_years(conn):
+def distinct_tax_years(conn, county_code=DEFAULT_COUNTY):
     with conn.cursor() as cur:
-        cur.execute(DISTINCT_YEARS_SQL)
+        cur.execute(DISTINCT_YEARS_SQL, {"county_code": county_code})
         return [r[0] for r in cur.fetchall()]
 
 
-def rollup_all_years(conn):
-    """(Re)compute parcel_tax_year for every tax_year present in prop_unit_tax_year."""
+def rollup_all_years(conn, county_code=DEFAULT_COUNTY):
+    """(Re)compute parcel_tax_year for every tax_year present in
+    prop_unit_tax_year for one county_code."""
     total = 0
-    for year in distinct_tax_years(conn):
-        total += rollup_tax_year(conn, year)
+    for year in distinct_tax_years(conn, county_code=county_code):
+        total += rollup_tax_year(conn, year, county_code=county_code)
     return total
 
 
-def repair_prop_id(conn):
+def repair_prop_id(conn, county_code=DEFAULT_COUNTY):
     """
     Replace parcel.prop_id's winner-contaminated value with the stable
     MIN(prop_id) representative across all prop_unit rows sharing that
-    geo_id. Idempotent — a second run updates 0 rows once already correct.
+    geo_id, scoped to one county_code. Idempotent — a second run updates
+    0 rows once already correct.
     """
     with conn.cursor() as cur:
-        cur.execute(PROP_ID_REPAIR_SQL)
+        cur.execute(PROP_ID_REPAIR_SQL, {"county_code": county_code})
         rowcount = cur.rowcount
     conn.commit()
     return rowcount
 
 
-def run(conn, tax_year=None):
+def run(conn, tax_year=None, county_code=DEFAULT_COUNTY):
     """
     Full rollup entry point used by loaders/run_all.py after all source
     loaders finish. Repairs parcel.prop_id's identity FIRST, then
     (re)computes parcel_tax_year's values, so there's no window where one
     is refreshed and the other still reflects stale/contaminated state.
+    PARCEL-ROLLUP-HOTFIX-1: county_code threaded through both steps,
+    default DEFAULT_COUNTY ("TRAVIS") matching every other real writer's
+    one-county-per-call convention.
     """
-    repaired = repair_prop_id(conn)
+    repaired = repair_prop_id(conn, county_code=county_code)
     if tax_year is not None:
-        rolled = rollup_tax_year(conn, tax_year)
+        rolled = rollup_tax_year(conn, tax_year, county_code=county_code)
     else:
-        rolled = rollup_all_years(conn)
+        rolled = rollup_all_years(conn, county_code=county_code)
     return {"prop_id_repaired": repaired, "parcel_tax_year_rows": rolled}
 
 
@@ -327,13 +374,18 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--year", type=int, default=None, help="Roll up a single tax_year only")
     ap.add_argument("--all-years", action="store_true", help="Roll up every tax_year present in prop_unit_tax_year")
+    ap.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code scoping every real query/write in this run (default: {DEFAULT_COUNTY}). "
+             "PARCEL-ROLLUP-HOTFIX-1: mirrors scrape_billing_history.py's own --county convention.",
+    )
     args = ap.parse_args()
 
     if not args.all_years and args.year is None:
         ap.error("pass --year YYYY or --all-years")
 
     conn = get_conn()
-    result = run(conn, tax_year=args.year)
+    result = run(conn, tax_year=args.year, county_code=args.county)
     print(f"prop_id repaired: {result['prop_id_repaired']:,} rows")
     print(f"parcel_tax_year rolled up: {result['parcel_tax_year_rows']:,} rows")
     conn.close()

@@ -146,7 +146,11 @@ def main():
 
     print("\n[5/11] parcel_rollup — full-history pass (idempotent safety net; "
           "each loader above already rolled up its own tax_year)…")
-    rollup_result = parcel_rollup.run(conn)
+    # PARCEL-ROLLUP-HOTFIX-1: county_code threaded through explicitly,
+    # matching this file's own established convention at every other real
+    # call site (e.g. ingest_gate.gather_and_run(..., county_code="TRAVIS")
+    # below).
+    rollup_result = parcel_rollup.run(conn, county_code="TRAVIS")
     print(f"    → prop_id repaired: {rollup_result['prop_id_repaired']:,}, "
           f"parcel_tax_year rows: {rollup_result['parcel_tax_year_rows']:,}")
 

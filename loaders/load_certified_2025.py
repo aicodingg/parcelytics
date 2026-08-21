@@ -40,6 +40,7 @@ import config
 from loaders.db import get_conn, execute_schema
 from loaders import ears_format
 from loaders import ingest_gate  # noqa: F401 — AC5 wiring marker; see module note below
+from loaders.scrape_billing_history import DEFAULT_COUNTY  # PARCEL-ROLLUP-HOTFIX-1
 import parcel_rollup
 
 # NOTE on ingest_gate wiring (Migration M2, AC5): this loader imports
@@ -61,7 +62,7 @@ DATA_SRC = "certified"
 
 
 # ── Step 1: PROP.TXT → parcel (public identity) + prop_unit (storage truth) ──
-def load_prop_txt(conn, cert_dir):
+def load_prop_txt(conn, cert_dir, county_code=DEFAULT_COUNTY):
     path = os.path.join(cert_dir, "PROP.TXT")
     print(f"  Loading PROP.TXT ({os.path.getsize(path)/1e9:.1f} GB)…")
     t0 = time.time()
@@ -93,7 +94,9 @@ def load_prop_txt(conn, cert_dir):
     for rec in ears_format.iter_prop_records(path):
         parcel_rows.append((rec["geo_id"], rec["prop_id"], rec["prop_type_cd"],
                              rec["owner_id"], rec["owner_name"]))
-        unit_rows.append((rec["prop_id"], rec["geo_id"], rec["prop_type_cd"], None,
+        # PARCEL-ROLLUP-HOTFIX-1: county_code first, matching PROP_UNIT_UPSERT_SQL's
+        # real column order.
+        unit_rows.append((county_code, rec["prop_id"], rec["geo_id"], rec["prop_type_cd"], None,
                            rec["owner_id"], rec["owner_name"], TAX_YEAR, TAX_YEAR))
         if rec["prop_id"] and rec["geo_id"]:
             pid_to_geo[rec["prop_id"]] = rec["geo_id"]
@@ -119,7 +122,7 @@ def _flush_prop_txt_batch(conn, parcel_sql, parcel_rows, unit_rows):
 
 
 # ── Step 2: PROP_ENT.TXT → prop_unit_tax_year (one row per real unit) ───────
-def load_prop_ent_txt(conn, cert_dir, pid_to_geo):
+def load_prop_ent_txt(conn, cert_dir, pid_to_geo, county_code=DEFAULT_COUNTY):
     path = os.path.join(cert_dir, "PROP_ENT.TXT")
     print(f"  Loading PROP_ENT.TXT ({os.path.getsize(path)/1e9:.1f} GB)…")
     t0 = time.time()
@@ -140,6 +143,7 @@ def load_prop_ent_txt(conn, cert_dir, pid_to_geo):
         if geo_id is None:
             n_no_geo += 1
         rows_to_insert.append((
+            county_code,  # PARCEL-ROLLUP-HOTFIX-1: matching PROP_UNIT_TAX_YEAR_UPSERT_SQL's real column order
             agg["prop_id"], agg.get("year") or TAX_YEAR, geo_id,
             agg["market_value"], agg["assessed_value"], agg["taxable_value"],
             None,  # hs_cap_loss — not derivable from PROP_ENT fields read here
@@ -212,18 +216,18 @@ def load_land_and_imprv(conn, cert_dir):
     return len(updates)
 
 
-def load(conn):
+def load(conn, county_code=DEFAULT_COUNTY):
     cert_dir = config.CERT_DIR
     if not os.path.isdir(cert_dir):
         print(f"  WARNING: {cert_dir} not found, skipping 2025 Certified")
         return 0
 
-    _, pid_to_geo = load_prop_txt(conn, cert_dir)
-    load_prop_ent_txt(conn, cert_dir, pid_to_geo)
+    _, pid_to_geo = load_prop_txt(conn, cert_dir, county_code=county_code)
+    load_prop_ent_txt(conn, cert_dir, pid_to_geo, county_code=county_code)
     load_land_and_imprv(conn, cert_dir)
 
     print("  Rolling up prop_unit_tax_year → parcel_tax_year for 2025…")
-    result = parcel_rollup.run(conn, tax_year=TAX_YEAR)
+    result = parcel_rollup.run(conn, tax_year=TAX_YEAR, county_code=county_code)
     print(f"    → prop_id repaired: {result['prop_id_repaired']:,}, "
           f"parcel_tax_year rows: {result['parcel_tax_year_rows']:,}")
 
@@ -231,7 +235,17 @@ def load(conn):
 
 
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code written to every real prop_unit/prop_unit_tax_year row "
+             f"(default: {DEFAULT_COUNTY}). PARCEL-ROLLUP-HOTFIX-1: mirrors "
+             f"scrape_billing_history.py's own --county convention.",
+    )
+    args = ap.parse_args()
+
     conn = get_conn()
     execute_schema(conn)
-    load(conn)
+    load(conn, county_code=args.county)
     conn.close()

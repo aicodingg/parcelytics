@@ -616,6 +616,23 @@ CREATE TABLE IF NOT EXISTS ingest_audit (
 
 CREATE INDEX IF NOT EXISTS idx_ingest_audit_source ON ingest_audit(source_tag, run_at);
 CREATE INDEX IF NOT EXISTS idx_ingest_audit_failed  ON ingest_audit(passed) WHERE passed = FALSE;
+
+-- county_code (MC2-BUILD-1: schema.sql staleness fix) -- ingest_audit is one
+-- of migrate_county_partitioning.py's two real ADD_COLUMN_TABLES (Mode 3,
+-- §4.3): a plain, non-PK, NOT NULL column added directly to production by
+-- that migration and by BILLING-GATE-HOTFIX-1's _write_audit() fix, but the
+-- CREATE TABLE body above was never resynced afterward -- this table has no
+-- county_code column above at all, unlike the Mode 1 (PK-rekey) tables
+-- elsewhere in this file whose staleness verify_index_coverage.py already
+-- disclosed. Mirrors the real migration's own three-step approach exactly
+-- (ADD COLUMN nullable -> backfill -> SET NOT NULL) rather than a bare
+-- inline NOT NULL, since ADD COLUMN ... NOT NULL with no DEFAULT fails
+-- outright against a table that already has rows; safe/idempotent against
+-- both a fresh apply (0 rows) and the already-migrated live table (column
+-- already present and NOT NULL, so all three statements are no-ops).
+ALTER TABLE ingest_audit ADD COLUMN IF NOT EXISTS county_code VARCHAR(20);
+UPDATE ingest_audit SET county_code = 'TRAVIS' WHERE county_code IS NULL;
+ALTER TABLE ingest_audit ALTER COLUMN county_code SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_metrics_year_etr       ON parcel_metrics(tax_year, effective_tax_rate);
 
 -- ── tax_billing_quarantine (PARTITION-2-IMPLEMENT, Part 5 — real
@@ -843,6 +860,17 @@ CREATE TABLE IF NOT EXISTS load_batch (
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     note         TEXT                                  -- e.g. 'refresh_group_stats.py standalone run'
 );
+
+-- county_code (MC2-BUILD-1: schema.sql staleness fix) -- load_batch is
+-- migrate_county_partitioning.py's OTHER real ADD_COLUMN_TABLES (Mode 3)
+-- entry, same gap as ingest_audit above: a real, live NOT NULL, no-default
+-- county_code column (confirmed via refresh_group_stats.py's _mint_batch()
+-- comment -- "found running the actual refresh live against production")
+-- that this CREATE TABLE body never showed. Same three-step, idempotent
+-- treatment as ingest_audit above, for the same reason.
+ALTER TABLE load_batch ADD COLUMN IF NOT EXISTS county_code VARCHAR(20);
+UPDATE load_batch SET county_code = 'TRAVIS' WHERE county_code IS NULL;
+ALTER TABLE load_batch ALTER COLUMN county_code SET NOT NULL;
 
 -- ── group_stats (Task AGGPRECOMP-1, Step 1 of SPEC_AGGREGATE_PRECOMPUTATION.md) ──
 -- Tier 3 precomputed group-percentile table. One row per distinct
