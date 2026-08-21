@@ -34,10 +34,18 @@ If either threshold fails, stop and document.
 
 import re, sys, os, csv, io, subprocess, argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+import config
 
 # ── Config ────────────────────────────────────────────────────────────────────
-_DATA_DIR = os.path.expanduser("~/Desktop/Claude Files")
-PDF_GEO = os.path.join(_DATA_DIR, "2021 CERTIFIED APPRAISAL ROLL as of Supp 0_GEO.pdf")
+# FILE-ARCH-2 (Aug 21 2026): this file previously hardcoded its own
+# ~/Desktop/Claude Files path, independent of config.py's DATA_DIR/
+# PARCELYTICS_DATA_ROOT convention -- a real Step 1 finding. Now reads
+# config.CERT_2021_PDF, which places the file under
+# travis/certified_roll/archive/2021/ (certified_roll is the correct real
+# Source Registry slug for this file -- see config.py's own AJR_FILES
+# comment on why 2021 certified-roll data nests under certified_roll rather
+# than a separate, unregistered slug). --pdf still overrides this default.
+PDF_GEO = config.CERT_2021_PDF
 
 # Default sample pages: straddling parcel 0100030105 (1201 S Lamar) + surrounding real property
 SAMPLE_START = 8510

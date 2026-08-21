@@ -34,7 +34,7 @@ from loaders.pir_xlsx_common import run_cli
 TAX_YEAR = 2023
 DATA_SOURCE = "pir_billing_2023_full"
 CONFIDENCE_LEVEL = "verified"
-FILEPATH = os.path.join(config.DATA_DIR, "DiegoPIR2023.xlsx")
+FILEPATH = config.PIR_BILLING_XLSX[2023]
 SANITY_EXPECTED = {
     "0100030105": 76601.36,   # independently confirmed pre-build (investigation)
     "0100030109": None,       # no independent figure for this parcel/year -- report only

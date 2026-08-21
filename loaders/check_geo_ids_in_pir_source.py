@@ -69,11 +69,11 @@ from loaders.pir_xlsx_common import (
 
 
 def filepath_for_year(tax_year):
-    if tax_year == 2021:
-        return config.PIR_2021_FULL_XLSX
-    if tax_year in (2022, 2023, 2024):
-        return os.path.join(config.DATA_DIR, f"DiegoPIR{tax_year}.xlsx")
-    return None
+    # All 4 real years (2021 Revised + 2022/2023/2024) now come from the one
+    # real config.PIR_BILLING_XLSX dict (FILE-ARCH-2) instead of a hand-built
+    # DATA_DIR-relative join -- config.PIR_2021_FULL_XLSX is itself just an
+    # alias into this same dict (see config.py), so this covers all 4 years.
+    return config.PIR_BILLING_XLSX.get(tax_year)
 
 
 def load_pairs(path):

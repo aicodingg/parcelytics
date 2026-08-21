@@ -41,7 +41,7 @@ from loaders.pir_xlsx_common import run_cli
 TAX_YEAR = 2022
 DATA_SOURCE = "pir_billing_2022_full"
 CONFIDENCE_LEVEL = "verified"
-FILEPATH = os.path.join(config.DATA_DIR, "DiegoPIR2022.xlsx")
+FILEPATH = config.PIR_BILLING_XLSX[2022]
 SANITY_EXPECTED = {
     "0100030105": 58432.29,     # investigation: fully re-verified, all 10 slots
     "0100030109": 1303196.40,   # investigation: found (second data point, no
