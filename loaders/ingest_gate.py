@@ -304,7 +304,7 @@ def g6_external_reconciliation_check(computed_total, published_total, warn_pct=0
 # conn; NOT exercised in this sandbox — see test file's AC8 disclosure)
 # ══════════════════════════════════════════════════════════════════════
 def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=None,
-                    published_total=None):
+                    published_total=None, county_code="TRAVIS"):
     """
     Full production entry point: scans the source files for G1/G2/G3,
     queries prop_unit/prop_unit_tax_year/parcel/parcel_tax_year for the
@@ -442,20 +442,27 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
     if published_total is not None:
         results["G6"] = g6_external_reconciliation_check(account_table_sum or 0, published_total)
 
-    _write_audit(conn, source_tag, tax_year, results)
+    _write_audit(conn, source_tag, tax_year, results, county_code=county_code)
     overall_pass = all(r[0] for r in results.values())
     return {"passed": overall_pass, "checks": results}
 
 
-def _write_audit(conn, source_tag, tax_year, results):
+def _write_audit(conn, source_tag, tax_year, results, county_code="TRAVIS"):
+    # BILLING-GATE-HOTFIX-1: county_code added -- ingest_audit's real,
+    # live county_code column is NOT NULL (added by the county-
+    # partitioning migration), and this shared function (used by both
+    # ingest_gate.py's own appraisal-side gate and billing_gate.py) never
+    # threaded it through, on either side. Default "TRAVIS" matches this
+    # codebase's established DEFAULT_COUNTY convention for every other
+    # not-yet-multi-county-aware call site.
     rows = []
     for check_code, result in results.items():
         passed, detail = result[0], result[1]
-        rows.append((source_tag, tax_year, check_code, passed, detail))
+        rows.append((source_tag, tax_year, check_code, passed, detail, county_code))
     with conn.cursor() as cur:
         cur.executemany(
-            "INSERT INTO ingest_audit (source_tag, tax_year, check_code, passed, detail) "
-            "VALUES (%s, %s, %s, %s, %s)",
+            "INSERT INTO ingest_audit (source_tag, tax_year, check_code, passed, detail, county_code) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
             rows,
         )
     conn.commit()

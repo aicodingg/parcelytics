@@ -292,7 +292,7 @@ def gather_and_run(conn, source_tag, county_code, tax_year, file_rows=None, file
 
     results["BG4"] = bg4_rollup_integrity_check(bg4_account_rows, bg4_tax_billing_rows, tax_year)
 
-    _write_audit(conn, source_tag, tax_year, results)
+    _write_audit(conn, source_tag, tax_year, results, county_code=county_code)
     overall_pass = all(r[0] for r in results.values())
     return {"passed": overall_pass, "checks": results}
 

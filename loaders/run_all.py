@@ -157,7 +157,7 @@ def main():
         cert_prop = os.path.join(config.CERT_DIR, "PROP.TXT") if os.path.isdir(config.CERT_DIR) else None
         cert_prop_ent = os.path.join(config.CERT_DIR, "PROP_ENT.TXT") if os.path.isdir(config.CERT_DIR) else None
         if cert_prop and os.path.exists(cert_prop):
-            summary = ingest_gate.gather_and_run(conn, "certified_2025", 2025, cert_prop, cert_prop_ent)
+            summary = ingest_gate.gather_and_run(conn, "certified_2025", 2025, cert_prop, cert_prop_ent, county_code="TRAVIS")
             gate_ran_any = True
             gate_passed = gate_passed and summary["passed"]
             for code, result in summary["checks"].items():
@@ -168,7 +168,7 @@ def main():
         prelim_prop = os.path.join(PRELIM_DIR, "PROP.TXT") if os.path.isdir(PRELIM_DIR) else None
         prelim_prop_ent = os.path.join(PRELIM_DIR, "PROP_ENT.TXT") if os.path.isdir(PRELIM_DIR) else None
         if prelim_prop and os.path.exists(prelim_prop):
-            summary = ingest_gate.gather_and_run(conn, "preliminary_2026", 2026, prelim_prop, prelim_prop_ent)
+            summary = ingest_gate.gather_and_run(conn, "preliminary_2026", 2026, prelim_prop, prelim_prop_ent, county_code="TRAVIS")
             gate_ran_any = True
             gate_passed = gate_passed and summary["passed"]
             for code, result in summary["checks"].items():
