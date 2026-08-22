@@ -93,6 +93,94 @@ def _travis(slug, *parts):
     return _county_source("travis", slug, *parts)
 
 
+# ── Archive root (FILE-ARCH-3, Aug 2026, Fable-approved) ────────────────────
+# Real, confirmed two-root architecture: the local PARCELYTICS_DATA_ROOT above
+# holds current/ and canary/ only; archived source data (multi-GB per-vintage
+# exports) lives on a separate external drive, PARCELYTICS_ARCHIVE_ROOT.
+#
+# Fable's own explicit reasoning for making this a second real root in code
+# (Option 2) rather than a symlink pointing PARCELYTICS_DATA_ROOT/.../archive
+# at the external drive: a symlink is filesystem state, not code -- invisible
+# in the repo, absent from any fresh machine's mental model, and makes this
+# file lie by omission about where data actually lives. The two-root reality
+# (local current/, external archive/) is a real architectural fact that
+# belongs here, in code, not silently in the filesystem.
+PARCELYTICS_ARCHIVE_ROOT = os.environ.get(
+    "PARCELYTICS_ARCHIVE_ROOT",
+    "/Volumes/Expansion/parcelytics_vault"
+)
+
+
+class ArchiveNotMountedError(RuntimeError):
+    """Raised when a real archive/<vintage> path is resolved but the
+    external vault drive (PARCELYTICS_ARCHIVE_ROOT) isn't mounted. A named
+    exception class, not a bare FileNotFoundError, so this fails loudly and
+    unambiguously at the point of use rather than surfacing as a confusing
+    raw stack trace three directories deep inside whatever loader asked for
+    the path."""
+    pass
+
+
+def _require_archive_mounted():
+    # Real, confirmed failure-mode reasoning (FILE-ARCH-3): fail-loudly is
+    # correct here specifically, because normal operation (loaders reading
+    # current/, canary runs against canary/) never touches this root at all
+    # -- a disconnected external drive costs nothing until something
+    # actually asks for archived data. That's exactly when this check runs:
+    # inside the archive-side path helpers below, at the point a real
+    # archive path is requested, never at config.py import time (which
+    # would wrongly turn "drive unplugged" into "app won't start").
+    if not os.path.isdir(PARCELYTICS_ARCHIVE_ROOT):
+        raise ArchiveNotMountedError(
+            f"archive root not mounted: {PARCELYTICS_ARCHIVE_ROOT} -- plug "
+            f"in / mount the external vault drive before requesting an "
+            f"archive-slug path. Current/canary data is unaffected; this "
+            f"only fires when something specifically asked for archived "
+            f"source data."
+        )
+
+
+def _county_source_archive(county, slug, *parts):
+    """Archive-side twin of _county_source() above -- identical registry-
+    slug grammar (one path grammar, two roots), rooted at
+    PARCELYTICS_ARCHIVE_ROOT instead of PARCELYTICS_DATA_ROOT. Checks the
+    drive is actually mounted before returning a path; see
+    _require_archive_mounted()'s own docstring for why that check lives
+    here (at resolution time) rather than at import time."""
+    _require_archive_mounted()
+    return os.path.join(PARCELYTICS_ARCHIVE_ROOT, county, slug, *parts)
+
+
+def _travis_archive(slug, *parts):
+    return _county_source_archive("travis", slug, *parts)
+
+
+# Real, confirmed rider (not touched by this brief, per Fable's own explicit
+# instruction): the legacy vault path this drive already holds
+# (`Travis County (TX)/...`, with its real spaces and parentheses) is
+# referenced history and stays exactly as-is -- do not rename it. Only
+# archive paths this file newly constructs going forward (i.e. any real call
+# to _travis_archive() from here on) use the same slug convention as
+# PARCELYTICS_DATA_ROOT (travis/certified_roll/..., not
+# "Travis County (TX)/..."), so the archive root converges on the one real
+# grammar for new material without disturbing what's already there.
+#
+# Real, confirmed rider (also settled, no code change): MC-4's canary
+# slices stay local-only, always derived from PARCELYTICS_DATA_ROOT's own
+# canary/ folders, never PARCELYTICS_ARCHIVE_ROOT -- canaries gate loads, so
+# they must be available precisely when the external drive might not be,
+# and they're regenerable in one line from archived source data (see
+# MULTI_COUNTY_ONBOARDING_STANDARDS.md's MC-4, point 4), so a vault copy
+# would just be redundancy of a disposable artifact. No _travis_archive()
+# call should ever construct a canary/ path.
+#
+# Real, honest disclosure: the actual physical move of Travis's bulk
+# archived source data from the legacy vault layout into this new slug-
+# based structure is out of scope for this brief -- a real, separate, later
+# step once this config change lands and is verified. No real call site
+# calls _travis_archive() yet as of this commit.
+
+
 # Real Travis source_slugs, derived from Travis's own Source Registry entry
 # (4 real rows: CAD certified appraisal export, CAD preliminary appraisal
 # export, Tax office billing data, Adopted tax rates) -- no separate
