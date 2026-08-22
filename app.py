@@ -5431,8 +5431,13 @@ def api_geocode(geo_id):
     result. Returns ok=False (no fabricated coordinates) on any failure.
     """
     import urllib.request, urllib.parse, json as _json
-    row = query("SELECT latitude, longitude, situs_address FROM parcel WHERE geo_id = %s",
-                (geo_id,), one=True)
+    # DALLAS-GATE-1 Part 2 pattern (see property_detail): scoped to
+    # g.county_code, set per-request by _pull_county_slug from this route's
+    # own <county_slug> segment. Missed in the original seam pass.
+    county_code = g.county_code
+    row = query("SELECT latitude, longitude, situs_address FROM parcel "
+                "WHERE geo_id = %s AND county_code = %s",
+                (geo_id, county_code), one=True)
     if not row:
         return jsonify({"ok": False, "error": "not_found"})
     if row.get("latitude") is not None and row.get("longitude") is not None:
@@ -5458,8 +5463,9 @@ def api_geocode(geo_id):
         try:
             conn = get_db()
             with conn.cursor() as cur:
-                cur.execute("UPDATE parcel SET latitude=%s, longitude=%s WHERE geo_id=%s",
-                            (lat, lng, geo_id))
+                cur.execute("UPDATE parcel SET latitude=%s, longitude=%s "
+                            "WHERE geo_id=%s AND county_code=%s",
+                            (lat, lng, geo_id, county_code))
             conn.commit()
             conn.close()
         except Exception:
