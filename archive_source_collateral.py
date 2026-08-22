@@ -26,11 +26,23 @@ LAYOUT (per PX-20260822-03, PM decision, 2026-08-22):
   2023-08-30 / 2024-08-28 AJR vintages, all EARS prep dates), so
   2025-09-04 is correct and the INFERRED-DATE flag is retired on
   evidence.
-- The two 2021 Certified Appraisal Roll PDFs have no confirmed vintage
-  date of their own (file mtime is a download date, not a roll date).
-  Placed under the only existing 2021 certified_roll vintage
-  (2021-09-25) as the least-arbitrary choice available -- FLAGGED, not
-  asserted, in the dry-run report.
+- The two 2021 Certified Appraisal Roll PDFs were initially placed
+  under 2021-09-25 (the only existing 2021 vintage) as a flagged
+  assumption. RESOLVED 2026-08-22 by reading the document: its only
+  date is a True Automation report-generation timestamp, 01/25/2022
+  22:09PM -- these are separately generated reports of the 2021
+  certified roll "as of Supplement 0", NOT part of the September 2021
+  EARS delivery. Relocated (hash-verified both sides) to
+  travis/certified_roll/2022-01-25/, keeping the archive's one dating
+  rule: folders are keyed by when the artifact was acquired/produced,
+  never by tax year. The "2021" stays unambiguous from the filenames.
+
+NOTE ON ._ FILES: the vault is ExFAT, which can't store macOS resource
+forks natively, so macOS writes AppleDouble sidecars (._<name>) beside
+copied files. These are metadata, not data; every script here skips
+dotfiles, which is why file counts stay clean. Deleting them is
+pointless -- macOS recreates them on the next copy. Any future tooling
+walking the vault must skip dotfiles or it will double-count.
 - 2025RatesHistory1990-2025.xlsx is NOT collateral -- it's its own
   Source Registry row (Adopted tax rates), archived under a new
   top-level slug: travis/adopted_tax_rates/.
