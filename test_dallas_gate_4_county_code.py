@@ -288,6 +288,208 @@ check("reconcile_geo_ids() deliberately left unscoped by county_code (matches DA
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# PX-20260822-06-rev1: DALLAS-GATE-4 family completion (3b/3c gaps against
+# the live constraint map, confirmed via \d against production,
+# 2026-08-23, table below reproduced from that brief):
+#   parcel_tax_year -> (county_code, geo_id, tax_year)
+#   parcel_metrics  -> (county_code, geo_id, tax_year)
+#   tax_delinquent  -> (county_code, geo_id)
+#   county_tax_rate -> (county_code, entity_code, tax_year)
+#   group_stats     -> (county_code, neighborhood_cd_key, state_cd1_class,
+#                        classi_cd_key, tax_year)
+# Same string/regex-against-real-shipping-source technique as Files 1-6
+# above -- every assertion below reads the actual file on disk.
+# ─────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 7: loaders/load_cert_2021.py (parcel_tax_year)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_cert_2021.py")
+src = open("loaders/load_cert_2021.py").read()
+
+check("DEFAULT_COUNTY imported from scrape_billing_history.py (single source of truth)",
+      "from loaders.scrape_billing_history import DEFAULT_COUNTY" in src)
+check("build_upsert_sql()'s INSERT column list includes county_code first",
+      'cols_insert = """county_code, geo_id, tax_year,' in src)
+check("build_upsert_sql()'s VALUES clause includes %(county_code)s first",
+      'vals_insert = """%(county_code)s, %(geo_id)s, %(tax_year)s,' in src)
+check("build_upsert_sql()'s ON CONFLICT targets the live (county_code, geo_id, tax_year)",
+      "ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE SET" in src)
+check("no stale ON CONFLICT (geo_id, tax_year) target remains",
+      "ON CONFLICT (geo_id, tax_year)" not in src)
+check("run_load() signature threads county_code=DEFAULT_COUNTY",
+      "def run_load(conn, records, with_exemptions, dry_run, county_code=DEFAULT_COUNTY):" in src)
+check("run_load()'s per-row dict includes county_code",
+      "'county_code':     county_code," in src)
+check("--county CLI flag added, default DEFAULT_COUNTY",
+      "ap.add_argument('--county', default=DEFAULT_COUNTY," in src)
+check("main() passes county_code=args.county into run_load()",
+      "run_load(conn, deduped, with_exemptions, args.dry_run, county_code=args.county)" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 8: loaders/compute_metrics.py (parcel_metrics)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/compute_metrics.py")
+src = open("loaders/compute_metrics.py").read()
+
+check("parcel_metrics INSERT column list includes county_code first",
+      "INSERT INTO parcel_metrics (\n                county_code, geo_id, tax_year," in src)
+check("parcel_metrics SELECT list sources county_code from pty.county_code "
+      "(parcel_tax_year already carries it, written by every real writer)",
+      "SELECT\n                pty.county_code,\n                pty.geo_id,\n                pty.tax_year," in src)
+check("DELETE FROM parcel_metrics's missing county_code scoping is explicitly "
+      "flagged as an out-of-scope 3d-class concern, not silently left unexplained",
+      "3d-class (blast-radius) concern" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 9: loaders/load_tax_current.py's load_delinquent() (tax_delinquent)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_tax_current.py -- load_delinquent() (tax_delinquent)")
+src = open("loaders/load_tax_current.py").read()
+
+check("load_delinquent() signature threads county_code=DEFAULT_COUNTY",
+      "def load_delinquent(conn, county_code=DEFAULT_COUNTY):" in src)
+check("tax_delinquent INSERT column list includes county_code first",
+      "INSERT INTO tax_delinquent\n            (county_code, geo_id, tax_year," in src)
+check("tax_delinquent ON CONFLICT targets the live (county_code, geo_id)",
+      "ON CONFLICT (county_code, geo_id) DO UPDATE" in src)
+check("no stale ON CONFLICT (geo_id) target remains against tax_delinquent",
+      "ON CONFLICT (geo_id) DO UPDATE" not in src)
+check("rows.append() for tax_delinquent includes county_code first",
+      "rows.append((\n                county_code,\n                geo_id," in src)
+check("load_delinquent() is called with county_code=args.county at the CLI call site",
+      "load_delinquent(conn, county_code=args.county)" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 10: loaders/load_tax_rates.py (county_tax_rate)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_tax_rates.py")
+src = open("loaders/load_tax_rates.py").read()
+
+check("DEFAULT_COUNTY imported from scrape_billing_history.py (single source of truth)",
+      "from loaders.scrape_billing_history import DEFAULT_COUNTY" in src)
+check("load() signature threads county_code=DEFAULT_COUNTY",
+      "def load(conn, county_code=DEFAULT_COUNTY):" in src)
+check("county_tax_rate INSERT column list includes county_code first",
+      "INSERT INTO county_tax_rate (county_code, entity_code, entity_name, tax_year, rate)" in src)
+check("county_tax_rate ON CONFLICT targets the live (county_code, entity_code, tax_year)",
+      "ON CONFLICT (county_code, entity_code, tax_year) DO UPDATE" in src)
+check("no stale ON CONFLICT (entity_code, tax_year) target remains",
+      "ON CONFLICT (entity_code, tax_year)" not in src)
+check("rows.append() includes county_code first",
+      "rows.append((county_code, str(entity_code), str(entity_name), year, rate))" in src)
+check("--county CLI flag added, default DEFAULT_COUNTY",
+      '"--county", default=DEFAULT_COUNTY' in src)
+check("main() passes county_code=args.county into load()",
+      "load(conn, county_code=args.county)" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 11: loaders/refresh_group_stats.py (group_stats) -- ALREADY CORRECT,
+# no code change this round; assertions confirm that, so a future
+# regression is caught the same way as every other file in this suite.
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/refresh_group_stats.py (verify-only -- already fixed by PARTITION-2-FIX-1)")
+src = open("loaders/refresh_group_stats.py").read()
+
+check("_build_insert_sql()'s columns list includes county_code",
+      "county_code, source_import_batch_id, refreshed_at" in src)
+check("_build_insert_sql()'s SELECT includes %(county_code)s AS county_code",
+      "%(county_code)s                                                        AS county_code," in src)
+check("shadow table is built via LIKE group_stats INCLUDING ALL -- inherits "
+      "whatever the LIVE group_stats PK/constraints are, so this file needs no "
+      "hardcoded ON CONFLICT target to stay correct against future PK changes",
+      "CREATE TABLE group_stats_shadow (LIKE group_stats INCLUDING ALL)" in src)
+check("no ON CONFLICT clause anywhere (shadow-swap via rename, not upsert -- "
+      "genuinely the correct design, not a missed fix)",
+      "ON CONFLICT" not in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 12: loaders/snapshot_2026_preliminary.py (parcel_2026_preliminary_snapshot)
+# -- ALREADY CORRECT, no code change this round (fixed by DALLAS-GATE-2).
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/snapshot_2026_preliminary.py (verify-only -- already fixed by DALLAS-GATE-2)")
+src = open("loaders/snapshot_2026_preliminary.py").read()
+
+check("INSERT_SQL column list includes county_code first",
+      "INSERT INTO parcel_2026_preliminary_snapshot\n        (county_code, geo_id, market_value" in src)
+check("DELETE_SQL is county-scoped (not an unconditional TRUNCATE), matching "
+      "reload_county_scope.py's discipline",
+      "DELETE FROM parcel_2026_preliminary_snapshot WHERE county_code = %(county_code)s" in src)
+check("INSERT_SQL itself (not the module docstring's ON CONFLICT DO NOTHING "
+      "discussion) genuinely has no ON CONFLICT clause -- correct by design: "
+      "county-scoped DELETE always runs immediately before the INSERT in the same "
+      "transaction, so no pre-existing row this INSERT could conflict against survives",
+      "ON CONFLICT" not in
+      src[src.index('INSERT_SQL = """'):src.index('"""', src.index('INSERT_SQL = """') + 20)])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 13: loaders/quarantine_contamination.py (tax_billing_quarantine
+# county_code column, re-verified) -- ALREADY CORRECT, no code change this
+# round; the in-file fail-loud reasoning (NOT NULL violation, not an ON
+# CONFLICT mismatch, since this INSERT has no ON CONFLICT clause at all)
+# still holds. Files 4's own checks above (lines ~154-182) already cover
+# this file's SQL shape; this is the PX-20260822-06-rev1-specific
+# confirmation that the documented reasoning is still accurate.
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/quarantine_contamination.py (re-verify: fail-loud reasoning still holds)")
+src = open("loaders/quarantine_contamination.py").read()
+
+check("run()'s INSERT into tax_billing_quarantine has no ON CONFLICT clause "
+      "(fail mode is a NOT NULL violation on county_code, not an ON CONFLICT "
+      "mismatch -- documented in-file, re-confirmed here)",
+      "a straight NOT NULL violation on" in src
+      and "tax_billing_quarantine.county_code" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 14: loaders/load_ajr.py (PARCEL_SQL + PROP_UNIT_UPSERT_SQL /
+# PROP_UNIT_TAX_YEAR_UPSERT_SQL arity mismatches)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_ajr.py")
+src = open("loaders/load_ajr.py").read()
+
+check("DEFAULT_COUNTY imported from scrape_billing_history.py (single source of truth)",
+      "from loaders.scrape_billing_history import DEFAULT_COUNTY" in src)
+check("PARCEL_SQL INSERT column list includes county_code first",
+      "INSERT INTO parcel (county_code, geo_id, prop_id, situs_address, legal_desc," in src)
+check("PARCEL_SQL ON CONFLICT targets the live (county_code, geo_id)",
+      "ON CONFLICT (county_code, geo_id) DO UPDATE" in src)
+check("no stale ON CONFLICT (geo_id) target remains against parcel",
+      "ON CONFLICT (geo_id) DO UPDATE" not in src)
+check("load_year() signature threads county_code=DEFAULT_COUNTY",
+      "def load_year(conn, year, filepath, pid_lookup, county_code=DEFAULT_COUNTY):" in src)
+check("parcel_rows.append() includes county_code first (9 values for PARCEL_SQL's 9 placeholders)",
+      "parcel_rows.append((county_code, geo_id, prop_id, address, legal," in src)
+check("unit_rows.append() includes county_code first, 9 values total -- matches "
+      "PROP_UNIT_UPSERT_SQL's 9 placeholders (was 8, a real arity mismatch)",
+      "unit_rows.append((county_code, prop_id, geo_id, None, address, owner_id, None, year, year))" in src)
+check("pty_rows.append() includes county_code first, 12 values total -- matches "
+      "PROP_UNIT_TAX_YEAR_UPSERT_SQL's 12 placeholders (was 11, a real arity mismatch)",
+      'pty_rows.append((county_code, prop_id, year, geo_id, market_val, assessed_val, None,\n'
+      '                              hs_cap, None, None, None, f"ajr_{year}"))' in src)
+check("load() signature threads county_code=DEFAULT_COUNTY",
+      "def load(conn, county_code=DEFAULT_COUNTY):" in src)
+check("load()'s load_year() call passes county_code=county_code",
+      "load_year(conn, year, filepath, pid_lookup, county_code=county_code)" in src)
+check("load()'s parcel_rollup.run() call passes county_code=county_code",
+      "parcel_rollup.run(conn, tax_year=year, county_code=county_code)" in src)
+check("--county CLI flag added, default DEFAULT_COUNTY",
+      '"--county", default=DEFAULT_COUNTY' in src)
+check("main() passes county_code=args.county into load()",
+      "load(conn, county_code=args.county)" in src)
+check("build_pid_lookup()'s missing county_code WHERE scoping is explicitly "
+      "flagged as an out-of-scope 3d-class concern (Travis-only today, so not "
+      "yet live-corrupting), not silently left unexplained",
+      "a 3d-class" in src and "(dynamic-clause) gap" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
 print(f"\n{'=' * 78}")
 if all_ok:
     print("ALL CHECKS PASSED")

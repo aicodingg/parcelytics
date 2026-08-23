@@ -11,7 +11,8 @@ Behavior:
   - Deduplicates split-parcel accounts: keeps highest market_value per geo_id;
     tie-breaks on primary account (RefID2 ending in 0000)
   - UPSERTs into parcel_tax_year for tax_year=2021:
-      * ON CONFLICT (geo_id, tax_year): replaces ajr_2021 values with cert_2021
+      * ON CONFLICT (county_code, geo_id, tax_year): replaces ajr_2021 values with cert_2021
+        (PX-20260822-06-rev1: county_code added to match the live PK)
       * For land_value / imprv_value: COALESCE — keeps existing DB value if PDF had NULL
         (avoids overwriting good data with two-column-collapse gaps)
   - Prints post-load summary:
@@ -46,6 +47,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import config
 import psycopg2
 import psycopg2.extras
+from loaders.scrape_billing_history import DEFAULT_COUNTY  # DALLAS-GATE-4 / PARCEL-ROLLUP-HOTFIX-1
 
 TAX_YEAR    = 2021
 DATA_SOURCE = 'cert_2021'
@@ -114,10 +116,15 @@ def has_column(conn, table, column):
 # ── Core UPSERT ───────────────────────────────────────────────────────────────
 
 def build_upsert_sql(with_exemptions):
-    cols_insert = """geo_id, tax_year,
+    # DALLAS-GATE-4 family completion (PX-20260822-06-rev1): county_code
+    # added first in the column list/VALUES/ON CONFLICT target, matching
+    # the PARCEL-ROLLUP-HOTFIX-1 convention -- live PK for parcel_tax_year
+    # is (county_code, geo_id, tax_year), confirmed via \d against
+    # production 2026-08-23.
+    cols_insert = """county_code, geo_id, tax_year,
                 market_value, assessed_value, taxable_value, hs_cap_loss,
                 land_value, imprv_value, data_source"""
-    vals_insert = """%(geo_id)s, %(tax_year)s,
+    vals_insert = """%(county_code)s, %(geo_id)s, %(tax_year)s,
                 %(market_value)s, %(assessed_value)s, %(taxable_value)s, %(cap_loss)s,
                 %(land_value)s, %(imprv_value)s, %(data_source)s"""
     set_clause  = """
@@ -137,7 +144,7 @@ def build_upsert_sql(with_exemptions):
     return f"""
         INSERT INTO parcel_tax_year ({cols_insert})
         VALUES ({vals_insert})
-        ON CONFLICT (geo_id, tax_year) DO UPDATE SET
+        ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE SET
             {set_clause}
         RETURNING (xmax = 0) AS inserted
     """
@@ -150,7 +157,7 @@ def upsert_batch(cur, sql, batch):
     # Note: executemany doesn't return RETURNING rows easily; we count separately
 
 
-def run_load(conn, records, with_exemptions, dry_run):
+def run_load(conn, records, with_exemptions, dry_run, county_code=DEFAULT_COUNTY):
     sql = build_upsert_sql(with_exemptions)
 
     # Count 2021 rows before load
@@ -176,6 +183,7 @@ def run_load(conn, records, with_exemptions, dry_run):
         batch = []
         for r in records:
             row = {
+                'county_code':     county_code,
                 'geo_id':          r['geo_id'],
                 'tax_year':        TAX_YEAR,
                 'market_value':    parse_int(r.get('market_value')),
@@ -303,6 +311,10 @@ def main():
                     help='CSV produced by parse_cert_2021_pdf.py')
     ap.add_argument('--dry-run', action='store_true',
                     help='Parse and deduplicate but do not write to DB')
+    ap.add_argument('--county', default=DEFAULT_COUNTY,
+                    help=f"county_code written to every parcel_tax_year row "
+                         f"(default: {DEFAULT_COUNTY}). DALLAS-GATE-4 / "
+                         f"PARCEL-ROLLUP-HOTFIX-1 convention.")
     args = ap.parse_args()
 
     # ── Load & deduplicate ────────────────────────────────────────────────────
@@ -339,7 +351,7 @@ def main():
 
     # ── UPSERT ────────────────────────────────────────────────────────────────
     print(f"\nLoading into parcel_tax_year (tax_year={TAX_YEAR}, data_source='{DATA_SOURCE}') ...")
-    result = run_load(conn, deduped, with_exemptions, args.dry_run)
+    result = run_load(conn, deduped, with_exemptions, args.dry_run, county_code=args.county)
 
     if args.dry_run or result is None:
         conn.close()

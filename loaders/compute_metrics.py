@@ -310,14 +310,32 @@ def compute_parcel_metrics(conn):
 
     with conn.cursor() as cur:
         cur.execute("DELETE FROM parcel_metrics")
+        # NOTE (PX-20260822-06-rev1, 3b/3c scope only): this DELETE has no
+        # county_code WHERE clause -- a full-table rebuild across every
+        # county on every run, not scoped to one county's data. That's a
+        # 3d-class (blast-radius) concern per verify_county_scoping.py's
+        # own taxonomy, explicitly out of scope for this brief. Flagging
+        # here rather than fixing silently, since a county-scoped DELETE
+        # would need to be paired with a county-scoped INSERT ... SELECT
+        # (WHERE pty.county_code = %(county_code)s below) to stay correct,
+        # and that's a real behavior change beyond "add the missing column."
 
     # Main insert: YoY metrics via SQL window functions
     # yoy_tax_amount_pct is NULL for all years — no historical billing exists yet
     # effective_tax_rate populated for 2025 only (real billing available)
+    # DALLAS-GATE-4 family completion (PX-20260822-06-rev1): county_code
+    # added to the column list, sourced directly from pty.county_code
+    # (parcel_tax_year already carries it, written by every real writer in
+    # this session's DALLAS-GATE-4/PARCEL-ROLLUP-HOTFIX-1 line of fixes).
+    # Live PK for parcel_metrics is (county_code, geo_id, tax_year) with FK
+    # (county_code, geo_id) -> parcel, confirmed via \d against production,
+    # 2026-08-23 -- NOT reflected in this repo's schema.sql (a pre-existing
+    # staleness gap, not something introduced by this fix; see PM's own
+    # note that schema.sql's DEFAULT 'TRAVIS' at line 217 is likewise dead).
     with conn.cursor() as cur:
         cur.execute(f"""
             INSERT INTO parcel_metrics (
-                geo_id, tax_year,
+                county_code, geo_id, tax_year,
                 coverage_level, has_tax_data,
                 yoy_market_value_pct,
                 yoy_assessed_value_pct,
@@ -330,6 +348,7 @@ def compute_parcel_metrics(conn):
                 computation_version
             )
             SELECT
+                pty.county_code,
                 pty.geo_id,
                 pty.tax_year,
 

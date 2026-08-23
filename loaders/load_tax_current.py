@@ -420,7 +420,7 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
     return total_billing
 
 
-def load_delinquent(conn):
+def load_delinquent(conn, county_code=DEFAULT_COUNTY):
     """Load TaxDelqOpenData.csv into tax_delinquent."""
     path = config.TAX_DELQ_CSV
     if not os.path.exists(path):
@@ -429,12 +429,18 @@ def load_delinquent(conn):
 
     print(f"  Loading TaxDelqOpenData ({os.path.getsize(path)/1e6:.1f} MB)…")
 
+    # DALLAS-GATE-4 family completion (PX-20260822-06-rev1): county_code
+    # added first in the column list/VALUES/ON CONFLICT target, matching
+    # the PARCEL-ROLLUP-HOTFIX-1 convention -- live PK for tax_delinquent
+    # is (county_code, geo_id), confirmed via \d against production,
+    # 2026-08-23. This loader writes ONE county per invocation
+    # (county_code param), so every row it produces shares the same value.
     sql = """
         INSERT INTO tax_delinquent
-            (geo_id, tax_year, delinquent_total, current_year_total, total_due,
+            (county_code, geo_id, tax_year, delinquent_total, current_year_total, total_due,
              first_delinquent_yr, cause_number)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (geo_id) DO UPDATE
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, geo_id) DO UPDATE
             SET delinquent_total    = EXCLUDED.delinquent_total,
                 current_year_total  = EXCLUDED.current_year_total,
                 total_due           = EXCLUDED.total_due,
@@ -451,6 +457,7 @@ def load_delinquent(conn):
             if not geo_id:
                 continue
             rows.append((
+                county_code,
                 geo_id,
                 _i(row.get("Last Tax Roll Year", "")),
                 _f(row.get("Delinquent Total", "")),
@@ -509,5 +516,5 @@ if __name__ == "__main__":
               f"{result['tax_billing_entity_rows']:,} tax_billing_entity rows, "
               f"{result['portal_scrape_merged_rows']:,} portal_scrape rows merged "
               f"(tax_year={EXPECTED_TAX_YEAR})")
-        load_delinquent(conn)
+        load_delinquent(conn, county_code=args.county)
         conn.close()

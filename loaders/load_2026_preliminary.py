@@ -85,9 +85,9 @@ def load_prop_txt(conn, county_code=DEFAULT_COUNTY):
     # geo_id and prop_id are the authoritative keys from the 2025 certified
     # load; this UPSERT only refreshes owner info, same as before.
     parcel_sql = """
-        INSERT INTO parcel (geo_id, prop_id, prop_type_cd, owner_id, owner_name)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (geo_id) DO UPDATE
+        INSERT INTO parcel (county_code, geo_id, prop_id, prop_type_cd, owner_id, owner_name)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, geo_id) DO UPDATE
             SET owner_name   = EXCLUDED.owner_name,
                 owner_id     = EXCLUDED.owner_id
     """
@@ -102,7 +102,7 @@ def load_prop_txt(conn, county_code=DEFAULT_COUNTY):
     pid_to_geo = {}
 
     for rec in ears_format.iter_prop_records(path):
-        parcel_rows.append((rec["geo_id"], rec["prop_id"], rec["prop_type_cd"],
+        parcel_rows.append((county_code, rec["geo_id"], rec["prop_id"], rec["prop_type_cd"],
                              rec["owner_id"], rec["owner_name"]))
         # PARCEL-ROLLUP-HOTFIX-1: county_code first, matching PROP_UNIT_UPSERT_SQL's
         # real column order.

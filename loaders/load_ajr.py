@@ -62,17 +62,26 @@ from loaders import ingest_gate  # noqa: F401 — AC5 wiring marker; see load_ce
                                   # module note for why this isn't also called inline here
                                   # (AJR CSVs also aren't the fixed-width EARS format G1 scans
                                   # anyway — see run_all.py's gate step for what IS covered)
+from loaders.scrape_billing_history import DEFAULT_COUNTY  # DALLAS-GATE-4 / PARCEL-ROLLUP-HOTFIX-1
 
 import psycopg2.extras
 
 
 AGGREGATE_ENTITY = "227000"
 
+# PX-20260822-06-rev1 (DALLAS-GATE-4 family completion): county_code added
+# first in the column list/VALUES/ON CONFLICT target, matching the
+# PARCEL-ROLLUP-HOTFIX-1 convention -- live PK for parcel is
+# (county_code, geo_id), confirmed via \d against production, 2026-08-23.
+# This was the third of load_ajr.py's three breakages named in the
+# ADDENDUM: PARCEL_SQL had ZERO county_code awareness (not even the stale
+# pre-hotfix 8-column shape ears_format.py's two shared SQL constants had
+# before their own fix -- this statement is entirely local to this file).
 PARCEL_SQL = """
-    INSERT INTO parcel (geo_id, prop_id, situs_address, legal_desc,
+    INSERT INTO parcel (county_code, geo_id, prop_id, situs_address, legal_desc,
                         neighborhood_cd, state_cd1, state_cd2, owner_id)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    ON CONFLICT (geo_id) DO UPDATE
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (county_code, geo_id) DO UPDATE
         SET situs_address  = COALESCE(parcel.situs_address,  EXCLUDED.situs_address),
             legal_desc     = COALESCE(parcel.legal_desc,     EXCLUDED.legal_desc),
             neighborhood_cd= COALESCE(parcel.neighborhood_cd,EXCLUDED.neighborhood_cd),
@@ -97,13 +106,26 @@ def _int_or_none(v):
 
 
 def build_pid_lookup(conn):
-    """Return {prop_id: geo_id} from prop_unit (every unit ever loaded, any year)."""
+    """Return {prop_id: geo_id} from prop_unit (every unit ever loaded, any year).
+
+    KNOWN GAP (flagged, not fixed -- out of scope for PX-20260822-06-rev1,
+    which named exactly three load_ajr.py breakages to fix together:
+    PARCEL_SQL + the two PROP_UNIT/PROP_UNIT_TAX_YEAR arity mismatches
+    below. This query has no county_code WHERE scoping, so on a real
+    multi-county prop_unit table a prop_id that collides across counties
+    could resolve to the WRONG county's geo_id here -- a 3d-class
+    (dynamic-clause) gap per verify_county_scoping.py's own taxonomy, not
+    a 3b/3c one. Since this loader is Travis-only today (single-county
+    AJR_FILES config), it's not yet live-corrupting anything, but it
+    should be scoped to county_code the same way once load_ajr.py itself
+    is ever pointed at a second county's AJR files.
+    """
     with conn.cursor() as cur:
         cur.execute("SELECT prop_id, geo_id FROM prop_unit WHERE prop_id IS NOT NULL")
         return {row[0]: row[1] for row in cur.fetchall()}
 
 
-def load_year(conn, year, filepath, pid_lookup):
+def load_year(conn, year, filepath, pid_lookup, county_code=DEFAULT_COUNTY):
     t0 = time.time()
     print(f"  Loading {year} AJR: {os.path.basename(filepath)}")
 
@@ -151,15 +173,23 @@ def load_year(conn, year, filepath, pid_lookup):
             assessed_val = _int_or_none(fields[34])
             hs_cap       = _int_or_none(fields[35])
 
-            parcel_rows.append((geo_id, prop_id, address, legal,
+            parcel_rows.append((county_code, geo_id, prop_id, address, legal,
                                 nbhd, state_cd1, state_cd2, owner_id))
-            unit_rows.append((prop_id, geo_id, None, address, owner_id, None, year, year))
+            # PX-20260822-06-rev1: county_code prepended -- both shared
+            # ears_format.py constants gained it as their leading column in
+            # PARCEL-ROLLUP-HOTFIX-1, but this file's tuples were never
+            # updated to match, an 8-value tuple against PROP_UNIT_UPSERT_SQL's
+            # 9 placeholders (a real arity mismatch, not just a missing value).
+            unit_rows.append((county_code, prop_id, geo_id, None, address, owner_id, None, year, year))
             # Task M5-PERYEAR-GEOID: geo_id is already resolved above (either
             # directly from this row's own field[6], or via pid_lookup for
             # the 2021 no-geo_id format) -- this IS this year's real,
             # as-of-that-year account assignment, so it's the correct value
             # for prop_unit_tax_year.geo_id too, no separate lookup needed.
-            pty_rows.append((prop_id, year, geo_id, market_val, assessed_val, None,
+            # PX-20260822-06-rev1: county_code prepended, same arity-mismatch
+            # fix as unit_rows above (11 values against PROP_UNIT_TAX_YEAR_
+            # UPSERT_SQL's 12 placeholders).
+            pty_rows.append((county_code, prop_id, year, geo_id, market_val, assessed_val, None,
                               hs_cap, None, None, None, f"ajr_{year}"))
             n_rows += 1
 
@@ -178,7 +208,7 @@ def load_year(conn, year, filepath, pid_lookup):
     return n_rows
 
 
-def load(conn):
+def load(conn, county_code=DEFAULT_COUNTY):
     import parcel_rollup
 
     print("  Building prop_id → geo_id lookup from prop_unit…")
@@ -191,7 +221,7 @@ def load(conn):
         if not os.path.exists(filepath):
             print(f"  WARNING: {filepath} not found, skipping {year}")
             continue
-        total += load_year(conn, year, filepath, pid_lookup)
+        total += load_year(conn, year, filepath, pid_lookup, county_code=county_code)
         years_loaded.append(year)
         # Refresh the lookup after each year so a later year's 2021-style
         # fallback (if ever needed) can resolve prop_ids this same run
@@ -203,7 +233,7 @@ def load(conn):
 
     for year in years_loaded:
         print(f"  Rolling up prop_unit_tax_year → parcel_tax_year for {year}…")
-        result = parcel_rollup.run(conn, tax_year=year)
+        result = parcel_rollup.run(conn, tax_year=year, county_code=county_code)
         print(f"    → prop_id repaired: {result['prop_id_repaired']:,}, "
               f"parcel_tax_year rows: {result['parcel_tax_year_rows']:,}")
 
@@ -211,7 +241,17 @@ def load(conn):
 
 
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code written to every parcel/prop_unit/prop_unit_tax_year "
+             f"row (default: {DEFAULT_COUNTY}). DALLAS-GATE-4 / "
+             f"PARCEL-ROLLUP-HOTFIX-1 convention.",
+    )
+    args = ap.parse_args()
+
     conn = get_conn()
     execute_schema(conn)
-    load(conn)
+    load(conn, county_code=args.county)
     conn.close()

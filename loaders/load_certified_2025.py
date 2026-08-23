@@ -69,9 +69,9 @@ def load_prop_txt(conn, cert_dir, county_code=DEFAULT_COUNTY):
 
     parcel_sql = """
         INSERT INTO parcel
-            (geo_id, prop_id, prop_type_cd, owner_id, owner_name)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (geo_id) DO UPDATE
+            (county_code, geo_id, prop_id, prop_type_cd, owner_id, owner_name)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (county_code, geo_id) DO UPDATE
             SET prop_id      = EXCLUDED.prop_id,
                 prop_type_cd = EXCLUDED.prop_type_cd,
                 owner_id     = EXCLUDED.owner_id,
@@ -92,7 +92,7 @@ def load_prop_txt(conn, cert_dir, county_code=DEFAULT_COUNTY):
     pid_to_geo = {}
 
     for rec in ears_format.iter_prop_records(path):
-        parcel_rows.append((rec["geo_id"], rec["prop_id"], rec["prop_type_cd"],
+        parcel_rows.append((county_code, rec["geo_id"], rec["prop_id"], rec["prop_type_cd"],
                              rec["owner_id"], rec["owner_name"]))
         # PARCEL-ROLLUP-HOTFIX-1: county_code first, matching PROP_UNIT_UPSERT_SQL's
         # real column order.
