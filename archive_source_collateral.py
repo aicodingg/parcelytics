@@ -6,7 +6,9 @@ Archives the ~70 NO_TWIN files found by verify_claude_files_twins.py:
 sole-copy source data and collateral still sitting in ~/Desktop/Claude
 Files/, never copied into the vault by any prior migration.
 
-LAYOUT (per PX-20260822-03, PM decision, 2026-08-22):
+LAYOUT (per PX-20260822-03, PM decision, 2026-08-22; corrected per
+PX-20260822-05-rev1, 2026-08-23 -- code below now matches the ruled
+end-state, not just the docstring):
 - Collateral lives FLAT inside its matching vintage folder alongside the
   already-archived extracted data (no separate collateral/ subdir).
 - Original delivery zips are archived alongside their extracted contents.
@@ -15,27 +17,39 @@ LAYOUT (per PX-20260822-03, PM decision, 2026-08-22):
   these are HIGH CONFIDENCE, already independently verified by that
   migration.
 - The 2025 EARS delivery (227EARS090425[, " 2"]) has no MIGRATION_MAP
-  entry -- it's a new vintage. Date 2025-09-04 was initially INFERRED
-  from the folder name's MM/DD/YY pattern, then CONFIRMED 2026-08-22 by
-  reading the archived signed MIF (Form 50-792,
+  entry -- it's a new vintage. Date 2025-09-04 is CONFIRMED (not
+  inferred) by reading the archived signed MIF (Form 50-792,
   227_EARS_MIF_090425_Signed.pdf): "Date Prepared 09/04/2025", signed by
   Chief Appraiser Leana H Mann. Note the same form lists a separate
   "Certification Date 07/18/2025" -- the appraisal roll's certification,
   not this submission's preparation. Vault vintages are keyed on
   preparation/acquisition date (consistent with the 2022-09-28 /
   2023-08-30 / 2024-08-28 AJR vintages, all EARS prep dates), so
-  2025-09-04 is correct and the INFERRED-DATE flag is retired on
-  evidence.
-- The two 2021 Certified Appraisal Roll PDFs were initially placed
-  under 2021-09-25 (the only existing 2021 vintage) as a flagged
-  assumption. RESOLVED 2026-08-22 by reading the document: its only
-  date is a True Automation report-generation timestamp, 01/25/2022
-  22:09PM -- these are separately generated reports of the 2021
-  certified roll "as of Supplement 0", NOT part of the September 2021
-  EARS delivery. Relocated (hash-verified both sides) to
-  travis/certified_roll/2022-01-25/, keeping the archive's one dating
-  rule: folders are keyed by when the artifact was acquired/produced,
-  never by tax year. The "2021" stays unambiguous from the filenames.
+  2025-09-04 is correct. (PX-20260822-05-rev1: build_plan() previously
+  still applied a stale INFERRED-DATE flag in code despite this
+  confirmation being documented here -- fixed below.)
+- The two 2021 Certified Appraisal Roll PDFs: their only internal date
+  is a True Automation report-generation timestamp, 01/25/2022 22:09PM
+  -- these are separately generated reports of the 2021 certified roll
+  "as of Supplement 0", NOT part of the September 2021 EARS delivery.
+  Destination is travis/certified_roll/2022-01-25/, keeping the
+  archive's one dating rule: folders are keyed by when the artifact was
+  acquired/produced, never by tax year. The "2021" stays unambiguous
+  from the filenames. (PX-20260822-05-rev1: build_plan() previously
+  still hardcoded the pre-relocation 2021-09-25 destination despite the
+  real files having been physically relocated to 2022-01-25 -- fixed
+  below.)
+- 2025RatesHistory1990-2025.xlsx is NOT collateral and is NOT a vintage
+  export -- it's the Source Registry's "Adopted tax rates" row, a
+  cumulative 1990-2025 history workbook. Destination is
+  travis/rates/2025RatesHistory1990-2025.xlsx: the REGISTERED slug
+  (config.py:229, TAX_RATES_XL = _travis("rates", ...); config.py:186
+  ties this slug to the Registry's "Adopted tax rates" row), at the
+  slug root with no vintage subfolder (there is no single vintage date
+  for a cumulative history file). (PX-20260822-05-rev1 ruling:
+  travis/adopted_tax_rates/ was an unregistered invention -- fixed
+  below. Diego relocates the physical file separately; this fix makes
+  the code match that ruled end-state.)
 
 NOTE ON ._ FILES: the vault is ExFAT, which can't store macOS resource
 forks natively, so macOS writes AppleDouble sidecars (._<name>) beside
@@ -43,9 +57,6 @@ copied files. These are metadata, not data; every script here skips
 dotfiles, which is why file counts stay clean. Deleting them is
 pointless -- macOS recreates them on the next copy. Any future tooling
 walking the vault must skip dotfiles or it will double-count.
-- 2025RatesHistory1990-2025.xlsx is NOT collateral -- it's its own
-  Source Registry row (Adopted tax rates), archived under a new
-  top-level slug: travis/adopted_tax_rates/.
 
 DEDUPLICATION: the " 2"-suffixed EARS folders are duplicates by name of
 their non-suffixed siblings. Each file is hashed; if a same-named file
@@ -121,26 +132,37 @@ def build_plan():
     _add_dir_by_year("227EARS082923 (2) 2", "2023")
     _add_dir_by_year("227EARS082824 (2) 2", "2024")
 
-    # Flagged: inferred 2025 vintage date, no MIGRATION_MAP entry exists
-    # (new vintage). Both duplicate-suffixed folders feed the SAME
+    # 2025-09-04 vintage date CONFIRMED (not inferred) from the signed MIF --
+    # see module docstring. Both duplicate-suffixed folders feed the SAME
     # destination so the dedup logic in main() catches any overlap.
-    INFERRED_2025_FLAG = "INFERRED-DATE 2025-09-04 (from folder name MM/DD/YY, not independently confirmed)"
+    CONFIRMED_2025_NOTE = (
+        "CONFIRMED 2025-09-04 from the archived signed MIF (Form 50-792, "
+        "\"Date Prepared 09/04/2025\", Chief Appraiser Leana H Mann) -- not "
+        "inferred from the folder name."
+    )
     for d in ("227EARS090425", "227EARS090425 2"):
-        _add_dir_with_date(d, "2025-09-04", flag=INFERRED_2025_FLAG)
+        _add_dir_with_date(d, "2025-09-04", flag=CONFIRMED_2025_NOTE)
 
-    # Flagged: 2021 Certified Appraisal Roll PDFs, placed under the only
-    # existing 2021 vintage -- no independent date confirmation.
+    # 2021 Certified Appraisal Roll PDFs -- destination is the CONFIRMED
+    # 2022-01-25 vintage (their own True Automation report-generation
+    # timestamp), not the September 2021 EARS delivery date. See module
+    # docstring for the relocation history.
     for fn in ("2021 CERTIFIED APPRAISAL ROLL as of Supp 0_Alpha.pdf",
                "2021 CERTIFIED APPRAISAL ROLL as of Supp 0_GEO.pdf"):
         p = os.path.join(CLAUDE, fn)
         if os.path.isfile(p):
-            PLAN.append((p, config._travis_archive("certified_roll", "2021-09-25"),
-                         "ASSUMED-VINTAGE: placed under 2021-09-25, the only existing 2021 vintage -- not independently confirmed"))
+            PLAN.append((p, config._travis_archive("certified_roll", "2022-01-25"),
+                         "RELOCATED: staged under 2021-09-25 originally (ASSUMED-VINTAGE), "
+                         "then relocated (hash-verified both sides) to 2022-01-25, CONFIRMED "
+                         "via the PDF's own True Automation report-generation timestamp, "
+                         "01/25/2022 22:09"))
 
-    # New slug: adopted tax rates, its own Source Registry row.
+    # Registered slug (PX-20260822-05-rev1 ruling): "rates", not the
+    # unregistered "adopted_tax_rates" -- see module docstring. No vintage
+    # subfolder: this is a cumulative history workbook, not a dated export.
     p = os.path.join(CLAUDE, "2025RatesHistory1990-2025.xlsx")
     if os.path.isfile(p):
-        PLAN.append((p, config._travis_archive("adopted_tax_rates"), None))
+        PLAN.append((p, config._travis_archive("rates"), None))
 
     return PLAN
 
