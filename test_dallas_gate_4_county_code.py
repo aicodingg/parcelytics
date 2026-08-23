@@ -69,20 +69,28 @@ check("DEFAULT_COUNTY = \"TRAVIS\" constant declared",
       'DEFAULT_COUNTY = "TRAVIS"' in src)
 check("load_file() signature threads county_code=DEFAULT_COUNTY",
       "def load_file(conn, filepath, dry_run=False, county_code=DEFAULT_COUNTY):" in src)
-check("billing_sql INSERT column list includes county_code",
-      re.search(r"INSERT INTO tax_billing\s*\n\s*\(county_code, geo_id, tax_year", src) is not None)
-check("billing_sql ON CONFLICT targets the live (county_code, geo_id, tax_year)",
-      "ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE" in src)
-check("entity_sql INSERT column list includes county_code",
-      "INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)" in src)
-check("entity_sql ON CONFLICT targets the live (county_code, geo_id, tax_year, entity_code)",
-      "ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE" in src)
+check("billing_sql INSERT column list includes county_code, targets tax_billing_account "
+      "(PX-20260823-01: TAX-BILLING-REKEY-3 retargeted this loader from the old "
+      "direct tax_billing write to the account-grain table)",
+      re.search(r"INSERT INTO tax_billing_account\s*\n\s*\(county_code, account_id, geo_id, tax_year", src) is not None)
+check("billing_sql ON CONFLICT targets the live (county_code, account_id, tax_year)",
+      "ON CONFLICT (county_code, account_id, tax_year) DO UPDATE" in src)
+check("entity_sql INSERT column list includes county_code, targets tax_billing_account_entity",
+      re.search(r"INSERT INTO tax_billing_account_entity\s*\n\s*\(county_code, account_id, geo_id, tax_year, "
+                 r"entity_code, amount_due, amount_paid\)", src) is not None)
+check("entity_sql ON CONFLICT targets the live (county_code, account_id, tax_year, entity_code)",
+      "ON CONFLICT (county_code, account_id, tax_year, entity_code) DO UPDATE" in src)
 check("no stale ON CONFLICT (geo_id, tax_year) target remains",
       "ON CONFLICT (geo_id, tax_year)" not in src)
 check("no stale ON CONFLICT (geo_id, tax_year, entity_code) target remains",
       "ON CONFLICT (geo_id, tax_year, entity_code)" not in src)
 check("--county CLI flag added, default DEFAULT_COUNTY",
       '"--county", default=DEFAULT_COUNTY' in src)
+check("PX-20260823-01 (Law 3): no stale direct-write INSERT INTO tax_billing/"
+      "tax_billing_entity remains -- TAX-BILLING-REKEY-3 retargeted billing_sql/"
+      "entity_sql to tax_billing_account/_account_entity; tax_billing/"
+      "tax_billing_entity are now written only by tax_billing_rollup.py",
+      "INSERT INTO tax_billing\n" not in src and "INSERT INTO tax_billing_entity" not in src)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -93,18 +101,30 @@ src = open("loaders/load_pir_billing_2021_full.py").read()
 
 check("DEFAULT_COUNTY imported from scrape_billing_history.py (single source of truth)",
       "from loaders.scrape_billing_history import ensure_columns as ensure_billing_cols, DEFAULT_COUNTY" in src)
-check("BILLING_SQL INSERT column list includes county_code",
-      re.search(r"INSERT INTO tax_billing\s*\n\s*\(county_code, geo_id, tax_year", src) is not None)
-check("BILLING_SQL ON CONFLICT targets the live (county_code, geo_id, tax_year)",
-      "ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE" in src)
-check("ENTITY_SQL INSERT column list includes county_code",
-      "INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)" in src)
-check("ENTITY_SQL ON CONFLICT targets the live (county_code, geo_id, tax_year, entity_code)",
-      "ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE" in src)
+check("BILLING_SQL INSERT column list includes county_code, targets tax_billing_account "
+      "(PX-20260823-01: TAX-BILLING-REKEY-3 retargeted this loader from the old "
+      "direct tax_billing write to the account-grain table)",
+      re.search(r"INSERT INTO tax_billing_account\s*\n\s*\(county_code, account_id, geo_id, tax_year", src) is not None)
+check("BILLING_SQL VALUES clause includes %(county_code)s",
+      "VALUES (%(county_code)s, %(account_id)s, %(geo_id)s, %(tax_year)s" in src)
+check("BILLING_SQL ON CONFLICT targets the live (county_code, account_id, tax_year)",
+      "ON CONFLICT (county_code, account_id, tax_year) DO UPDATE" in src)
+check("ENTITY_SQL INSERT column list includes county_code, targets tax_billing_account_entity",
+      re.search(r"INSERT INTO tax_billing_account_entity\s*\n\s*\(county_code, account_id, geo_id, tax_year, "
+                 r"entity_code, amount_due, amount_paid\)", src) is not None)
+check("ENTITY_SQL VALUES clause includes %(county_code)s",
+      "VALUES (%(county_code)s, %(account_id)s, %(geo_id)s, %(tax_year)s, %(entity_code)s" in src)
+check("ENTITY_SQL ON CONFLICT targets the live (county_code, account_id, tax_year, entity_code)",
+      "ON CONFLICT (county_code, account_id, tax_year, entity_code) DO UPDATE" in src)
 check("no stale ON CONFLICT (geo_id, tax_year) target remains",
       "ON CONFLICT (geo_id, tax_year)" not in src)
 check("no stale ON CONFLICT (geo_id, tax_year, entity_code) target remains",
       "ON CONFLICT (geo_id, tax_year, entity_code)" not in src)
+check("PX-20260823-01 (Law 3): no stale direct-write INSERT INTO tax_billing/"
+      "tax_billing_entity remains -- TAX-BILLING-REKEY-3 retargeted BILLING_SQL/"
+      "ENTITY_SQL to tax_billing_account/_account_entity; tax_billing/"
+      "tax_billing_entity are now written only by tax_billing_rollup.py",
+      "INSERT INTO tax_billing\n" not in src and "INSERT INTO tax_billing_entity" not in src)
 check("write_to_db() signature threads county_code=DEFAULT_COUNTY",
       "def write_to_db(conn, matched, county_code=DEFAULT_COUNTY):" in src)
 check("verify_sanity_parcels() signature threads county_code=DEFAULT_COUNTY "
@@ -128,24 +148,34 @@ check("load() signature threads county_code=DEFAULT_COUNTY",
       "def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):" in src)
 check("--new-only already_tagged_keys SELECT scopes by county_code",
       'WHERE tax_year = 2025 AND data_source IS NOT NULL AND county_code = %s' in src)
-check("billing_sql INSERT column list includes county_code",
-      re.search(r"INSERT INTO tax_billing\s*\n\s*\(county_code, geo_id, tax_year", src) is not None)
-check("billing_sql ON CONFLICT targets the live (county_code, geo_id, tax_year)",
-      "ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE" in src)
-check("entity_sql INSERT column list includes county_code",
-      "INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)" in src)
-check("entity_sql ON CONFLICT targets the live (county_code, geo_id, tax_year, entity_code)",
-      "ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE" in src)
-check("no stale ON CONFLICT (geo_id, tax_year) target remains against tax_billing",
+check("billing_sql INSERT column list includes county_code, targets tax_billing_account "
+      "(PX-20260823-01: TAX-BILLING-REKEY-3 retargeted load()'s billing_sql/entity_sql "
+      "from the old direct tax_billing write to the account-grain table)",
+      re.search(r"INSERT INTO tax_billing_account\s*\n\s*\(county_code, account_id, geo_id, tax_year", src) is not None)
+check("billing_sql ON CONFLICT targets the live (county_code, account_id, tax_year)",
+      "ON CONFLICT (county_code, account_id, tax_year) DO UPDATE" in src)
+check("entity_sql INSERT column list includes county_code, targets tax_billing_account_entity",
+      re.search(r"INSERT INTO tax_billing_account_entity\s*\n\s*\(county_code, account_id, geo_id, tax_year, "
+                 r"entity_code, amount_due, amount_paid\)", src) is not None)
+check("entity_sql ON CONFLICT targets the live (county_code, account_id, tax_year, entity_code)",
+      "ON CONFLICT (county_code, account_id, tax_year, entity_code) DO UPDATE" in src)
+check("no stale ON CONFLICT (geo_id, tax_year) target remains against tax_billing_account",
       "ON CONFLICT (geo_id, tax_year) DO UPDATE" not in src)
 check("no stale ON CONFLICT (geo_id, tax_year, entity_code) target remains",
       "ON CONFLICT (geo_id, tax_year, entity_code)" not in src)
 check("--county CLI flag added, default DEFAULT_COUNTY",
       '"--county", default=DEFAULT_COUNTY' in src)
-check("load_delinquent()'s own ON CONFLICT (geo_id) is a DIFFERENT table "
-      "(tax_delinquent, out of this brief's tax_billing-writer scope) and is "
-      "correctly left untouched",
-      "ON CONFLICT (geo_id) DO UPDATE" in src and "INSERT INTO tax_delinquent" in src)
+check("PX-20260823-01 (Law 3): no stale direct-write INSERT INTO tax_billing/"
+      "tax_billing_entity remains -- TAX-BILLING-REKEY-3 retargeted load()'s "
+      "billing_sql/entity_sql to tax_billing_account/_account_entity",
+      "INSERT INTO tax_billing\n" not in src and "INSERT INTO tax_billing_entity" not in src)
+check("load_delinquent()'s tax_delinquent table now ALSO carries county_code "
+      "(PX-20260822-06-rev1 fixed this separately from the tax_billing-family "
+      "rekey -- the old claim here that it was 'correctly left untouched' is "
+      "itself now stale, since it WAS touched in that later brief; File 9 below "
+      "is the canonical rigor-test for tax_delinquent's shape, this check just "
+      "keeps File 3's own cross-reference to it accurate rather than false)",
+      "ON CONFLICT (county_code, geo_id) DO UPDATE" in src and "INSERT INTO tax_delinquent" in src)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -229,26 +259,37 @@ src = open("loaders/pir_xlsx_common.py").read()
 
 check("DEFAULT_COUNTY imported from scrape_billing_history.py (single source of truth)",
       "from loaders.scrape_billing_history import DEFAULT_COUNTY" in src)
-check("BILLING_SQL INSERT column list includes county_code",
-      re.search(r"INSERT INTO tax_billing\s*\n\s*\(county_code, geo_id, tax_year", src) is not None)
+check("BILLING_SQL INSERT column list includes county_code, targets tax_billing_account "
+      "(PX-20260823-01: TAX-BILLING-REKEY-3 retargeted this loader from the old "
+      "direct tax_billing write to the account-grain table)",
+      re.search(r"INSERT INTO tax_billing_account\s*\n\s*\(county_code, account_id, geo_id, tax_year", src) is not None)
 check("BILLING_SQL VALUES clause includes %(county_code)s",
-      "VALUES (%(county_code)s, %(geo_id)s, %(tax_year)s" in src)
-check("BILLING_SQL ON CONFLICT targets the live (county_code, geo_id, tax_year)",
-      "ON CONFLICT (county_code, geo_id, tax_year) DO UPDATE" in src)
-check("ENTITY_SQL INSERT column list includes county_code",
-      "INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, entity_code, amount_due, amount_paid)" in src)
+      "VALUES (%(county_code)s, %(account_id)s, %(geo_id)s, %(tax_year)s" in src)
+check("BILLING_SQL ON CONFLICT targets the live (county_code, account_id, tax_year)",
+      "ON CONFLICT (county_code, account_id, tax_year) DO UPDATE" in src)
+check("ENTITY_SQL INSERT column list includes county_code, targets tax_billing_account_entity",
+      re.search(r"INSERT INTO tax_billing_account_entity\s*\n\s*\(county_code, account_id, geo_id, tax_year, "
+                 r"entity_code, amount_due, amount_paid\)", src) is not None)
 check("ENTITY_SQL VALUES clause includes %(county_code)s",
-      "VALUES (%(county_code)s, %(geo_id)s, %(tax_year)s, %(entity_code)s" in src)
-check("ENTITY_SQL ON CONFLICT targets the live (county_code, geo_id, tax_year, entity_code)",
-      "ON CONFLICT (county_code, geo_id, tax_year, entity_code) DO UPDATE" in src)
+      "VALUES (%(county_code)s, %(account_id)s, %(geo_id)s, %(tax_year)s, %(entity_code)s" in src)
+check("ENTITY_SQL ON CONFLICT targets the live (county_code, account_id, tax_year, entity_code)",
+      "ON CONFLICT (county_code, account_id, tax_year, entity_code) DO UPDATE" in src)
 check("no stale ON CONFLICT (geo_id, tax_year) target remains",
       "ON CONFLICT (geo_id, tax_year)" not in src)
 check("no stale ON CONFLICT (geo_id, tax_year, entity_code) target remains",
       "ON CONFLICT (geo_id, tax_year, entity_code)" not in src)
+check("PX-20260823-01 (Law 3): no stale direct-write INSERT INTO tax_billing/"
+      "tax_billing_entity remains -- TAX-BILLING-REKEY-3 retargeted BILLING_SQL/"
+      "ENTITY_SQL to tax_billing_account/_account_entity; tax_billing/"
+      "tax_billing_entity are now written only by tax_billing_rollup.py",
+      "INSERT INTO tax_billing\n" not in src and "INSERT INTO tax_billing_entity" not in src)
 check("write_to_db() signature threads county_code=DEFAULT_COUNTY",
       "def write_to_db(conn, matched, tax_year, data_source, confidence_level, county_code=DEFAULT_COUNTY):" in src)
-check("write_to_db()'s billing_rows dict includes county_code",
-      '"county_code": county_code, "geo_id": geo_id, "tax_year": tax_year,' in src)
+check("write_to_db()'s billing_rows dict includes county_code, account_id, geo_id, tax_year "
+      "(TAX-BILLING-REKEY-3: account_id inserted between county_code and geo_id, so the "
+      "old contiguous county_code/geo_id/tax_year substring no longer appears verbatim)",
+      '"county_code": county_code, "account_id": account_id, "geo_id": geo_id,' in src
+      and '"tax_year": tax_year,' in src)
 check("check_portal_scrape_divergence() signature threads county_code=DEFAULT_COUNTY "
       "(forward-looking read-side fix, mirrors DALLAS-GATE-4's identical fix to "
       "load_pir_billing_2021_full.py's sibling verify_sanity_parcels())",
