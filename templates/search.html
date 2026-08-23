@@ -54,7 +54,7 @@
     <div class="card">
       <div class="card-header">Find a Parcel</div>
       <div class="card-body">
-        <form method="get" action="/" id="searchPageForm">
+        <form method="get" action="{{ url_for('index') }}" id="searchPageForm">
           <label class="form-label small text-muted mb-1" for="spQ">Parcel ID or address</label>
           <div class="ta-wrap" style="position:relative;">
             <input type="text" name="q" id="spQ" class="form-control"
@@ -593,7 +593,7 @@ ParcelTypeahead.attach({ inputId: "spQ" });
     return all;
   }
 
-  fetch("/api/benchmark/meta").then(r => r.json()).then(d => {
+  fetch(`${COUNTY_BASE}/api/benchmark/meta`).then(r => r.json()).then(d => {
     const propTypes = d.prop_types || [];
     propTypeTA.setOptions(propTypes.map(p => ({ value: p, label: p })));
     useCodesByType = d.use_codes_by_type || {};
@@ -648,7 +648,7 @@ ParcelTypeahead.attach({ inputId: "spQ" });
     const view = SNAPSHOT_VIEW_BY_LABEL[e.detail];
     if (!view) { snapshotLink.style.display = "none"; return; }
     snapshotLabel.textContent = e.detail;
-    snapshotLink.href = "/snapshot?view=" + encodeURIComponent(view);
+    snapshotLink.href = `${COUNTY_BASE}/snapshot?view=` + encodeURIComponent(view);
     snapshotLink.style.display = "";
   });
   document.getElementById("fltPropTypeInput").addEventListener("input", (e) => {
@@ -765,7 +765,7 @@ ParcelTypeahead.attach({ inputId: "spQ" });
       quickBtns.forEach((b, i) => b.disabled = quickBtnsPrevDisabled[i]);
     }
 
-    fetch("/api/search_filter?" + buildParams(currentPage).toString())
+    fetch(`${COUNTY_BASE}/api/search_filter?` + buildParams(currentPage).toString())
       .then(r => r.json().then(d => ({ status: r.status, body: d })))
       .then(({ status, body }) => {
         clearLoading();
@@ -794,7 +794,7 @@ ParcelTypeahead.attach({ inputId: "spQ" });
 
         resultsBody.innerHTML = (body.results || []).map(r => `
           <tr>
-            <td><a href="/parcel/${encodeURIComponent(r.geo_id)}">${r.situs_address || "(address unknown)"}</a></td>
+            <td><a href="${COUNTY_BASE}/parcel/${encodeURIComponent(r.geo_id)}">${r.situs_address || "(address unknown)"}</a></td>
             <td><span style="font-family:var(--font-mono); font-size:11.5px;">${r.geo_id}</span></td>
             <td>${r.prop_type || "—"}</td>
             <td class="text-end">${r.market_value != null ? "$" + Math.round(r.market_value).toLocaleString() : "—"}</td>
@@ -850,7 +850,7 @@ ParcelTypeahead.attach({ inputId: "spQ" });
     // simplest correct way to respect SEARCH_FILTER_PAGE_SIZE pagination
     // without guessing at page boundaries client-side.
     function fetchPage(page) {
-      return fetch("/api/search_filter?" + buildParams(page).toString())
+      return fetch(`${COUNTY_BASE}/api/search_filter?` + buildParams(page).toString())
         .then(r => r.json())
         .then(body => {
           if (!body.ok) throw new Error(body.error || "export failed");

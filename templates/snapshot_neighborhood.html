@@ -3,7 +3,7 @@
 
 {% block content %}
 {# Back link — same convention as parcel_list.html's "&larr; Back to Snapshot" #}
-<a href="/snapshot?view={{ view }}" class="back-link">&larr; Back to Market Snapshot{% if view != 'overall' %} ({{ view_prop_type }}){% endif %}</a>
+<a href="{{ url_for('county_snapshot', view=view) }}" class="back-link">&larr; Back to Market Snapshot{% if view != 'overall' %} ({{ view_prop_type }}){% endif %}</a>
 
 <div class="page-header mb-3 mt-2 d-flex align-items-center gap-3 flex-wrap">
   <div>
@@ -53,10 +53,10 @@
           {% for p in parcels %}
           <tr>
             <td data-label="Address">
-              <a href="/parcel/{{ p.geo_id }}" class="text-decoration-none">{{ p.situs_address or "(unknown)" }}</a>
+              <a href="{{ url_for('property_detail', geo_id=p.geo_id) }}" class="text-decoration-none">{{ p.situs_address or "(unknown)" }}</a>
             </td>
             <td data-label="Parcel ID">
-              <a href="/parcel/{{ p.geo_id }}" class="text-muted text-decoration-none" style="font-family:var(--font-mono); font-size:11.5px;">{{ p.geo_id }}</a>
+              <a href="{{ url_for('property_detail', geo_id=p.geo_id) }}" class="text-muted text-decoration-none" style="font-family:var(--font-mono); font-size:11.5px;">{{ p.geo_id }}</a>
             </td>
             <td class="text-end" style="font-family:var(--font-mono); font-size:12px;" data-label="2025 Market Value">
               {{ "$" + "{:,.0f}".format(p.mv25) if p.mv25 else "—" }}
@@ -96,13 +96,13 @@
     {% if total_pages > 1 %}
     <div class="d-flex align-items-center gap-2">
       {% if page > 1 %}
-      <a href="/snapshot/neighborhood/{{ code }}?view={{ view }}&page={{ page - 1 }}" class="btn btn-sm btn-outline-secondary">&larr; Prev</a>
+      <a href="{{ url_for('snapshot_neighborhood', code=code, view=view, page=page - 1) }}" class="btn btn-sm btn-outline-secondary">&larr; Prev</a>
       {% else %}
       <button type="button" class="btn btn-sm btn-outline-secondary" disabled>&larr; Prev</button>
       {% endif %}
       <span class="text-muted" style="font-size:12px;">Page {{ page }} of {{ total_pages }}</span>
       {% if page < total_pages %}
-      <a href="/snapshot/neighborhood/{{ code }}?view={{ view }}&page={{ page + 1 }}" class="btn btn-sm btn-outline-secondary">Next &rarr;</a>
+      <a href="{{ url_for('snapshot_neighborhood', code=code, view=view, page=page + 1) }}" class="btn btn-sm btn-outline-secondary">Next &rarr;</a>
       {% else %}
       <button type="button" class="btn btn-sm btn-outline-secondary" disabled>Next &rarr;</button>
       {% endif %}

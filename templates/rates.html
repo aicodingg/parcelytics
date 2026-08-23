@@ -584,7 +584,7 @@ document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
   }
 
   function lookup(q) {
-    fetch('/api/parcel_entities?q=' + encodeURIComponent(q))
+    fetch(`${COUNTY_BASE}/api/parcel_entities?q=` + encodeURIComponent(q))
       .then(r => r.json())
       .then(d => {
         if (!d.ok) return;

@@ -431,7 +431,7 @@
 {% set excodes_list = excodes.replace(";", ",").split(",") | map("trim") | select | list %}
 
 <div class="d-flex justify-content-between align-items-center mt-2">
-  <a href="/" class="back-link">&larr; New search</a>
+  <a href="{{ url_for('index') }}" class="back-link">&larr; New search</a>
 </div>
 
 <div class="mb-4 mt-2">
@@ -757,10 +757,10 @@
         {% elif current and current.computed_total_tax %}
           Not in the county's billing file — {% if is_residential %}your estimated 2025 tax{% else %}this property's estimated 2025 tax{% endif %}, based on certified value × certified rates.
           <span class="badge-estimated" style="font-size:9px;">Estimated</span>
-          <a href="/about#methodology-billing-gap" class="text-muted" style="font-size:10.5px; text-decoration:underline;" title="Why isn't this parcel in the county's billing file?">Why?</a>
+          <a href="{{ url_for('about') }}#methodology-billing-gap" class="text-muted" style="font-size:10.5px; text-decoration:underline;" title="Why isn't this parcel in the county's billing file?">Why?</a>
         {% else %}
           {% if is_residential %}Your 2025 tax bill isn't in the county's billing file.{% else %}This property's 2025 tax bill isn't in the county's billing file.{% endif %}
-          <a href="/about#methodology-billing-gap" class="text-muted" style="font-size:10.5px; text-decoration:underline;" title="Why isn't this parcel in the county's billing file?">Why?</a>
+          <a href="{{ url_for('about') }}#methodology-billing-gap" class="text-muted" style="font-size:10.5px; text-decoration:underline;" title="Why isn't this parcel in the county's billing file?">Why?</a>
         {% endif %}
       </div>
     </div></div>
@@ -1593,7 +1593,7 @@
 {% else %}
 {# ── Back link ───────────────────────────────────────────────────────── #}
 <div class="d-flex justify-content-between align-items-center">
-  <a href="/" class="back-link">&larr; New search</a>
+  <a href="{{ url_for('index') }}" class="back-link">&larr; New search</a>
   <div class="d-flex gap-2">
     {# Tax Due Diligence PDF export (July 2026, per Diego's outside-review
        brief, item 3) -- placed alongside Pin to Compare per the brief's own
@@ -1602,7 +1602,7 @@
        per the brief's explicit scope). Plain link, not a JS fetch: the
        route returns a real PDF file directly (Content-Disposition: inline),
        so the browser just opens/downloads it -- no extra JS needed. #}
-    <a class="btn btn-sm btn-outline-secondary" href="/parcel/{{ parcel.geo_id }}/export.pdf"
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('export_due_diligence_pdf', geo_id=parcel.geo_id) }}"
        target="_blank" title="Download a citable one-page tax due diligence PDF for this parcel">
       ⤓ Export Due Diligence PDF
     </a>
@@ -4052,10 +4052,10 @@
                         style="font-style:italic; color:var(--text-muted); cursor:help;">
                     not in county billing file · ~${{ "{:,.0f}".format(r.computed_total_tax) }} estimated
                   </span>
-                  <a href="/about#methodology-billing-gap" class="text-muted" style="font-size:10px; text-decoration:underline;" title="Why isn't this year in the county's billing file?">Why?</a>
+                  <a href="{{ url_for('about') }}#methodology-billing-gap" class="text-muted" style="font-size:10px; text-decoration:underline;" title="Why isn't this year in the county's billing file?">Why?</a>
                 {% else %}
                   <span class="na-cell" id="bna-{{ r.tax_year }}">not in county billing file</span>
-                  <a href="/about#methodology-billing-gap" class="text-muted" style="font-size:10px; text-decoration:underline;" title="Why isn't this year in the county's billing file?">Why?</a>
+                  <a href="{{ url_for('about') }}#methodology-billing-gap" class="text-muted" style="font-size:10px; text-decoration:underline;" title="Why isn't this year in the county's billing file?">Why?</a>
                 {% endif %}
               </td>
               <td data-label="Source" {% if r.tax_year in [2021,2022,2023,2024] %}id="bsrc-{{ r.tax_year }}"{% endif %}>
@@ -4894,7 +4894,7 @@
   const mapEl = document.getElementById('hoSatMap');
   const fallbackEl = document.getElementById('hoSatFallback');
   if (!mapEl || !window.L) return;
-  fetch('/api/geocode/{{ parcel.geo_id }}').then(r => r.json()).then(d => {
+  fetch(`${COUNTY_BASE}/api/geocode/{{ parcel.geo_id }}`).then(r => r.json()).then(d => {
     if (!d || !d.ok || d.lat == null) return;   // no fabricated location — fallback stays visible
     // Both-visible-at-once bug fix (July 2026, per the founder — parcel 0100030109):
     // #hoSatFallback carries Bootstrap's `d-flex` utility class, which Bootstrap
@@ -4987,7 +4987,7 @@
     if (sp) sp.style.display = 'inline';
     const btn = $('acqRunBtn'); if (btn) btn.disabled = true;
 
-    fetch(`/api/estimate_acq/${encodeURIComponent(GEO_ID)}?price=${encodeURIComponent(raw)}&buyer=${encodeURIComponent(buyer)}&rate_mode=${encodeURIComponent(rateMode)}`)
+    fetch(`${COUNTY_BASE}/api/estimate_acq/${encodeURIComponent(GEO_ID)}?price=${encodeURIComponent(raw)}&buyer=${encodeURIComponent(buyer)}&rate_mode=${encodeURIComponent(rateMode)}`)
       .then(r => r.json())
       .then(d => {
         if (sp) sp.style.display = 'none';
@@ -5337,7 +5337,7 @@
         <td><a href="${esc(it.link)}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>
           ${it.source ? `<div style="color:var(--text-3); font-size:11px;">${esc(it.source)}</div>` : ''}</td>
       </tr>`;
-    fetch('/api/news?type=homeowner').then(r => r.json()).then(d => {
+    fetch(`${COUNTY_BASE}/api/news?type=homeowner`).then(r => r.json()).then(d => {
       const items = (d && d.items) || [];
       if (!d || !d.ok || !items.length) { body.innerHTML = '<span class="text-muted">News is temporarily unavailable — please check back shortly.</span>'; return; }
       const first = items.slice(0, 3), rest = items.slice(3, 8);
@@ -5757,7 +5757,7 @@ if (rCtx) {
 
   // ── Load meta from server ────────────────────────────────────────
   function loadMeta() {
-    fetch('/api/benchmark/meta')
+    fetch(`${COUNTY_BASE}/api/benchmark/meta`)
       .then(r => r.json())
       .then(data => {
         metaData = data;
@@ -5912,7 +5912,7 @@ if (rCtx) {
     if (neighborhood) params.set('neighborhood', neighborhood);
 
     loadingEl.style.display = 'inline';
-    fetch(`/api/benchmark?${params}`)
+    fetch(`${COUNTY_BASE}/api/benchmark?${params}`)
       .then(r => r.json())
       .then(data => {
         loadingEl.style.display = 'none';
@@ -5999,7 +5999,7 @@ function ordinalSuffix(n) {
 
   function _fmtM(n) { return n == null ? '—' : '$' + Math.round(n).toLocaleString(); }
 
-  fetch(`/api/peer_benchmark_local/${GEO_ID}`)
+  fetch(`${COUNTY_BASE}/api/peer_benchmark_local/${GEO_ID}`)
     .then(r => r.json())
     .then(d => {
       if (!d.ok) {
@@ -6102,7 +6102,7 @@ function ordinalSuffix(n) {
         ${it.source ? `<div style="color:var(--text-3); font-size:11px;">${esc(it.source)}</div>` : ''}
       </td>
     </tr>`;
-  const url = '/api/news' + (NEWS_TYPE ? ('?type=' + encodeURIComponent(NEWS_TYPE)) : '');
+  const url = COUNTY_BASE + '/api/news' + (NEWS_TYPE ? ('?type=' + encodeURIComponent(NEWS_TYPE)) : '');
   fetch(url)
     .then(r => r.json())
     .then(d => {
@@ -6158,7 +6158,7 @@ function ordinalSuffix(n) {
     broad_category_fallback: 'No parcels shared this exact use code within a reasonable range, so this shows the broader property-category match instead (same category, not necessarily the same exact use). Excludes AJR accounts. Click an address to open that parcel.',
     broad_category_no_subject_code: 'This parcel has no use code on file, so an exact-use-code match isn\'t possible — showing the broader property-category match instead. Excludes AJR accounts. Click an address to open that parcel.',
   };
-  fetch(`/api/peer_set/${encodeURIComponent(GEO_ID)}`)
+  fetch(`${COUNTY_BASE}/api/peer_set/${encodeURIComponent(GEO_ID)}`)
     .then(r => r.json())
     .then(d => {
       if (!d.ok) return;
@@ -6174,7 +6174,7 @@ function ordinalSuffix(n) {
       }
       body.innerHTML = d.peers.map(p => `
         <tr>
-          <td><a href="/parcel/${encodeURIComponent(p.geo_id)}">${p.address || '—'}</a></td>
+          <td><a href="${COUNTY_BASE}/parcel/${encodeURIComponent(p.geo_id)}">${p.address || '—'}</a></td>
           <td><code style="font-size:11px;">${p.geo_id}</code></td>
           <td>${p.classi_cd ? (p.classi_cd + (p.use_desc ? ' · ' + p.use_desc : '')) : '—'}</td>
           <td class="text-end">${p.main_area_sqft != null ? fmt0(p.main_area_sqft) + ' SF' : '—'}</td>
@@ -6208,7 +6208,7 @@ function ordinalSuffix(n) {
     return `<span style="color:${clr}; font-weight:600;">${ordinalSuffix(r)} pct</span>`;
   }
 
-  fetch(`/api/peer_benchmark_sf/${encodeURIComponent(GEO_ID)}`)
+  fetch(`${COUNTY_BASE}/api/peer_benchmark_sf/${encodeURIComponent(GEO_ID)}`)
     .then(r => r.json())
     .then(d => {
       if (!d.ok) {
@@ -6482,7 +6482,7 @@ function ordinalSuffix(n) {
       c[GEO_ID] = ADDR;
       saveC(c);
       if (btn) btn.classList.add('btn-dark');
-      if (btn) btn.innerHTML = '✓ Pinned &nbsp;—&nbsp; <a href="/compare?ids=' + Object.keys(c).join(',') + '" target="_blank" class="text-white" style="font-size:12px;">Compare now →</a>';
+      if (btn) btn.innerHTML = '✓ Pinned &nbsp;—&nbsp; <a href="' + COUNTY_BASE + '/compare?ids=' + Object.keys(c).join(',') + '" target="_blank" class="text-white" style="font-size:12px;">Compare now →</a>';
     }
   };
 
@@ -6491,7 +6491,7 @@ function ordinalSuffix(n) {
   const btn = document.getElementById('comparePin');
   if (btn && c[GEO_ID]) {
     btn.classList.add('btn-dark');
-    btn.innerHTML = '✓ Pinned &nbsp;—&nbsp; <a href="/compare?ids=' + Object.keys(c).join(',') + '" target="_blank" class="text-white" style="font-size:12px;">Compare now →</a>';
+    btn.innerHTML = '✓ Pinned &nbsp;—&nbsp; <a href="' + COUNTY_BASE + '/compare?ids=' + Object.keys(c).join(',') + '" target="_blank" class="text-white" style="font-size:12px;">Compare now →</a>';
   }
 })();
 </script>
@@ -6515,7 +6515,7 @@ function ordinalSuffix(n) {
     }
   });
 
-  fetch("/api/billing/" + GEO_ID)
+  fetch(COUNTY_BASE + "/api/billing/" + GEO_ID)
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (data.status !== "ok" || !data.rows.length) {

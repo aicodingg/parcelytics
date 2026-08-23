@@ -21,7 +21,7 @@
 
 <nav class="navbar navbar-expand-lg">
   <div class="container-fluid px-0">
-    <a class="navbar-brand" href="/" aria-label="Parcelytics home">
+    <a class="navbar-brand" href="{{ url_for('index') }}" aria-label="Parcelytics home">
       <img src="{{ url_for('static', filename='parcelytics-mark.png') }}" alt="" class="brand-mark-img">
       <img src="{{ url_for('static', filename='parcelytics-wordmark.png') }}" alt="Parcelytics" class="brand-wordmark-img">
     </a>
@@ -40,7 +40,7 @@
          at all (plain GET-and-reload on Enter), which is exactly the box
          implicated in "results render below the fold with no indication
          anything happened" when used from a non-home page. #}
-      <form class="d-flex me-lg-3 my-2 my-lg-0" role="search" action="/" method="get" id="navSearchForm">
+      <form class="d-flex me-lg-3 my-2 my-lg-0" role="search" action="{{ url_for('index') }}" method="get" id="navSearchForm">
         <input class="form-control form-control-sm" type="search" name="q" id="navSearchInput"
                placeholder="Search parcel ID or address…" autocomplete="off"
                aria-label="Search parcels" style="min-width:210px; font-size:12px;">
@@ -57,27 +57,34 @@
            {% if mode == 'investor' %}background:#94B0DA; color:#fff;{% else %}background:#fff; color:#505A5B;{% endif %}">Investor</a>
       </div>
       <div class="navbar-nav ms-auto d-flex align-items-lg-center">
-        <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/">Home</a>
-        <a class="nav-link {% if request.path == '/about' %}active{% endif %}" href="/about">About</a>
-        <a class="nav-link {% if request.path == '/info' %}active{% endif %}" href="/info">Info</a>
-        <a class="nav-link {% if request.path == '/search' %}active{% endif %}" href="/search">Search</a>
-        <a class="nav-link {% if request.path == '/rates' %}active{% endif %}" href="/rates">Rate Trends</a>
+        {# Task 3 (PX-20260823-03): nav active-state was comparing request.path
+           against a bare, unprefixed route literal (e.g. '/search') -- this
+           silently stopped matching ANYTHING the moment county prefixing
+           landed, since every real path now starts with a county slug (e.g.
+           '/travis-tx/search'). request.endpoint is immune to any URL prefix
+           by construction, so it's the correct comparison going forward
+           regardless of how many counties or slug shapes exist. #}
+        <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">Home</a>
+        <a class="nav-link {% if request.endpoint == 'about' %}active{% endif %}" href="{{ url_for('about') }}">About</a>
+        <a class="nav-link {% if request.endpoint == 'info' %}active{% endif %}" href="{{ url_for('info') }}">Info</a>
+        <a class="nav-link {% if request.endpoint == 'search_page' %}active{% endif %}" href="{{ url_for('search_page') }}">Search</a>
+        <a class="nav-link {% if request.endpoint == 'tax_rates' %}active{% endif %}" href="{{ url_for('tax_rates') }}">Rate Trends</a>
 
         {# Sector dropdown — links to Market Snapshot with appropriate view #}
         <div class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle {% if request.path == '/snapshot' %}active{% endif %}" href="/snapshot" role="button"
+          <a class="nav-link dropdown-toggle {% if request.endpoint == 'county_snapshot' %}active{% endif %}" href="{{ url_for('county_snapshot') }}" role="button"
              data-bs-toggle="dropdown" aria-expanded="false" id="sectorDropdown">
             Market Snapshot
           </a>
           <ul class="dropdown-menu dropdown-menu-end sector-dropdown" aria-labelledby="sectorDropdown">
             <li class="dropdown-header">Sector</li>
-            <li><a class="dropdown-item" href="/snapshot?view=overall">All Property Types</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='overall') }}">All Property Types</a></li>
             <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" href="/snapshot?view=residential">Residential (SFR)</a></li>
-            <li><a class="dropdown-item" href="/snapshot?view=multifamily">Multi-Family</a></li>
-            <li><a class="dropdown-item" href="/snapshot?view=commercial">Commercial</a></li>
-            <li><a class="dropdown-item" href="/snapshot?view=land">Land / Vacant</a></li>
-            <li><a class="dropdown-item" href="/snapshot?view=agricultural">Agricultural</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='residential') }}">Residential (SFR)</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='multifamily') }}">Multi-Family</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='commercial') }}">Commercial</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='land') }}">Land / Vacant</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='agricultural') }}">Agricultural</a></li>
           </ul>
         </div>
       </div>
@@ -112,19 +119,19 @@
     </div>
     <div class="footer-col">
       <div class="footer-col-title">Product</div>
-      <a href="/">Parcel search</a>
-      <a href="/snapshot">Market snapshot</a>
-      <a href="/rates">Rate trends</a>
-      <a href="/about">About</a>
-      <a href="/terms">Terms of Service</a>
-      <a href="/privacy">Privacy Policy</a>
-      <a href="/disclaimer">Disclaimer</a>
+      <a href="{{ url_for('index') }}">Parcel search</a>
+      <a href="{{ url_for('county_snapshot') }}">Market snapshot</a>
+      <a href="{{ url_for('tax_rates') }}">Rate trends</a>
+      <a href="{{ url_for('about') }}">About</a>
+      <a href="{{ url_for('terms') }}">Terms of Service</a>
+      <a href="{{ url_for('privacy') }}">Privacy Policy</a>
+      <a href="{{ url_for('disclaimer') }}">Disclaimer</a>
     </div>
     <div class="footer-col">
       <div class="footer-col-title">Data sources — Travis County, TX</div>
       <span>Travis Central Appraisal District</span>
       <span>Travis County Tax Office</span>
-      <a href="/about">Methodology &amp; coverage</a>
+      <a href="{{ url_for('about') }}">Methodology &amp; coverage</a>
     </div>
     <div class="footer-col">
       <div class="footer-col-title">Coverage</div>
@@ -189,8 +196,8 @@
           county office before making a decision based on it.
         </p>
         <p>
-          By clicking Continue, you agree to our <a href="/terms">Terms of Service</a> and
-          <a href="/privacy">Privacy Policy</a>.
+          By clicking Continue, you agree to our <a href="{{ url_for('terms') }}">Terms of Service</a> and
+          <a href="{{ url_for('privacy') }}">Privacy Policy</a>.
         </p>
       </div>
       <div class="modal-footer">
@@ -210,6 +217,15 @@
   // hero, /search, Rate Trends) attach their own instances from their own
   // per-page scripts block further down this file — see those templates.
   ParcelTypeahead.attach({ inputId: "navSearchInput" });
+</script>
+<script>
+  // Task 2 (PX-20260823-03): single county-aware base for every page-script
+  // fetch() call below (and any JS-built app-route href). url_for('index')
+  // auto-carries the CURRENT request's county_slug via _add_county_slug()
+  // in app.py -- this is the one mechanism, not a second '/' + county_slug
+  // convention living in JS. Trailing slash stripped so callers can safely
+  // do `${COUNTY_BASE}/api/...` without a double slash.
+  const COUNTY_BASE = {{ url_for('index') | tojson }}.replace(/\/$/, '');
 </script>
 {% block scripts %}{% endblock %}
 </body>

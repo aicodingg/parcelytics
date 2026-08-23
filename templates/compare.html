@@ -16,7 +16,7 @@
 {% elif not parcels %}
 <div class="search-error-block">
   No parcels to compare. Select parcels from the
-  <a href="/snapshot">Market Snapshot</a> or any property detail page.
+  <a href="{{ url_for('county_snapshot') }}">Market Snapshot</a> or any property detail page.
 </div>
 {% else %}
 
@@ -29,7 +29,7 @@
         {% for p in parcels %}
         <th class="text-center" style="min-width:180px;">
           <div style="font-size:12px; font-weight:600; word-break:break-word;">
-            <a href="/parcel/{{ p.geo_id }}" class="text-decoration-none" target="_blank">
+            <a href="{{ url_for('property_detail', geo_id=p.geo_id) }}" class="text-decoration-none" target="_blank">
               {{ p.address or p.geo_id }}
             </a>
           </div>

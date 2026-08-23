@@ -76,43 +76,43 @@
 {% if mode != 'homeowner' %}
 <div class="mb-4">
   <div class="btn-group btn-group-sm flex-wrap" role="group">
-    <a href="/snapshot?view=overall"
+    <a href="{{ url_for('county_snapshot', view='overall') }}"
        class="btn {% if view == 'overall' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Overall
     </a>
-    <a href="/snapshot?view=residential"
+    <a href="{{ url_for('county_snapshot', view='residential') }}"
        class="btn {% if view == 'residential' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Residential
     </a>
-    <a href="/snapshot?view=multifamily"
+    <a href="{{ url_for('county_snapshot', view='multifamily') }}"
        class="btn {% if view == 'multifamily' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Multi-Family
     </a>
-    <a href="/snapshot?view=retail"
+    <a href="{{ url_for('county_snapshot', view='retail') }}"
        class="btn {% if view == 'retail' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Retail
     </a>
-    <a href="/snapshot?view=industrial"
+    <a href="{{ url_for('county_snapshot', view='industrial') }}"
        class="btn {% if view == 'industrial' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Industrial
     </a>
-    <a href="/snapshot?view=office"
+    <a href="{{ url_for('county_snapshot', view='office') }}"
        class="btn {% if view == 'office' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Office
     </a>
-    <a href="/snapshot?view=hotel"
+    <a href="{{ url_for('county_snapshot', view='hotel') }}"
        class="btn {% if view == 'hotel' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Hotel
     </a>
-    <a href="/snapshot?view=land"
+    <a href="{{ url_for('county_snapshot', view='land') }}"
        class="btn {% if view == 'land' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Land
     </a>
-    <a href="/snapshot?view=agricultural"
+    <a href="{{ url_for('county_snapshot', view='agricultural') }}"
        class="btn {% if view == 'agricultural' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Agricultural
     </a>
-    <a href="/snapshot?view=other"
+    <a href="{{ url_for('county_snapshot', view='other') }}"
        class="btn {% if view == 'other' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
       Other
     </a>
@@ -447,7 +447,12 @@
                  real subtype folded into it (r._rolled_ptypes), not just a
                  literal ptype-string equality -- see app.py's
                  _ptype_drill_where() `rolled` handling. #}
-              <a href="/parcels?view={{ view }}&ptype={{ r.ptype | urlencode }}{% if r._rolled_ptypes is defined %}{% for rp in r._rolled_ptypes %}&rolled={{ rp | urlencode }}{% endfor %}{% endif %}"
+              {# Task 1 (PX-20260823-03): url_for() handles repeated query
+                 params for a list value natively (emits one rolled=... per
+                 list item), so the old manual per-item Jinja loop is no
+                 longer needed -- Flask's own URL-encoding replaces the
+                 explicit | urlencode filters too. #}
+              <a href="{{ url_for('parcel_list', view=view, ptype=r.ptype, rolled=(r._rolled_ptypes if r._rolled_ptypes is defined else None)) }}"
                  class="text-decoration-none"
                  title="View all {{ r.ptype }} parcels{% if r._rolled_ptypes is defined %} (includes {{ r._rolled_ptypes | length }} rolled-up subtypes){% endif %}">
                 {{ r.ptype }}
@@ -566,7 +571,7 @@
             {% for n in top_neighborhoods %}
             <tr>
               <td style="font-family:var(--font-mono); font-size:12px;">
-                <a href="/snapshot/neighborhood/{{ n.neighborhood_cd | urlencode }}?view={{ view | urlencode }}"
+                <a href="{{ url_for('snapshot_neighborhood', code=n.neighborhood_cd, view=view) }}"
                    title="View {{ n.neighborhood_cd }} parcel detail">{{ n.neighborhood_cd }}</a>
               </td>
               {# Coherence fix (July 2026, per Fable review finding 6): raw
@@ -591,7 +596,7 @@
             {% for n in bottom_neighborhoods %}
             <tr>
               <td style="font-family:var(--font-mono); font-size:12px;">
-                <a href="/snapshot/neighborhood/{{ n.neighborhood_cd | urlencode }}?view={{ view | urlencode }}"
+                <a href="{{ url_for('snapshot_neighborhood', code=n.neighborhood_cd, view=view) }}"
                    title="View {{ n.neighborhood_cd }} parcel detail">{{ n.neighborhood_cd }}</a>
               </td>
               {# Coherence fix (July 2026, per Fable review finding 6): raw

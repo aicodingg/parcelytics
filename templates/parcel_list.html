@@ -2,7 +2,7 @@
 {% block title %}{{ ptype }} Parcels — Parcelytics{% endblock %}
 
 {% block content %}
-<a href="/snapshot?view={{ view }}" class="back-link">&larr; Back to Snapshot</a>
+<a href="{{ url_for('county_snapshot', view=view) }}" class="back-link">&larr; Back to Snapshot</a>
 
 <div class="page-header mb-3 mt-2 d-flex align-items-center gap-3 flex-wrap">
   <div>
@@ -29,7 +29,7 @@
   </div>
   <div class="ms-auto d-flex gap-2 align-items-center">
     <button class="btn btn-sm btn-outline-secondary" id="sortToggle" onclick="toggleSort()">Sort: MV ↓</button>
-    <a href="/compare" id="compareLink" class="btn btn-sm btn-dark"
+    <a href="{{ url_for('compare_parcels') }}" id="compareLink" class="btn btn-sm btn-dark"
        style="display:none;" target="_blank">
        Compare (<span id="compareCt">0</span>)
     </a>
@@ -63,7 +63,7 @@
               </button>
             </td>
             <td data-label="Address">
-              <a href="/parcel/{{ p.geo_id }}" class="text-decoration-none">
+              <a href="{{ url_for('property_detail', geo_id=p.geo_id) }}" class="text-decoration-none">
                 {{ p.address or "(unknown)" }}
               </a>
             </td>
@@ -78,7 +78,7 @@
               {% if yoy is not none %}{{ "{:+.1f}%".format(yoy) }}{% else %}—{% endif %}
             </td>
             <td class="text-end" style="font-family:var(--font-mono); font-size:11px; color:var(--text-3);" data-label="Geo ID">
-              <a href="/parcel/{{ p.geo_id }}" class="text-muted text-decoration-none">{{ p.geo_id }}</a>
+              <a href="{{ url_for('property_detail', geo_id=p.geo_id) }}" class="text-muted text-decoration-none">{{ p.geo_id }}</a>
             </td>
           </tr>
           {% endfor %}
@@ -174,7 +174,7 @@ function renderPins() {
         <button onclick="togglePin('${id}','${c[id]}')" style="border:none;background:none;padding:0;cursor:pointer;color:var(--text-3);">×</button>
        </span>`
     ).join('');
-    const compareHref = '/compare?ids=' + ids.join(',');
+    const compareHref = COUNTY_BASE + '/compare?ids=' + ids.join(',');
     document.getElementById('compareTrayBtn').href = compareHref;
     if (link) link.href = compareHref;
   } else {
@@ -187,7 +187,7 @@ function openCompare(e) {
   e.preventDefault();
   const ids = Object.keys(getCompare());
   if (ids.length < 2) { alert('Select at least 2 parcels to compare.'); return; }
-  window.open('/compare?ids=' + ids.join(','), '_blank');
+  window.open(COUNTY_BASE + '/compare?ids=' + ids.join(','), '_blank');
 }
 
 function clearCompare() {
