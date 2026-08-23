@@ -47,6 +47,10 @@ import config
 from loaders.db import get_conn, execute_schema
 from tax_logic.classify import label_case_sql
 from parcel_filters import CANONICAL_PARCEL_EXCL_BARE
+# PX-20260823-02: DEFAULT_COUNTY imported from the same real source every
+# other county-aware loader uses (single source of truth), rather than a
+# second, independent "TRAVIS" constant.
+from loaders.scrape_billing_history import DEFAULT_COUNTY
 import psycopg2.extras
 
 COMPUTATION_VERSION = "2.0"
@@ -293,7 +297,7 @@ def analyze_threshold(conn):
 
 
 # ── Step 2: Compute parcel_metrics ──────────────────────────────────────────────
-def compute_parcel_metrics(conn):
+def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
     print("\n[1] Computing parcel_metrics…")
     t0 = time.time()
 
@@ -310,15 +314,25 @@ def compute_parcel_metrics(conn):
 
     with conn.cursor() as cur:
         cur.execute("DELETE FROM parcel_metrics")
-        # NOTE (PX-20260822-06-rev1, 3b/3c scope only): this DELETE has no
-        # county_code WHERE clause -- a full-table rebuild across every
-        # county on every run, not scoped to one county's data. That's a
-        # 3d-class (blast-radius) concern per verify_county_scoping.py's
-        # own taxonomy, explicitly out of scope for this brief. Flagging
-        # here rather than fixing silently, since a county-scoped DELETE
-        # would need to be paired with a county-scoped INSERT ... SELECT
-        # (WHERE pty.county_code = %(county_code)s below) to stay correct,
-        # and that's a real behavior change beyond "add the missing column."
+        # EXEMPT (PX-20260823-02, registered in verify_county_scoping.py's
+        # EXEMPTIONS -- not comment-only): a documented, named 3d-class (blast-radius) concern,
+        # not silently left unexplained. This DELETE has no county_code
+        # WHERE clause -- a full-table rebuild across every county on every
+        # run. Real reason scoping it here is NOT cheap (the brief's own
+        # bar for when an exemption is legitimate): the INSERT ... SELECT
+        # immediately below carries NO ON CONFLICT clause at all (it's a
+        # genuine insert-only rebuild, not an upsert -- see that INSERT's
+        # own EXEMPT registration). Scoping ONLY this DELETE to one county
+        # while leaving that INSERT's SELECT unscoped would make the
+        # rebuild actively WRONG the moment a second county's data exists:
+        # the INSERT would still try to re-insert every OTHER county's rows
+        # too (its SELECT has no county filter), colliding with the
+        # untouched, non-deleted rows already there for those counties --
+        # a real duplicate-key failure this exemption exists to prevent
+        # introducing. A correct per-county rebuild needs this DELETE AND
+        # the INSERT's SELECT WHERE scoped TOGETHER as one behavior change
+        # (a real write-shape change, not a WHERE-clause-only fix) --
+        # flagged as a follow-up, not built here.
 
     # Main insert: YoY metrics via SQL window functions
     # yoy_tax_amount_pct is NULL for all years — no historical billing exists yet
@@ -332,6 +346,17 @@ def compute_parcel_metrics(conn):
     # 2026-08-23 -- NOT reflected in this repo's schema.sql (a pre-existing
     # staleness gap, not something introduced by this fix; see PM's own
     # note that schema.sql's DEFAULT 'TRAVIS' at line 217 is likewise dead).
+    # EXEMPT (PX-20260823-02, registered in verify_county_scoping.py's
+    # EXEMPTIONS): this INSERT has no ON CONFLICT clause at all -- genuinely
+    # correct by design, not a gap. It's a full DELETE+INSERT...SELECT
+    # rebuild sharing one transaction with the DELETE above (same pattern
+    # as loaders/snapshot_2026_preliminary.py's own already-verified-correct
+    # INSERT_SQL): the DELETE always runs first in the same transaction, so
+    # no pre-existing row this INSERT could conflict against survives --
+    # there is no unique-constraint target to have. See the DELETE's own
+    # EXEMPT comment above for why this INSERT's SELECT is ALSO not
+    # county-scoped today (a real, disclosed, coupled follow-up, not an
+    # oversight).
     with conn.cursor() as cur:
         cur.execute(f"""
             INSERT INTO parcel_metrics (
@@ -500,12 +525,15 @@ def compute_parcel_metrics(conn):
     # Pass 2: large value jump flag
     t1 = time.time()
     with conn.cursor() as cur:
+        # PX-20260823-02: county_code added to the WHERE -- this UPDATE
+        # previously touched every county's rows on every run.
         cur.execute(f"""
             UPDATE parcel_metrics
             SET risk_large_value_jump     = TRUE,
                 risk_large_value_jump_pct = ABS(yoy_market_value_pct)
             WHERE ABS(yoy_market_value_pct) > {LARGE_JUMP_THRESHOLD_PCT}
-        """)
+              AND county_code = %s
+        """, (county_code,))
         n_jump = cur.rowcount
     print(f"    risk_large_value_jump: {n_jump:,} rows flagged (>{LARGE_JUMP_THRESHOLD_PCT}%)  ({time.time()-t1:.1f}s)")
 
@@ -615,7 +643,8 @@ def compute_parcel_metrics(conn):
                   AND (pty.unit_count = 1 OR pty.unit_count IS NULL)
             ) cse
             WHERE pm.geo_id = cse.geo_id AND pm.tax_year = 2025
-        """)
+              AND pm.county_code = %s
+        """, (county_code,))
         n_step_up = cur.rowcount
     print(f"    cap_step_up_exposure: {n_step_up:,} rows flagged (2025 only, >=22% relative gap "
           f"AND >=$500 estimated)  ({time.time()-t1:.1f}s)")
@@ -650,7 +679,8 @@ def compute_parcel_metrics(conn):
                   AND (pty25.unit_count = 1 OR pty25.unit_count IS NULL)
             ) ces
             WHERE pm.geo_id = ces.geo_id AND pm.tax_year = 2025
-        """)
+              AND pm.county_code = %s
+        """, (county_code,))
         n_expiry = cur.rowcount
     print(f"    cap_expiry_signal: {n_expiry:,} rows flagged (2025 only, HS on 2025 "
           f"certified, absent from 2026 preliminary)  ({time.time()-t1:.1f}s)")
@@ -688,7 +718,8 @@ def compute_parcel_metrics(conn):
                   AND cur.tax_year != mn.earliest_year   -- need at least 2 data points
             ) sub
             WHERE pm.geo_id = sub.geo_id AND pm.tax_year = 2025
-        """)
+              AND pm.county_code = %s
+        """, (county_code,))
         n_cum = cur.rowcount
     print(f"    cumulative_value_growth_pct: {n_cum:,} rows updated  ({time.time()-t1:.1f}s)")
 
@@ -698,7 +729,7 @@ def compute_parcel_metrics(conn):
 
 
 # ── Step 2b: Compute county_benchmark ──────────────────────────────────────────
-def compute_county_benchmarks(conn):
+def compute_county_benchmarks(conn, county_code=DEFAULT_COUNTY):
     print("\n[2] Computing county_benchmark…")
     t0 = time.time()
 
@@ -711,7 +742,14 @@ def compute_county_benchmarks(conn):
         prev_count = cur.fetchone()[0]
 
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM county_benchmark")
+        # PX-20260823-02: scoped by county_code -- cheap and safe here
+        # (unlike parcel_metrics' DELETE above) because the INSERT below is
+        # a real upsert (ON CONFLICT (county_code, tax_year,
+        # property_type_label) DO UPDATE), so re-inserting every county's
+        # rows on every run -- which the unscoped SELECT below still does --
+        # can't collide with rows this DELETE left untouched for other
+        # counties.
+        cur.execute("DELETE FROM county_benchmark WHERE county_code = %s", (county_code,))
 
     excl = _exclude_clause()
     # classi_cd-first label (Task 1): apartments carrying a multi-family
@@ -729,7 +767,7 @@ def compute_county_benchmarks(conn):
                     median_yoy_value_change_pct
                 )
                 SELECT
-                    'TRAVIS',
+                    %s,
                     pty.tax_year,
                     %s,
                     %s,
@@ -766,7 +804,7 @@ def compute_county_benchmarks(conn):
                         median_assessment_ratio     = EXCLUDED.median_assessment_ratio,
                         median_yoy_value_change_pct = EXCLUDED.median_yoy_value_change_pct,
                         computed_at                 = NOW()
-            """, (label, prefix_key, label))
+            """, (county_code, label, prefix_key, label))
             n = cur.rowcount
             print(f"    {label}: {n} year rows")
             # Each of the five TYPE_GROUPS is known to have real parcels in
@@ -883,6 +921,16 @@ def main():
     parser.add_argument("--benchmarks-only", action="store_true",
                         help="Rebuild county_benchmark only (skip the parcel_metrics "
                              "recompute). Use after a classification-only change.")
+    parser.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code used to scope every UPDATE this script issues, and "
+             f"written to every county_benchmark row (default: {DEFAULT_COUNTY}). "
+             f"PX-20260823-02. Does NOT (yet) scope compute_parcel_metrics()'s or "
+             f"compute_county_benchmarks()'s own source SELECTs -- both still "
+             f"aggregate across every county's parcel_tax_year/parcel_metrics rows "
+             f"regardless of this flag; see the in-code EXEMPT notes for why that's "
+             f"a separate, disclosed follow-up, not an oversight.",
+    )
     args = parser.parse_args()
 
     conn = get_conn()
@@ -899,7 +947,7 @@ def main():
             # Task 1: classification-only change touches county_benchmark bucketing,
             # not the per-parcel YoY rows — rebuild just the benchmark.
             try:
-                compute_county_benchmarks(conn)
+                compute_county_benchmarks(conn, county_code=args.county)
             except Exception:
                 conn.rollback()
                 print("\n*** county_benchmark rebuild FAILED and was rolled back — "
@@ -922,8 +970,8 @@ def main():
         # already committed and IS updated — only the table whose "done" line
         # never printed was rolled back to its prior state.
         try:
-            compute_parcel_metrics(conn)
-            compute_county_benchmarks(conn)
+            compute_parcel_metrics(conn, county_code=args.county)
+            compute_county_benchmarks(conn, county_code=args.county)
         except Exception:
             conn.rollback()
             print("\n*** compute_metrics FAILED and was rolled back. Check which "

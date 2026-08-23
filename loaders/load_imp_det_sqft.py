@@ -43,6 +43,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn
+from loaders.scrape_billing_history import DEFAULT_COUNTY  # PX-20260823-02
 
 import psycopg2.extras
 
@@ -86,7 +87,7 @@ def _build_prop_id_map(cert_dir):
     return prop_map
 
 
-def load(conn, cert_dir=None):
+def load(conn, cert_dir=None, county_code=DEFAULT_COUNTY):
     """
     Scan IMP_DET.TXT, sum living-area sqft per geo_id, upsert into parcel.
 
@@ -165,13 +166,14 @@ def load(conn, cert_dir=None):
     print(f"  Upserting {len(area_by_geo):,} parcel sqft values…")
     t1 = time.time()
 
+    # PX-20260823-02: county_code added to the WHERE.
     sql = """
         UPDATE parcel
            SET living_area_sqft = %s
-         WHERE geo_id = %s
+         WHERE geo_id = %s AND county_code = %s
     """
 
-    rows = [(round(sqft, 2), geo_id) for geo_id, sqft in area_by_geo.items()]
+    rows = [(round(sqft, 2), geo_id, county_code) for geo_id, sqft in area_by_geo.items()]
 
     BATCH = 5000
     updated = 0
@@ -220,6 +222,15 @@ def _sanity_check(conn):
 
 
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code scoping the parcel.living_area_sqft UPDATE "
+             f"(default: {DEFAULT_COUNTY}).",
+    )
+    args = ap.parse_args()
+
     conn = get_conn()
-    load(conn)
+    load(conn, county_code=args.county)
     conn.close()

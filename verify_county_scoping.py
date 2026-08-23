@@ -759,6 +759,182 @@ def audit_extracted(extracted):
     return findings
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Exemption registry — PX-20260823-02 Part 1.
+#
+# Every real UPDATE/DELETE either gets county_code scoping (the default,
+# applied everywhere it was cheap to do so — see PX-20260823-02's Part 2
+# file-by-file fixes) or a registered, documented exemption in THIS tool —
+# never comment-only. A comment in the loader source is invisible to CI and
+# to the next engineer running this script; a registry entry here is not.
+#
+# Key: (filepath, table, stmt_kind) — repo-root-relative filepath, the real
+# table name (shadow suffix already stripped by extraction), and one of
+# "INSERT" / "UPDATE" / "DELETE". Deliberately file+table+kind grain, not
+# per-line: a single root cause (e.g. one f-string-resolution tool
+# limitation) can produce more than one FAIL at different line numbers in
+# the same file against the same table, and one exemption entry should
+# cover all of them, not force a duplicate entry per line.
+#
+# Each entry MUST carry:
+#   reason      -- human-readable justification (mandatory, never blank).
+#   approved_by -- the PX brief ID that approved this exemption.
+#
+# General-purpose across rules 3b/3c/3d, not narrowly 3d-only: the brief's
+# own Not-in-scope section requires BOTH a 3d exemption (the DELETE) and a
+# 3c exemption (the INSERT's missing ON CONFLICT) for the same
+# quarantine_contamination.py file, so a 3d-only registry couldn't honestly
+# cover what this brief itself asks for.
+#
+# Law 3, enforced by _apply_exemptions() below: an exemption that matches
+# ZERO findings on a given run is itself a loud FAILURE ("stale exemption"),
+# not a silent pass. Exemptions can't outlive the code they excuse.
+# ═══════════════════════════════════════════════════════════════════════════
+
+EXEMPTIONS = {
+    ("loaders/refresh_group_stats.py", "group_stats", "INSERT"): {
+        "reason": (
+            "Tool limitation, not a code bug: _build_insert_sql() builds this "
+            "INSERT via an f-string whose column list comes from a local "
+            "`columns` variable (an ast.FormattedValue node) -- this auditor's "
+            "f-string resolution renders FormattedValue expressions as literal "
+            "'{varname}' text rather than substituting the variable's real "
+            "value, so it can't see that `columns` genuinely includes "
+            "county_code. Confirmed by direct read: PARTITION-2-FIX-1 added "
+            "county_code as the second-to-last column in `columns`, and the "
+            "paired SELECT emits '%(county_code)s AS county_code'. Covers both "
+            "FAIL lines this key produces (:257 and :302 as of this audit) -- "
+            "same root cause, same file, same table, same statement kind."
+        ),
+        "approved_by": "PX-20260823-02",
+    },
+    ("loaders/load_cert_2021.py", "parcel_tax_year", "INSERT"): {
+        "reason": (
+            "Tool limitation, not a code bug: build_upsert_sql()'s INSERT "
+            "column list comes from a local `cols_insert` variable via the "
+            "same f-string-FormattedValue-non-resolution gap described in the "
+            "refresh_group_stats.py entry above. Confirmed by direct read: "
+            "cols_insert already lists county_code first (fixed under "
+            "PX-20260822-06-rev1)."
+        ),
+        "approved_by": "PX-20260823-02",
+    },
+    ("loaders/snapshot_2026_preliminary.py", "parcel_2026_preliminary_snapshot", "INSERT"): {
+        "reason": (
+            "Correct-by-design, not a gap: this INSERT always runs immediately "
+            "after a full DELETE of the same table in the same uncommitted "
+            "transaction (a whole-table rebuild) -- no ON CONFLICT is needed "
+            "or correct for a table guaranteed empty of every row right "
+            "before the INSERT. Verified under PX-20260822-06-rev1."
+        ),
+        "approved_by": "PX-20260823-02",
+    },
+    ("loaders/compute_metrics.py", "parcel_metrics", "DELETE"): {
+        "reason": (
+            "Deliberate same-transaction DELETE+INSERT whole-table rebuild in "
+            "compute_parcel_metrics(). Scoping only the DELETE to one county "
+            "would BREAK the rebuild, not just leave it unscoped: the paired "
+            "INSERT ... SELECT (next registry entry) has no ON CONFLICT and "
+            "reads parcel_tax_year with no county filter, so un-deleted "
+            "other-county rows would collide on duplicate keys the moment "
+            ">1 county's data coexists. This is the brief's own named "
+            "exemption pattern: 'a same-transaction DELETE+INSERT rebuild "
+            "where the DELETE is deliberately whole-table.'"
+        ),
+        "approved_by": "PX-20260823-02",
+    },
+    ("loaders/compute_metrics.py", "parcel_metrics", "INSERT"): {
+        "reason": (
+            "Paired with the parcel_metrics DELETE exemption above, same "
+            "compute_parcel_metrics() whole-table rebuild -- correct-by-design "
+            "absence of ON CONFLICT, matching the snapshot_2026_preliminary.py "
+            "precedent (also registered above)."
+        ),
+        "approved_by": "PX-20260823-02",
+    },
+    ("loaders/delete_confirmed_absent_taxcur_rows.py", "tax_billing", "DELETE"): {
+        "reason": (
+            "Group 4 downgrade per this brief's own explicit Not-in-scope "
+            "section: a tightly-scoped, one-time incident-remediation script "
+            "(confirmed-absent-row deletion, built for the July 2026 62-row "
+            "gap investigation), not a general-purpose loader -- excluded "
+            "from further loader-side county_code changes by the brief itself."
+        ),
+        "approved_by": "PX-20260823-02",
+    },
+    ("loaders/delete_confirmed_absent_taxcur_rows.py", "tax_billing_entity", "DELETE"): {
+        "reason": (
+            "Same script, same Group 4 downgrade as this file's tax_billing "
+            "DELETE exemption above -- see that entry for the full reason."
+        ),
+        "approved_by": "PX-20260823-02",
+    },
+    ("loaders/quarantine_contamination.py", "tax_billing", "DELETE"): {
+        "reason": (
+            "Group 4 downgrade per this brief's own explicit Not-in-scope "
+            "section: incident-remediation quarantine/restore path. "
+            "DALLAS-GATE-4 already fixed this file's INSERT/ON CONFLICT sides "
+            "(see this table's allowed_writers note); this DELETE is its "
+            "remaining unscoped side, deliberately left as-is per the brief."
+        ),
+        "approved_by": "PX-20260823-02",
+    },
+    ("loaders/quarantine_contamination.py", "tax_billing_quarantine", "INSERT"): {
+        "reason": (
+            "Correct-by-design, not a gap: this INSERT deliberately carries no "
+            "ON CONFLICT -- tax_billing_quarantine.county_code is NOT NULL, so "
+            "a row that somehow arrived without county_code would fail loud "
+            "(a constraint violation) at write time rather than silently "
+            "upserting/corrupting data. Already documented as correct-by-design "
+            "in PX-20260822-06-rev1's test suite."
+        ),
+        "approved_by": "PX-20260823-02",
+    },
+}
+
+
+def _apply_exemptions(findings):
+    """
+    Converts FAIL findings that match a registered EXEMPTIONS entry to
+    severity "EXEMPT" (reported, not a failure). Then, per Law 3 (an
+    exemption can't silently outlive the code it excuses), any registry
+    entry that matched ZERO findings on this run becomes a NEW loud FAIL
+    ("stale exemption") -- so if the code an exemption was written for gets
+    rewritten, deleted, or genuinely fixed, the registry entry itself goes
+    loud instead of quietly excusing nothing forever.
+    """
+    matched_keys = set()
+    result = []
+    for f in findings:
+        key = (f.filepath, f.table, f.stmt_kind)
+        if f.severity == "FAIL" and key in EXEMPTIONS:
+            entry = EXEMPTIONS[key]
+            matched_keys.add(key)
+            result.append(Finding(
+                f.filepath, f.lineno, f.table, f.stmt_kind, f.rule, "EXEMPT",
+                f"EXEMPT ({entry['reason']}) -- approved by {entry['approved_by']}. "
+                f"Original finding: {f.detail}",
+            ))
+        else:
+            result.append(f)
+
+    for key, entry in EXEMPTIONS.items():
+        if key not in matched_keys:
+            filepath, table, stmt_kind = key
+            result.append(Finding(
+                filepath, 0, table, stmt_kind, "exempt-stale", "FAIL",
+                f"STALE EXEMPTION: this registered EXEMPTIONS entry for "
+                f"(file={filepath!r}, table={table!r}, stmt_kind={stmt_kind!r}) "
+                f"matched NO finding in this run (reason on file: "
+                f"{entry['reason']!r}, approved by {entry['approved_by']}). "
+                f"Per Law 3, a stale exemption is a loud failure, not a silent "
+                f"pass -- either the finding it excused is genuinely gone "
+                f"(remove this registry entry) or something else changed "
+                f"(investigate before removing).",
+            ))
+    return result
+
+
 def run_audit(root_paths=None, only_table=None):
     if root_paths is None:
         root_paths = [REPO_ROOT]
@@ -766,6 +942,7 @@ def run_audit(root_paths=None, only_table=None):
     if only_table:
         extracted = [e for e in extracted if e.table == only_table]
     findings = audit_extracted(extracted)
+    findings = _apply_exemptions(findings)
     return {
         "extracted": extracted,
         "errors": errors,
@@ -778,16 +955,24 @@ def print_report(result):
     fails = [f for f in findings if f.severity == "FAIL"]
     passes = [f for f in findings if f.severity == "PASS"]
     nas = [f for f in findings if f.severity == "N/A"]
+    exempt = [f for f in findings if f.severity == "EXEMPT"]
 
     print("=" * 78)
     print("verify_county_scoping.py — MC-2 real audit")
     print("=" * 78)
     print(f"Statements extracted: {sum(1 for _ in result['extracted'])}")
-    print(f"Findings: {len(findings)}  ({len(fails)} FAIL, {len(passes)} PASS, {len(nas)} N/A)")
+    print(f"Findings: {len(findings)}  ({len(fails)} FAIL, {len(passes)} PASS, "
+          f"{len(nas)} N/A, {len(exempt)} EXEMPT)")
     if result["errors"]:
         print(f"\nParse errors ({len(result['errors'])}):")
         for f, e in result["errors"]:
             print(f"  {f}: {e}")
+
+    if exempt:
+        print(f"\n{'─' * 78}\nEXEMPT ({len(exempt)}) — registered, documented, not a failure:\n{'─' * 78}")
+        for f in sorted(exempt, key=lambda x: (x.table, x.filepath, x.lineno)):
+            print(f"  [{f.rule}] {f.table} :: {f.filepath}:{f.lineno} ({f.stmt_kind})")
+            print(f"        {f.detail}")
 
     if fails:
         print(f"\n{'─' * 78}\nFAILURES ({len(fails)}):\n{'─' * 78}")

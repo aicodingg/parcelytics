@@ -145,7 +145,7 @@ def load_prop_ent(conn, cert_dir, year, data_source, pid_to_geo, county_code=DEF
 
 
 # ── Step 3: LAND_DET.TXT → land_value + imprv_value (by prop_id) ────────────
-def load_land_imprv(conn, cert_dir, year):
+def load_land_imprv(conn, cert_dir, year, county_code=DEFAULT_COUNTY):
     path = os.path.join(cert_dir, "LAND_DET.TXT")
     print(f"  Loading LAND_DET.TXT…")
     t0 = time.time()
@@ -160,10 +160,11 @@ def load_land_imprv(conn, cert_dir, year):
         )
         market_by_pid = {r[0]: r[1] for r in cur.fetchall()}
 
+    # PX-20260823-02: county_code added to the WHERE.
     update_sql = """
         UPDATE prop_unit_tax_year
         SET land_value = %s, imprv_value = %s
-        WHERE prop_id = %s AND tax_year = %s
+        WHERE prop_id = %s AND tax_year = %s AND county_code = %s
     """
     updates = []
     for prop_id, land_val in land_totals.items():
@@ -171,7 +172,7 @@ def load_land_imprv(conn, cert_dir, year):
         if market_val is None:
             continue
         imprv_val = max(0, market_val - land_val)
-        updates.append((land_val, imprv_val, prop_id, year))
+        updates.append((land_val, imprv_val, prop_id, year, county_code))
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(cur, update_sql, updates, page_size=2000)
@@ -280,7 +281,7 @@ def main():
 
     _, pid_to_geo = load_prop_unit(conn, cert_dir, year, county_code=args.county)
     load_prop_ent(conn, cert_dir, year, data_source, pid_to_geo, county_code=args.county)
-    load_land_imprv(conn, cert_dir, year)
+    load_land_imprv(conn, cert_dir, year, county_code=args.county)
 
     print(f"  Rolling up prop_unit_tax_year → parcel_tax_year for {year}…")
     result = parcel_rollup.run(conn, tax_year=year, county_code=args.county)

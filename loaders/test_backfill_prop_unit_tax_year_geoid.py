@@ -146,9 +146,15 @@ def test_backfill_year_only_selects_rows_missing_geoid():
     select_calls = [e for e in conn.executed if e[0].upper().startswith("SELECT")]
     check("exactly one SELECT issued", len(select_calls) == 1, conn.executed)
     sql, params = select_calls[0]
-    check("SELECT is scoped to tax_year param", params == (2023,), (sql, params))
+    # PX-20260823-02: county_code added to the SELECT's WHERE too (not just
+    # the UPDATE) -- pid_to_geo is built from a single county's source
+    # file, so the SELECT must not pull other counties' NULL rows either.
+    check("SELECT is scoped to tax_year + county_code params",
+          params == (2023, bf.DEFAULT_COUNTY), (sql, params))
     check("SELECT filters geo_id IS NULL (never re-scans already-backfilled rows)",
           "geo_id IS NULL" in sql, sql)
+    check("SELECT is scoped to county_code (PX-20260823-02)",
+          "county_code" in sql, sql)
 
 
 def test_backfill_year_live_write_touches_only_geoid_for_matched_rows():
@@ -178,10 +184,15 @@ def test_backfill_year_live_write_touches_only_geoid_for_matched_rows():
           sql)
     check("live write: exactly 2 rows written (100, 200) -- 999 excluded (unmatched)",
           len(rows) == 2, rows)
-    check("live write: row tuples are (geo_id, prop_id, tax_year), matching UPDATE_SQL's %s order",
-          set(rows) == {("0100030105", 100, 2022), ("0100030106", 200, 2022)}, rows)
+    # PX-20260823-02: county_code appended as UPDATE_SQL's 4th %s (WHERE ...
+    # AND county_code = %s), so each written row tuple now carries it too.
+    check("live write: row tuples are (geo_id, prop_id, tax_year, county_code), matching UPDATE_SQL's %s order",
+          set(rows) == {("0100030105", 100, 2022, bf.DEFAULT_COUNTY),
+                        ("0100030106", 200, 2022, bf.DEFAULT_COUNTY)}, rows)
     check("live write: unmatched prop_id 999 never appears in written rows",
           all(r[1] != 999 for r in rows), rows)
+    check("live write: UPDATE_SQL is scoped to county_code (PX-20260823-02)",
+          "county_code" in sql, sql)
 
 
 def test_backfill_year_idempotent_second_run_finds_nothing():

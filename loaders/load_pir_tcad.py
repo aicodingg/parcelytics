@@ -24,6 +24,7 @@ import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn, execute_schema
+from loaders.scrape_billing_history import DEFAULT_COUNTY  # PX-20260823-02
 import psycopg2.extras
 
 # ── Field positions (0-based, AJR CSV format) ──────────────────────────────────
@@ -86,7 +87,7 @@ def build_pid_lookup(conn):
         return {row[0]: row[1] for row in cur.fetchall()}
 
 
-def load_year(conn, year, filepath, pid_lookup, dry_run=False):
+def load_year(conn, year, filepath, pid_lookup, dry_run=False, county_code=DEFAULT_COUNTY):
     t0 = time.time()
     print(f"  Loading PIR TCAD {year}: {os.path.basename(filepath)}")
 
@@ -132,7 +133,7 @@ def load_year(conn, year, filepath, pid_lookup, dry_run=False):
             # Sanity check: if PIR market_value disagrees significantly with what we loaded
             # from AJR, flag but still proceed (the VALUES are what we care about).
             # We don't update market_value — it stays as loaded from the authoritative AJR.
-            rows.append((taxable_val, land_val, imprv_val, f"ajr_pir_{year}", geo_id, year))
+            rows.append((taxable_val, land_val, imprv_val, f"ajr_pir_{year}", geo_id, year, county_code))
 
             if lineno % 500_000 == 0:
                 print(f"    … {lineno:,} lines, {len(seen):,} parcels collected")
@@ -145,14 +146,15 @@ def load_year(conn, year, filepath, pid_lookup, dry_run=False):
         print(f"  DRY RUN: would update {len(rows):,} parcel_tax_year rows for {year}")
         return len(rows)
 
-    # UPDATE existing parcel_tax_year rows — never creates new rows
+    # UPDATE existing parcel_tax_year rows — never creates new rows.
+    # PX-20260823-02: county_code added to the WHERE.
     update_sql = """
         UPDATE parcel_tax_year
         SET taxable_value = %s,
             land_value    = %s,
             imprv_value   = %s,
             data_source   = %s
-        WHERE geo_id = %s AND tax_year = %s
+        WHERE geo_id = %s AND tax_year = %s AND county_code = %s
     """
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(cur, update_sql, rows, page_size=2000)
@@ -171,6 +173,10 @@ def main():
                         help="Print field layout of first file and exit")
     parser.add_argument("--dry-run", action="store_true",
                         help="Count rows without writing to DB")
+    parser.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code scoping every parcel_tax_year UPDATE (default: {DEFAULT_COUNTY}).",
+    )
     args = parser.parse_args()
 
     files = config.PIR_TCAD_FILES
@@ -202,7 +208,7 @@ def main():
             if not os.path.exists(path):
                 print(f"  WARNING: {path} not found — skipping {year}")
                 continue
-            total += load_year(conn, year, path, pid_lookup, dry_run=args.dry_run)
+            total += load_year(conn, year, path, pid_lookup, dry_run=args.dry_run, county_code=args.county)
 
         print(f"\nPIR TCAD load complete — {total:,} rows updated.")
         if not args.dry_run:

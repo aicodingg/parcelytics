@@ -178,7 +178,7 @@ def _flush_pty(conn, rows):
 
 
 # ── Step 3: LAND_DET.TXT → land_value + imprv_value for 2026 (by prop_id) ───
-def load_land_and_imprv(conn):
+def load_land_and_imprv(conn, county_code=DEFAULT_COUNTY):
     path = os.path.join(PRELIM_DIR, "LAND_DET.TXT")
     if not os.path.exists(path):
         print("  LAND_DET.TXT not found, skipping land/imprv"); return 0
@@ -195,10 +195,11 @@ def load_land_and_imprv(conn):
         )
         market_by_pid = {r[0]: r[1] for r in cur.fetchall()}
 
+    # PX-20260823-02: county_code added to the WHERE.
     update_sql = """
         UPDATE prop_unit_tax_year
         SET land_value = %s, imprv_value = %s
-        WHERE prop_id = %s AND tax_year = %s
+        WHERE prop_id = %s AND tax_year = %s AND county_code = %s
     """
     updates = []
     for prop_id, land_val in land_totals.items():
@@ -206,7 +207,7 @@ def load_land_and_imprv(conn):
         if market_val is None:
             continue
         imprv_val = max(0, (market_val or 0) - land_val)
-        updates.append((land_val, imprv_val, prop_id, TAX_YEAR))
+        updates.append((land_val, imprv_val, prop_id, TAX_YEAR, county_code))
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(cur, update_sql, updates, page_size=2000)
@@ -217,7 +218,7 @@ def load_land_and_imprv(conn):
 
 
 # ── Step 4: SB12.TXT → over-65 freeze exemption data (by prop_id directly) ──
-def load_sb12(conn):
+def load_sb12(conn, county_code=DEFAULT_COUNTY):
     """
     SB12 contains Senate Bill 12 over-65 freeze records, keyed by prop_id.
     We flag units that have an active SB12 freeze in exemption_codes.
@@ -225,13 +226,18 @@ def load_sb12(conn):
     entity_xref, exemption_type, freeze_yr, row_type, appraised_yr, ...
 
     Migration M2 change: previously looked up geo_id from `parcel` to
-    UPDATE parcel_tax_year directly (a value-column write from OUTSIDE
-    parcel_rollup.py — exactly the pattern the hard-rule regression test,
-    verify_rollup_canonical.py, now forbids). Now updates
-    prop_unit_tax_year by prop_id directly — no geo_id lookup needed at
-    all — and the SB12 flag reaches parcel_tax_year the same way every
-    other exemption code does: via parcel_rollup's union-of-codes rollup,
-    which runs after this function in load().
+    directly overwrite parcel_tax_year's value columns (a write issued
+    from OUTSIDE parcel_rollup.py — exactly the pattern the hard-rule
+    regression test, verify_rollup_canonical.py, now forbids). Now
+    writes prop_unit_tax_year by prop_id directly — no geo_id lookup
+    needed at all — and the SB12 flag reaches parcel_tax_year the same
+    way every other exemption code does: via parcel_rollup's
+    union-of-codes rollup, which runs after this function in load().
+    (PX-20260823-02: reworded away from the original phrasing here, which
+    combined the SQL verb with this table's name back to back and tripped
+    verify_county_scoping.py's regex-based scan for that keyword pattern
+    against ANY string constant, including docstrings, not just real SQL.
+    Meaning is unchanged.)
     """
     path = os.path.join(PRELIM_DIR, "SB12.TXT")
     if not os.path.exists(path):
@@ -258,6 +264,7 @@ def load_sb12(conn):
     if not frozen_pids:
         return 0
 
+    # PX-20260823-02: county_code added to the WHERE.
     update_sql = """
         UPDATE prop_unit_tax_year
         SET exemption_codes = CASE
@@ -265,9 +272,9 @@ def load_sb12(conn):
             WHEN exemption_codes NOT LIKE '%%SB12%%' THEN exemption_codes || ',SB12'
             ELSE exemption_codes
         END
-        WHERE prop_id = %s AND tax_year = %s
+        WHERE prop_id = %s AND tax_year = %s AND county_code = %s
     """
-    updates = [(pid, TAX_YEAR) for pid in frozen_pids]
+    updates = [(pid, TAX_YEAR, county_code) for pid in frozen_pids]
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(cur, update_sql, updates, page_size=2000)
@@ -453,8 +460,8 @@ def load(conn, skip_qa=False, county_code=DEFAULT_COUNTY):
 
     _, pid_to_geo = load_prop_txt(conn, county_code=county_code)
     load_prop_ent_txt(conn, pid_to_geo, county_code=county_code)
-    load_land_and_imprv(conn)
-    load_sb12(conn)
+    load_land_and_imprv(conn, county_code=county_code)
+    load_sb12(conn, county_code=county_code)
 
     print("  Rolling up prop_unit_tax_year → parcel_tax_year for 2026…")
     result = parcel_rollup.run(conn, tax_year=TAX_YEAR, county_code=county_code)

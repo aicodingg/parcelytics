@@ -193,11 +193,15 @@ def load_file(conn, filepath, dry_run=False, county_code=DEFAULT_COUNTY):
     return total_written, years_seen
 
 
-def update_coverage_level(conn, years):
+def update_coverage_level(conn, years, county_code=DEFAULT_COUNTY):
     """
-    After billing data is loaded for a set of years, update parcel_metrics
+    After billing data is loaded for a set of years, flip parcel_metrics'
     coverage_level from 'value_only' to 'full' for rows that now have billing.
     Also compute yoy_tax_amount_pct and effective_tax_rate for those years.
+    (PX-20260823-02: reworded away from the original phrasing here, which
+    combined the SQL verb with this table's name back to back and tripped
+    verify_county_scoping.py's regex-based scan for that keyword pattern
+    against ANY string constant, including docstrings, not just real SQL.)
 
     Real fix (July 2026, per Diego's "Property Page Small Bugs Batch" item 3,
     same round as compute_metrics.py's coverage_level fix): this used to flip
@@ -223,6 +227,7 @@ def update_coverage_level(conn, years):
     with conn.cursor() as cur:
         # Flip coverage_level and has_tax_data where billing now exists AND
         # is genuinely verified (not just present) -- see docstring above.
+        # PX-20260823-02: county_code added to the WHERE.
         cur.execute(f"""
             UPDATE parcel_metrics pm
             SET coverage_level = 'full',
@@ -239,7 +244,8 @@ def update_coverage_level(conn, years):
               AND pm.tax_year = tb.tax_year
               AND pm.tax_year IN ({year_list})
               AND tb.confidence_level = 'verified'
-        """)
+              AND pm.county_code = %s
+        """, (county_code,))
         updated = cur.rowcount
     conn.commit()
     print(f"    coverage_level → 'full' for {updated:,} rows (verified billing only)")
@@ -248,6 +254,7 @@ def update_coverage_level(conn, years):
     # YoY = (this_year_tax - prior_year_tax) / prior_year_tax * 100
     # Only valid when BOTH years now have billing
     with conn.cursor() as cur:
+        # PX-20260823-02: county_code added to the WHERE.
         cur.execute(f"""
             UPDATE parcel_metrics pm
             SET yoy_tax_amount_pct = CASE
@@ -264,7 +271,8 @@ def update_coverage_level(conn, years):
               AND pm.tax_year = tb_cur.tax_year
               AND pm.tax_year IN ({year_list})
               AND tb_cur.total_tax > 0
-        """)
+              AND pm.county_code = %s
+        """, (county_code,))
         n_yoy = cur.rowcount
     conn.commit()
     print(f"    yoy_tax_amount_pct computed for {n_yoy:,} rows")
@@ -327,7 +335,7 @@ def main():
                 print(f"  tax_billing_rollup ({yr}): {result['tax_billing_rows']:,} tax_billing rows, "
                       f"{result['tax_billing_entity_rows']:,} tax_billing_entity rows")
             if not args.skip_metrics:
-                update_coverage_level(conn, all_years)
+                update_coverage_level(conn, all_years, county_code=args.county)
                 print("\nRun python3 loaders/compute_metrics.py to recompute all derived metrics.")
     finally:
         conn.close()

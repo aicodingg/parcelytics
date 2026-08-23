@@ -105,6 +105,14 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders import ears_format
+
+# PX-20260823-02: a local constant, NOT `from loaders.scrape_billing_history
+# import DEFAULT_COUNTY` -- that module imports loaders.db, which imports
+# psycopg2 at module level, and this file is deliberately importable with
+# no psycopg2 installed (see the lazy-import comment above for
+# load_ajr/psycopg2.extras). Matches snapshot_2026_preliminary.py's and
+# ingest_gate.py's own local-constant precedent for the identical reason.
+DEFAULT_COUNTY = "TRAVIS"
 # NOTE: loaders.load_ajr (reused for the 2021 special case, see
 # build_pid_to_geo_for_2021() below) is deliberately NOT imported here at
 # module level -- load_ajr.py imports loaders.db, which imports psycopg2
@@ -116,14 +124,21 @@ from loaders import ears_format
 # loaders/snapshot_2026_preliminary.py and loaders/ingest_gate.py for the
 # identical reason (see those modules' own comments).
 
+# PX-20260823-02: county_code added to both the UPDATE's WHERE and the
+# SELECT's WHERE -- the SELECT scoping matters too, not just for the
+# auditor: pid_to_geo below is built from a SINGLE county's source file
+# (CERT_SOURCE_DIRS[year]), so without this an out-of-county row that
+# happens to share a prop_id with a Travis prop_id would get silently
+# written with the wrong county's geo_id once >1 county's data coexists.
 UPDATE_SQL = """
     UPDATE prop_unit_tax_year
     SET geo_id = %s
-    WHERE prop_id = %s AND tax_year = %s
+    WHERE prop_id = %s AND tax_year = %s AND county_code = %s
 """
 
 SELECT_NULL_ROWS_SQL = """
-    SELECT prop_id FROM prop_unit_tax_year WHERE tax_year = %s AND geo_id IS NULL
+    SELECT prop_id FROM prop_unit_tax_year
+    WHERE tax_year = %s AND geo_id IS NULL AND county_code = %s
 """
 
 # Year -> Certified Export dir containing PROP.TXT. 2021 is handled
@@ -170,7 +185,7 @@ def build_pid_to_geo_for_2021(conn):
     return load_ajr.build_pid_lookup(conn)
 
 
-def backfill_year(conn, year, pid_to_geo, dry_run=False, verbose=True):
+def backfill_year(conn, year, pid_to_geo, dry_run=False, verbose=True, county_code=DEFAULT_COUNTY):
     """
     pid_to_geo: {prop_id: geo_id} for this year, already built by one of
     the two builder functions above (kept as a separate parameter, not
@@ -183,10 +198,10 @@ def backfill_year(conn, year, pid_to_geo, dry_run=False, verbose=True):
 
     t0 = time.time()
     with conn.cursor() as cur:
-        cur.execute(SELECT_NULL_ROWS_SQL, (year,))
+        cur.execute(SELECT_NULL_ROWS_SQL, (year, county_code))
         null_prop_ids = {r[0] for r in cur.fetchall()}
 
-    matched = [(pid_to_geo[pid], pid, year) for pid in null_prop_ids if pid in pid_to_geo]
+    matched = [(pid_to_geo[pid], pid, year, county_code) for pid in null_prop_ids if pid in pid_to_geo]
     unmatched = len(null_prop_ids) - len(matched)
 
     _log(f"    {len(null_prop_ids):,} prop_unit_tax_year rows for {year} still need geo_id, "
@@ -204,7 +219,7 @@ def backfill_year(conn, year, pid_to_geo, dry_run=False, verbose=True):
     return {"year": year, "matched": len(matched), "updated": len(matched), "unmatched": unmatched}
 
 
-def run_year(conn, year, dry_run=False, verbose=True):
+def run_year(conn, year, dry_run=False, verbose=True, county_code=DEFAULT_COUNTY):
     """Full per-year entry point: resolves the right source, builds
     pid_to_geo, then calls backfill_year() to do the DB work."""
     def _log(msg):
@@ -228,7 +243,7 @@ def run_year(conn, year, dry_run=False, verbose=True):
         pid_to_geo = build_pid_to_geo_from_prop_txt(prop_txt_path=prop_txt)
 
     _log(f"    {len(pid_to_geo):,} prop_id→geo_id mappings from source  [{time.time()-t0:.1f}s]")
-    return backfill_year(conn, year, pid_to_geo, dry_run=dry_run, verbose=verbose)
+    return backfill_year(conn, year, pid_to_geo, dry_run=dry_run, verbose=verbose, county_code=county_code)
 
 
 def main():
@@ -236,6 +251,11 @@ def main():
     ap.add_argument("--year", type=int, choices=ALL_YEARS, help="Backfill a single tax_year")
     ap.add_argument("--all-years", action="store_true", help="Backfill all six years (2021-2026)")
     ap.add_argument("--dry-run", action="store_true", help="Parse and match only; no DB writes")
+    ap.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code scoping every prop_unit_tax_year row this script "
+             f"reads/writes (default: {DEFAULT_COUNTY}).",
+    )
     args = ap.parse_args()
 
     if not args.all_years and args.year is None:
@@ -257,7 +277,7 @@ def main():
         print(f"  Backfilling prop_unit_tax_year.geo_id for {year}"
               f"{'  (DRY RUN — no writes)' if args.dry_run else ''}")
         print(f"{'='*65}")
-        results.append(run_year(conn, year, dry_run=args.dry_run))
+        results.append(run_year(conn, year, dry_run=args.dry_run, county_code=args.county))
 
     conn.close()
 

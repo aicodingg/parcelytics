@@ -22,6 +22,9 @@ import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn
+# PX-20260823-02: DEFAULT_COUNTY imported from the same real source every
+# other county-aware loader uses (single source of truth).
+from loaders.scrape_billing_history import DEFAULT_COUNTY
 import psycopg2.extras
 
 # code -> 1-based byte position of its 'T'/'F' flag in PROP.TXT
@@ -50,7 +53,7 @@ def _codes_for(rec):
     return [c for c, p in EXEMPTION_FLAGS if n >= p and rec[p - 1:p].upper() == "T"]
 
 
-def load_year(conn, year):
+def load_year(conn, year, county_code=DEFAULT_COUNTY):
     cert_dir = YEAR_DIRS.get(year)
     if not cert_dir:
         print(f"  No export dir configured for {year}; skipping.")
@@ -77,14 +80,15 @@ def load_year(conn, year):
             codes = _codes_for(line)
             seen[geo] = ",".join(codes) if codes else None
 
-    rows = [(ex, geo, year) for geo, ex in seen.items()]
+    # PX-20260823-02: county_code threaded into every row + the WHERE.
+    rows = [(ex, geo, year, county_code) for geo, ex in seen.items()]
     n_with = sum(1 for r in rows if r[0])
     print(f"    parsed {len(rows):,} parcels ({n_with:,} with ≥1 exemption) in {time.time()-t0:.1f}s")
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(
             cur,
-            "UPDATE parcel_tax_year SET exemption_codes = %s WHERE geo_id = %s AND tax_year = %s",
+            "UPDATE parcel_tax_year SET exemption_codes = %s WHERE geo_id = %s AND tax_year = %s AND county_code = %s",
             rows, page_size=5000)
     conn.commit()
     # quick count of solar
@@ -96,12 +100,17 @@ def load_year(conn, year):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--year", type=int, help="Only this year (default: 2025 and 2026)")
+    ap.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code written to/matched against parcel_tax_year rows "
+             f"(default: {DEFAULT_COUNTY}).",
+    )
     args = ap.parse_args()
     years = [args.year] if args.year else [2025, 2026]
     conn = get_conn()
     try:
         for y in years:
-            load_year(conn, y)
+            load_year(conn, y, county_code=args.county)
         # Sanity sample
         print("\n  Sanity — exemption_codes after load:")
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

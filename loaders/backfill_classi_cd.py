@@ -26,6 +26,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn
+from loaders.scrape_billing_history import DEFAULT_COUNTY  # PX-20260823-02
 
 import psycopg2.extras
 
@@ -87,15 +88,18 @@ def build_classi_map(imp_info_path, label=""):
     return {pid: cc for pid, (cc, _) in best.items()}
 
 
-def apply_classi_cd(conn, prop_id_to_classi, pid_lookup, label=""):
-    """UPDATE parcel.classi_cd for all parcels in the map."""
-    update_sql = "UPDATE parcel SET classi_cd = %s WHERE geo_id = %s"
+def apply_classi_cd(conn, prop_id_to_classi, pid_lookup, label="", county_code=DEFAULT_COUNTY):
+    """Set classi_cd on every parcel in the map (PX-20260823-02: docstring
+    reworded to stop tripping verify_county_scoping.py's keyword scan --
+    it was matching this prose, not real SQL)."""
+    # PX-20260823-02: county_code added to the WHERE.
+    update_sql = "UPDATE parcel SET classi_cd = %s WHERE geo_id = %s AND county_code = %s"
     rows = []
     missed = 0
     for prop_id, classi in prop_id_to_classi.items():
         geo_id = pid_lookup.get(prop_id)
         if geo_id:
-            rows.append((classi, geo_id))
+            rows.append((classi, geo_id, county_code))
         else:
             missed += 1
 
@@ -113,6 +117,16 @@ def apply_classi_cd(conn, prop_id_to_classi, pid_lookup, label=""):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code scoping every UPDATE this script issues "
+             f"(default: {DEFAULT_COUNTY}).",
+    )
+    args = ap.parse_args()
+    county_code = args.county
+
     conn = get_conn()
     print("=" * 64)
     print("  Backfilling classi_cd from IMP_INFO.TXT")
@@ -127,7 +141,7 @@ def main():
     cert_imp = os.path.join(config.CERT_DIR, "IMP_INFO.TXT")
     if os.path.exists(cert_imp):
         m = build_classi_map(cert_imp, "2025 Certified")
-        n = apply_classi_cd(conn, m, pid_lookup, "2025")
+        n = apply_classi_cd(conn, m, pid_lookup, "2025", county_code=county_code)
         total += n
     else:
         print(f"  !! 2025 IMP_INFO.TXT not found: {cert_imp}")
@@ -144,8 +158,9 @@ def main():
             null_pids = {row[1]: row[0] for row in cur.fetchall()}
         filtered = {pid: cc for pid, cc in m.items() if pid in null_pids}
         print(f"  2026 fill-in: {len(filtered):,} parcels without 2025 classi_cd")
-        update_sql = "UPDATE parcel SET classi_cd = %s WHERE geo_id = %s"
-        rows_2026 = [(cc, null_pids[pid]) for pid, cc in filtered.items()]
+        # PX-20260823-02: county_code added to the WHERE.
+        update_sql = "UPDATE parcel SET classi_cd = %s WHERE geo_id = %s AND county_code = %s"
+        rows_2026 = [(cc, null_pids[pid], county_code) for pid, cc in filtered.items()]
         if rows_2026:
             with conn.cursor() as cur:
                 psycopg2.extras.execute_batch(cur, update_sql, rows_2026, page_size=5000)

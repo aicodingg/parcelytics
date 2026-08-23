@@ -215,9 +215,10 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
                 amount_paid = EXCLUDED.amount_paid
     """
 
+    # PX-20260823-02: county_code added to the WHERE.
     owner_update_sql = """
         UPDATE parcel SET owner_name = %s, owner_id = %s
-        WHERE geo_id = %s AND owner_name IS NULL
+        WHERE geo_id = %s AND owner_name IS NULL AND county_code = %s
     """
 
     billing_rows = []
@@ -356,7 +357,7 @@ def load(conn, dry_run=False, new_only=False, county_code=DEFAULT_COUNTY):
 
             # Backfill owner name on parcel table
             if owner_name:
-                owner_rows.append((owner_name, owner_id, geo_id))
+                owner_rows.append((owner_name, owner_id, geo_id, county_code))
 
             if not dry_run and len(billing_rows) >= 3000:
                 with conn.cursor() as cur:

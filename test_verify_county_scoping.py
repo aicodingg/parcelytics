@@ -66,9 +66,20 @@ def findings_for(source_text, filepath, table, rule):
 # ─────────────────────────────────────────────────────────────────────────
 # Fixture 5: parcel_rollup.py (PARCEL-ROLLUP-HOTFIX-1)
 # ─────────────────────────────────────────────────────────────────────────
-section("Fixture 5: parcel_rollup.py -- real pre-fix (git HEAD) vs real post-fix (working tree)")
+section("Fixture 5: parcel_rollup.py -- real pre-fix vs real post-fix (working tree)")
 
-pre_rollup = git_show("HEAD", "parcel_rollup.py")
+# PX-20260823-02: pinned to the real immutable pre-fix commit (f72532f^,
+# the parent of the PARCEL-ROLLUP-HOTFIX-1 fix commit itself), NOT the
+# moving "HEAD" ref this fixture originally used. HEAD was a valid
+# pre-fix snapshot only in the window between when this fixture was
+# authored and when the fix commit (f72532f) landed as HEAD -- once
+# committed, "git show HEAD:parcel_rollup.py" silently started returning
+# the POST-fix content, which would have made every "pre-fix" assertion
+# below false (verified: f72532f actually IS the fix commit for this
+# file; f72532f^ genuinely lacks county_code in ROLLUP_SQL's INSERT/ON
+# CONFLICT, confirmed by direct git show). A commit hash is immutable;
+# HEAD is not -- pin fixtures like this to the hash.
+pre_rollup = git_show("f72532f^", "parcel_rollup.py")
 post_rollup = open("parcel_rollup.py").read()
 
 # Pre-fix: HEAD's real ROLLUP_SQL has no county_code in its INSERT column
@@ -98,9 +109,11 @@ check("post-fix (real working tree): 3c has no FAIL for parcel_tax_year",
 # ─────────────────────────────────────────────────────────────────────────
 # Fixture 6: loaders/ears_format.py (PARCEL-ROLLUP-HOTFIX-1)
 # ─────────────────────────────────────────────────────────────────────────
-section("Fixture 6: loaders/ears_format.py -- real pre-fix (git HEAD) vs real post-fix (working tree)")
+section("Fixture 6: loaders/ears_format.py -- real pre-fix vs real post-fix (working tree)")
 
-pre_ears = git_show("HEAD", "loaders/ears_format.py")
+# PX-20260823-02: same fix as Fixture 5 above -- pinned to the real
+# immutable pre-fix commit (f72532f^) instead of the moving "HEAD" ref.
+pre_ears = git_show("f72532f^", "loaders/ears_format.py")
 post_ears = open("loaders/ears_format.py").read()
 
 # Pre-fix: HEAD's real PROP_UNIT_UPSERT_SQL / PROP_UNIT_TAX_YEAR_UPSERT_SQL
@@ -144,6 +157,122 @@ check("real full-repo audit: loaders/ears_format.py has zero FAIL findings",
       not any(f.filepath == "loaders/ears_format.py" for f in fails_in_scope))
 check("real full-repo audit: both files produced at least some PASS findings (proves they were scanned, not silently skipped)",
       any(f.severity == "PASS" for f in findings_in_scope))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Fixture 7: EXEMPTIONS registry — a registered exemption converts a
+# matching FAIL to EXEMPT (PX-20260823-02 Part 1).
+# ─────────────────────────────────────────────────────────────────────────
+section("Fixture 7: EXEMPTIONS registry converts a matching FAIL to EXEMPT")
+
+_real_exemptions = dict(vcs.EXEMPTIONS)  # save, restore at the end -- never leave test state behind
+
+try:
+    # A synthetic FAIL finding, built the same way audit_extracted() would
+    # produce one (not hand-typed to look like a Finding, actually IS one).
+    fake_fail = vcs.Finding(
+        filepath="loaders/fake_test_loader.py",
+        lineno=42,
+        table="parcel",
+        stmt_kind="DELETE",
+        rule="3d",
+        severity="FAIL",
+        detail="No county_code reference found in this UPDATE/DELETE's WHERE clause.",
+    )
+    fake_pass = vcs.Finding(
+        filepath="loaders/fake_test_loader.py",
+        lineno=43,
+        table="parcel",
+        stmt_kind="DELETE",
+        rule="3a",
+        severity="PASS",
+        detail="loaders/fake_test_loader.py is a registered writer.",
+    )
+
+    vcs.EXEMPTIONS = {
+        ("loaders/fake_test_loader.py", "parcel", "DELETE"): {
+            "reason": "synthetic test exemption -- proves the conversion mechanism, not a real loader.",
+            "approved_by": "PX-TEST-FIXTURE-7",
+        },
+    }
+
+    converted = vcs._apply_exemptions([fake_fail, fake_pass])
+    exempted = [f for f in converted if f.rule == "3d"]
+    untouched = [f for f in converted if f.rule == "3a"]
+
+    check("EXEMPT conversion: exactly one finding still has rule 3d", len(exempted) == 1)
+    check("EXEMPT conversion: that finding's severity is now EXEMPT (not FAIL)",
+          len(exempted) == 1 and exempted[0].severity == "EXEMPT")
+    check("EXEMPT conversion: detail carries the registered reason",
+          len(exempted) == 1 and "synthetic test exemption" in exempted[0].detail)
+    check("EXEMPT conversion: detail carries the approved_by brief ID",
+          len(exempted) == 1 and "PX-TEST-FIXTURE-7" in exempted[0].detail)
+    check("EXEMPT conversion: detail still preserves the original finding text",
+          len(exempted) == 1 and "No county_code reference found" in exempted[0].detail)
+    check("EXEMPT conversion: an unrelated PASS finding (different rule/key) is untouched",
+          len(untouched) == 1 and untouched[0].severity == "PASS")
+    check("EXEMPT conversion: no stale-exemption finding fires when the registry key WAS matched",
+          not any(f.rule == "exempt-stale" for f in converted))
+finally:
+    vcs.EXEMPTIONS = _real_exemptions
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Fixture 8: EXEMPTIONS registry — a registered exemption matching ZERO
+# findings becomes a loud FAIL ("stale exemption"), per Law 3
+# (PX-20260823-02 Part 1).
+# ─────────────────────────────────────────────────────────────────────────
+section("Fixture 8: a stale EXEMPTIONS entry (matches nothing) fires as a loud FAIL")
+
+_real_exemptions = dict(vcs.EXEMPTIONS)
+
+try:
+    vcs.EXEMPTIONS = {
+        ("loaders/nonexistent_loader.py", "parcel", "UPDATE"): {
+            "reason": "synthetic test exemption for code that doesn't exist -- proves stale-exemption detection.",
+            "approved_by": "PX-TEST-FIXTURE-8",
+        },
+    }
+
+    # No findings at all reference this key -- the registry entry is stale
+    # from the moment it's registered, same as it would be if the real
+    # finding it was written for got fixed/deleted without updating the
+    # registry.
+    result = vcs._apply_exemptions([])
+    stale = [f for f in result if f.rule == "exempt-stale"]
+
+    check("stale exemption: exactly one stale-exemption finding is produced", len(stale) == 1)
+    check("stale exemption: its severity is FAIL (loud, not silently dropped)",
+          len(stale) == 1 and stale[0].severity == "FAIL")
+    check("stale exemption: detail names the unmatched file",
+          len(stale) == 1 and "loaders/nonexistent_loader.py" in stale[0].detail)
+    check("stale exemption: detail says STALE EXEMPTION explicitly",
+          len(stale) == 1 and "STALE EXEMPTION" in stale[0].detail)
+    check("stale exemption: detail carries the approved_by brief ID",
+          len(stale) == 1 and "PX-TEST-FIXTURE-8" in stale[0].detail)
+finally:
+    vcs.EXEMPTIONS = _real_exemptions
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Cross-check: the REAL, currently-registered EXEMPTIONS dict, run against
+# the real full-repo audit -- every registered entry must actually match a
+# real finding (i.e. the production registry itself has zero stale entries
+# right now). This is the "tested alarm" proof for the real registry, not
+# just the mechanism.
+# ─────────────────────────────────────────────────────────────────────────
+section("Cross-check: real EXEMPTIONS registry has zero stale entries against the real repo")
+
+real_result = vcs.run_audit()
+real_stale = [f for f in real_result["findings"] if f.rule == "exempt-stale"]
+real_exempt = [f for f in real_result["findings"] if f.severity == "EXEMPT"]
+check(f"real audit: zero stale-exemption findings ({len(real_stale)} found)",
+      len(real_stale) == 0)
+check(f"real audit: every registered EXEMPTIONS key produced at least one EXEMPT finding "
+      f"({len(real_exempt)} EXEMPT findings from {len(vcs.EXEMPTIONS)} registry entries)",
+      len(real_exempt) >= len(vcs.EXEMPTIONS))
+check("real audit: zero remaining FAIL findings (every 3d/3b/3c gap is either fixed or registered)",
+      not any(f.severity == "FAIL" for f in real_result["findings"]))
 
 
 print(f"\n{'=' * 78}")

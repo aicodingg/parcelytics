@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders.db import get_conn
 from loaders.load_imp_det_sqft import _build_prop_id_map, LIVING_AREA_CODES
+from loaders.scrape_billing_history import DEFAULT_COUNTY  # PX-20260823-02
 
 import psycopg2.extras
 
@@ -235,6 +236,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--migrate-only", action="store_true",
                     help="Just add the columns (instant) so routes don't error; skip the load.")
+    ap.add_argument(
+        "--county", default=DEFAULT_COUNTY,
+        help=f"county_code scoping the parcel attrs UPDATE (default: {DEFAULT_COUNTY}).",
+    )
     args = ap.parse_args()
 
     cert_dir = config.CERT_DIR
@@ -258,11 +263,13 @@ def main():
             detail_by_geo.get(g),
             impdet_by_geo.get(g),
             g,
+            args.county,
         ) for g in geos]
 
         print(f"  Upserting {len(rows):,} parcels…")
         t0 = time.time()
         with conn.cursor() as cur:
+            # PX-20260823-02: county_code added to the WHERE.
             psycopg2.extras.execute_batch(cur, """
                 UPDATE parcel
                    SET land_sqft                = COALESCE(%s, land_sqft),
@@ -271,7 +278,7 @@ def main():
                        gross_excluded_sqft      = %s,
                        gross_excluded_detail    = %s,
                        imp_det_json             = %s
-                 WHERE geo_id = %s
+                 WHERE geo_id = %s AND county_code = %s
             """, rows, page_size=5000)
         conn.commit()
         print(f"    → done in {time.time()-t0:.1f}s")
