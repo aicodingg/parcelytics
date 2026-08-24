@@ -81,8 +81,16 @@ class FakeG:
     function's `where` list construction). Minimal stand-in for Flask's real
     `g` request-context object -- same single attribute _pull_county_slug()
     sets on every real request, hardcoded to 'TRAVIS' here since these tests
-    exercise the delinquent-filter SQL/logic, not multi-county routing."""
+    exercise the delinquent-filter SQL/logic, not multi-county routing.
+
+    PX-20260824-06: county_slug added alongside county_code -- both are set
+    together by the real _pull_county_slug() (app.py:1891-1892), and the
+    Task 2 fix reads g.county_slug to validate the `county` query-string
+    param against the request's own already-registered slug (see that
+    fix's comment in app.py). Kept in sync with county_code here the same
+    way the real request context keeps them in sync."""
     county_code = "TRAVIS"
+    county_slug = "travis-tx"
 
 
 def _row_confidence(data_source, assessed_value=None, market_value=None):
@@ -93,13 +101,29 @@ def _row_confidence(data_source, assessed_value=None, market_value=None):
     return "verified" if data_source == "certified" else "preliminary"
 
 
-def run_api_search_filter(query_args, fake_rows=None, fake_total_count=0):
+# PX-20260824-06: minimal stand-in for COUNTY_PROFILES, real enough to
+# exercise the county_name lookups in both new gates' error/message
+# strings without importing all of app.py's module-level state.
+FAKE_COUNTY_PROFILES = {
+    "TRAVIS": {"county_name": "Travis County"},
+    "DALLAS": {"county_name": "Dallas County"},
+}
+
+
+def run_api_search_filter(query_args, fake_rows=None, fake_total_count=0,
+                           fake_g=None, county_has_data=True):
     """
     Execs the real api_search_filter() body (sliced straight out of app.py)
     against fakes, calls it, and returns (captured_sql, captured_params,
     jsonify_payload).
+
+    PX-20260824-06: fake_g (defaults to FakeG(), i.e. Travis) and
+    county_has_data (defaults to True) let callers exercise the two new
+    gates -- the g.county_slug-derived registration check and the
+    _county_has_data() has-data check -- without touching every existing
+    call site above.
     """
-    captured = {}
+    captured = {"has_data_checked_for": None}
 
     def fake_query(sql, params=None):
         captured["sql"] = sql
@@ -114,13 +138,19 @@ def run_api_search_filter(query_args, fake_rows=None, fake_total_count=0):
     def fake_jsonify(payload):
         return payload
 
+    def fake_county_has_data(county_code):
+        captured["has_data_checked_for"] = county_code
+        return county_has_data
+
     namespace = {
         "request": FakeRequest(query_args),
-        "g": FakeG(),
+        "g": fake_g or FakeG(),
         "query": fake_query,
         "jsonify": fake_jsonify,
         "label_case_sql": label_case_sql,
         "_row_confidence": _row_confidence,
+        "_county_has_data": fake_county_has_data,
+        "COUNTY_PROFILES": FAKE_COUNTY_PROFILES,
         "_HS_TOKEN_RE": r'(^|[,;])\s*HS\s*($|[,;])',
         "CERTIFIED_TIER_DATA_SOURCES": frozenset({"certified", "cert_2022", "cert_2023", "cert_2024"}),
         "SEARCH_FILTER_PAGE_SIZE": 50,
@@ -213,6 +243,65 @@ captured, payload = run_api_search_filter(
 )
 sql = captured["sql"]
 all_ok &= check("no tax_delinquent JOIN when delinquent_only=0", "tax_delinquent" not in sql)
+
+# ── 5. PX-20260824-06: registration-mismatch gate (was `if county !=
+#      "travis"`) -- a `county` query param that doesn't match the
+#      request's own g.county_slug is rejected, without a hardcoded
+#      county literal driving the comparison. ──────────────────────────────
+print("Test 5: county param mismatched against g.county_slug -> 400, no query run")
+captured, payload = run_api_search_filter(
+    {"county": "dallas", "prop_type": "Residential", "tax_year": "2025", "page": "1"},
+    fake_g=FakeG(),  # county_slug = "travis-tx" -> expected token "travis"
+)
+all_ok &= check("rejected (ok: False)", payload.get("ok") is False)
+all_ok &= check("error message present and names the real county", "error" in payload and "Travis County" in payload["error"])
+all_ok &= check("no query ever run (rejected before the SQL block)", "sql" not in captured)
+all_ok &= check("has-data check never reached", captured["has_data_checked_for"] is None)
+
+# ── 6. PX-20260824-06: matching county param on a real Dallas request
+#      passes the registration check (no hardcoded "travis" literal blocks
+#      it) and reaches the has-data check. ─────────────────────────────────
+print("Test 6: county=dallas on a Dallas request (g.county_slug=dallas-tx) passes registration gate")
+
+
+class FakeGDallas:
+    county_code = "DALLAS"
+    county_slug = "dallas-tx"
+
+
+captured, payload = run_api_search_filter(
+    {"county": "dallas", "prop_type": "Residential", "tax_year": "2025", "page": "1"},
+    fake_g=FakeGDallas(),
+    county_has_data=False,  # Dallas: registered, not yet loaded
+)
+all_ok &= check("registration gate passed (no county-mismatch error)",
+                not (payload.get("ok") is False and "mismatch" in payload.get("error", "").lower()))
+all_ok &= check("has-data check reached and scoped to DALLAS", captured["has_data_checked_for"] == "DALLAS")
+
+# ── 7. PX-20260824-06: has-data gate -- registered-but-dataless county
+#      (Dallas today) gets a clean "no data yet" response, not a 500 and
+#      not results from the (never-run) query. ─────────────────────────────
+print("Test 7: Dallas registered but county_has_data=False -> clean no-data-yet response")
+all_ok &= check("ok is False (distinguishable from a real 0-result search)", payload.get("ok") is False)
+all_ok &= check("no_data_yet flag set", payload.get("no_data_yet") is True)
+all_ok &= check("message names Dallas County, not a generic/Travis message", "Dallas County" in payload.get("error", ""))
+all_ok &= check("query() never called (no wasted round-trip)", "sql" not in captured)
+
+# ── 8. PX-20260824-06: has-data gate does NOT block Travis (the only
+#      county with real data today) -- pure regression check that the new
+#      gate is additive, not a behavior change for the existing path. ──────
+print("Test 8: Travis (county_has_data=True) unaffected by the new has-data gate")
+captured, payload = run_api_search_filter(
+    {"prop_type": "Residential", "tax_year": "2025", "page": "1"},
+    fake_rows=[{"geo_id": "0005", "situs_address": "5 Main St", "neighborhood_cd": "N1",
+                "prop_type_label": "Residential", "market_value": 310000, "assessed_value": 300000,
+                "data_source": "certified", "tax_year": 2025}],
+    fake_total_count=1,
+    county_has_data=True,
+)
+all_ok &= check("has-data check reached and scoped to TRAVIS", captured["has_data_checked_for"] == "TRAVIS")
+all_ok &= check("real query ran (has-data gate did not short-circuit)", "sql" in captured)
+all_ok &= check("normal results payload returned", payload.get("ok") is not False and "results" in payload)
 
 print()
 if all_ok:

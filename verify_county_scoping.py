@@ -1079,16 +1079,242 @@ def print_report(result):
     return len(fails) == 0
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# PX-20260824-06 Task 4 — hardcoded county-literal comparison scanner
+#
+# Placement justification (per the brief's explicit "whichever fits the
+# pattern's shape" instruction): neither existing scanner is a natural
+# home. verify_template_county_scoping.py operates on raw Jinja/HTML text
+# in templates/*.html via regex, with no Python AST at all -- the two real
+# PX-20260824-06 sites (app.py's api_search_filter()) are Python
+# conditionals, not template markup, so that scanner's whole extraction
+# layer doesn't apply. THIS file's own extraction stage IS a Python-AST
+# walker over the whole repo already (see module docstring's "AST-based
+# extraction, NOT naive regex/grep" section) -- the closest-shaped
+# infrastructure available, even though its Stage 2/3 checks are about SQL
+# statement text, not comparison expressions. Reusing this file's file-
+# walking/exclusion conventions (EXCLUDED_NAME_PREFIXES, EXCLUDED_DIRS,
+# REPO_ROOT) for a NEW, independent check function is a better fit than
+# bolting a Python-AST walker onto the template scanner, or standing up a
+# third, entirely separate script for one check.
+#
+# No second hardcoded county list: the "which literals count as a county
+# literal" registry is not hand-typed here -- it's parsed directly out of
+# app.py's own COUNTY_SLUGS / COUNTY_PROFILES dict literals via AST (same
+# technique this file already uses to resolve SQL string constants), so a
+# future Harris/etc. registration is picked up automatically the next time
+# this check runs, with nothing to keep in sync by hand.
+# ═══════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class LiteralFinding:
+    filepath: str
+    lineno: int
+    literal: str
+    code_snippet: str
+    severity: str = "FAIL"
+    detail: str = ""
+
+
+def _load_county_registry_from_app_py(app_py_path=None):
+    """Parses app.py's own AST (does not import/execute app.py -- same
+    reason every other tool in this codebase avoids that: app.py has real
+    Flask/psycopg2/Sentry imports and route registration side effects at
+    module load time) to extract the REAL, current COUNTY_SLUGS and
+    COUNTY_PROFILES dict literals. Returns (slugs: {slug: code},
+    profiles: {code: county_name_or_None})."""
+    path = app_py_path or os.path.join(REPO_ROOT, "app.py")
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=path)
+    slugs, profiles = {}, {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            continue
+        name = node.targets[0].id
+        if name == "COUNTY_SLUGS" and isinstance(node.value, ast.Dict):
+            for k, v in zip(node.value.keys, node.value.values):
+                if isinstance(k, ast.Constant) and isinstance(k.value, str) and isinstance(v, ast.Constant) and isinstance(v.value, str):
+                    slugs[k.value] = v.value
+        elif name == "COUNTY_PROFILES" and isinstance(node.value, ast.Dict):
+            for k, v in zip(node.value.keys, node.value.values):
+                if not (isinstance(k, ast.Constant) and isinstance(k.value, str) and isinstance(v, ast.Dict)):
+                    continue
+                county_name = None
+                for pk, pv in zip(v.keys, v.values):
+                    if (isinstance(pk, ast.Constant) and pk.value == "county_name"
+                            and isinstance(pv, ast.Constant) and isinstance(pv.value, str)):
+                        county_name = pv.value
+                profiles[k.value] = county_name
+    return slugs, profiles
+
+
+def _build_watched_county_literals(slugs, profiles):
+    """Every literal-string SHAPE a hardcoded county comparison could
+    plausibly use in this codebase, derived entirely from the registry
+    dicts above -- e.g. slugs={'travis-tx': 'TRAVIS', ...} and
+    profiles={'TRAVIS': 'Travis County', ...} yields {'travis-tx',
+    'travis', 'TRAVIS', 'Travis County', 'TRAVIS COUNTY', ...}. The walker
+    below compares case-insensitively, so only one case per shape is
+    needed here."""
+    watched = set()
+    for slug, code in slugs.items():
+        watched.add(slug)                      # "travis-tx"
+        watched.add(slug.split("-")[0])        # "travis" -- the query-string-param shape api_search_filter() used
+        watched.add(code)                       # "TRAVIS"
+    for code, county_name in profiles.items():
+        if county_name:
+            watched.add(county_name)            # "Travis County"
+            watched.add(county_name.upper())    # "TRAVIS COUNTY" -- categorize_entity()'s old shape
+    return {w for w in watched if w}
+
+
+# PX-20260824-06: registered, documented exemptions for hardcoded county-
+# literal COMPARISONS that are legitimate, not stale-assumption gates.
+# Same Law-3 discipline as EXEMPTIONS above (a comment in the source is
+# invisible to this scanner and the next engineer running it; a registry
+# entry here is not) -- keyed by (filepath, literal), file+literal grain
+# rather than per-line since a line number can drift across edits while
+# the literal itself is stable.
+LITERAL_EXEMPTIONS = {}
+
+
+def find_hardcoded_county_comparisons(root_paths=None, watched_literals=None):
+    """Walks every ast.Compare node (==, !=) across the scanned .py files
+    and flags any where one operand is a string Constant matching (case-
+    insensitively) a real, registry-derived county-literal shape -- the
+    exact `if county != "travis"` / `if county_code == "TRAVIS"` style
+    gates this brief exists to catch, independent of variable name, so the
+    third instance of this bug class fails loud here instead of waiting
+    for a copy pass to trip over it (PX-20260824-01's own history with
+    this exact class).
+
+    Deliberately narrow to Eq/NotEq against a bare string Constant --
+    `slug in COUNTY_SLUGS` / `COUNTY_SLUGS.get(slug)` (membership/lookup
+    against the real registry collection) is the CORRECT pattern this
+    check must not flag, and neither call shape produces an ast.Compare
+    node with a string-Constant operand at all, so no special-casing is
+    needed to exclude it."""
+    if watched_literals is None:
+        slugs, profiles = _load_county_registry_from_app_py()
+        watched_literals = _build_watched_county_literals(slugs, profiles)
+    watched_lower = {w.lower() for w in watched_literals}
+
+    if root_paths is None:
+        root_paths = [REPO_ROOT]
+    files = []
+    for p in root_paths:
+        full = p if os.path.isabs(p) else os.path.join(REPO_ROOT, p)
+        if os.path.isdir(full):
+            for dirpath, dirnames, filenames in os.walk(full):
+                dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIRS]
+                for fn in filenames:
+                    if fn.endswith(".py") and not fn.startswith(EXCLUDED_NAME_PREFIXES):
+                        files.append(os.path.join(dirpath, fn))
+        elif os.path.isfile(full):
+            fn = os.path.basename(full)
+            if fn.endswith(".py") and not fn.startswith(EXCLUDED_NAME_PREFIXES):
+                files.append(full)
+
+    findings = []
+    for f in sorted(set(files)):
+        relpath = os.path.relpath(f, REPO_ROOT)
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                source = fh.read()
+            tree = ast.parse(source, filename=f)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Compare) and len(node.ops) == 1
+                    and isinstance(node.ops[0], (ast.Eq, ast.NotEq))):
+                continue
+            sides = [node.left, node.comparators[0]]
+            for side in sides:
+                if (isinstance(side, ast.Constant) and isinstance(side.value, str)
+                        and side.value.lower() in watched_lower):
+                    lineno = getattr(node, "lineno", -1)
+                    key = (relpath, side.value)
+                    if key in LITERAL_EXEMPTIONS:
+                        entry = LITERAL_EXEMPTIONS[key]
+                        findings.append(LiteralFinding(
+                            relpath, lineno, side.value, _unparse(node), "EXEMPT",
+                            f"EXEMPT ({entry['reason']}) -- approved by {entry['approved_by']}.",
+                        ))
+                    else:
+                        findings.append(LiteralFinding(
+                            relpath, lineno, side.value, _unparse(node), "FAIL",
+                            f"Hardcoded county-literal comparison against {side.value!r} -- "
+                            f"per MC-2 / PX-20260824-06, compare against a registry lookup "
+                            f"(COUNTY_SLUGS/COUNTY_PROFILES membership, or the request's own "
+                            f"g.county_slug/g.county_code) instead of a literal, or register a "
+                            f"documented exemption in LITERAL_EXEMPTIONS if this one is "
+                            f"deliberate and correct.",
+                        ))
+                    break
+    # Law 3 parity: an EXEMPTIONS entry that matched nothing this run is a
+    # loud failure, not a silent pass.
+    matched = {(f.filepath, f.literal) for f in findings if f.severity == "EXEMPT"}
+    for key, entry in LITERAL_EXEMPTIONS.items():
+        if key not in matched:
+            filepath, literal = key
+            findings.append(LiteralFinding(
+                filepath, 0, literal, "", "FAIL",
+                f"STALE EXEMPTION: LITERAL_EXEMPTIONS entry for (file={filepath!r}, "
+                f"literal={literal!r}) matched NO finding in this run (reason on file: "
+                f"{entry['reason']!r}, approved by {entry['approved_by']}). Remove or "
+                f"investigate, per Law 3.",
+            ))
+    return findings
+
+
+def print_literal_report(findings):
+    fails = [f for f in findings if f.severity == "FAIL"]
+    exempt = [f for f in findings if f.severity == "EXEMPT"]
+    print("=" * 78)
+    print("verify_county_scoping.py — hardcoded county-literal comparison scan (Task 4)")
+    print("=" * 78)
+    print(f"Findings: {len(findings)}  ({len(fails)} FAIL, {len(exempt)} EXEMPT)")
+    if exempt:
+        print(f"\n{'─' * 78}\nEXEMPT ({len(exempt)}):\n{'─' * 78}")
+        for f in sorted(exempt, key=lambda x: (x.filepath, x.lineno)):
+            print(f"  {f.filepath}:{f.lineno} -- {f.code_snippet}")
+            print(f"        {f.detail}")
+    if fails:
+        print(f"\n{'─' * 78}\nFAILURES ({len(fails)}):\n{'─' * 78}")
+        for f in sorted(fails, key=lambda x: (x.filepath, x.lineno)):
+            print(f"  {f.filepath}:{f.lineno} -- {f.code_snippet}")
+            print(f"        {f.detail}")
+    else:
+        print("\nNo failures.")
+    print("=" * 78)
+    return len(fails) == 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", help="Restrict the scan to one file (repo-root-relative or absolute).")
     ap.add_argument("--table", help="Restrict findings to one registered table.")
+    ap.add_argument("--literals-only", action="store_true",
+                     help="PX-20260824-06 Task 4: run only the hardcoded county-literal "
+                          "comparison scan (skip the SQL-writer MC-2 checks).")
+    ap.add_argument("--skip-literals", action="store_true",
+                     help="Run only the original SQL-writer MC-2 checks (skip Task 4's scan).")
     args = ap.parse_args()
 
     root_paths = [args.only] if args.only else None
-    result = run_audit(root_paths=root_paths, only_table=args.table)
-    ok = print_report(result)
-    sys.exit(0 if ok else 1)
+
+    sql_ok = True
+    if not args.literals_only:
+        result = run_audit(root_paths=root_paths, only_table=args.table)
+        sql_ok = print_report(result)
+
+    literal_ok = True
+    if not args.skip_literals:
+        print()
+        literal_findings = find_hardcoded_county_comparisons(root_paths=root_paths)
+        literal_ok = print_literal_report(literal_findings)
+
+    sys.exit(0 if (sql_ok and literal_ok) else 1)
 
 
 if __name__ == "__main__":

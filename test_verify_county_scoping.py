@@ -409,6 +409,100 @@ check("real audit: zero remaining FAIL findings (every 3d/3b/3c gap is either fi
       not any(f.severity == "FAIL" for f in real_result["findings"]))
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Fixture 11: PX-20260824-06 Task 4 -- the new hardcoded-county-literal-
+# comparison scan. Tested-alarm proof against the REAL, historical broken
+# shape: app.py's api_search_filter() before this brief's own fix, read
+# straight out of git (the working tree at the start of this brief, before
+# any edit made this session) -- not typed out by hand.
+# ─────────────────────────────────────────────────────────────────────────
+section("Fixture 11: hardcoded county-literal comparison scan fires on the REAL pre-fix api_search_filter()")
+
+_pre_fix_app_py = git_show("HEAD", "app.py")
+_start = _pre_fix_app_py.index('    if county != "travis":')
+_pre_fix_snippet = _pre_fix_app_py[_start:_start + 200]
+check("sanity: the real pre-fix HEAD snapshot actually contains the hardcoded literal check "
+      "(proves this fixture models the real bug, not a synthetic stand-in)",
+      'if county != "travis"' in _pre_fix_snippet)
+
+import tempfile
+with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tf:
+    tf.write('def api_search_filter():\n    county = "travis"\n' + _pre_fix_snippet + "\n")
+    _fixture_11_path = tf.name
+try:
+    findings_11 = vcs.find_hardcoded_county_comparisons(root_paths=[_fixture_11_path])
+finally:
+    import os as _os
+    _os.unlink(_fixture_11_path)
+
+check("Fixture 11: the real pre-fix `if county != \"travis\":` line is caught as a FAIL",
+      any(f.severity == "FAIL" and f.literal.lower() == "travis" for f in findings_11))
+
+# And the real, CURRENT (post-fix) app.py must have ZERO hardcoded
+# county-literal comparisons left -- the actual acceptance bar for Task 4,
+# proven against the live file, not a fixture stand-in.
+findings_11_current = vcs.find_hardcoded_county_comparisons(root_paths=["app.py"])
+check(f"Fixture 11 real-file cross-check: current app.py has zero hardcoded county-literal "
+      f"comparisons ({len(findings_11_current)} found)",
+      len([f for f in findings_11_current if f.severity == "FAIL"]) == 0)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Fixture 12: false-positive check -- the CORRECT registry-based pattern
+# (membership/lookup against COUNTY_SLUGS, exactly what _pull_county_slug()
+# and this brief's own Task 2 fix use) must never be flagged. A scanner
+# that fires on the very pattern it's supposed to push people toward would
+# make the fix and the enforcement contradict each other.
+# ─────────────────────────────────────────────────────────────────────────
+section("Fixture 12: registry-based county checks (the CORRECT pattern) are never flagged")
+
+source_12 = '''
+COUNTY_SLUGS = {"travis-tx": "TRAVIS", "dallas-tx": "DALLAS"}
+
+def good_gate(slug, g):
+    county_code = COUNTY_SLUGS.get(slug)
+    if county_code is None:
+        return 404
+    if slug in COUNTY_SLUGS:
+        return "registered"
+    expected = g.county_slug.split("-")[0]
+    if county != expected:
+        return "mismatch"
+'''
+import tempfile as _tempfile12
+with _tempfile12.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tf12:
+    tf12.write(source_12)
+    _fixture_12_path = tf12.name
+try:
+    findings_12 = vcs.find_hardcoded_county_comparisons(root_paths=[_fixture_12_path])
+finally:
+    import os as _os12
+    _os12.unlink(_fixture_12_path)
+
+check("Fixture 12: zero findings against registry-membership/lookup + g.county_slug-derived checks",
+      len(findings_12) == 0)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Cross-check: the real, live repo-wide literal scan (excluding the same
+# test_/verify_/validate_ prefixes the SQL-writer scan already excludes)
+# must currently report zero FAIL findings and zero stale LITERAL_
+# EXEMPTIONS entries -- the actual, current state of the codebase, not a
+# fixture demonstration.
+# ─────────────────────────────────────────────────────────────────────────
+section("Cross-check: real repo-wide literal-comparison scan is currently clean")
+
+real_literal_findings = vcs.find_hardcoded_county_comparisons()
+real_literal_fails = [f for f in real_literal_findings if f.severity == "FAIL"]
+real_literal_exempt = [f for f in real_literal_findings if f.severity == "EXEMPT"]
+check(f"real literal scan: zero FAIL findings across the whole repo, including any stale "
+      f"LITERAL_EXEMPTIONS entries (those also surface as FAIL) ({len(real_literal_fails)} found)",
+      len(real_literal_fails) == 0)
+check(f"real literal scan: LITERAL_EXEMPTIONS registry entries ({len(vcs.LITERAL_EXEMPTIONS)}) "
+      f"all matched a real finding ({len(real_literal_exempt)} EXEMPT)",
+      len(real_literal_exempt) >= len(vcs.LITERAL_EXEMPTIONS))
+
+
 print(f"\n{'=' * 78}")
 print("ALL PASS" if all_ok else "SOME FAILED")
 print(f"{'=' * 78}")

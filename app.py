@@ -4484,6 +4484,28 @@ def _row_confidence(data_source, assessed_value=None, market_value=None):
     return "partial"
 
 
+def _county_has_data(county_code):
+    """PX-20260824-06: real, ground-truth "has this county actually been
+    loaded" check -- distinct from "is this county registered" (COUNTY_SLUGS
+    membership, already enforced by _pull_county_slug() before any view
+    function runs) and distinct from COUNTY_PROFILES membership (Dallas has
+    a profile entry today with zero loaded rows -- see COUNTY_PROFILES'
+    own comments). Queries parcel directly rather than a separate
+    "counties with data" registry constant: any manually-maintained flag
+    is exactly the kind of thing that goes stale the moment a real load
+    lands (the failure class this whole brief exists to close off), while
+    parcel is the actual table every query in this function reads from, so
+    this can't drift from what the real query below would find. Cheap:
+    migrate_county_partitioning.py made county_code the leading column of
+    parcel's composite primary key, so this is an index-only prefix scan,
+    not a sequential scan (see schema.sql's "real, urgent hotfix" comment
+    block for the migration that did this)."""
+    return query(
+        "SELECT EXISTS(SELECT 1 FROM parcel WHERE county_code = %(county_code)s) AS has_data",
+        {"county_code": county_code}, one=True,
+    )["has_data"]
+
+
 @app.route("/<county_slug>/api/search_filter")
 @limiter.limit(_LIMIT_HEAVY)
 def api_search_filter():
@@ -4527,8 +4549,25 @@ def api_search_filter():
     tax_year        = _i("tax_year") or 2025
     page            = max(1, _i("page") or 1)
 
-    if county != "travis":
-        return jsonify({"ok": False, "error": f"Unknown county '{county}'. Only Travis County, TX is available today."}), 400
+    # PX-20260824-06: was `if county != "travis": ... 400` -- a hardcoded
+    # literal comparison against the `county` query-string param (Task 1
+    # finding: this param predates URL-based county routing -- g.county_code,
+    # already resolved+validated against COUNTY_SLUGS by _pull_county_slug()
+    # before this view function ever runs, is what actually scopes every
+    # query below; `county` itself is otherwise unused in this function).
+    # Replaced with a registry-derived check against g.county_slug (the
+    # request's own already-validated slug) rather than a second hardcoded
+    # county list to keep in sync with COUNTY_SLUGS -- catches a stale/
+    # malformed `county` param (e.g. a page loaded before a dropdown
+    # refresh, or a hand-crafted request) without reintroducing a literal.
+    expected_county_token = g.county_slug.split("-")[0]
+    if county != expected_county_token:
+        return jsonify({
+            "ok": False,
+            "error": (f"County mismatch: this page is scoped to "
+                      f"{COUNTY_PROFILES.get(g.county_code, COUNTY_PROFILES['TRAVIS'])['county_name']}, "
+                      f"but the request's county parameter was '{county}'."),
+        }), 400
 
     # ── Minimum-filter guard ────────────────────────────────────────────────
     # County and Tax Year each SELECT which slice of data to look at — neither
@@ -4575,6 +4614,26 @@ def api_search_filter():
     # ADDITIONAL predicate only -- no existing filter, ORDER BY, or column
     # selection changes.
     county_code = g.county_code
+
+    # PX-20260824-06 Task 2: "has data" gate, distinct from the registration
+    # check above. g.county_code being resolvable at all already proves the
+    # county is REGISTERED (COUNTY_SLUGS membership, enforced by
+    # _pull_county_slug()) -- it says nothing about whether that county has
+    # actually been loaded. Dallas/Harris will sit registered-but-dataless
+    # between COUNTY_SLUGS registration and their real first load (see
+    # PX-20260824-05's onboarding runbook) -- without this check, a request
+    # for either would fall through to the query below, which would just
+    # return an honest-looking "0 results" page indistinguishable from a
+    # genuine Travis search that happens to match nothing. That's a worse
+    # failure mode than an error: it looks like the search worked.
+    if not _county_has_data(county_code):
+        county_name = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])["county_name"]
+        return jsonify({
+            "ok": False,
+            "no_data_yet": True,
+            "error": f"{county_name} data hasn't been loaded yet.",
+        }), 200
+
     where = ["1=1", "p.county_code = %(county_code)s"]
     params = {"tax_year": tax_year, "county_code": county_code}
 
