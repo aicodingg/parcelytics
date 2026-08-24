@@ -40,21 +40,67 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from loaders import ears_format
-from loaders import ingest_gate  # noqa: F401 — AC5 wiring marker; see load_certified_2025.py's
-                                  # module note for why this isn't also called inline here
+from loaders import ingest_gate
 from loaders.scrape_billing_history import DEFAULT_COUNTY  # PARCEL-ROLLUP-HOTFIX-1
 import parcel_rollup
 import psycopg2
 import psycopg2.extras
 
+# PX-20260824-03 Task 2: gate wiring, real correction of an inaccurate
+# premise. Every other refactored loader's own comment (load_certified_2025.py,
+# load_2026_preliminary.py) says "the real gate enforcement point is
+# loaders/run_all.py's explicit step" -- checked directly against run_all.py's
+# real source rather than trusted at face value (this brief's own standing
+# rule): run_all.py's gate step (its step 6) only ever calls
+# ingest_gate.gather_and_run() for two hardcoded sources, "certified_2025"
+# (config.CERT_DIR) and "preliminary_2026" (PRELIM_DIR). run_all.py never
+# calls this loader at all, for any year -- it's designed to be run
+# standalone (see this module's own docstring's Usage section). So the
+# "real enforcement point" those other loaders defer to genuinely does not
+# exist for this one; deferring the same way here would mean the gate runs
+# zero times for a historical-year load, silently. Fixed here, not by
+# routing through run_all.py (this loader isn't in its pipeline and adding
+# it there is a bigger, separate change than this brief's two named
+# blockers), but by calling gather_and_run() directly at the end of this
+# loader's own main(), below -- the same real call shape run_all.py uses
+# for its two sources, just invoked from the one place that actually runs
+# for this loader's years.
+#
+# Accepted, disclosed tradeoff: gather_and_run() re-scans PROP.TXT and
+# PROP_ENT.TXT a second time (G1/G2/G3's own file scans, independent of the
+# reads load_prop_unit()/load_prop_ent() already did above) -- the exact
+# "second full read of a multi-gigabyte file" cost load_certified_2025.py's
+# own comment cites as its reason NOT to do this inline. That reasoning is
+# sound for a loader that might run routinely; less costly here, since a
+# historical-year load is an occasional, one-off operation, not a nightly
+# job -- flagged explicitly as a real, accepted tradeoff, not a silently
+# copied decision.
 BATCH_SIZE = 5000
 
-CERT_DIRS = {
-    2022: os.path.join(config.DATA_DIR, "2022_Certified_Export"),
-    2023: os.path.join(config.DATA_DIR, "2023_Certified_Export"),
-    2024: os.path.join(config.DATA_DIR, "2024_Certified_Export"),
-    2026: os.path.join(config.DATA_DIR, "2026_Certified_Export"),
-}
+# PX-20260824-03: rewritten from a plain module-level dict pointing at
+# config.DATA_DIR (a stale, pre-FILE-ARCH-2 grammar -- "2022_Certified_Export"
+# etc. haven't existed under DATA_DIR since FILE-ARCH-2 moved what DATA_DIR
+# means; see PX-20260824-02's findings report for the full path-resolution
+# audit) to a small function that resolves through config.py's own canonical,
+# now-fixed CERT_DIR_2022/2023/2024/2026 constants -- the same real, verified
+# archive-drive locations backfill_prop_unit_tax_year_geoid.py's own
+# CERT_SOURCE_DIRS already uses this exact pattern for.
+#
+# Deliberately a function, not a module-level dict: config.CERT_DIR_2022 (and
+# siblings) are themselves now lazy, mount-check-guarded attributes (see
+# config.py's own CERT_DIR family comment) -- resolving all 4 into a plain
+# dict at THIS module's import time would just move the same "import
+# shouldn't require the archive drive mounted" problem up one level. A
+# function called only from main(), after argument parsing, defers the
+# mount check to the one real place it should fire: right before this
+# loader is actually about to read from the resolved directory.
+def _cert_dir_for_year(year):
+    return {
+        2022: config.CERT_DIR_2022,
+        2023: config.CERT_DIR_2023,
+        2024: config.CERT_DIR_2024,
+        2026: config.CERT_DIR_2026,
+    }[year]
 
 
 # ── Step 1: PROP.TXT → prop_unit (+ prop_id → geo_id map, side-effect) ──────
@@ -241,12 +287,37 @@ def main():
              f"(default: {DEFAULT_COUNTY}). PARCEL-ROLLUP-HOTFIX-1: mirrors "
              f"scrape_billing_history.py's own --county convention.",
     )
+    ap.add_argument(
+        '--published-total', type=float, default=None,
+        help="TCAD's published county total for this tax_year, for the gate's G6 "
+             "external-reconciliation check (PX-20260824-03). Optional -- if "
+             "omitted, G6 is reported as an explicit SKIPPED result (not silently "
+             "absent), since no historical-year published total is on file "
+             "anywhere in this repo as of this writing.",
+    )
+    ap.add_argument(
+        '--skip-gate', action='store_true',
+        help="Skip the Ingestion Conservation Gate (G1-G6) after loading. Not "
+             "recommended -- matches run_all.py's own --skip-gate escape hatch "
+             "naming for consistency, same rationale (an explicit opt-out, not "
+             "a silent one).",
+    )
     args = ap.parse_args()
 
     year        = args.year
     data_source = f"cert_{year}"
-    cert_dir    = CERT_DIRS[year]
     ajr_source  = f"ajr_{year}"
+
+    # PX-20260824-03: resolving cert_dir can now raise ArchiveNotMountedError
+    # (the external vault drive isn't attached) -- caught here and reported
+    # the same way this loader already reports "dir not found" below, since
+    # both are the same real precondition ("the source data isn't reachable
+    # right now") surfaced through two different, equally legitimate causes.
+    try:
+        cert_dir = _cert_dir_for_year(year)
+    except config.ArchiveNotMountedError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
 
     if not os.path.isdir(cert_dir):
         print(f"ERROR: Cert dir not found: {cert_dir}")
@@ -289,6 +360,43 @@ def main():
           f"parcel_tax_year rows: {result['parcel_tax_year_rows']:,}")
 
     print(f"\n  Total elapsed: {time.time()-t_total:.1f}s")
+
+    # PX-20260824-03 Task 2: wire the Ingestion Conservation Gate for real,
+    # at the end of this loader's own run. See the module-level comment
+    # block above (right after the imports) for why this call lives HERE
+    # rather than mirroring load_certified_2025.py verbatim -- that loader
+    # does NOT call gather_and_run() itself; run_all.py's own step 6 is its
+    # real enforcement point, and run_all.py never calls this loader at all
+    # for any year. Without an inline call here, historical-year loads
+    # would have zero gate coverage, silently. --skip-gate exists for the
+    # same reason run_all.py exposes its own --skip-gate: local iteration
+    # without paying the cost of a second full PROP.TXT/PROP_ENT.TXT scan.
+    if args.skip_gate:
+        print(f"\n  ⚠ Gate SKIPPED (--skip-gate passed) — no G1-G6 checks ran, "
+              f"no ingest_audit row written for this run.")
+    else:
+        prop_path = os.path.join(cert_dir, "PROP.TXT")
+        prop_ent_path = os.path.join(cert_dir, "PROP_ENT.TXT")
+        print(f"\n  Running Ingestion Conservation Gate (G1-G6) for {data_source}…")
+        gate_summary = ingest_gate.gather_and_run(
+            conn,
+            source_tag=data_source,
+            tax_year=year,
+            prop_path=prop_path,
+            prop_ent_path=prop_ent_path,
+            published_total=args.published_total,
+            county_code=args.county,
+        )
+        for code, gate_result in gate_summary["checks"].items():
+            passed, detail = gate_result[0], gate_result[1]
+            print(f"    {code}: {'PASS' if passed else 'FAIL'} — {detail}")
+        print(f"  GATE OVERALL: {'PASS' if gate_summary['passed'] else 'FAIL'}")
+        if not gate_summary["passed"]:
+            print(f"  ⚠ Gate reported a FAILURE for {data_source}. Data has already "
+                  f"been written and rolled up -- this is a loud post-hoc signal, "
+                  f"not a pre-write block (matching run_all.py's own gate-after-load "
+                  f"ordering). Investigate ingest_audit before trusting this year's "
+                  f"figures.")
 
     post_load_summary(conn, year, data_source, rows_before, ajr_before)
 

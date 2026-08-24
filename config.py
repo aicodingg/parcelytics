@@ -206,12 +206,69 @@ AJR_FILES = {
 CERT_2021_PDF = _travis("certified_roll", "archive", "2021",
                          "2021 CERTIFIED APPRAISAL ROLL as of Supp 0_GEO.pdf")
 
-CERT_DIR      = _travis("certified_roll", "archive", "2025")
-CERT_DIR_2022 = _travis("certified_roll", "archive", "2022")
-CERT_DIR_2023 = _travis("certified_roll", "archive", "2023")
-CERT_DIR_2024 = _travis("certified_roll", "archive", "2024")
-CERT_DIR_2026 = _travis("certified_roll", "archive", "2026")
 PRELIM_2026_DIR = _travis("preliminary_roll", "archive", "2026")
+
+# ── CERT_DIR family (PX-20260824-03: real-location fix) ─────────────────────
+# The 5 lines this replaced (`CERT_DIR = _travis("certified_roll", "archive",
+# "2025")` etc.) never matched where these files actually are. They assumed
+# a local-root `certified_roll/archive/<year>/` layout that vault_manifest.md
+# never used -- PX-20260824-02's pre-flight found the real, SHA-256-verified
+# location for every one of these years is on the EXTERNAL archive drive
+# (PARCELYTICS_ARCHIVE_ROOT), in a date-stamped folder, not a year-named one.
+# Each date below is cited straight from vault_manifest.md's own "Current
+# path (as of FILE-ARCH-3, 2026-08-22)" column (all rows COPIED_VERIFIED):
+#   CERT_DIR      -> vault_manifest.md row: "2025 | certified | .../PROP.TXT | ... |
+#                     .../certified_roll/2025-07-20/PROP.TXT (verified 2026-08-22)"
+#   CERT_DIR_2022 -> vault_manifest.md row: "2022 | certified | .../PROP.TXT | ... |
+#                     .../certified_roll/2022-07-25/PROP.TXT (verified 2026-08-22)"
+#   CERT_DIR_2023 -> vault_manifest.md row: "2023 | certified | .../PROP.TXT | ... |
+#                     .../certified_roll/2023-07-22/PROP.TXT (verified 2026-08-22)"
+#   CERT_DIR_2024 -> vault_manifest.md row: "2024 | certified | .../PROP.TXT | ... |
+#                     .../certified_roll/2024-08-21/PROP.TXT (verified 2026-08-22)"
+#   CERT_DIR_2026 -> vault_manifest.md row: "2026 | certified | .../PROP.TXT | ... |
+#                     .../certified_roll/2026-07-19/PROP.TXT (verified 2026-08-22)"
+# (PROP_ENT.TXT and LAND_DET.TXT for each year are recorded at the identical
+# directory in the manifest -- one row per file, same date-stamped folder.)
+#
+# Real design constraint, not incidental: these must resolve through
+# _travis_archive() (the canonical FILE-ARCH-3 archive-side helper, per this
+# brief's own instruction), which calls _require_archive_mounted() and RAISES
+# ArchiveNotMountedError if the external drive isn't attached -- correct and
+# deliberate (silently resolving to a wrong/missing path is exactly the bug
+# being fixed here). But _require_archive_mounted()'s own docstring is
+# explicit that this check must fire "at the point of use", "never at
+# config.py import time (which would wrongly turn 'drive unplugged' into
+# 'app won't start')". A plain `CERT_DIR_2022 = _travis_archive(...)` module-
+# level assignment would violate that -- Python evaluates it once, eagerly,
+# the moment ANYTHING does `import config`, including callers (app.py, most
+# loaders) that never touch this data and must keep starting cleanly with
+# the drive unplugged.
+#
+# Module-level __getattr__ (PEP 562) defers that resolution to the actual
+# point of use: `config.CERT_DIR_2022` still reads exactly like a plain
+# string attribute to every existing caller (no call-site changes needed
+# anywhere in the codebase), but the mount check and the real path join only
+# happen the first time something actually asks for one of these 5 names --
+# matching _require_archive_mounted()'s own stated intent exactly, instead
+# of fighting it.
+_CERT_ARCHIVE_DATES = {
+    "CERT_DIR":      "2025-07-20",
+    "CERT_DIR_2022": "2022-07-25",
+    "CERT_DIR_2023": "2023-07-22",
+    "CERT_DIR_2024": "2024-08-21",
+    "CERT_DIR_2026": "2026-07-19",
+}
+
+
+def __getattr__(name):
+    """PEP 562 module-level lazy attribute resolution -- see the CERT_DIR
+    family comment block above for why this exists. Only intercepts the 5
+    names in _CERT_ARCHIVE_DATES; anything else is a genuine AttributeError,
+    same as normal module attribute lookup (this function is only consulted
+    when a plain lookup in this module's __dict__ already failed)."""
+    if name in _CERT_ARCHIVE_DATES:
+        return _travis_archive("certified_roll", _CERT_ARCHIVE_DATES[name])
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ── Raw Vault (DATA_LIFECYCLE.md Stage 0 / Phase 1 backfill, Aug 2026) ──────
 # vault/{county}/{year}/{source}/{date}/ per the lifecycle doc's own

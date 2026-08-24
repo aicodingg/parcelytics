@@ -21,11 +21,33 @@ corruption cases that must FAIL (not just pass-case tests):
      refreshed).
 
 Run: python3 loaders/test_ingest_gate.py
+
+PX-20260824-03 note: the G4 tests below call gate.g4_rollup_integrity_check()
+directly, which does a lazy `import parcel_rollup` internally -- that module
+transitively imports loaders/db.py, which does `import psycopg2`
+unconditionally at module top level. psycopg2 is not installed in this
+sandbox (no network access to pip install it), so without the fake-module
+injection below this file crashed with ModuleNotFoundError the moment it
+reached the G4 tests -- a pre-existing sandbox gap in this test file
+specifically (every OTHER fixture-tested module already using this real,
+established technique -- e.g. loaders/test_backfill_prop_unit_tax_year_geoid.py,
+loaders/test_pir_xlsx_common.py, test_cert_archive_paths.py,
+loaders/test_gate_wiring.py -- this file just hadn't needed it before its
+G4 tests were added). Nothing this file actually exercises touches
+psycopg2's real behavior at all; the fake module exists purely to satisfy
+the transitive import chain.
 """
 import os
 import sys
+import types
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+_fake_pg2 = types.ModuleType("psycopg2")
+_fake_pg2.extras = types.ModuleType("psycopg2.extras")
+sys.modules.setdefault("psycopg2", _fake_pg2)
+sys.modules.setdefault("psycopg2.extras", _fake_pg2.extras)
+
 from loaders import ingest_gate as gate
 from loaders import ears_format as ef
 

@@ -342,13 +342,32 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
         # groups by geo_id, re-deriving parcel_rollup's own aggregation)
         # and G5 (which derives its geo_id count from G4's gathered rows)
         # are touched below.
+        # PX-20260824-03: county_code added to both queries below. Before
+        # this fix, gather_and_run() accepted a county_code parameter (used
+        # only to LABEL the ingest_audit row -- see _write_audit() below)
+        # but never actually filtered any of its own gathering queries by
+        # it, despite prop_unit_tax_year/parcel_tax_year both being real,
+        # already-migrated, county_code-leading-PK tables in production
+        # (migrate_county_partitioning.py's own TABLE_SPECS) -- the exact
+        # same bug class PARCEL-ROLLUP-HOTFIX-1 already found and fixed in
+        # parcel_rollup.py's ROLLUP_SQL. Harmless today (Travis is still
+        # the only county with rows in these tables, so an unscoped COUNT/
+        # SUM equals the scoped version), but confirmed as a real,
+        # load-bearing gap: prop_id is NOT globally unique across counties
+        # (prop_unit's real PK is (county_code, prop_id)), so the day a
+        # second county's data lands here, an unscoped COUNT(DISTINCT
+        # prop_id) would count both counties' prop_ids together and
+        # compare it against one county's file-scan count -- a false FAIL.
         cur.execute(
             "SELECT SUM(market_value), COUNT(DISTINCT prop_id) "
-            "FROM prop_unit_tax_year WHERE tax_year = %s",
-            (tax_year,),
+            "FROM prop_unit_tax_year WHERE tax_year = %s AND county_code = %s",
+            (tax_year, county_code),
         )
         unit_table_sum, g2_landed_count = cur.fetchone()
-        cur.execute("SELECT SUM(market_value) FROM parcel_tax_year WHERE tax_year = %s", (tax_year,))
+        cur.execute(
+            "SELECT SUM(market_value) FROM parcel_tax_year WHERE tax_year = %s AND county_code = %s",
+            (tax_year, county_code),
+        )
         account_table_sum = cur.fetchone()[0]
 
         # G4 inputs: independently re-derive the rollup from prop_unit_tax_year
@@ -368,15 +387,23 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
         # what parcel_rollup.py now computes, not what it used to compute.
         # LEFT JOIN (not INNER) so a row with its own y.geo_id populated is
         # never dropped just because its prop_id has no prop_unit match.
+        # PX-20260824-03: county_code added to the WHERE, AND to the JOIN
+        # condition (u.county_code = y.county_code) -- matching
+        # parcel_rollup.py's own ROLLUP_SQL fix under PARCEL-ROLLUP-HOTFIX-1
+        # exactly. Without the join condition, a Travis prop_id that happens
+        # to collide numerically with a Dallas prop_id (prop_id is only
+        # unique WITHIN a county) could join against the WRONG county's
+        # prop_unit row, silently corrupting this check's own independent
+        # re-derivation of what parcel_tax_year should contain.
         cur.execute("""
             SELECT y.prop_id, y.geo_id AS geo_id, u.geo_id AS prop_unit_geo_id,
                    y.tax_year, y.market_value, y.assessed_value,
                    y.taxable_value, y.hs_cap_loss, y.land_value, y.imprv_value,
                    y.exemption_codes, y.data_source
             FROM prop_unit_tax_year y
-            LEFT JOIN prop_unit u ON u.prop_id = y.prop_id
-            WHERE y.tax_year = %s
-        """, (tax_year,))
+            LEFT JOIN prop_unit u ON u.prop_id = y.prop_id AND u.county_code = y.county_code
+            WHERE y.tax_year = %s AND y.county_code = %s
+        """, (tax_year, county_code))
         g4_cols = [d[0] for d in cur.description]
         g4_unit_rows = [dict(zip(g4_cols, row)) for row in cur.fetchall()]
 
@@ -384,8 +411,8 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
             SELECT geo_id, market_value, assessed_value, taxable_value, hs_cap_loss,
                    land_value, imprv_value, exemption_codes, unit_count
             FROM parcel_tax_year
-            WHERE tax_year = %s
-        """, (tax_year,))
+            WHERE tax_year = %s AND county_code = %s
+        """, (tax_year, county_code))
         pty_cols = [d[0] for d in cur.description]
         g4_parcel_rows = {row[0]: dict(zip(pty_cols, row)) for row in cur.fetchall()}
 
@@ -439,8 +466,33 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
 
     results["G5"] = g5_account_coverage_check(distinct_geo_ids, parcel_count)
 
+    # PX-20260824-03: G6 now ALWAYS appears in results/ingest_audit, even
+    # when no published_total is available -- previously it was simply
+    # omitted from `results` in that case, which meant a caller reading the
+    # per-check printout (or ingest_audit afterward) saw 5 checks and had
+    # no way to tell "G6 wasn't run" apart from "G6 wasn't relevant" or an
+    # oversight. This matters most for historical-year runs specifically:
+    # TCAD's published county total is readily available for the current
+    # year (2026's real load DID pass one -- see CHANGELOG's 1.5.0 entry,
+    # "5.45% deviation vs. 10.61%") but nothing in this repo has an
+    # on-file published total for 2022-2024 -- SKIPPED here is an honest,
+    # loud statement of that gap, not a silent absence. passed=True so a
+    # skip never blocks compute_metrics (matching this function's existing
+    # `overall_pass = all(r[0] for r in results.values())` semantics) --
+    # only a genuine reconciliation FAILURE should ever block downstream
+    # steps, not "we didn't have a number to check against."
     if published_total is not None:
         results["G6"] = g6_external_reconciliation_check(account_table_sum or 0, published_total)
+    else:
+        results["G6"] = (
+            True,
+            f"SKIPPED — no published_total supplied for tax_year {tax_year}. "
+            f"TCAD's published county total for this year was not available to "
+            f"this run. G6 provides no assurance for this source/year until a "
+            f"published total is sourced and passed explicitly via "
+            f"--published-total.",
+            "skipped",
+        )
 
     _write_audit(conn, source_tag, tax_year, results, county_code=county_code)
     overall_pass = all(r[0] for r in results.values())
@@ -478,6 +530,15 @@ if __name__ == "__main__":
     ap.add_argument("--tax-year", type=int, default=None)
     ap.add_argument("--check-db", action="store_true", help="Also run G2/G3/G5 against the live DB")
     ap.add_argument("--published-total", type=float, default=None, help="TCAD-published total for G6")
+    ap.add_argument(
+        "--county", default="TRAVIS",
+        help="county_code every DB-facing check is scoped to (default: TRAVIS). "
+             "PX-20260824-03: mirrors load_certified_historical.py's own --county "
+             "convention -- was previously accepted by gather_and_run() but not "
+             "exposed here, and not threaded into any of that function's own "
+             "gathering queries either (see gather_and_run()'s own PX-20260824-03 "
+             "comment for the fix).",
+    )
     args = ap.parse_args()
 
     if not args.check_db:
@@ -495,7 +556,7 @@ if __name__ == "__main__":
         from loaders.db import get_conn
         conn = get_conn()
         summary = gather_and_run(conn, args.source_tag, args.tax_year, args.prop, args.prop_ent,
-                                  args.published_total)
+                                  args.published_total, county_code=args.county)
         for code, result in summary["checks"].items():
             print(f"{code}: {'PASS' if result[0] else 'FAIL'} — {result[1]}")
         print(f"\nOVERALL: {'PASS' if summary['passed'] else 'FAIL'}")
