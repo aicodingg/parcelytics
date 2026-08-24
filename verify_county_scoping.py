@@ -440,16 +440,44 @@ def _resolve_string_node(node, assignments):
     if isinstance(node, ast.JoinedStr):
         parts = []
         any_dynamic = False
+        any_resolved_dynamic = False
         for v in node.values:
             if isinstance(v, ast.Constant):
                 parts.append(str(v.value))
             elif isinstance(v, ast.FormattedValue):
-                any_dynamic = True
-                parts.append("{" + _unparse(v.value) + "}")
+                # PX-20260823-04 Task 1: a FormattedValue whose value is a
+                # bare Name -- e.g. an f-string's `{columns}` -- used to
+                # ALWAYS render as the literal placeholder text "{columns}"
+                # below, even though `assignments` (built by
+                # _collect_simple_string_assignments, walking the same file)
+                # may already hold that name's real, statically-resolved
+                # string value. That was the actual bug: the lookup table
+                # existed, this branch just never consulted it. Bounded on
+                # purpose -- only a bare ast.Name is attempted (matching the
+                # brief's "FormattedValue whose value is a Name node"), not
+                # arbitrary expressions inside {}; anything else (a call, an
+                # attribute access, a reassigned/ambiguous name not present
+                # in `assignments`) still falls through to the original
+                # literal-placeholder rendering, unchanged from before this
+                # fix. No guessing, no execution -- a static lookup against
+                # the exact same single-assignment table this file already
+                # trusted for top-level `NAME = f"..."` constants.
+                if isinstance(v.value, ast.Name) and v.value.id in assignments:
+                    parts.append(assignments[v.value.id])
+                    any_resolved_dynamic = True
+                else:
+                    any_dynamic = True
+                    parts.append("{" + _unparse(v.value) + "}")
             else:
                 any_dynamic = True
                 parts.append("{?}")
-        return "".join(parts), ("fstring_dynamic" if any_dynamic else "fstring_static")
+        if any_dynamic:
+            kind = "fstring_dynamic"
+        elif any_resolved_dynamic:
+            kind = "fstring_dynamic_resolved"
+        else:
+            kind = "fstring_static"
+        return "".join(parts), kind
 
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         left_text, left_kind = _resolve_string_node(node.left, assignments)
@@ -463,6 +491,35 @@ def _resolve_string_node(node, assignments):
         if node.id in assignments:
             return assignments[node.id], "variable"
         return f"{{{node.id}}}", "variable_unresolved"
+
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "join"
+        and isinstance(node.func.value, ast.Constant)
+        and isinstance(node.func.value.value, str)
+        and len(node.args) == 1
+        and isinstance(node.args[0], (ast.List, ast.Tuple))
+    ):
+        # PX-20260823-04 Task 1: explicitly named in the brief as in-scope
+        # ("a static expression of string constants (including ", ".join
+        # ([...]) over a constant list") even though none of the three real
+        # cases actually use it -- supported here so a future writer using
+        # this real, idiomatic Python pattern for a column list doesn't
+        # reopen the same class of tool-limitation gap. Deliberately narrow:
+        # separator must itself be a literal string, and every list/tuple
+        # element must be a plain string constant -- an element that's
+        # itself a Name/Call/anything non-constant makes the whole
+        # expression unresolved (no partial credit, no guessing at what an
+        # unresolvable element might contain).
+        sep = node.func.value.value
+        items = []
+        for el in node.args[0].elts:
+            if isinstance(el, ast.Constant) and isinstance(el.value, str):
+                items.append(el.value)
+            else:
+                return "{<unresolved-join>}", "unresolved"
+        return sep.join(items), "join"
 
     return "{<unresolved-expr>}", "unresolved"
 
@@ -510,13 +567,59 @@ def _classify_statement(text):
     return None, None
 
 
+def _docstring_constant_ids(tree):
+    """PX-20260823-04 (discovered during Task 1/2 verification, not
+    originally scoped by the brief -- see final report): id()s of every
+    ast.Constant string node that is a REAL docstring -- the first
+    statement of a Module/FunctionDef/AsyncFunctionDef/ClassDef body, when
+    that statement is a bare `Expr(Constant(str))`. This is the exact same
+    definition ast.get_docstring() uses; not a heuristic.
+
+    Why this matters here: _build_insert_sql()'s docstring in
+    loaders/refresh_group_stats.py explains the function's SQL shape in
+    prose that legitimately quotes 'INSERT INTO group_stats_shadow (...)'
+    (literal ellipsis, not real columns) -- a real, registered table name
+    sitting right next to a real INSERT keyword, so it passes
+    _classify_statement()'s keyword+table-name filter and gets extracted
+    as if it were an actual SQL statement. It never was one; scanning it
+    for county_code produces a permanent, unfixable-by-resolution FAIL
+    (there IS no column list to resolve -- the "columns" are the literal
+    text "..."). This was already a latent gap in the extractor before
+    PX-20260823-04 -- Task 1's FormattedValue fix made the file's ONE
+    real statement resolve correctly, which is what exposed this second,
+    unrelated statement as a standalone finding for the first time (it
+    was previously masked by sharing an EXEMPTIONS key with the real one).
+    Skipping true docstrings from extraction is the correct, narrow fix:
+    it doesn't touch FormattedValue resolution (Task 1's actual scope) and
+    doesn't add a new EXEMPTIONS entry for what was never a real SQL
+    statement in the first place."""
+    ids = set()
+    docstring_owners = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    for node in ast.walk(tree):
+        if isinstance(node, docstring_owners) and node.body:
+            first = node.body[0]
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                ids.add(id(first.value))
+    return ids
+
+
 def extract_statements_from_source(source_text, filepath):
     """Walks EVERY string-literal/f-string node AND every simple constant
     assignment in the file -- not scoped to any particular call site or
     function-argument position (see module docstring for why). Returns
-    every ExtractedStatement referencing a registered table."""
+    every ExtractedStatement referencing a registered table.
+
+    Excludes genuine docstrings (see _docstring_constant_ids) -- a
+    docstring is prose ABOUT code, never itself an executed SQL string, so
+    it can never be a real 3a/3b/3c/3d finding; treating one as SQL only
+    ever produces a false positive."""
     tree = ast.parse(source_text, filename=filepath)
     assignments = _collect_simple_string_assignments(tree)
+    docstring_ids = _docstring_constant_ids(tree)
     results = []
     seen_line_table_kind = set()
 
@@ -537,6 +640,8 @@ def extract_statements_from_source(source_text, filepath):
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstring_ids:
+                continue
             _maybe_add(node, node.value, "literal")
         elif isinstance(node, ast.JoinedStr):
             text, resolution = _resolve_string_node(node, assignments)
@@ -792,33 +897,22 @@ def audit_extracted(extracted):
 # ═══════════════════════════════════════════════════════════════════════════
 
 EXEMPTIONS = {
-    ("loaders/refresh_group_stats.py", "group_stats", "INSERT"): {
-        "reason": (
-            "Tool limitation, not a code bug: _build_insert_sql() builds this "
-            "INSERT via an f-string whose column list comes from a local "
-            "`columns` variable (an ast.FormattedValue node) -- this auditor's "
-            "f-string resolution renders FormattedValue expressions as literal "
-            "'{varname}' text rather than substituting the variable's real "
-            "value, so it can't see that `columns` genuinely includes "
-            "county_code. Confirmed by direct read: PARTITION-2-FIX-1 added "
-            "county_code as the second-to-last column in `columns`, and the "
-            "paired SELECT emits '%(county_code)s AS county_code'. Covers both "
-            "FAIL lines this key produces (:257 and :302 as of this audit) -- "
-            "same root cause, same file, same table, same statement kind."
-        ),
-        "approved_by": "PX-20260823-02",
-    },
-    ("loaders/load_cert_2021.py", "parcel_tax_year", "INSERT"): {
-        "reason": (
-            "Tool limitation, not a code bug: build_upsert_sql()'s INSERT "
-            "column list comes from a local `cols_insert` variable via the "
-            "same f-string-FormattedValue-non-resolution gap described in the "
-            "refresh_group_stats.py entry above. Confirmed by direct read: "
-            "cols_insert already lists county_code first (fixed under "
-            "PX-20260822-06-rev1)."
-        ),
-        "approved_by": "PX-20260823-02",
-    },
+    # PX-20260823-04 Task 2: the two entries formerly registered here --
+    # ("loaders/refresh_group_stats.py", "group_stats", "INSERT") and
+    # ("loaders/load_cert_2021.py", "parcel_tax_year", "INSERT") -- are
+    # REMOVED, not left in place stale. Both existed solely to document-
+    # around a real tool limitation (this auditor's f-string resolver
+    # couldn't see through a FormattedValue naming a same-file variable),
+    # not to excuse an actual gap in county_code scoping. That limitation is
+    # now fixed directly in _resolve_string_node's ast.JoinedStr branch
+    # (bounded ast.Name-in-`assignments` lookup) -- both statements now
+    # resolve their real column lists (which already, correctly, include
+    # county_code) and PASS on their own merits. Per Law 3 below, an
+    # exemption that no longer matches any finding must not be left sitting
+    # in the registry to go stale; the correct move for a genuinely-obsolete
+    # entry is deletion, which is what happened here -- not the deletion
+    # itself triggering the stale-exemption alarm, since a deleted key can
+    # never be "matched zero times" (it isn't examined at all).
     ("loaders/snapshot_2026_preliminary.py", "parcel_2026_preliminary_snapshot", "INSERT"): {
         "reason": (
             "Correct-by-design, not a gap: this INSERT always runs immediately "
