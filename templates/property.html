@@ -442,7 +442,7 @@
      one place Homeowner mode's fallback didn't match that register on a
      non-residential parcel). #}
   <h2 class="fw-bold mb-1">{{ parcel.situs_address or ("Your home" if is_residential else "This property") }}</h2>
-  <div class="text-muted">Travis County, TX · Parcel {{ parcel.geo_id }}</div>
+  <div class="text-muted">{{ county_profile.display_name }} · Parcel {{ parcel.geo_id }}</div>
 </div>
 
 {{ tax_calendar_strip(tax_calendar) }}
@@ -790,10 +790,10 @@
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if mv26 %}
         {% if is_2026_certified %}
-        TCAD's 2026 certified appraisal{% if mv25 %} — {{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }} vs. 2025{% endif %}. Final, not subject to change.
+        {{ county_profile.cad_abbr }}'s 2026 certified appraisal{% if mv25 %} — {{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }} vs. 2025{% endif %}. Final, not subject to change.
         <span class="badge-verified" style="font-size:9px;">Certified</span>
         {% else %}
-        TCAD's 2026 preliminary appraisal{% if mv25 %} — {{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }} vs. 2025{% endif %}. A real appraisal figure, not yet certified.
+        {{ county_profile.cad_abbr }}'s 2026 preliminary appraisal{% if mv25 %} — {{ "{:+.0f}%".format((mv26 - mv25) / mv25 * 100) }} vs. 2025{% endif %}. A real appraisal figure, not yet certified.
         <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
         {% endif %}
         {% else %}
@@ -824,13 +824,13 @@
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if tv26 %}
         {% if tv26_is_approx %}
-        Parcelytics's estimate of the homestead-capped 2026 taxable value — TCAD's own {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification){% if mv26 and mv26 > tv26 %}, {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below {% if is_2026_certified %}certified{% else %}preliminary{% endif %} market value{% endif %}.
+        Parcelytics's estimate of the homestead-capped 2026 taxable value — {{ county_profile.cad_abbr }}'s own {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification){% if mv26 and mv26 > tv26 %}, {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below {% if is_2026_certified %}certified{% else %}preliminary{% endif %} market value{% endif %}.
         <span class="badge-estimated" style="font-size:9px;">Estimated</span>
         {% elif is_2026_certified %}
-        TCAD's 2026 certified taxable value{% if mv26 and mv26 > tv26 %} — {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below market value{% if has_hs %} thanks to the homestead cap and exemptions{% endif %}{% endif %}. Final, not subject to change.
+        {{ county_profile.cad_abbr }}'s 2026 certified taxable value{% if mv26 and mv26 > tv26 %} — {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below market value{% if has_hs %} thanks to the homestead cap and exemptions{% endif %}{% endif %}. Final, not subject to change.
         <span class="badge-verified" style="font-size:9px;">Certified</span>
         {% else %}
-        TCAD's 2026 preliminary taxable value{% if mv26 and mv26 > tv26 %} — {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below market value{% if has_hs %} thanks to the homestead cap and exemptions{% endif %}{% endif %}. A real appraisal figure, not yet certified.
+        {{ county_profile.cad_abbr }}'s 2026 preliminary taxable value{% if mv26 and mv26 > tv26 %} — {{ "{:.0f}".format((mv26 - tv26) / mv26 * 100) }}% below market value{% if has_hs %} thanks to the homestead cap and exemptions{% endif %}{% endif %}. A real appraisal figure, not yet certified.
         <span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
         {% endif %}
         {% else %}
@@ -874,7 +874,7 @@
          line doesn't compound the same card's density. #}
       <div class="text-muted" style="font-size:10.5px; line-height:1.4; margin-top:4px;">
         <span class="badge-estimated" style="font-size:9px;">Estimated</span> uses last year's (2025) rate assumption
-        <span title="This describes the RATE assumption only. The 2026 value it's applied to already carries its own, separate Preliminary badge above, from TCAD's real 2026 roll -- the two badges describe different things, not a contradiction." style="cursor:help; font-size:11px; color:var(--text-3);">ⓘ</span>.
+        <span title="This describes the RATE assumption only. The 2026 value it's applied to already carries its own, separate Preliminary badge above, from {{ county_profile.cad_abbr }}'s real 2026 roll -- the two badges describe different things, not a contradiction." style="cursor:help; font-size:11px; color:var(--text-3);">ⓘ</span>.
       </div>
       {% endif %}
     </div></div>
@@ -1056,8 +1056,8 @@
     </div>
   </div>
   <div class="card-footer text-muted small">
-    Preliminary from TCAD's June 9, 2026 export; certified from TCAD's July 25, 2026 certified appraisal roll — final, not subject to change.
-    Taxable-value comparison uses the same homestead-cap-aware figure shown elsewhere on this page, not TCAD's raw preliminary/certified export value.
+    Preliminary from {{ county_profile.cad_abbr }}'s June 9, 2026 export; certified from {{ county_profile.cad_abbr }}'s July 25, 2026 certified appraisal roll — final, not subject to change.
+    Taxable-value comparison uses the same homestead-cap-aware figure shown elsewhere on this page, not {{ county_profile.cad_abbr }}'s raw preliminary/certified export value.
   </div>
   {% else %}
   <div class="card-body">
@@ -1418,7 +1418,7 @@
                  Reuses the exact same is_billing_verified check already driving the
                  badge, not a new condition. #}
               {% if _h.is_billing_verified %}${{ "{:,.0f}".format(_h.total_tax|float) }}
-                <span class="badge-verified" style="font-size:9px; padding:1px 5px;" title="Verified = confirmed directly from official Travis County Tax Office billing records.">Verified</span>
+                <span class="badge-verified" style="font-size:9px; padding:1px 5px;" title="Verified = confirmed directly from official {{ county_profile.tax_office_name }} billing records.">Verified</span>
               {% else %}~${{ "{:,.0f}".format(_h.total_tax|float) }}
                 <span class="badge-partial" style="font-size:9px; padding:1px 5px;" title="Partial = built from official records that may not include every taxing entity, so this figure is a close estimate, not a confirmed total.">Partial</span>
               {% endif %}
@@ -1458,7 +1458,7 @@
        badge text ("Verified"/"Partial"/"Computed") now that these are pills, not
        lowercase parenthetical text. #}
     Combined rate = the total of all {% if is_residential %}your{% else %}this property's{% endif %} taxing entities' rates that year. Years marked
-    “Verified” are confirmed directly from the Travis County Tax Office. Years marked
+    “Verified” are confirmed directly from the {{ county_profile.tax_office_name }}. Years marked
     “Partial” are reconstructed from portal payment receipts or incomplete billing records
     and may not reflect every adjustment. Where no billing record exists for a year, an
     estimate computed from that year's certified taxable value × combined rate may be shown
@@ -1501,7 +1501,7 @@
    residential title in line with the same honesty standard. #}
 <div class="card mb-3"><div class="card-header">{% if is_residential %}How You Compare Countywide{% else %}How You Compare to {{ bench_label }} Peers{% endif %}</div>
   <div class="card-body">
-    <p class="mb-2">{% if is_residential %}Your home's{% else %}This property's{% endif %} value is <strong>{{ _cmp }}</strong> {{ _peer_group }} in Travis County
+    <p class="mb-2">{% if is_residential %}Your home's{% else %}This property's{% endif %} value is <strong>{{ _cmp }}</strong> {{ _peer_group }} in {{ county_profile.county_name }}
       (county median: <strong>${{ "{:,.0f}".format(_med) }}</strong>).</p>
     <p class="mb-0">Because property taxes are based on value, {% if is_residential %}your{% else %}the{% endif %} tax bill is likely <strong>{{ _taxcmp }}</strong> similar {% if is_residential %}homes{% else %}properties{% endif %}.</p>
   </div>
@@ -1648,7 +1648,7 @@
     {{ parcel.situs_address or "Address unknown" }}
   </h2>
   <div class="property-meta">
-    <span>Travis County, TX</span>
+    <span>{{ county_profile.display_name }}</span>
     {% if _prop_type %}
       <span class="sep">&middot;</span>
       <span>{{ _prop_type }}</span>
@@ -1717,7 +1717,7 @@
     {% if current %}
       {% set _cur_av_anomaly = current.assessed_value and current.market_value and current.assessed_value > current.market_value %}
       {% if current.data_source in _certified_tier_sources and not _cur_av_anomaly %}
-        <span class="badge-verified ms-2" title="TCAD's 2025 appraisal roll is certified — final, not subject to change.">Appraisal: 2025 Certified</span>
+        <span class="badge-verified ms-2" title="{{ county_profile.cad_abbr }}'s 2025 appraisal roll is certified — final, not subject to change.">Appraisal: 2025 Certified</span>
       {% elif current.data_source in _certified_tier_sources and _cur_av_anomaly %}
         <span class="badge-partial ms-2" title="Assessed value exceeds market value in this year's source data — see the data-anomaly icon in the Value History table below for detail.">Appraisal: Partial</span>
       {% elif current.data_source == "preliminary" %}
@@ -1726,7 +1726,7 @@
         <span class="badge-partial ms-2" title="Appraisal certification status isn't tracked for this record.">Appraisal: Unknown</span>
       {% endif %}
       {% if current.total_tax and current.is_billing_verified %}
-        <span class="badge-verified ms-1" title="2025 tax billing confirmed directly from Travis County Tax Office records.">Billing: 2025 Verified</span>
+        <span class="badge-verified ms-1" title="2025 tax billing confirmed directly from {{ county_profile.tax_office_name }} records.">Billing: 2025 Verified</span>
       {% elif current.total_tax %}
         <span class="badge-partial ms-1" title="This 2025 total is a reconstructed or partial figure — see the {% if is_residential %}Your Tax Rate &amp; Bill{% else %}Tax Rate &amp; Bill{% endif %} table below for why.">Billing: 2025 Partial</span>
       {% elif current.computed_total_tax %}
@@ -1736,7 +1736,7 @@
       {% endif %}
       {% if _hist_total > 0 %}
         {% if _hist_verified == _hist_total %}
-          <span class="badge-verified ms-1" style="font-size:9px; padding:1px 5px;" title="Every 2021–2024 row on file for this parcel is genuinely verified billing (Travis County Tax Office export), not a reconstructed or partial figure.">2021–24 billing ✓</span>
+          <span class="badge-verified ms-1" style="font-size:9px; padding:1px 5px;" title="Every 2021–2024 row on file for this parcel is genuinely verified billing ({{ county_profile.tax_office_name }} export), not a reconstructed or partial figure.">2021–24 billing ✓</span>
         {% elif _hist_verified > 0 %}
           <span class="badge-partial ms-1" style="font-size:9px; padding:1px 5px;" title="{{ _hist_verified }} of {{ _hist_total }} available 2021–2024 years are genuinely verified billing — see the Value & Tax History table below for which.">2021–24 billing partial</span>
         {% else %}
@@ -1981,14 +1981,14 @@
      row shows a real cap, this app's own capped-value estimate otherwise,
      badged accordingly. #}
   <div class="kpi-card">
-    <div class="kpi-label" title="What the tax rate will be applied to — TCAD's 2026 {% if is_2026_certified %}certified{% else %}preliminary{% endif %} assessed value after exemptions, not the market value above">Taxable Value</div>
+    <div class="kpi-label" title="What the tax rate will be applied to — {{ county_profile.cad_abbr }}'s 2026 {% if is_2026_certified %}certified{% else %}preliminary{% endif %} assessed value after exemptions, not the market value above">Taxable Value</div>
     <div class="kpi-value">
       {% if inv_tv26 %}{% if inv_tv26_is_approx %}~{% endif %}${{ "{:,.0f}".format(inv_tv26) }}{% else %}—{% endif %}
     </div>
     <div class="kpi-sub">
       {% if inv_tv26 %}
         {% if inv_tv26_is_approx %}
-          2026 <span class="badge-estimated" style="font-size:9px; padding:1px 5px;" title="TCAD's {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the homestead cap for this parcel (Tax Code §23.23 applies it at certification) — this is Parcelytics's estimate of the capped value.">Estimated</span>
+          2026 <span class="badge-estimated" style="font-size:9px; padding:1px 5px;" title="{{ county_profile.cad_abbr }}'s {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the homestead cap for this parcel (Tax Code §23.23 applies it at certification) — this is Parcelytics's estimate of the capped value.">Estimated</span>
         {% elif is_2026_certified %}
           2026 <span class="badge-verified" style="font-size:9px; padding:1px 5px;">Certified</span>
         {% else %}
@@ -2294,8 +2294,8 @@
       </table>
 
       <div class="text-muted mt-2" style="font-size:10.5px; line-height:1.5;">
-        Build-up from 2025 TCAD certified values. Land and Improvement are shown as single totals — Parcelytics'
-        loaders capture one aggregate value per year, not TCAD's Homesite / Non-Homesite split. Special Use Land
+        Build-up from 2025 {{ county_profile.cad_abbr }} certified values. Land and Improvement are shown as single totals — Parcelytics'
+        loaders capture one aggregate value per year, not {{ county_profile.cad_abbr }}'s Homesite / Non-Homesite split. Special Use Land
         Market and Special Use Exclusion (agricultural/productivity valuation) are not in the current dataset.
       </div>
     </div>
@@ -2633,7 +2633,7 @@
           Estimated from {{ insights.hs_history_year }} certified/preliminary values (Partial confidence) — AJR 2021–2024 has no record for this parcel.
           {% else %}
           Historical data from AJR 2021–2024 (Partial confidence).
-          Current status confirmed by 2025 TCAD Certified Export.
+          Current status confirmed by 2025 {{ county_profile.cad_abbr }} Certified Export.
           {% endif %}
         </small>
       </p>
@@ -2833,7 +2833,7 @@
       <p class="mb-2">
         <strong>Submarket Position:</strong>
         At ${{ "{:,.0f}".format(_mv) }}, this parcel sits in the <strong>{{ _band }}</strong>
-        of {{ bench_label }} property in Travis County — county median ${{ "{:,.0f}".format(_med) }}
+        of {{ bench_label }} property in {{ county_profile.county_name }} — county median ${{ "{:,.0f}".format(_med) }}
         (P25 ${{ "{:,.0f}".format(_p25) }} / P75 ${{ "{:,.0f}".format(_p75) }}{% if _b25.parcel_count %}, n={{ "{:,}".format(_b25.parcel_count) }}{% endif %}).
         <span class="text-muted" style="font-size:12.5px;">{{ bench_label }} here is the broad TCAD category — every {{ bench_label|lower }} property countywide, any size or use — not a use-code-specific peer group.</span>
         See the Peer Set and the Where This Property Stands benchmark below, which narrows to this property's actual use code, for parcel-level comparables.
@@ -3173,7 +3173,7 @@
         Total: ${{ '{:,.0f}'.format(_total_tax_bar) }}
       </div>
     </div>
-    <div class="card-footer">2025 billing by taxing entity, ranked by share of total. From Travis County Tax Office open data.</div>
+    <div class="card-footer">2025 billing by taxing entity, ranked by share of total. From {{ county_profile.tax_office_name }} open data.</div>
   </div>
   {% endif %}
   {# ── Phase 2: Risk Indicators ────────────────────────────────────── #}
@@ -3263,8 +3263,8 @@
               This parcel had an active homestead exemption on the 2025 certified roll, but
               the county's 2026 preliminary file no longer shows one. This sometimes reflects
               file incompleteness in the preliminary export rather than a real change — it
-              will be confirmed once TCAD's 2026 roll certifies. Worth a direct check with the
-              owner or TCAD before treating this as a confirmed exemption loss.
+              will be confirmed once {{ county_profile.cad_abbr }}'s 2026 roll certifies. Worth a direct check with the
+              owner or {{ county_profile.cad_abbr }} before treating this as a confirmed exemption loss.
             </p>
           </div>
         </div>
@@ -3326,7 +3326,7 @@
   <div class="section-hdr">Rate Environment</div>
   <div class="card mb-4">
     <div class="card-header">
-      Historical Tax Rates by Entity (Travis County)
+      Historical Tax Rates by Entity ({{ county_profile.county_name }})
     </div>
     {# Compact rate trend chart #}
     {% if chart_entity_data %}
@@ -3459,8 +3459,8 @@
       </div>
     </div>
     <div class="card-footer text-muted small">
-      Rate columns (2021–2025) from Travis County tax rate records.
-      2025 billing from Travis County Tax Office open data.
+      Rate columns (2021–2025) from {{ county_profile.county_name }} tax rate records.
+      2025 billing from {{ county_profile.tax_office_name }} open data.
       <span class="na-cell">—</span> = entity not in rate records for that year.
     </div>
   </div>
@@ -3556,7 +3556,7 @@
               <td class="text-end">
                 {% if current_2026 and current_2026.est_assessed_2026 %}
                   {% if current_2026.basis_2026 == 'derived_cap_estimate' %}
-                    <span title="{% if current_2026.assessed_value is not none %}TCAD's {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export shows ${{ '{:,.0f}'.format(current_2026.assessed_value) }} before the 10% homestead cap; the cap applies at certification (Tax Code §23.23). Shown here as an estimate of the capped value.{% else %}Estimate of the homestead-capped value; TCAD's {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification).{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current_2026.est_assessed_2026) }}</span>
+                    <span title="{% if current_2026.assessed_value is not none %}{{ county_profile.cad_abbr }}'s {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export shows ${{ '{:,.0f}'.format(current_2026.assessed_value) }} before the 10% homestead cap; the cap applies at certification (Tax Code §23.23). Shown here as an estimate of the capped value.{% else %}Estimate of the homestead-capped value; {{ county_profile.cad_abbr }}'s {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification).{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current_2026.est_assessed_2026) }}</span>
                   {% else %}${{ "{:,.0f}".format(current_2026.est_assessed_2026) }}
                   {% endif %}
                 {% else %}<span class="na-cell">—</span>{% endif %}
@@ -3626,7 +3626,7 @@
               <td class="text-end">
                 {% if current_2026 and current_2026.est_taxable_2026 %}
                   {% if current_2026.basis_2026 == 'derived_cap_estimate' %}
-                    <span title="{% if current_2026.taxable_value is not none %}TCAD's {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export shows ${{ '{:,.0f}'.format(current_2026.taxable_value) }} before the 10% homestead cap; the cap applies at certification (Tax Code §23.23). Shown here as an estimate of the capped value.{% else %}Estimate of the homestead-capped value; TCAD's {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification).{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current_2026.est_taxable_2026) }}</span>
+                    <span title="{% if current_2026.taxable_value is not none %}{{ county_profile.cad_abbr }}'s {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export shows ${{ '{:,.0f}'.format(current_2026.taxable_value) }} before the 10% homestead cap; the cap applies at certification (Tax Code §23.23). Shown here as an estimate of the capped value.{% else %}Estimate of the homestead-capped value; {{ county_profile.cad_abbr }}'s {% if is_2026_certified %}certified{% else %}preliminary{% endif %} export doesn't yet reflect the cap for this parcel (Tax Code §23.23 applies it at certification).{% endif %}" style="cursor:help;">~${{ "{:,.0f}".format(current_2026.est_taxable_2026) }}</span>
                   {% else %}${{ "{:,.0f}".format(current_2026.est_taxable_2026) }}
                   {% endif %}
                 {% else %}<span class="na-cell">—</span>{% endif %}
@@ -3690,7 +3690,7 @@
               <td class="text-end" style="color:var(--down);">
                 {% if _hs26_wedge and _hs26_wedge > 0 %}
                   {% if current_2026.basis_2026 == 'derived_cap_estimate' %}
-                    <span title="TCAD's preliminary export doesn't yet reflect the homestead cap for this parcel; shown here as an estimate of the capped value's protection versus market (Tax Code §23.23)." style="cursor:help;">~-${{ "{:,.0f}".format(_hs26_wedge) }}</span>
+                    <span title="{{ county_profile.cad_abbr }}'s preliminary export doesn't yet reflect the homestead cap for this parcel; shown here as an estimate of the capped value's protection versus market (Tax Code §23.23)." style="cursor:help;">~-${{ "{:,.0f}".format(_hs26_wedge) }}</span>
                   {% else %}-${{ "{:,.0f}".format(_hs26_wedge) }}
                   {% endif %}
                 {% else %}<span class="na-cell">—</span>{% endif %}
@@ -3801,9 +3801,9 @@
     </div>
     <div class="card-footer text-muted small">
       {% if is_2026_certified %}
-      2026 from TCAD's certified appraisal roll — final, not subject to change.
+      2026 from {{ county_profile.cad_abbr }}'s certified appraisal roll — final, not subject to change.
       {% else %}
-      2026 from June 9, 2026 TCAD preliminary export — subject to change; certified July 25, 2026.
+      2026 from June 9, 2026 {{ county_profile.cad_abbr }} preliminary export — subject to change; certified July 25, 2026.
       {% endif %}
       No 2026 tax billing until entity budgets are adopted.
       {% if estimated_tax_2026 %}
@@ -3909,8 +3909,8 @@
       </div>
     </div>
     <div class="card-footer text-muted small">
-      Preliminary from TCAD's June 9, 2026 export; certified from TCAD's July 25, 2026 certified appraisal roll — final, not subject to change.
-      Taxable-value comparison uses the same homestead-cap-aware figure shown elsewhere on this page, not TCAD's raw preliminary/certified export value.
+      Preliminary from {{ county_profile.cad_abbr }}'s June 9, 2026 export; certified from {{ county_profile.cad_abbr }}'s July 25, 2026 certified appraisal roll — final, not subject to change.
+      Taxable-value comparison uses the same homestead-cap-aware figure shown elsewhere on this page, not {{ county_profile.cad_abbr }}'s raw preliminary/certified export value.
     </div>
     {% else %}
     <div class="card-body">
@@ -3991,7 +3991,7 @@
                        template's own Property-level confidence badge block above). Wording
                        now says so, instead of implying the anomaly is informational only. #}
                     <span class="badge-data-anomaly"
-                          title="Assessed value exceeds market value in this year's source data. This is why this year's appraisal confidence shows Partial rather than Verified — verify against TCAD's official records before relying on this figure.">!</span>
+                          title="Assessed value exceeds market value in this year's source data. This is why this year's appraisal confidence shows Partial rather than Verified — verify against {{ county_profile.cad_abbr }}'s official records before relying on this figure.">!</span>
                   {% endif %}
                 {% else %}—{% endif %}
               </td>
@@ -4048,7 +4048,7 @@
                      estimated", plus a "Why?" link to the new Methodology section
                      (templates/about.html#methodology-billing-gap); tooltip kept for
                      the fuller explanation on hover. #}
-                  <span title="Computed: taxable value × combined entity rate — this year's row is not in Travis County's billing file"
+                  <span title="Computed: taxable value × combined entity rate — this year's row is not in {{ county_profile.county_name }}'s billing file"
                         style="font-style:italic; color:var(--text-muted); cursor:help;">
                     not in county billing file · ~${{ "{:,.0f}".format(r.computed_total_tax) }} estimated
                   </span>
@@ -4076,11 +4076,11 @@
                    ordering is redundant-but-harmless, kept only for the distinct
                    copy. #}
                 {% if r.billing_source == 'portal_scrape' %}
-                  <span class="badge-partial" title="Payment receipt from Travis County portal — amount paid, not levied; entity breakdown unavailable">Partial</span>
+                  <span class="badge-partial" title="Payment receipt from {{ county_profile.county_name }} portal — amount paid, not levied; entity breakdown unavailable">Partial</span>
                 {% elif r.total_tax_derived %}
                   <span class="badge-partial" title="Reconstructed by summing 2025 entity-level billing records — some taxing entities may be missing from this total">Partial</span>
                 {% elif r.is_billing_verified and r.total_tax %}
-                  <span class="badge-verified" title="Verified — confirmed directly from the Travis County Tax Office">Verified</span>
+                  <span class="badge-verified" title="Verified — confirmed directly from the {{ county_profile.tax_office_name }}">Verified</span>
                 {% elif r.data_source == 'preliminary' %}
                   <span class="badge-preliminary">Preliminary</span>
                 {% elif r.tax_year == 2026 and is_2026_certified %}
@@ -4222,7 +4222,7 @@
                   {{ "{:.4f}%".format(m.effective_tax_rate * 100) }}
                 {% elif m and m.has_tax_data %}
                   {# 2025 row but no billing match in tax_billing #}
-                  <span class="na-cell" title="This parcel does not have a matching row in the 2025 Travis County tax billing data. It may be billed under a different account number or exempt from the open billing roll.">No billing data</span>
+                  <span class="na-cell" title="This parcel does not have a matching row in the 2025 {{ county_profile.county_name }} tax billing data. It may be billed under a different account number or exempt from the open billing roll.">No billing data</span>
                 {% else %}
                   {# Pre-2025 rows — no billing history available #}
                   <span class="na-cell" title="Effective tax rate requires actual billing data (total tax ÷ market value). Verified 2021–2024 billing now exists (see the Value & Tax History table above) but effective tax rate isn't computed for pre-2025 years in this table yet.">Not available</span>
@@ -4475,7 +4475,7 @@
       <div class="d-flex gap-2 flex-wrap align-items-center" style="font-size:12px;">
         {# Geography — single option, disabled #}
         <input class="form-control form-control-sm" style="width:auto; font-size:12px; min-width:130px;"
-               value="All Travis County" disabled title="Sub-county geography filters coming soon">
+               value="All {{ county_profile.county_name }}" disabled title="Sub-county geography filters coming soon">
         {# Neighborhood typeahead #}
         <div class="ta-wrap" style="min-width:130px;">
           <input type="text" class="form-control form-control-sm" style="font-size:12px;"
@@ -4538,7 +4538,7 @@
           In 2025, this property's market value of
           <strong>${{ "{:,.0f}".format(_mv) }}</strong>
           places it in the <strong style="color:{{ _pct_clr }};" id="benchPctLabel">{{ _pct_lbl }}</strong>
-          for <span id="benchSummaryType">{{ bench_label }}</span> properties in Travis County
+          for <span id="benchSummaryType">{{ bench_label }}</span> properties in {{ county_profile.county_name }}
           (<span id="benchComparableCount">{{ _b25.parcel_count if _b25.parcel_count else "—" }}</span> comparable) —
           <strong style="color:var(--accent);" id="benchVsMed">
             {% if _ratio and _ratio|abs >= 3 %}{{ "{:.0f}".format(_ratio) }}×{% else %}{{ "{:+.0f}%".format(_vs_med) }}{% endif %}
@@ -4744,13 +4744,13 @@
   <div class="card mb-4" id="newsCard">
     <div class="card-header d-flex justify-content-between align-items-center">
       <span>Property Tax &amp; County News</span>
-      <span class="text-muted" style="font-size:11px; font-weight:400;">Travis County · live feed</span>
+      <span class="text-muted" style="font-size:11px; font-weight:400;">{{ county_profile.county_name }} · live feed</span>
     </div>
     <div class="card-body p-0">
       <div id="newsBody" class="p-3 text-muted" style="font-size:12.5px;">Loading news…</div>
     </div>
     <div class="card-footer text-muted" style="font-size:10.5px;">
-      Headlines via Google News for “Travis County property tax” / Travis Central Appraisal District.
+      Headlines via Google News for “{{ county_profile.county_name }} property tax” / {{ county_profile.cad_name }}.
       Dates and sources as published; links open the original source in a new tab. Updated hourly.
     </div>
   </div>
@@ -5138,7 +5138,7 @@
               <div><span class="hs-k">What it is</span><span class="hs-v">A reduction in the taxable value of your primary residence. Requires you to own <em>and occupy</em> the home.</span></div>
               <div><span class="hs-k">School exemption</span><span class="hs-v">$140,000 off the school-district (ISD) taxable value — state-mandated (§11.13(b)(1), 2025).</span></div>
               <div><span class="hs-k">10% appraisal cap</span><span class="hs-v">Once homesteaded, assessed value can rise at most 10%/yr regardless of market — caps your tax growth (§23.23).</span></div>
-              <div><span class="hs-k">Filing</span><span class="hs-v">File with TCAD by April 30 of the year after purchase. Free; no annual refiling needed.</span></div>
+              <div><span class="hs-k">Filing</span><span class="hs-v">File with {{ county_profile.cad_abbr }} by April 30 of the year after purchase. Free; no annual refiling needed.</span></div>
               <div><span class="hs-k">Year-1 gap</span><span class="hs-v">Neither the exemption nor the cap applies in the purchase year — full value is taxable until they activate.</span></div>
             </div>
           </div>
@@ -5612,6 +5612,10 @@ if (rCtx) {
   const parcelMv        = {{ (_r25.market_value if _r25 and _r25.market_value else 0) | tojson }};
   const parcelClassiCd  = {{ (parcel.classi_cd or "") | tojson }};
   const defaultBenchLabel = {{ bench_label | tojson }};
+  // PX-20260824-01: single-sourced from the same county_profile the Jinja-
+  // rendered "broad category" caveat above (benchBroadCaveat's initial render)
+  // reads from, so the JS-rebuilt version below can't drift from it.
+  const CAD_ABBR = {{ county_profile.cad_abbr | tojson }};
   const parcelNeighborhood = {{ (parcel.neighborhood_cd or "") | tojson }};  // Task 8: default nbhd filter
 
   const selYear      = document.getElementById('benchYearFilter');
@@ -5891,8 +5895,8 @@ if (rCtx) {
       caveatEl.style.display = showing ? 'block' : 'none';
       if (showing) {
         caveatEl.textContent = codeUnavailableReason
-          ? `${label} here is the broad TCAD category. A use-code-specific comparison isn't available for this parcel (${codeUnavailableReason}).`
-          : `${label} here is the broad TCAD category — every ${label.toLowerCase()} property countywide, any size or use — not a use-code-specific peer group. Use the Use Code filter above to narrow to this property's actual type.`;
+          ? `${label} here is the broad ${CAD_ABBR} category. A use-code-specific comparison isn't available for this parcel (${codeUnavailableReason}).`
+          : `${label} here is the broad ${CAD_ABBR} category — every ${label.toLowerCase()} property countywide, any size or use — not a use-code-specific peer group. Use the Use Code filter above to narrow to this property's actual type.`;
       }
     }
   }

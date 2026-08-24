@@ -5,7 +5,7 @@
 
 <div class="d-flex align-items-baseline gap-3 mb-1">
   <h2 class="fw-bold mb-0" style="letter-spacing: -0.025em;">Tax Rate Trends</h2>
-  <span style="font-size: 13px; color: var(--text-3);">Travis County · {{ year_min }}–{{ year_max }}</span>
+  <span style="font-size: 13px; color: var(--text-3);">{{ county_profile.county_name }} · {{ year_min }}–{{ year_max }}</span>
 </div>
 <p style="font-size: 13px; color: var(--text-3); margin-bottom: 1.5rem;">
   Rates per $100 of taxable value. Select one or more entities to compare.
@@ -536,9 +536,9 @@ document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
 
   const countyTA = initTypeaheadSelect("county", "County");
   if (!countyTA) return;
-  countyTA.setOptions([{ value: "travis", label: "Travis County, TX" }]);
-  document.getElementById("fltCountyInput").value = "Travis County, TX";
-  document.getElementById("fltCountyValue").value = "travis";
+  countyTA.setOptions([{ value: {{ county_slug.split('-')[0] | tojson }}, label: {{ county_profile.display_name | tojson }} }]);
+  document.getElementById("fltCountyInput").value = {{ county_profile.display_name | tojson }};
+  document.getElementById("fltCountyValue").value = {{ county_slug.split('-')[0] | tojson }};
 })();
 
 // ── Part 5: "Which entities apply to my property?" ─────────────────────────

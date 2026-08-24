@@ -113,7 +113,7 @@
       <div class="footer-brand-word">Parcel<b>ytics</b></div>
       <p class="footer-tagline">
         Verified property-tax intelligence, sourced directly from official government records
-        and labeled by confidence. No third-party aggregators. Live today in Travis County, TX —
+        and labeled by confidence. No third-party aggregators. Live today in {{ county_profile.display_name }} —
         expanding market by market, each one verified before it goes live.
       </p>
     </div>
@@ -128,9 +128,9 @@
       <a href="{{ url_for('disclaimer') }}">Disclaimer</a>
     </div>
     <div class="footer-col">
-      <div class="footer-col-title">Data sources — Travis County, TX</div>
-      <span>Travis Central Appraisal District</span>
-      <span>Travis County Tax Office</span>
+      <div class="footer-col-title">Data sources — {{ county_profile.display_name }}</div>
+      <span>{{ county_profile.cad_name }}</span>
+      <span>{{ county_profile.tax_office_name }}</span>
       <a href="{{ url_for('about') }}">Methodology &amp; coverage</a>
     </div>
     <div class="footer-col">
@@ -151,7 +151,7 @@
     </span>
   </div>
   <div class="footer-bottom">
-    <span>Data: Travis Central Appraisal District &amp; Travis County Tax Office · Live market: Travis County, TX</span>
+    <span>Data: {{ county_profile.cad_name }} &amp; {{ county_profile.tax_office_name }} · Live market: {{ county_profile.display_name }}</span>
     {# Cowork brief "Terms of Service, Privacy Policy, Disclaimer Page, Beta
        Popup, Footer Notice", July 2026, item 5: non-affiliation line added
        to the right side of the footer. Grouped with the existing two spans

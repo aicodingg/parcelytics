@@ -852,8 +852,18 @@ def generate_property_narrative(parcel, history, metrics_by_year, benchmark_by_y
     m25   = metrics_by_year.get(2025)
     paragraphs = []
 
+    # PX-20260824-01: county_name from the request's real profile, not a
+    # hardcoded "Travis County". ", Texas" (spelled out, matching this
+    # sentence's own pre-existing style -- every other site occurrence
+    # abbreviates "TX") is not a profile field: every county registered in
+    # COUNTY_PROFILES today is a Texas county (Travis, Dallas; Harris when
+    # it's onboarded), so this is safe for now but would need a real
+    # "state" field the day a non-Texas county is added -- flagged here
+    # rather than silently assumed to hold forever.
+    county_profile = COUNTY_PROFILES.get(getattr(g, "county_code", None), COUNTY_PROFILES["TRAVIS"])
+
     # ── Para 1: property identity + value trajectory ──────────────────────────
-    p1 = [f"{address} is a {prop_type} parcel in Travis County, Texas."]
+    p1 = [f"{address} is a {prop_type} parcel in {county_profile['county_name']}, Texas."]
     if r2026 and r2026.get("market_value") and r2025 and r2025.get("market_value"):
         mv26, mv25 = r2026["market_value"], r2025["market_value"]
         pct = (mv26 - mv25) / mv25 * 100
@@ -1794,6 +1804,63 @@ COUNTY_SLUGS = {
 DEFAULT_COUNTY_SLUG = "travis-tx"
 
 
+# PX-20260824-01: the county-profile-of-record for site COPY (institutional
+# names, source-attribution strings), as distinct from COUNTY_SLUGS above
+# (which is purely a routing table). Every field here is copied verbatim
+# or mechanically concatenated from Notion's real "County Public Profile
+# (Website Content Template)" database -- queried directly for this brief,
+# not guessed or invented. Travis is "Live" there; Dallas is "In Prep" (its
+# row exists with real CAD/Tax-Office names already filled in, confirming
+# DALLAS-CLASS-1-rev's own DCAD naming) but several URL fields are still
+# genuinely blank in Notion for Dallas -- left as None here rather than
+# guessed, per this brief's explicit "no wording/URLs invented" rule. A
+# None field means: don't render that link for this county yet; that's a
+# real, honest gap, not a bug to paper over.
+#
+# NOT included, and deliberately so: a "cad_property_search_url" /
+# "cad_efile_portal_url" field. Several real links already live in
+# property.html (traviscad.org/propertysearch/, traviscad.org/protests,
+# traviscad.org/contact, traviscad.org/homesteadexemptions/, the
+# travis.prodigycad.com/property-detail/<prop_id>/... deep link) append a
+# Travis/ProdigyCAD-specific URL PATH on top of a real domain -- Notion has
+# no corresponding "CAD Property Search URL" / "CAD e-File / Protest Portal
+# URL" value for EITHER county yet (confirmed via direct query), and there
+# is no evidence Dallas's CAD software vendor uses the same path
+# conventions as Travis's (ProdigyCAD). Synthesizing those paths from
+# cad_website would produce a plausible-looking but unverified URL for any
+# future county -- exactly the kind of guess this brief's rules forbid.
+# These specific links are flagged in the final report as needing real
+# per-county URL research, not converted.
+COUNTY_PROFILES = {
+    "TRAVIS": {
+        "display_name": "Travis County, TX",
+        "county_name": "Travis County",
+        "cad_name": "Travis Central Appraisal District",
+        "cad_abbr": "TCAD",
+        "cad_website": "https://traviscad.org",
+        "cad_interactive_map_url": "https://travis.prodigycad.com/maps",
+        "tax_office_name": "Travis County Tax Office",
+        "tax_office_website": "https://tax-office.traviscountytx.gov",
+    },
+    "DALLAS": {
+        "display_name": "Dallas County, TX",
+        "county_name": "Dallas County",
+        "cad_name": "Dallas Central Appraisal District",
+        "cad_abbr": "DCAD",
+        "cad_website": "https://www.dallascad.org",
+        "cad_interactive_map_url": None,   # not yet in Notion
+        "tax_office_name": "Dallas County Tax Office",
+        "tax_office_website": None,        # not yet in Notion
+    },
+    # HARRIS intentionally NOT registered here yet -- COUNTY_SLUGS reserves
+    # the routing slug, but Notion's County Public Profile row for Harris
+    # is still "Planned" with real names not yet independently confirmed
+    # (per that database's own note). Registering a profile with guessed
+    # names would be worse than a template falling back to raw text for a
+    # county nobody can reach today anyway (harris-tx has no loaded data).
+}
+
+
 @app.url_value_preprocessor
 def _pull_county_slug(endpoint, values):
     """Runs BEFORE the matched view function, for every real route below
@@ -1857,9 +1924,18 @@ def county_url(path):
 
 @app.context_processor
 def _inject_county_helpers():
+    """PX-20260824-01: county_profile added alongside the existing
+    county_slug/county_url values -- same injection point, no new
+    mechanism. Falls back to TRAVIS's profile outside a real request
+    context (matching county_slug/county_url's own DEFAULT_COUNTY_SLUG
+    fallback above) so a template read never raises for a KeyError on a
+    profile that isn't registered -- .get() with the TRAVIS profile as a
+    safety net, not a silent assumption that every county IS Travis."""
+    county_code = getattr(g, "county_code", COUNTY_SLUGS[DEFAULT_COUNTY_SLUG])
     return {
         "county_slug": getattr(g, "county_slug", DEFAULT_COUNTY_SLUG),
         "county_url": county_url,
+        "county_profile": COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"]),
     }
 
 
@@ -2677,6 +2753,9 @@ def export_due_diligence_pdf(geo_id):
     # tables per migrate_county_partitioning.py's TABLE_SPECS) by geo_id alone.
     # county_code added below as an ADDITIONAL predicate only.
     county_code = g.county_code
+    # PX-20260824-01: profile-driven source citations below (institutional
+    # names/URLs), same county_code this route already resolves.
+    county_profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
 
     history = query("""
         SELECT pty.tax_year, pty.market_value, pty.assessed_value, pty.taxable_value,
@@ -2912,8 +2991,8 @@ def export_due_diligence_pdf(geo_id):
     story.append(Paragraph(f"{addr} &nbsp;·&nbsp; Geo ID {geo_id}", body))
     story.append(Paragraph(
         f"Generated {datetime.now().strftime('%B %d, %Y')} — for informational purposes; "
-        "verify official figures with TCAD / the Travis County Tax Office before relying "
-        "on this for a transaction.", small
+        f"verify official figures with {county_profile['cad_abbr']} / the "
+        f"{county_profile['tax_office_name']} before relying on this for a transaction.", small
     ))
     story.append(Spacer(1, 8))
     story.append(HRFlowable(width="100%", color=rl_colors.HexColor("#dddddd")))
@@ -2994,7 +3073,11 @@ def export_due_diligence_pdf(geo_id):
         # preliminary export shows the pre-cap figure), not a real TCAD
         # number -- the "~" prefix alone isn't enough in a PDF someone may
         # print/forward without the live page's tooltip; state it in the note.
-        conf_2026_note += ". Assessed/Taxable Value are Parcelytics estimates of the capped value (TCAD's preliminary export doesn't yet reflect the homestead cap for this parcel) — Market Value is TCAD's real figure."
+        conf_2026_note += (
+            f". Assessed/Taxable Value are Parcelytics estimates of the capped value "
+            f"({county_profile['cad_abbr']}'s preliminary export doesn't yet reflect the "
+            f"homestead cap for this parcel) — Market Value is {county_profile['cad_abbr']}'s real figure."
+        )
     story.append(Paragraph(
         f"<i>2026 column: {conf_2026_note}. 2025 column: {appraisal_confidence}.</i>", small
     ))
@@ -3125,12 +3208,17 @@ def export_due_diligence_pdf(geo_id):
     story.append(HRFlowable(width="100%", color=rl_colors.HexColor("#dddddd")))
     story.append(Paragraph("Sources", h2))
     for s in [
-        "Market / assessed / taxable values: Travis Central Appraisal District (TCAD) Certified Appraisal Roll.",
+        # NOTE (PX-20260824-01): institutional names below are profile-driven;
+        # the named-dataset/document identifiers (Rates History, TaxCurOpenData,
+        # PIR bulk billing export, TaxDelqOpenData) are Travis's actual system
+        # names and are NOT converted -- no COUNTY_PROFILES field confirms an
+        # equivalent named system exists for other counties. Flagged, not guessed.
+        f"Market / assessed / taxable values: {county_profile['cad_name']} ({county_profile['cad_abbr']}) Certified Appraisal Roll.",
         "Entity tax rates: Travis County Rates History (1990–2025), as adopted by each taxing entity.",
-        "Current-year billing: Travis County Tax Office current-year billing data (TaxCurOpenData).",
-        "Prior-year billing (2021–2024): Travis County Tax Office PIR bulk billing export, cross-verified "
+        f"Current-year billing: {county_profile['tax_office_name']} current-year billing data (TaxCurOpenData).",
+        f"Prior-year billing (2021–2024): {county_profile['tax_office_name']} PIR bulk billing export, cross-verified "
         "against known sanity-check accounts.",
-        f"Delinquency status: Travis County Tax Office delinquent-account data (TaxDelqOpenData), where applicable — "
+        f"Delinquency status: {county_profile['tax_office_name']} delinquent-account data (TaxDelqOpenData), where applicable — "
         f"as of {TAX_DELQ_EXPORT_DATE.strftime('%B %-d, %Y')}; balance grows monthly under Tax Code §33.01.",
     ]:
         # Plain hyphen, not "•" -- same base-font glyph-mapping issue as the
@@ -3140,8 +3228,8 @@ def export_due_diligence_pdf(geo_id):
     story.append(Spacer(1, 6))
     story.append(Paragraph(
         "Generated by Parcelytics. This report reflects the most recent verified county data "
-        "available in the system at the time of generation and is not an official TCAD or "
-        "Travis County Tax Office document.", small
+        f"available in the system at the time of generation and is not an official "
+        f"{county_profile['cad_abbr']} or {county_profile['tax_office_name']} document.", small
     ))
 
     doc.build(story)
@@ -3158,7 +3246,7 @@ def export_due_diligence_pdf(geo_id):
 ENTITY_CATEGORY_ORDER = ["School District", "County", "City", "Hospital District", "MUD/WCID", "Other"]
 
 
-def categorize_entity(code, name):
+def categorize_entity(code, name, county_code=None):
     """
     Infer a display category for a taxing entity, for grouping the Rate
     Trends page's entity selector (Task: Rate Trends Page brief, Part 3).
@@ -3179,15 +3267,41 @@ def categorize_entity(code, name):
     for those three omits the word "MUD" (unlike the 4th, U4N "Pilot Knob
     MUD #4", which matches correctly) — a naming inconsistency in the
     county's own source file, not something this function special-cases.
+
+    PX-20260824-01: `county_code` (optional, defaults to Travis's own
+    profile if omitted) replaces the previous hardcoded `n == "TRAVIS
+    COUNTY"` literal comparison — that line matched the *current* county's
+    own line-item in its rate table by exact string equality, not a
+    general pattern, so it could never have matched Dallas's real
+    "DALLAS COUNTY" row. Read via COUNTY_PROFILES rather than re-deriving
+    the county's own name from `name` itself (the string being classified
+    IS the thing being compared against, so there's nothing else to derive
+    it from).
+
+    The other four rules (ISD suffix, "CITY OF"/"VILLAGE OF" prefix, HEALTH
+    substring for hospital districts, MUD/WCID/WSID/UTILITY DISTRICT for
+    special districts) are NOT county-specific literals -- they're
+    statewide Texas administrative-naming conventions (independent school
+    district names always end "ISD", municipalities are always styled
+    "City of X", MUD/WCID/WSID are standard Texas Water Code district
+    abbreviations used across every TX county, not just Travis's). Only
+    the exact "county's own row" comparison was genuinely Travis-only;
+    changed here. Left AS A REAL, NAMED LIMITATION rather than silently
+    assumed to transfer: whether Dallas's real JURISNAME text actually
+    follows these same conventions is unverified until real Dallas rate
+    data is loaded and read -- this fix makes the mechanism correct, it
+    does not verify Dallas's real strings against it (that requires real
+    Dallas source data this sandbox doesn't have).
     """
     n = (name or "").upper()
+    county_name = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])["county_name"]
     if "ISD" in n:
         return "School District"
-    if n == "TRAVIS COUNTY":
+    if n == county_name.upper():
         return "County"
     if "CITY OF" in n or "VILLAGE OF" in n:
         return "City"
-    if "HEALTH" in n:                 # THD = "Travis Central Health", the county hospital district
+    if "HEALTH" in n:                 # e.g. THD = "Travis Central Health", the county hospital district
         return "Hospital District"
     if "MUD" in n or "WCID" in n or "WSID" in n or "UTILITY DISTRICT" in n:
         return "MUD/WCID"
@@ -3255,7 +3369,7 @@ def tax_rates():
             {
                 "code": code,
                 "name": entity_names[code],
-                "category": categorize_entity(code, entity_names[code]),
+                "category": categorize_entity(code, entity_names[code], county_code),
             }
             for code in by_entity.keys()
         ],
@@ -5325,15 +5439,25 @@ _NEWS_CACHE = {}     # query string -> {"ts": float, "items": list}
 _NEWS_TTL = 3600     # seconds
 
 # Property-type-specific news queries (keyed by the classi_cd-first label).
-_NEWS_QUERIES = {
-    "homeowner":    "Travis County homestead exemption OR Austin property tax homeowner OR Austin school tax",
-    "Residential":  "Travis County homestead exemption OR Austin residential property tax",
-    "Multi-Family": "Austin multifamily property tax OR Austin apartment market",
-    "Commercial":   "Travis County commercial property tax",
-    "Land/Vacant":  "Travis County property tax TCAD",
-    "Agricultural": "Travis County agricultural property tax",
-}
-_NEWS_GENERIC = "Travis County property tax OR Travis Central Appraisal District"
+# NOTE (PX-20260824-01): "Austin" segments are NOT converted -- no
+# COUNTY_PROFILES field carries a colloquial city name distinct from
+# county_name, so those stay hardcoded/Travis-specific and are flagged in
+# the PX-20260824-01 report. The "Travis County" / "TCAD" segments ARE
+# profile-derivable and are built per-request from county_profile below.
+def _news_queries(county_profile):
+    cn = county_profile["county_name"]
+    return {
+        "homeowner":    f"{cn} homestead exemption OR Austin property tax homeowner OR Austin school tax",
+        "Residential":  f"{cn} homestead exemption OR Austin residential property tax",
+        "Multi-Family": "Austin multifamily property tax OR Austin apartment market",
+        "Commercial":   f"{cn} commercial property tax",
+        "Land/Vacant":  f"{cn} property tax {county_profile['cad_abbr']}",
+        "Agricultural": f"{cn} agricultural property tax",
+    }
+
+
+def _news_generic(county_profile):
+    return f"{county_profile['county_name']} property tax OR {county_profile['cad_name']}"
 
 
 def _fetch_news(query):
@@ -5397,8 +5521,10 @@ def api_news():
     never fabricates headlines.
     """
     import time as _time
+    county_profile = COUNTY_PROFILES.get(g.county_code, COUNTY_PROFILES["TRAVIS"])
+    news_generic = _news_generic(county_profile)
     ptype = (request.args.get("type", "") or "").strip()
-    query = _NEWS_QUERIES.get(ptype, _NEWS_GENERIC)
+    query = _news_queries(county_profile).get(ptype, news_generic)
     now = _time.time()
 
     def _cached(q):
@@ -5411,11 +5537,11 @@ def api_news():
         if items:
             _NEWS_CACHE[query] = {"ts": now, "items": items}
     # Fall back to the generic query if the tailored one failed or was empty.
-    if not items and query != _NEWS_GENERIC:
-        items = _cached(_NEWS_GENERIC) or _fetch_news(_NEWS_GENERIC)
+    if not items and query != news_generic:
+        items = _cached(news_generic) or _fetch_news(news_generic)
         if items:
-            _NEWS_CACHE[_NEWS_GENERIC] = {"ts": now, "items": items}
-            query = _NEWS_GENERIC
+            _NEWS_CACHE[news_generic] = {"ts": now, "items": items}
+            query = news_generic
     if not items:
         return jsonify({"ok": False, "error": "news_unavailable"})
     return jsonify({"ok": True, "items": items, "query_type": ptype or "generic"})

@@ -4,13 +4,13 @@
 {% block content %}
 <div class="page-header mb-3 d-flex align-items-center gap-3 flex-wrap">
   <div>
-    <h1 class="page-title mb-0">{% if mode == 'homeowner' %}Travis County Home Values{% else %}Travis County Market Snapshot{% endif %}</h1>
+    <h1 class="page-title mb-0">{% if mode == 'homeowner' %}{{ county_profile.county_name }} Home Values{% else %}{{ county_profile.county_name }} Market Snapshot{% endif %}</h1>
     {# M4-2026-PRELIM-SNAPSHOT Part 1 fix: badge/label used to hardcode
        "Preliminary" regardless of actual data_source. status_2026 is
        computed in _compute_snapshot_data() (app.py) from the real
        data_source split across this view's population. #}
     <p class="text-muted mb-0" style="font-size:13px; margin-top:4px;">
-      {% if mode == 'homeowner' %}How home values changed across Travis County, 2025 → 2026{% else %}2026 {% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}(mixed Certified/Preliminary){% else %}Preliminary{% endif %} vs 2025 Certified{% endif %}
+      {% if mode == 'homeowner' %}How home values changed across {{ county_profile.county_name }}, 2025 → 2026{% else %}2026 {% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}(mixed Certified/Preliminary){% else %}Preliminary{% endif %} vs 2025 Certified{% endif %}
       {% if status_2026 == "certified" %}
       <span class="badge-verified ms-2">Certified</span>
       {% elif status_2026 == "mixed" %}
@@ -223,7 +223,7 @@
       {% set sub1 = _res_subs[0] if _res_subs|length > 0 else none %}
       {% set sub2 = _res_subs[1] if _res_subs|length > 1 else none %}
       {% if mode == 'homeowner' %}
-        Across Travis County, the typical home's value
+        Across {{ county_profile.county_name }}, the typical home's value
         {# Coherence fix (July 2026, per Fable review finding 6): raw value
            change, not tax burden -- neutral color. #}
         <strong style="color:var(--accent);">
@@ -234,7 +234,7 @@
         {% endif %}
         Remember: a higher value usually means a higher tax bill, and a homestead exemption helps limit how fast your taxable value can rise.
       {% else %}
-      Travis County residential values
+      {{ county_profile.county_name }} residential values
       <strong style="color:var(--accent);">
         {{ "declined" if totals.median_pct < 0 else "increased" }}
       </strong>
@@ -259,7 +259,7 @@
       {% set _sec_subs = rows | rejectattr('ptype', 'equalto', _sec_fallback) | list %}
       {% set sub1 = _sec_subs[0] if _sec_subs|length > 0 else none %}
       {% set sub2 = _sec_subs[1] if _sec_subs|length > 1 else none %}
-      Travis County {{ {'retail':'retail','industrial':'industrial','office':'office','hotel':'hospitality'}[view] }} values show a median change of
+      {{ county_profile.county_name }} {{ {'retail':'retail','industrial':'industrial','office':'office','hotel':'hospitality'}[view] }} values show a median change of
       <strong style="color:var(--accent);">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
@@ -287,7 +287,7 @@
       {% set _com_subs = rows | rejectattr('ptype', 'equalto', 'Other Commercial') | list %}
       {% set sub1 = _com_subs[0] if _com_subs|length > 0 else none %}
       {% set sub2 = _com_subs[1] if _com_subs|length > 1 else none %}
-      Travis County commercial values show a median change of
+      {{ county_profile.county_name }} commercial values show a median change of
       <strong style="color:var(--accent);">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
@@ -300,7 +300,7 @@
         {{ sub2.ptype }}: median {{ "+" if sub2.median_pct >= 0 else "" }}{{ sub2.median_pct }}%,
         ${{ "{:,.2f}B".format(sub2.total_mv25_b) }} → ${{ "{:,.2f}B".format(sub2.total_mv26_b) }}.
       {% endif %}
-      Note: 26 non-supplement commercial parcels had >500% increases (genuine TCAD reappraisals);
+      Note: 26 non-supplement commercial parcels had >500% increases (genuine {{ county_profile.cad_abbr }} reappraisals);
       the median is the reliable central-tendency statistic.
 
     {% elif view in ('land', 'agricultural') %}
@@ -316,14 +316,14 @@
       {% set _size_subs = rows | rejectattr('ptype', 'equalto', 'Size Not Available') | list %}
       {% set sub1 = _size_subs[0] if _size_subs|length > 0 else none %}
       {% set sub2 = _size_subs[1] if _size_subs|length > 1 else none %}
-      Travis County <strong>{{ {'land':'vacant land','agricultural':'agricultural'}[view] }}</strong>
+      {{ county_profile.county_name }} <strong>{{ {'land':'vacant land','agricultural':'agricultural'}[view] }}</strong>
       values show a median change of
       <strong style="color:var(--accent);">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
       ({{ "{:,}".format(totals.n_total) }} parcels, {{ "{:,}".format(totals.n_up) }} up / {{ "{:,}".format(totals.n_down) }} down).
       {% if sub1 %}
-        Most {{ {'land':'Land/Vacant','agricultural':'Agricultural'}[view] }} parcels in Travis County are
+        Most {{ {'land':'Land/Vacant','agricultural':'Agricultural'}[view] }} parcels in {{ county_profile.county_name }} are
         <strong>{{ sub1.ptype | lower }}</strong> ({{ "{:,}".format(sub1.n_parcels) }} parcels),
         with a median change of {{ "+" if sub1.median_pct >= 0 else "" }}{{ sub1.median_pct }}%,
         ${{ "{:,.2f}B".format(sub1.total_mv25_b) }} → ${{ "{:,.2f}B".format(sub1.total_mv26_b) }}.
@@ -344,7 +344,7 @@
          SNAPSHOT_MULTIFAMILY_CODES) but was never given a dedicated sub1/
          sub2 narrative block in earlier rounds either -- out of scope for
          this specific fix, unchanged. #}
-      Travis County <strong>{{ {'multifamily':'multi-family','other':'other real property'}[view] }}</strong>
+      {{ county_profile.county_name }} <strong>{{ {'multifamily':'multi-family','other':'other real property'}[view] }}</strong>
       values show a median change of
       <strong style="color:var(--accent);">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
@@ -521,11 +521,11 @@
   </div>
   <div class="card-footer text-muted small">
     {% if status_2026 == "certified" %}
-    Based on 2026 Certified TCAD Appraisal Export vs 2025 Certified Export. 2026 values are final, not subject to change.
+    Based on 2026 Certified {{ county_profile.cad_abbr }} Appraisal Export vs 2025 Certified Export. 2026 values are final, not subject to change.
     {% elif status_2026 == "mixed" %}
-    Based on a mix of 2026 Certified and 2026 Preliminary TCAD Appraisal Export data (June 9, 2026 preliminary export; certified July 25, 2026) vs 2025 Certified Export.
+    Based on a mix of 2026 Certified and 2026 Preliminary {{ county_profile.cad_abbr }} Appraisal Export data (June 9, 2026 preliminary export; certified July 25, 2026) vs 2025 Certified Export.
     {% else %}
-    Based on 2026 Preliminary TCAD Appraisal Export (June 9, 2026) vs 2025 Certified Export.
+    Based on 2026 Preliminary {{ county_profile.cad_abbr }} Appraisal Export (June 9, 2026) vs 2025 Certified Export.
     Subject to change at certification (July 25, 2026).
     {% endif %}
     Excludes: tax-exempt accounts (X state_cd1 prefix), personal property accounts (N prefix, 3 accounts),
@@ -533,7 +533,7 @@
     M (manufactured homes) and O/G/J (other real property, minerals, utilities) are included as real property.
     Sector tabs (Residential/Multi-Family/Retail/Industrial/Office/Hotel/Land/Agricultural/Other) use a
     Market-Snapshot-specific classification separate from the rest of the site's canonical property-type
-    system, built from real TCAD use codes.
+    system, built from real {{ county_profile.cad_abbr }} use codes.
     "Other" combines the canonical-unclassified O/G/J parcels with any commercial-adjacent parcel whose
     use code doesn't cleanly sort into Retail/Industrial/Office/Hotel.
     Within a sector, only the top {{ subtype_cap }} real subtypes by parcel count are shown individually; the rest
@@ -849,9 +849,9 @@
 
   const countyTA = initTypeaheadSelect("county", "County");
   if (!countyTA) return;
-  countyTA.setOptions([{ value: "travis", label: "Travis County, TX" }]);
-  document.getElementById("fltCountyInput").value = "Travis County, TX";
-  document.getElementById("fltCountyValue").value = "travis";
+  countyTA.setOptions([{ value: {{ county_slug.split('-')[0] | tojson }}, label: {{ county_profile.display_name | tojson }} }]);
+  document.getElementById("fltCountyInput").value = {{ county_profile.display_name | tojson }};
+  document.getElementById("fltCountyValue").value = {{ county_slug.split('-')[0] | tojson }};
 })();
 </script>
 {% if rows %}

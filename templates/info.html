@@ -111,7 +111,7 @@
       <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
         <label class="text-muted mb-0" for="countySelect-homestead">County</label>
         <select id="countySelect-homestead" class="topic-county-select form-select form-select-sm" style="width:auto;">
-          <option value="travis" selected>Travis County</option>
+          <option value="{{ county_slug.split('-')[0] }}" selected>{{ county_profile.county_name }}</option>
         </select>
         <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
       </div>
@@ -267,7 +267,7 @@
       <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
         <label class="text-muted mb-0" for="countySelect-protests">County</label>
         <select id="countySelect-protests" class="topic-county-select form-select form-select-sm" style="width:auto;">
-          <option value="travis" selected>Travis County</option>
+          <option value="{{ county_slug.split('-')[0] }}" selected>{{ county_profile.county_name }}</option>
         </select>
         <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
       </div>
@@ -414,7 +414,7 @@
       <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
         <label class="text-muted mb-0" for="countySelect-ag">County</label>
         <select id="countySelect-ag" class="topic-county-select form-select form-select-sm" style="width:auto;">
-          <option value="travis" selected>Travis County</option>
+          <option value="{{ county_slug.split('-')[0] }}" selected>{{ county_profile.county_name }}</option>
         </select>
         <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
       </div>
@@ -551,7 +551,7 @@
       <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
         <label class="text-muted mb-0" for="countySelect-delinquency">County</label>
         <select id="countySelect-delinquency" class="topic-county-select form-select form-select-sm" style="width:auto;">
-          <option value="travis" selected>Travis County</option>
+          <option value="{{ county_slug.split('-')[0] }}" selected>{{ county_profile.county_name }}</option>
         </select>
         <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
       </div>
@@ -684,7 +684,7 @@
       <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
         <label class="text-muted mb-0" for="countySelect-bill-calculated">County</label>
         <select id="countySelect-bill-calculated" class="topic-county-select form-select form-select-sm" style="width:auto;">
-          <option value="travis" selected>Travis County</option>
+          <option value="{{ county_slug.split('-')[0] }}" selected>{{ county_profile.county_name }}</option>
         </select>
         <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
       </div>
@@ -811,7 +811,7 @@
       <div class="d-flex align-items-center gap-2 mb-2" style="font-size:13px;">
         <label class="text-muted mb-0" for="countySelect-homestead-cap">County</label>
         <select id="countySelect-homestead-cap" class="topic-county-select form-select form-select-sm" style="width:auto;">
-          <option value="travis" selected>Travis County</option>
+          <option value="{{ county_slug.split('-')[0] }}" selected>{{ county_profile.county_name }}</option>
         </select>
         <span class="text-muted" style="font-size:11px;">More counties as Parcelytics expands coverage.</span>
       </div>

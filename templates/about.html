@@ -7,7 +7,7 @@
 {# ══ HERO ══════════════════════════════════════════════════════════════════ #}
 <section class="hero">
   <div class="hero-inner" style="max-width:760px;">
-    <span class="hero-eyebrow"><span class="dot"></span> Travis County, Texas</span>
+    <span class="hero-eyebrow"><span class="dot"></span> {{ county_profile.county_name }}, Texas</span>
     <h1 style="max-width:20ch;">Property-tax intelligence you can <span class="accent">cite</span>.</h1>
     <p class="hero-sub">
       Parcelytics turns certified government records into investment-grade analysis —
@@ -52,13 +52,16 @@
   <div class="fd-kicker">What Parcelytics covers</div>
   <h2 class="fd-h2">The tax side of underwriting, end to end.</h2>
   <div class="row g-4 mt-2">
+    {# NOTE (PX-20260824-01): "City of Austin" in the Tax rate history entry is
+       NOT converted -- no COUNTY_PROFILES field carries a colloquial city
+       name distinct from county_name; flagged in the PX-20260824-01 report. #}
     {% set features = [
-      ('Property tax intelligence','Full certified appraisal history for every Travis County parcel — market, assessed, and taxable value, land/improvement breakdown, exemptions, and ownership. Sourced from TCAD certified rolls, 2021–2026.'),
-      ('Tax rate history','35 years of entity-level rates (1990–2025) across every Travis County jurisdiction — county, school districts, City of Austin, MUDs and more. Track how each entity has moved.'),
+      ('Property tax intelligence','Full certified appraisal history for every ' ~ county_profile.county_name ~ ' parcel — market, assessed, and taxable value, land/improvement breakdown, exemptions, and ownership. Sourced from ' ~ county_profile.cad_abbr ~ ' certified rolls, 2021–2026.'),
+      ('Tax rate history','35 years of entity-level rates (1990–2025) across every ' ~ county_profile.county_name ~ ' jurisdiction — county, school districts, City of Austin, MUDs and more. Track how each entity has moved.'),
       ('Investor insight reports','Per-parcel analysis: year-over-year growth, assessment-ratio trends, homestead-cap risk, large-jump detection, and illustrative multi-year tax projections — built for underwriting.'),
       ('County market snapshot','County-wide intelligence each appraisal cycle: median value change by property type, aggregate trends, and sector breakdowns across residential, multi-family, commercial, land and ag.'),
       ('Submarket benchmarking','Compare any parcel against county medians and percentiles for its type, use code, and neighborhood. Filter by sector, use code, year, and geography.'),
-      ('2026 preliminary values','First-look at 2026 TCAD preliminary appraisals for every parcel — clearly labeled preliminary, subject to change at certification (July 25, 2026).')
+      ('2026 preliminary values','First-look at 2026 ' ~ county_profile.cad_abbr ~ ' preliminary appraisals for every parcel — clearly labeled preliminary, subject to change at certification (July 25, 2026).')
     ] %}
     {% for title, body in features %}
     <div class="col-md-6 col-lg-4">
@@ -84,25 +87,25 @@
           </thead>
           <tbody>
             <tr>
-              <td class="fw-semibold">Travis Central Appraisal District (TCAD)</td>
+              <td class="fw-semibold">{{ county_profile.cad_name }} ({{ county_profile.cad_abbr }})</td>
               <td>Certified appraisal rolls — values, exemptions, ownership, land/improvement detail</td>
               <td><span class="badge-verified">Verified</span> 2021–2025<br><span class="badge-preliminary mt-1 d-inline-block">Preliminary</span> 2026</td>
             </tr>
             <tr>
-              <td class="fw-semibold">Travis County Tax Office</td>
-              <td>Tax rates by entity across all Travis County taxing jurisdictions</td>
+              <td class="fw-semibold">{{ county_profile.tax_office_name }}</td>
+              <td>Tax rates by entity across all {{ county_profile.county_name }} taxing jurisdictions</td>
               <td>1990–2025</td>
             </tr>
             <tr>
-              <td class="fw-semibold">Travis County Tax Office</td>
+              <td class="fw-semibold">{{ county_profile.tax_office_name }}</td>
               <td>Billing &amp; delinquency — total tax billed, paid, and outstanding</td>
-              <td>2025 current (Verified or Partial by parcel)<br><span class="badge-verified mt-1 d-inline-block">Verified</span> 2021–2024 (Travis County Tax Office billing export)</td>
+              <td>2025 current (Verified or Partial by parcel)<br><span class="badge-verified mt-1 d-inline-block">Verified</span> 2021–2024 ({{ county_profile.tax_office_name }} billing export)</td>
             </tr>
           </tbody>
         </table>
       </div>
     </div>
-    <div class="card-footer">All data sourced directly from official government records. No third-party aggregators. Values verified against TCAD's certified appraisal rolls.</div>
+    <div class="card-footer">All data sourced directly from official government records. No third-party aggregators. Values verified against {{ county_profile.cad_abbr }}'s certified appraisal rolls.</div>
   </div>
 </section>
 

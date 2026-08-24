@@ -52,7 +52,7 @@
             <div class="ta-list" id="addrTaList"></div>
           </div>
         </form>
-        <div class="hero-search-hint">Accepts 10-digit TCAD account, 14-digit Tax Office account, prop_id, or street address — Travis County, TX today.</div>
+        <div class="hero-search-hint">Accepts 10-digit {{ county_profile.cad_abbr }} account, 14-digit Tax Office account, prop_id, or street address — Travis County, TX today.</div>
 
         {# Cowork brief item D: a completed search's results (or its honest
            "no results" message) must never be visually indistinguishable
@@ -166,11 +166,11 @@
       <div class="col-lg-6">
         <div class="provenance-row">
           <span class="provenance-check">✓</span>
-          <div><div class="src">Travis Central Appraisal District (TCAD)</div><div class="desc">Certified appraisal rolls — values, exemptions, ownership · 2021–2025 verified, 2026 preliminary</div></div>
+          <div><div class="src">{{ county_profile.cad_name }} ({{ county_profile.cad_abbr }})</div><div class="desc">Certified appraisal rolls — values, exemptions, ownership · 2021–2025 verified, 2026 preliminary</div></div>
         </div>
         <div class="provenance-row">
           <span class="provenance-check">✓</span>
-          <div><div class="src">Travis County Tax Office</div><div class="desc">Tax rates by entity (1990–2025) and 2025 billing &amp; delinquency open data</div></div>
+          <div><div class="src">{{ county_profile.tax_office_name }}</div><div class="desc">Tax rates by entity (1990–2025) and 2025 billing &amp; delinquency open data</div></div>
         </div>
         <div class="mt-4">
           <div class="label-caps mb-2" style="color:var(--text-on-dark-3);">The confidence system, previewed</div>

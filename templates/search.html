@@ -63,7 +63,7 @@
             <div class="ta-list" id="spTaList" style="display:none;"></div>
           </div>
           <div class="form-text" style="font-size:11.5px;">
-            Accepts 10-digit TCAD account, 14-digit Tax Office account, prop_id, or street address.
+            Accepts 10-digit {{ county_profile.cad_abbr }} account, 14-digit Tax Office account, prop_id, or street address.
           </div>
 
           <button type="submit" class="btn btn-dark btn-sm w-100 mt-3 fw-semibold">Search</button>
@@ -568,6 +568,13 @@ ParcelTypeahead.attach({ inputId: "spQ" });
   // County: one real option today. Pre-selected and effectively fixed, but
   // built as a real typeahead-select so a second county is just another
   // entry in this options array — no restructuring.
+  // PX-20260824-01: NOT converted to county_profile -- this value feeds
+  // directly into buildParams()'s `county` query param, which app.py's
+  // api_search_filter() gates with a hardcoded `if county != "travis"`
+  // check (unmodified, out of this brief's copy-conversion scope). Making
+  // this dynamic without also fixing that gate would 400 the filter on
+  // non-Travis pages. Flagged in the PX-20260824-01 report as a paired
+  // follow-up with that gate, not done piecemeal here.
   countyTA.setOptions([{ value: "travis", label: "Travis County, TX" }]);
   document.getElementById("fltCountyInput").value = "Travis County, TX";
   document.getElementById("fltCountyValue").value = "travis";
