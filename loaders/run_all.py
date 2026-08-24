@@ -161,7 +161,19 @@ def main():
         cert_prop = os.path.join(config.CERT_DIR, "PROP.TXT") if os.path.isdir(config.CERT_DIR) else None
         cert_prop_ent = os.path.join(config.CERT_DIR, "PROP_ENT.TXT") if os.path.isdir(config.CERT_DIR) else None
         if cert_prop and os.path.exists(cert_prop):
-            summary = ingest_gate.gather_and_run(conn, "certified_2025", 2025, cert_prop, cert_prop_ent, county_code="TRAVIS")
+            # PX-20260824-04: data_source="certified" added explicitly --
+            # source_tag="certified_2025" is only an ingest_audit LABEL;
+            # the real data_source column value load_certified_2025.py
+            # writes is its own DATA_SRC constant, "certified" (a
+            # different string). Without this, gather_and_run()'s new
+            # data_source-scoped G2/G3 queries would default to scoping
+            # by "certified_2025" -- a value that literally never appears
+            # in prop_unit_tax_year -- silently reporting a false,
+            # catastrophic 100%-missing gap for the current production
+            # 2025 gate run. Found and fixed while building this task;
+            # see gather_and_run()'s own docstring for the full landmine.
+            summary = ingest_gate.gather_and_run(conn, "certified_2025", 2025, cert_prop, cert_prop_ent,
+                                                  county_code="TRAVIS", data_source="certified")
             gate_ran_any = True
             gate_passed = gate_passed and summary["passed"]
             for code, result in summary["checks"].items():
@@ -172,7 +184,11 @@ def main():
         prelim_prop = os.path.join(PRELIM_DIR, "PROP.TXT") if os.path.isdir(PRELIM_DIR) else None
         prelim_prop_ent = os.path.join(PRELIM_DIR, "PROP_ENT.TXT") if os.path.isdir(PRELIM_DIR) else None
         if prelim_prop and os.path.exists(prelim_prop):
-            summary = ingest_gate.gather_and_run(conn, "preliminary_2026", 2026, prelim_prop, prelim_prop_ent, county_code="TRAVIS")
+            # PX-20260824-04: same fix, data_source="preliminary" --
+            # load_2026_preliminary.py's own DATA_SRC constant, not the
+            # "preliminary_2026" source_tag label.
+            summary = ingest_gate.gather_and_run(conn, "preliminary_2026", 2026, prelim_prop, prelim_prop_ent,
+                                                  county_code="TRAVIS", data_source="preliminary")
             gate_ran_any = True
             gate_passed = gate_passed and summary["passed"]
             for code, result in summary["checks"].items():

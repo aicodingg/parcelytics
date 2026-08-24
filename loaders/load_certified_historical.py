@@ -386,6 +386,12 @@ def main():
             prop_ent_path=prop_ent_path,
             published_total=args.published_total,
             county_code=args.county,
+            # PX-20260824-04: explicit, even though it equals source_tag
+            # here (this loader's data_source IS its own source_tag,
+            # unlike run_all.py's two calls -- see gather_and_run()'s own
+            # docstring) -- explicit is safer than relying on the
+            # source_tag-equals-data_source default holding forever.
+            data_source=data_source,
         )
         for code, gate_result in gate_summary["checks"].items():
             passed, detail = gate_result[0], gate_result[1]

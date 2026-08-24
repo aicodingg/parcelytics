@@ -183,20 +183,137 @@ def test_g2_old_unscoped_query_would_have_falsely_failed():
     )
 
 
-# ── G3 ────────────────────────────────────────────────────────────────────
-def test_g3_pass_all_equal():
-    passed, detail = gate.g3_dollar_conservation_check(500, 500, 500)
-    check("G3 pass: all three equal", passed, detail)
+# ── G3 (PX-20260824-04: narrowed to file vs unit_table only -- see
+#    g3_dollar_conservation_check's own docstring) ──────────────────────────
+def test_g3_pass_equal():
+    passed, detail = gate.g3_dollar_conservation_check(500, 500)
+    check("G3 pass: file and unit_table equal", passed, detail)
 
 
 def test_g3_pass_all_none():
-    passed, detail = gate.g3_dollar_conservation_check(None, None, None)
-    check("G3 pass: all-None is a valid equal match", passed, detail)
+    passed, detail = gate.g3_dollar_conservation_check(None, None)
+    check("G3 pass: both-None is a valid equal match", passed, detail)
 
 
 def test_g3_fail_mismatch():
-    passed, detail = gate.g3_dollar_conservation_check(500, 500, 499)
+    passed, detail = gate.g3_dollar_conservation_check(500, 499)
     check("G3 fail: one value off by $1 correctly fails (zero tolerance)", passed is False, detail)
+
+
+# ── G2 expected_gap (PX-20260824-04) ────────────────────────────────────────
+def test_g2_expected_gap_pass():
+    """A file_prop_id_count/db_landed_count gap that exactly matches the
+    caller-supplied expected_gap (the known PROP_ENT.TXT-vs-PROP.TXT
+    population difference) PASSES -- this is the real 429,367/470,483/
+    41,116 shape PX-20260824-04 investigated, using small stand-in
+    numbers."""
+    passed, detail = gate.g2_identity_coverage_check(
+        file_prop_id_count=900, db_landed_count=1000, expected_gap=100
+    )
+    check("G2 pass: gap exactly matches expected_gap (known no-geo population diff)", passed, detail)
+
+
+def test_g2_expected_gap_fail_bigger_than_expected():
+    """A gap LARGER than expected_gap means something beyond the known
+    no-geo mechanism is going on (e.g. genuine data loss/duplication) --
+    must still FAIL, not be silently absorbed by the explanation."""
+    passed, detail = gate.g2_identity_coverage_check(
+        file_prop_id_count=900, db_landed_count=1050, expected_gap=100
+    )
+    check("G2 CORRUPTION CASE: actual gap (150) exceeds expected_gap (100) correctly FAILS",
+          passed is False, detail)
+
+
+def test_g2_expected_gap_fail_smaller_than_expected():
+    """A gap SMALLER than expected (fewer rows landed than the file
+    populations predict) is just as real a problem -- some of the
+    'explained' no-geo rows didn't actually land at all."""
+    passed, detail = gate.g2_identity_coverage_check(
+        file_prop_id_count=900, db_landed_count=950, expected_gap=100
+    )
+    check("G2 CORRUPTION CASE: actual gap (50) short of expected_gap (100) correctly FAILS",
+          passed is False, detail)
+
+
+def test_g2_expected_gap_defaults_to_zero():
+    """Omitting expected_gap preserves this function's pre-PX-20260824-04
+    exact-match behavior -- no caller that doesn't know about the new
+    parameter silently gets different semantics."""
+    passed, detail = gate.g2_identity_coverage_check(file_prop_id_count=1000, db_landed_count=1000)
+    check("G2: expected_gap defaults to 0, exact match still passes", passed, detail)
+    passed2, detail2 = gate.g2_identity_coverage_check(file_prop_id_count=1000, db_landed_count=1041)
+    check("G2: expected_gap defaults to 0, an unexplained gap still fails", passed2 is False, detail2)
+
+
+# ── G3_rollup (PX-20260824-04, new check) ───────────────────────────────────
+# Both sides are WHOLE-YEAR here -- whole_year_unit_sum is the unscoped
+# SUM(market_value) FROM prop_unit_tax_year (every data_source that has
+# ever written a row for this tax_year, combined), NOT a single source's
+# own total. min_expected_residual is a LOWER BOUND (this run's own known
+# no-geo dollars) -- the check passes on >=, not exact equality, since
+# other sources may legitimately contribute additional, separately
+# unexplained residual this run has no file to name. See
+# g3_rollup_residual_check()'s own docstring for the full reasoning
+# (including why an earlier, per-source-vs-whole-year version of this
+# check was replaced during this task's own fixture testing).
+def test_g3_rollup_pass_explained_residual():
+    """whole_year_unit_sum exceeds account_table_sum by EXACTLY the known
+    no-geo dollar total -- the real $774,939,443-shaped case PX-20260824-04
+    investigated for 2022, using small stand-in numbers. PASSES, with a
+    detail string that says WHOLE-YEAR scope explicitly."""
+    passed, detail = gate.g3_rollup_residual_check(
+        whole_year_unit_sum=10_000, account_table_sum=9_000, min_expected_residual=1_000
+    )
+    check("G3_rollup pass: residual exactly matches the known minimum (no-geo dollars)", passed, detail)
+    check("G3_rollup detail explicitly names WHOLE-YEAR scope",
+          "WHOLE-YEAR" in detail, detail)
+
+
+def test_g3_rollup_fail_residual_below_known_minimum():
+    """A residual SMALLER than this source's own known no-geo total means
+    even the well-understood gap isn't fully reflected -- a real bug (the
+    rollup did something it shouldn't have). Must FAIL loudly."""
+    passed, detail = gate.g3_rollup_residual_check(
+        whole_year_unit_sum=10_000, account_table_sum=9_500, min_expected_residual=1_000
+    )
+    check("G3_rollup CORRUPTION CASE: residual (500) below known minimum (1,000) correctly FAILS",
+          passed is False, detail)
+
+
+def test_g3_rollup_pass_zero_residual_zero_expected():
+    """No no-geo rows at all (true for 2025/2026 today) -- whole_year_unit_sum
+    should equal account_table_sum exactly, min_expected_residual=0."""
+    passed, detail = gate.g3_rollup_residual_check(
+        whole_year_unit_sum=10_000, account_table_sum=10_000, min_expected_residual=0
+    )
+    check("G3_rollup pass: zero residual when min_expected_residual is zero", passed, detail)
+
+
+def test_g3_rollup_pass_extra_residual_from_other_sources():
+    """PX-20260824-04's real design point: a residual LARGER than this
+    source's own known minimum is NOT a failure -- it's expected once
+    other data_sources (e.g. a lingering ajr_2022 alongside a fresh
+    cert_2022 load) also have rows for the same tax_year and may carry
+    their own, separately unexplained no-geo dollars this run can't name
+    from its own file alone. Must still PASS, with a detail string that
+    says so."""
+    passed, detail = gate.g3_rollup_residual_check(
+        whole_year_unit_sum=15_000, account_table_sum=9_000, min_expected_residual=1_000
+    )
+    check("G3_rollup pass: residual (6,000) exceeds this source's own known minimum (1,000)",
+          passed, detail)
+    check("G3_rollup detail flags the extra residual as likely another source's, not a failure",
+          "other source" in detail, detail)
+
+
+def test_g3_rollup_handles_none_as_zero():
+    """account_table_sum=None (nothing rolled up at all yet for this
+    tax_year/county) is treated as 0, same None-safety convention as the
+    rest of this module's dollar checks."""
+    passed, detail = gate.g3_rollup_residual_check(
+        whole_year_unit_sum=1_000, account_table_sum=None, min_expected_residual=1_000
+    )
+    check("G3_rollup: None account_table_sum treated as 0, residual matches known minimum", passed, detail)
 
 
 # ── G4 ────────────────────────────────────────────────────────────────────

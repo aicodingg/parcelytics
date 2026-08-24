@@ -139,46 +139,165 @@ def g1_conservation_check(ledger):
 # ══════════════════════════════════════════════════════════════════════
 # G2 — identity coverage (pure decision; counts supplied by caller)
 # ══════════════════════════════════════════════════════════════════════
-def g2_identity_coverage_check(file_prop_id_count, db_landed_count):
+def g2_identity_coverage_check(file_prop_id_count, db_landed_count, expected_gap=0):
     """
-    PASS iff the number of distinct prop_ids the source file scan says
-    should exist for THIS tax_year exactly equals the number that actually
-    landed a prop_unit_tax_year row for that same tax_year.
+    SCOPE: per-source. PASS iff db_landed_count - file_prop_id_count ==
+    expected_gap exactly.
 
-    Fixed 2026-07-29 (task M3-G2-FIX): db_landed_count must be a
-    tax-year-scoped count (e.g. `SELECT COUNT(DISTINCT prop_id) FROM
-    prop_unit_tax_year WHERE tax_year = %s`), NOT an unscoped `SELECT
-    COUNT(*) FROM prop_unit` (which accumulates one row per prop_id ever
-    seen across every year ever loaded, and will never match a single
-    year's file scan -- confirmed against the live DB: 518,894 all-time
-    prop_unit rows vs 449,290 distinct prop_ids in the 2025 file, a
-    69,604 gap explained 100% by scope, not a real data problem). This
-    function itself didn't change -- it was always a correct, generic
-    count-equality check; the bug was entirely in what count the caller
-    supplied as the second argument.
+    file_prop_id_count: distinct prop_ids from THIS source's PROP.TXT
+        accepted-row scan (scan_prop_ledger()'s "accepted" bucket).
+    db_landed_count: distinct prop_ids landed in prop_unit_tax_year for
+        this SAME tax_year + county_code + data_source. PX-20260824-04:
+        now scoped by data_source (gather_and_run() adds `AND data_source
+        = %s`) -- previously unscoped, which silently conflated this
+        source's file-scan count against every data_source's rows for
+        that tax_year (harmless for 2025/2026, where exactly one source
+        ever writes that tax_year's rows, but structurally wrong for
+        historical years where e.g. both `ajr_2022` and `cert_2022` can
+        have rows for tax_year=2022 at once).
+    expected_gap: PX-20260824-04. PROP_ENT.TXT (the file that actually
+        drives prop_unit_tax_year's population via load_prop_ent()) and
+        PROP.TXT (the file file_prop_id_count comes from) are TWO
+        DIFFERENT FILES with, in general, two different prop_id
+        populations -- a prop_id can carry entity/tax data in
+        PROP_ENT.TXT while being excluded from PROP.TXT's "accepted"
+        bucket (a supplement row, a blank geo_id field, etc). That
+        prop_id's PROP_ENT.TXT row still lands a prop_unit_tax_year row
+        (with geo_id=NULL) -- see load_prop_ent()'s own n_no_geo counter,
+        which is the load-time face of this exact same gap -- so
+        db_landed_count will legitimately exceed file_prop_id_count by
+        this population difference even for a perfectly-loaded file, with
+        zero rows actually lost or duplicated. gather_and_run() computes
+        expected_gap directly from the two file scans already gathered
+        for G1 (len(ent_ledger prop_ids - prop_ledger prop_ids)) BEFORE
+        this function is ever called -- a real, re-derived-every-run
+        number, not a hardcoded pass-through of a previously-observed
+        figure. If the actual observed gap doesn't match this freshly
+        recomputed expectation, that IS a genuine, unexplained
+        discrepancy and this check still FAILS loudly (see
+        test_ingest_gate.py's deliberate-incomplete-load corruption case).
+        Default 0 preserves this function's pre-PX-20260824-04 exact-match
+        behavior for any caller that doesn't supply it.
     """
-    passed = file_prop_id_count == db_landed_count
-    detail = f"file: {file_prop_id_count:,} distinct prop_ids, landed (this tax_year): {db_landed_count:,} rows"
+    actual_gap = db_landed_count - file_prop_id_count
+    passed = actual_gap == expected_gap
+    detail = (f"file(PROP.TXT accepted, this source): {file_prop_id_count:,} distinct prop_ids  "
+              f"landed(prop_unit_tax_year, this data_source): {db_landed_count:,} rows  "
+              f"gap: {actual_gap:+,}")
+    if expected_gap:
+        detail += f"  (expected {expected_gap:+,}, from PROP_ENT.TXT prop_ids absent from PROP.TXT's accepted set)"
     if not passed:
-        detail += f"  MISMATCH ({db_landed_count - file_prop_id_count:+,})"
+        detail += f"  MISMATCH -- actual gap {actual_gap:+,} != expected {expected_gap:+,}"
     return passed, detail
 
 
 # ══════════════════════════════════════════════════════════════════════
 # G3 — dollar conservation (pure decision)
 # ══════════════════════════════════════════════════════════════════════
-def g3_dollar_conservation_check(file_sum, unit_table_sum, account_table_sum):
+def g3_dollar_conservation_check(file_sum, unit_table_sum):
     """
-    All three must match EXACTLY. file_sum/unit_table_sum/account_table_sum
-    may each individually be None (meaning "no non-null dollar values at
-    all in that source") — None is treated as a valid, comparable value
-    (None == None passes; None vs a real number fails, same as any other
-    mismatch), matching SQL SUM()'s own all-NULL-returns-NULL semantics.
+    SCOPE: per-source. file_sum and unit_table_sum must match EXACTLY.
+
+    PX-20260824-04: narrowed from a three-way file/unit/account comparison
+    to this two-way file/unit comparison. This is the real per-source
+    conservation claim -- "did every dollar this file's PROP_ENT.TXT
+    entity data names actually land in prop_unit_tax_year for this
+    specific data_source." Unlike PROP.TXT's population (which feeds G2
+    and can legitimately differ from PROP_ENT.TXT's -- see
+    g2_identity_coverage_check's own docstring), load_prop_ent() writes
+    EVERY PROP_ENT.TXT aggregate's market_value regardless of whether that
+    row's geo_id resolved (a NULL-geo_id row is still a written row with
+    its real dollar value) -- so file_sum and unit_table_sum (both scoped
+    to this data_source) should match exactly for a correctly-functioning
+    load, historical years included, with zero structural exception.
+
+    account_table_sum (parcel_tax_year, the rolled-up view) is
+    deliberately NOT part of this check anymore -- it is inherently a
+    whole-year, cross-source, geo_id-keyed view, not a per-source dollar
+    total, and structurally EXCLUDES no-geo rows (parcel_rollup.py's
+    ROLLUP_SQL requires geo_id to have anywhere to roll up TO). Comparing
+    it against a single source's unit-level sum needs residual-aware
+    semantics, not exact equality -- see g3_rollup_residual_check() below.
+    file_sum/unit_table_sum may each individually be None (meaning "no
+    non-null dollar values at all in that source") -- None is treated as
+    a valid, comparable value (None == None passes), matching SQL SUM()'s
+    own all-NULL-returns-NULL semantics.
     """
-    passed = file_sum == unit_table_sum == account_table_sum
-    detail = f"file=${_fmt(file_sum)}  unit_table=${_fmt(unit_table_sum)}  account_table=${_fmt(account_table_sum)}"
+    passed = file_sum == unit_table_sum
+    detail = f"file(PROP_ENT.TXT)=${_fmt(file_sum)}  unit_table(this data_source)=${_fmt(unit_table_sum)}"
     if not passed:
         detail += "  MISMATCH"
+    return passed, detail
+
+
+# ══════════════════════════════════════════════════════════════════════
+# G3_rollup — whole-year rollup residual reconciliation (pure decision;
+# new PX-20260824-04, split out of the old three-way G3 check)
+# ══════════════════════════════════════════════════════════════════════
+def g3_rollup_residual_check(whole_year_unit_sum, account_table_sum, min_expected_residual):
+    """
+    SCOPE: WHOLE-YEAR, both sides -- deliberately NOT per-source on either
+    side. This is the one check in this module that's genuinely meant to
+    be a whole-year comparison (per the brief's own instruction to "keep
+    the whole-year comparison only where it means something") -- comparing
+    a per-source sum against a whole-year rollup total is NOT a
+    well-defined claim once more than one data_source has rows for the
+    same tax_year (a real, historical-year scenario) -- see this
+    function's own git history / PX-20260824-04 report for the earlier,
+    broken per-source-vs-whole-year version of this check and why it was
+    replaced with this whole-year-vs-whole-year design during fixture
+    testing.
+
+    whole_year_unit_sum: SUM(market_value) FROM prop_unit_tax_year for
+        this tax_year/county, UNSCOPED by data_source (every source that
+        has ever written a row for this tax_year, combined) -- gathered
+        by a second, deliberately unscoped query in gather_and_run(),
+        alongside the data_source-scoped one G2/G3 use.
+    account_table_sum: SUM(market_value) FROM parcel_tax_year for this
+        tax_year/county -- inherently whole-year and cross-source (one row
+        per geo_id, `data_source` on it is a MIN() representative across
+        every unit summed in, per post_load_summary()'s own comment).
+        parcel_rollup.py's ROLLUP_SQL structurally excludes any row with a
+        NULL geo_id (nowhere to roll up TO), so whole_year_unit_sum will
+        always legitimately be >= account_table_sum for a correctly
+        functioning system -- never the reverse.
+    min_expected_residual: gather_and_run() computes this directly from
+        THIS run's own source file -- the sum of market_value for every
+        PROP_ENT.TXT aggregate in THIS source whose prop_id has no
+        resolved geo_id (absent from PROP.TXT's accepted set) -- BEFORE
+        calling this function. This is a LOWER BOUND on the true
+        whole-year residual, not a claim of exact equality: OTHER sources
+        that have also written rows for this tax_year (e.g. a lingering
+        `ajr_2022` alongside a fresh `cert_2022` load) may carry their own
+        no-geo rows too, which this run has no file to re-derive (it only
+        has ITS OWN prop_path/prop_ent_path) -- their contribution would
+        add to the real residual without this check being able to name it
+        specifically. A real, re-derived-every-run number either way, not
+        a hardcoded pass-through of a previously-observed figure (e.g. the
+        $774,939,443 2022 figure PX-20260824-04 investigated).
+
+    PASS iff (whole_year_unit_sum - account_table_sum) >= min_expected_residual.
+    Using >= rather than == is a deliberate, disclosed choice: a residual
+    LARGER than this source's own known explanation is not itself a
+    failure (other sources may be contributing their own, separately
+    unexplained gap -- a real but different concern, not this run's to
+    diagnose from its own file alone). A residual SMALLER than the known
+    minimum, or negative, IS a genuine problem -- it would mean even this
+    source's own well-understood no-geo dollars aren't fully reflected in
+    the whole-year gap, which should never happen if parcel_rollup.py is
+    working correctly -- and still fails this loudly.
+    """
+    whole_year_unit_sum = whole_year_unit_sum or 0
+    account_table_sum = account_table_sum or 0
+    actual_residual = whole_year_unit_sum - account_table_sum
+    passed = actual_residual >= min_expected_residual
+    detail = (f"unit_table(WHOLE-YEAR, all sources)=${_fmt(whole_year_unit_sum)}  "
+              f"account_table(parcel_tax_year, WHOLE-YEAR rollup)=${_fmt(account_table_sum)}  "
+              f"residual=${_fmt(actual_residual)}  min_expected(no-geo rows, THIS source only)=${_fmt(min_expected_residual)}")
+    if not passed:
+        detail += "  MISMATCH -- residual smaller than even this source's own known no-geo gap"
+    elif actual_residual > min_expected_residual:
+        detail += "  (residual exceeds this source's own known gap -- other source(s) likely also contributing unexplained no-geo dollars for this tax_year; not this run's own problem to name)"
     return passed, detail
 
 
@@ -249,13 +368,17 @@ def g5_account_coverage_check(distinct_geo_ids_in_units, geo_id_count_in_parcel)
     have caught a real per-year gap. This function itself never changed;
     the bug was entirely in what the caller supplied.
 
-    Known, already-documented residual even after this fix: ~3,119/year
-    orphaned "P-type" prop_unit_tax_year rows have no matching prop_unit
-    row (see KNOWN_LIMITATIONS.md), so they're never counted on the left
-    side either way; any stale parcel_tax_year rows without current unit
-    data would inflate the right side. A small nonzero gap post-fix is
-    expected, not proof the fix didn't work -- compare its size against
-    this documented cause before treating it as new.
+    Previously-documented residual even after this fix: ~3,119/year
+    orphaned "P-type" prop_unit_tax_year rows with no matching prop_unit
+    row (see KNOWN_LIMITATIONS.md's Unit-Model Migration section, item #2).
+    STATUS (PX-20260824-04, 2026-08-24 live smoke run): this figure is
+    STALE -- re-measured at 0 for all years by that run (byte-identical
+    before/after snapshots; already repaired by intervening rekey/rollup
+    work, not a fresh fix). See KNOWN_LIMITATIONS.md's "2026-08-24: G4/G5
+    residual baselines above are STALE" entry for the full correction and
+    its own sandbox-vs-live disclosure. A nonzero gap here today should be
+    treated as a genuinely new finding, not assumed to be this old,
+    already-resolved cause.
     """
     passed = distinct_geo_ids_in_units == geo_id_count_in_parcel
     detail = f"prop_unit_tax_year distinct geo_ids: {distinct_geo_ids_in_units:,}  parcel_tax_year rows: {geo_id_count_in_parcel:,}"
@@ -304,23 +427,62 @@ def g6_external_reconciliation_check(computed_total, published_total, warn_pct=0
 # conn; NOT exercised in this sandbox — see test file's AC8 disclosure)
 # ══════════════════════════════════════════════════════════════════════
 def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=None,
-                    published_total=None, county_code="TRAVIS"):
+                    published_total=None, county_code="TRAVIS", data_source=None):
     """
     Full production entry point: scans the source files for G1/G2/G3,
     queries prop_unit/prop_unit_tax_year/parcel/parcel_tax_year for the
-    rest, runs all six checks, writes one ingest_audit row per check, and
-    returns an overall summary dict. Requires a live psycopg2 connection
-    — this function itself is not fixture-tested (see AC8 disclosure);
-    the g*_check() decision functions it calls ARE.
+    rest, runs all seven checks (G1_prop, G1_prop_ent, G2, G3, G3_rollup,
+    G4, G5, G6 -- eight, actually, counting both G1 halves), writes one
+    ingest_audit row per check, and returns an overall summary dict.
+    Requires a live psycopg2 connection — this function itself is not
+    fixture-tested (see AC8 disclosure); the g*_check() decision functions
+    it calls ARE.
+
+    data_source: PX-20260824-04. The literal `data_source` column value
+        THIS run's rows carry in prop_unit_tax_year -- used to scope G2/G3's
+        landed/unit-sum queries to just this run's own rows (see those
+        queries' own comments below for why an unscoped query was a real,
+        structural bug for historical years). Defaults to `source_tag` if
+        not given, which is ONLY correct when source_tag IS the literal
+        column value -- true for load_certified_historical.py's calls
+        (source_tag=f"cert_{year}", written verbatim as data_source). It is
+        NOT true for run_all.py's two calls: source_tag="certified_2025"/
+        "preliminary_2026" are ingest_audit LABELS, while the real column
+        values load_certified_2025.py/load_2026_preliminary.py write are
+        "certified"/"preliminary" (their own DATA_SRC constants) -- a real
+        landmine found while building this fix. Those callers MUST pass
+        data_source explicitly; run_all.py has been updated accordingly.
     """
     results = {}
 
+    prop_ledger = None
+    ent_ledger = None
     if prop_path:
         prop_ledger = scan_prop_ledger(prop_path)
         results["G1_prop"] = g1_conservation_check(prop_ledger)
     if prop_ent_path:
         ent_ledger = scan_prop_ent_ledger(prop_ent_path)
         results["G1_prop_ent"] = g1_conservation_check(ent_ledger)
+
+    # PX-20260824-04: the real data_source column value this run's rows
+    # carry -- see this function's own docstring for the run_all.py
+    # landmine that makes `source_tag` unsafe as a silent default for
+    # every caller (safe only for load_certified_historical.py's calls).
+    effective_data_source = data_source if data_source is not None else source_tag
+
+    # PX-20260824-04: expected_gap/no_geo_dollars are computed PURELY from
+    # the two file scans above -- zero DB access -- so they're a real,
+    # re-derived-every-run cross-check, not a trusted constant. See
+    # g2_identity_coverage_check()'s and g3_rollup_residual_check()'s own
+    # docstrings for the full mechanism: a prop_id can carry entity/tax
+    # data in PROP_ENT.TXT while being excluded from PROP.TXT's "accepted"
+    # bucket (supplement row, blank geo_id, etc) -- that prop_id's row
+    # still lands in prop_unit_tax_year (geo_id=NULL), so it's expected
+    # to appear as a gap in G2's count and a residual in G3_rollup's
+    # dollar comparison, not a real conservation failure.
+    known_prop_ids = prop_ledger["prop_ids"] if prop_ledger is not None else set()
+    expected_gap = (len(ent_ledger["prop_ids"] - known_prop_ids)
+                     if ent_ledger is not None and prop_ledger is not None else 0)
 
     with conn.cursor() as cur:
         # G2 fix (task M3-G2-FIX): the old `SELECT COUNT(*) FROM prop_unit`
@@ -342,28 +504,52 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
         # groups by geo_id, re-deriving parcel_rollup's own aggregation)
         # and G5 (which derives its geo_id count from G4's gathered rows)
         # are touched below.
-        # PX-20260824-03: county_code added to both queries below. Before
-        # this fix, gather_and_run() accepted a county_code parameter (used
-        # only to LABEL the ingest_audit row -- see _write_audit() below)
-        # but never actually filtered any of its own gathering queries by
-        # it, despite prop_unit_tax_year/parcel_tax_year both being real,
-        # already-migrated, county_code-leading-PK tables in production
-        # (migrate_county_partitioning.py's own TABLE_SPECS) -- the exact
-        # same bug class PARCEL-ROLLUP-HOTFIX-1 already found and fixed in
-        # parcel_rollup.py's ROLLUP_SQL. Harmless today (Travis is still
-        # the only county with rows in these tables, so an unscoped COUNT/
-        # SUM equals the scoped version), but confirmed as a real,
-        # load-bearing gap: prop_id is NOT globally unique across counties
-        # (prop_unit's real PK is (county_code, prop_id)), so the day a
-        # second county's data lands here, an unscoped COUNT(DISTINCT
-        # prop_id) would count both counties' prop_ids together and
-        # compare it against one county's file-scan count -- a false FAIL.
+        # PX-20260824-03: county_code added to both queries below. [...]
+        # (see git history for the full original comment -- unchanged
+        # reasoning, still applies alongside the PX-20260824-04 fix
+        # immediately below.)
+        #
+        # PX-20260824-04: `AND data_source = %s` added to the unit-table
+        # query -- this is the actual fix Task 1 asked for. Before this,
+        # the query was scoped by tax_year + county_code only, which is
+        # equivalent to "every row for this tax_year, from EVERY source
+        # that has ever written one" -- true assurance only for 2025/2026,
+        # where exactly one data_source ever writes that tax_year's rows.
+        # For historical years, `ajr_2022` and `cert_2022` (etc) can BOTH
+        # have live rows for tax_year=2022 at once (a cert load doesn't
+        # delete pre-existing AJR-sourced rows for prop_ids its own
+        # PROP_ENT.TXT never mentions) -- an unscoped query would silently
+        # count both sources together and compare that combined total
+        # against ONE source's own file scan, which is not the claim G2/G3
+        # are supposed to be making ("did THIS file land completely").
+        # account_table_sum (parcel_tax_year, below) is deliberately left
+        # UNSCOPED by data_source -- it's inherently a whole-year, rolled-
+        # up, cross-source view (see g3_rollup_residual_check()'s own
+        # docstring for why that's correct, not an oversight).
         cur.execute(
             "SELECT SUM(market_value), COUNT(DISTINCT prop_id) "
+            "FROM prop_unit_tax_year WHERE tax_year = %s AND county_code = %s AND data_source = %s",
+            (tax_year, county_code, effective_data_source),
+        )
+        unit_table_sum, g2_landed_count = cur.fetchone()
+
+        # PX-20260824-04: a SECOND, deliberately UNSCOPED query, used only
+        # by G3_rollup below -- comparing a per-source unit sum against the
+        # whole-year, cross-source parcel_tax_year total is not a
+        # well-defined claim once more than one data_source has rows for
+        # this tax_year (found and fixed during this task's own fixture
+        # testing -- a multi-source scenario made a per-source comparison
+        # go negative and fail nonsensically). This is literally the query
+        # that was here before this fix -- revived specifically for the
+        # one check where "whole-year" genuinely is the right scope on
+        # BOTH sides. See g3_rollup_residual_check()'s own docstring.
+        cur.execute(
+            "SELECT SUM(market_value) "
             "FROM prop_unit_tax_year WHERE tax_year = %s AND county_code = %s",
             (tax_year, county_code),
         )
-        unit_table_sum, g2_landed_count = cur.fetchone()
+        whole_year_unit_sum = cur.fetchone()[0]
+
         cur.execute(
             "SELECT SUM(market_value) FROM parcel_tax_year WHERE tax_year = %s AND county_code = %s",
             (tax_year, county_code),
@@ -452,17 +638,50 @@ def gather_and_run(conn, source_tag, tax_year, prop_path=None, prop_ent_path=Non
         parcel_count = len(g4_parcel_rows)
 
     if prop_path:
-        results["G2"] = g2_identity_coverage_check(len(prop_ledger["prop_ids"]), g2_landed_count)
+        results["G2"] = g2_identity_coverage_check(
+            len(prop_ledger["prop_ids"]), g2_landed_count, expected_gap
+        )
 
     results["G4"] = g4_rollup_integrity_check(g4_unit_rows, g4_parcel_rows, tax_year)
 
+    # PX-20260824-04: file_sum and no_geo_dollars are computed in ONE
+    # combined pass over iter_prop_ent_aggregates(), not two separate
+    # scans -- this loader's own module comment already discloses the
+    # accepted "re-scan the source file a second time" tradeoff (once for
+    # loading, once for the gate); a THIRD pass just to compute
+    # no_geo_dollars separately would needlessly compound that cost.
+    # no_geo_dollars: sum of market_value for every PROP_ENT.TXT aggregate
+    # whose prop_id is absent from PROP.TXT's accepted set -- the same
+    # population g2_identity_coverage_check's expected_gap counts, just
+    # summed in dollars instead of counted in rows. This is the real,
+    # re-derived-every-run answer to "where do the no-geo rows' dollars
+    # go, and how much do they carry" -- not a hardcoded pass-through of
+    # a previously-observed figure (e.g. the $774,939,443 2022 number
+    # PX-20260824-04 investigated).
     file_sum = None
+    no_geo_dollars = 0
     if prop_ent_path:
-        file_sum = sum(
-            agg["market_value"] for agg in ears_format.iter_prop_ent_aggregates(prop_ent_path)
-            if agg["market_value"] is not None
-        ) or None
-    results["G3"] = g3_dollar_conservation_check(file_sum, unit_table_sum, account_table_sum)
+        running_sum = 0
+        any_value = False
+        for agg in ears_format.iter_prop_ent_aggregates(prop_ent_path):
+            mv = agg["market_value"]
+            if mv is None:
+                continue
+            running_sum += mv
+            any_value = True
+            # PX-20260824-04: only attribute a dollar to the no-geo
+            # residual if we actually HAVE a PROP.TXT scan to check
+            # membership against -- with prop_path absent, `known_prop_ids`
+            # is an empty set (see its own definition above), which would
+            # otherwise misclassify every single row as "no geo" rather
+            # than honestly reporting "can't compute this residual without
+            # a PROP.TXT scan." Matches expected_gap's own prop_ledger-is-None
+            # guard, same limitation, same reasoning.
+            if prop_ledger is not None and agg["prop_id"] not in known_prop_ids:
+                no_geo_dollars += mv
+        file_sum = running_sum if any_value else None
+    results["G3"] = g3_dollar_conservation_check(file_sum, unit_table_sum)
+    results["G3_rollup"] = g3_rollup_residual_check(whole_year_unit_sum, account_table_sum, no_geo_dollars)
 
     results["G5"] = g5_account_coverage_check(distinct_geo_ids, parcel_count)
 
@@ -539,6 +758,15 @@ if __name__ == "__main__":
              "gathering queries either (see gather_and_run()'s own PX-20260824-03 "
              "comment for the fix).",
     )
+    ap.add_argument(
+        "--data-source", default=None,
+        help="PX-20260824-04. The literal data_source column value to scope G2/G3's "
+             "landed/unit-sum queries to (defaults to --source-tag if omitted -- see "
+             "gather_and_run()'s own docstring for exactly when that default is UNSAFE: "
+             "e.g. for the real 'certified_2025'/'preliminary_2026' run_all.py source "
+             "tags, the actual column value is 'certified'/'preliminary', a different "
+             "string). Get this wrong and G2/G3 will report a false, misleading gap.",
+    )
     args = ap.parse_args()
 
     if not args.check_db:
@@ -556,7 +784,8 @@ if __name__ == "__main__":
         from loaders.db import get_conn
         conn = get_conn()
         summary = gather_and_run(conn, args.source_tag, args.tax_year, args.prop, args.prop_ent,
-                                  args.published_total, county_code=args.county)
+                                  args.published_total, county_code=args.county,
+                                  data_source=args.data_source)
         for code, result in summary["checks"].items():
             print(f"{code}: {'PASS' if result[0] else 'FAIL'} — {result[1]}")
         print(f"\nOVERALL: {'PASS' if summary['passed'] else 'FAIL'}")

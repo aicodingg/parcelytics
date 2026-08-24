@@ -710,6 +710,60 @@ account reissue between two years correctly resolves to each year's own real
 value, not a cross-contaminated one). Live-verified via `ingest_gate.py` on both
 local and production databases, before/after numbers as stated above.
 
+### 2026-08-24: G4/G5 residual baselines above are STALE — both measured at 0
+by the live smoke run (PX-20260824-04); correction recorded, original entry
+kept for history
+
+**Do not read the 2026-07-31 entry above as this platform's current G4/G5
+state.** The 2026-08-24 live gate smoke run (`ingest_gate.py --check-db`
+against the real 2022-2024 production/local data) re-measured both figures
+that entry documented as the M5-PERYEAR-GEOID fix's residual:
+
+  - **G4 (rollup integrity):** the 385 (2022) / 313 (2023) / 25 (2024)
+    mismatch counts above are now **0 for all three years**.
+  - **G5-adjacent orphan population (item #2 above, "~3,119/year" orphaned
+    P-type `prop_unit_tax_year` rows):** also measured at **0** by the same
+    run.
+
+Both were confirmed via **byte-identical before/after snapshots** on the
+2026-08-24 run — i.e. this is not a fresh fix made during this task; the
+385/313/25 and ~3,119 figures were already fully repaired by the intervening
+rekey/rollup work (TAX-BILLING-REKEY-3/4, PARCEL-ROLLUP-HOTFIX-1, and related
+county-scoping fixes logged elsewhere in this file) between 2026-07-31 and
+2026-08-24 — this entry is catching the documentation up to a state the code
+already reached, not announcing a new repair. **Sandbox disclosure:** this
+correction is recorded on the strength of the 2026-08-24 live run's own
+reported before/after snapshot evidence (per that task's brief) — this
+sandbox has no live DB connection to independently re-derive either number.
+Diego should treat both 0s as live-confirmed by that run, not sandbox-derived.
+
+**Per this project's own history convention (see the 2026-07-29
+severity-correction entry above for precedent): the original 2026-07-31
+entry is NOT deleted or edited in place.** Its 385/313/25 and ~3,119 figures
+remain accurate as a record of what the M5-PERYEAR-GEOID fix measured
+*at that time* — this addendum instead records that those specific numbers
+no longer describe the platform's current state, and why.
+
+**New, current G3 residual for 2022 (a different check, a different gap
+than G4/G5's dash-format/P-type causes above):** the same 2026-08-24 smoke
+run is what originally surfaced the G2/G3 per-source-scoping gap this task
+(PX-20260824-04) fixed — see that task's own report for the full mechanism
+(PROP.TXT's "accepted" identity-file population vs. PROP_ENT.TXT's
+entity/value-file population are two different populations; a prop_id can
+carry real dollars in PROP_ENT.TXT while having no resolvable `geo_id` in
+PROP.TXT, landing a `prop_unit_tax_year` row that legitimately cannot roll
+up into `parcel_tax_year`). For 2022 specifically, this residual is
+**$774,939,443** (whole-year `prop_unit_tax_year.market_value` sum minus
+whole-year `parcel_tax_year.market_value` sum) — this is now the number
+`g3_rollup_residual_check()`'s `min_expected_residual` lower bound is
+checked against for a 2022 run, not an unexplained gap. **Sandbox
+disclosure, same as above:** this figure is recorded on the strength of the
+brief's own stated live-run evidence; not independently re-derived here (no
+live DB in this sandbox) — Diego should verify it against a live
+`ingest_gate.py --check-db --data-source cert_2022 --tax-year 2022` run
+(or equivalent) the next time 2022 is re-gated, and treat any material
+disagreement as a real new finding, not a documentation error.
+
 ## UI / Frontend Issues
 
 ### Investor-mode section nav: click-to-scroll unreliable (real, open, low-severity)
