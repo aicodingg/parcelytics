@@ -146,9 +146,10 @@ def test_bg4_pass_matches_expected():
         ("TRAVIS", "G1"): {"total_tax": 3000, "total_paid": 2800, "total_due": 200,
                             "is_delinquent": False, "account_count": 2},
     }
-    passed, detail, mismatches = gate.bg4_rollup_integrity_check(account_rows, stored, 2025)
+    passed, detail, mismatches, legacy_only = gate.bg4_rollup_integrity_check(account_rows, stored, 2025)
     check("BG4 pass: correctly rolled-up row matches", passed, detail)
     check("BG4 pass: zero mismatches", mismatches == [], mismatches)
+    check("BG4 pass: zero legacy-only keys", legacy_only == [], legacy_only)
 
 
 def test_bg4_deliberate_corruption_rollup_drift():
@@ -171,10 +172,11 @@ def test_bg4_deliberate_corruption_rollup_drift():
         ("TRAVIS", "G1"): {"total_tax": 9999, "total_paid": 2800, "total_due": 200,
                             "is_delinquent": False, "account_count": 2},
     }
-    passed, detail, mismatches = gate.bg4_rollup_integrity_check(account_rows, corrupted_stored, 2025)
+    passed, detail, mismatches, legacy_only = gate.bg4_rollup_integrity_check(account_rows, corrupted_stored, 2025)
     check("BG4 CORRUPTION CASE: drifted total_tax correctly FAILS", passed is False, detail)
     check("BG4 CORRUPTION CASE: mismatch identifies the right key/column",
           any(m[0] == ("TRAVIS", "G1") and "total_tax" in m[1] for m in mismatches), mismatches)
+    check("BG4 CORRUPTION CASE: no legacy-only keys involved", legacy_only == [], legacy_only)
 
 
 def test_bg4_fail_missing_geo_id():
@@ -185,8 +187,77 @@ def test_bg4_fail_missing_geo_id():
          "data_source": "load_tax_current", "confidence_level": "certified"},
     ]
     stored = {}  # G9 never made it into tax_billing at all
-    passed, detail, mismatches = gate.bg4_rollup_integrity_check(account_rows, stored, 2025)
+    passed, detail, mismatches, legacy_only = gate.bg4_rollup_integrity_check(account_rows, stored, 2025)
     check("BG4 fail: geo_id present in accounts but missing from tax_billing", passed is False, detail)
+    check("BG4 fail: rollup-missing-from-tax_billing is NOT legacy-only "
+          "(legacy-only is the reverse direction)", legacy_only == [], legacy_only)
+
+
+# ── PX-20260826-01: BG4 LEGACY-ONLY classification ──────────────────────
+def test_bg4_legacy_only_classified_not_failed():
+    """
+    The real cutover proved this is a known, named, honest class: a key
+    present in tax_billing with NO tax_billing_account counterpart at all
+    (5 such rows confirmed 2021-2024, individually verified -- honest
+    last-known taxcur_current data with no PIR/TaxCur account-grain
+    counterpart for that year, not a bug). Must be classified LEGACY-ONLY
+    and reported (with its real $ value), never silently dropped, but must
+    NOT fail the gate and must NOT appear in `mismatches` -- same
+    "classify, don't blanket-fail" refinement G2/G3 got in f0c3f59.
+    """
+    account_rows = [
+        {"county_code": "TRAVIS", "account_id": "A1", "tax_year": 2022, "geo_id": "G1",
+         "billing_num": "B1", "owner_name": "Smith", "total_tax": 1000, "total_paid": 1000,
+         "total_due": 0, "is_delinquent": False, "exemption_codes": None,
+         "data_source": "load_pir_billing", "confidence_level": "certified"},
+    ]
+    stored = {
+        # G1: real, correctly-rolled-up row, backed by the account_rows above.
+        ("TRAVIS", "G1"): {"total_tax": 1000, "total_paid": 1000, "total_due": 0,
+                            "is_delinquent": False, "account_count": 1},
+        # G2: a real, honest LEGACY-ONLY row -- exists in tax_billing (the
+        # pre-rekey last-known value) but no tax_billing_account rows for
+        # it at all in this scope -- exactly the 5-row class the cutover found.
+        ("TRAVIS", "G2"): {"total_tax": 450.00, "total_paid": 450.00, "total_due": 0,
+                            "is_delinquent": False, "account_count": None},
+    }
+    passed, detail, mismatches, legacy_only = gate.bg4_rollup_integrity_check(account_rows, stored, 2022)
+    check("BG4 legacy-only: gate PASSES overall (no genuine mismatches)", passed, detail)
+    check("BG4 legacy-only: G2 is classified legacy-only, not a mismatch",
+          mismatches == [], mismatches)
+    check("BG4 legacy-only: G2 appears in legacy_only with its real $ value",
+          legacy_only == [(("TRAVIS", "G2"), 450.00)], legacy_only)
+    check("BG4 legacy-only: detail string reports it explicitly, not hidden",
+          "LEGACY-ONLY" in detail and "TRAVIS/G2" in detail and "450.00" in detail, detail)
+
+
+def test_bg4_legacy_only_does_not_mask_a_real_mismatch():
+    """
+    Belt-and-suspenders: a legacy-only key and a genuine value-mismatch key
+    present in the SAME run must be handled independently -- the gate must
+    still FAIL overall (the real mismatch), while the legacy-only key is
+    still reported separately and correctly excluded from `mismatches`.
+    """
+    account_rows = [
+        {"county_code": "TRAVIS", "account_id": "A1", "tax_year": 2023, "geo_id": "G3",
+         "billing_num": "B1", "owner_name": "Jones", "total_tax": 2000, "total_paid": 2000,
+         "total_due": 0, "is_delinquent": False, "exemption_codes": None,
+         "data_source": "load_pir_billing", "confidence_level": "certified"},
+    ]
+    stored = {
+        # G3: drifted -- a real mismatch, must still FAIL.
+        ("TRAVIS", "G3"): {"total_tax": 9999, "total_paid": 2000, "total_due": 0,
+                            "is_delinquent": False, "account_count": 1},
+        # G4: legacy-only, must be classified separately, not folded into the FAIL.
+        ("TRAVIS", "G4"): {"total_tax": 75.50, "total_paid": 75.50, "total_due": 0,
+                            "is_delinquent": False, "account_count": None},
+    }
+    passed, detail, mismatches, legacy_only = gate.bg4_rollup_integrity_check(account_rows, stored, 2023)
+    check("BG4 mixed case: gate correctly FAILS on the real mismatch", passed is False, detail)
+    check("BG4 mixed case: only G3 is in mismatches, not G4",
+          len(mismatches) == 1 and mismatches[0][0] == ("TRAVIS", "G3"), mismatches)
+    check("BG4 mixed case: G4 still reported as legacy-only, independent of the G3 FAIL",
+          legacy_only == [(("TRAVIS", "G4"), 75.50)], legacy_only)
 
 
 # ── REQUIRED: last-write-wins loss reproduction ─────────────────────────

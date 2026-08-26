@@ -23,7 +23,14 @@ Order matters:
                       migration's G1 file-scan check supports). See the gate step below for
                       an explicit disclosure of which sources are NOT gated yet (AJR CSVs,
                       2021 cert, PIR supplemental) — out of this migration's scope.
-  7. TaxCurrent     — billing data + backfills owner name
+  7. TaxCurrent     — billing data + backfills owner name. TAX-BILLING-REKEY-3's
+                      tax_billing_rollup.py runs immediately after (see step below),
+                      and PX-20260826-01: loaders/billing_gate.py's BG1-BG4 gate now
+                      runs immediately after THAT, every time — loud, post-hoc,
+                      non-blocking (mirrors ceda1f0's load_certified_historical.py
+                      wiring pattern: reports PASS/FAIL per check, never aborts the
+                      run). No longer something that depends on someone remembering
+                      to invoke loaders/billing_gate.py by hand.
   8. TaxDelinquent  — delinquency flags
   9. compute_metrics — Phase 2 derived insight layer (parcel_metrics, county_benchmark).
                       Per spec §4.1, this step is now GATED: it only runs if every gate
@@ -63,6 +70,7 @@ from loaders.compute_metrics     import (
     analyze_threshold, compute_parcel_metrics, compute_county_benchmarks
 )
 from loaders import ingest_gate
+from loaders import billing_gate
 import parcel_rollup
 import tax_billing_rollup
 import config
@@ -214,6 +222,19 @@ def main():
         rollup_result = tax_billing_rollup.run(conn, tax_year=2025)
         print(f"  tax_billing_rollup (2025): {rollup_result['tax_billing_rows']:,} tax_billing rows, "
               f"{rollup_result['tax_billing_entity_rows']:,} tax_billing_entity rows")
+        # PX-20260826-01: billing_gate.gather_and_run() wired in here, right
+        # after the rollup it verifies -- same pattern as ceda1f0's
+        # load_certified_historical.py wiring (loud, post-hoc, never blocks
+        # the run). source_tag is deliberately "taxcur_billing_2025", NOT
+        # load_tax_current.py's own DATA_SOURCE value ("taxcur_current") --
+        # the f0c3f59 lesson was that a source_tag string can silently get
+        # mistaken for (or later refactored into) a real data_source column
+        # value; keeping this tag visibly distinct from that column's real
+        # values avoids the exact same category-confusion mistake here.
+        billing_summary = billing_gate.gather_and_run(conn, "taxcur_billing_2025", "TRAVIS", 2025)
+        print(f"  billing_gate (2025): {'PASS' if billing_summary['passed'] else 'FAIL'}")
+        for code, result in billing_summary["checks"].items():
+            print(f"    {code}: {'PASS' if result[0] else 'FAIL'} — {result[1]}")
         print("\n[8/11] TaxDelqOpenData (delinquent)…")
         load_delinquent(conn)
     else:
@@ -269,6 +290,13 @@ def main():
                     print(f"  tax_billing_rollup ({yr}): {rollup_result['tax_billing_rows']:,} "
                           f"tax_billing rows, {rollup_result['tax_billing_entity_rows']:,} "
                           f"tax_billing_entity rows")
+                    # PX-20260826-01: same wiring as the 2025 TaxCur step
+                    # above -- source_tag "pir_billing_<year>", distinct
+                    # from load_pir_billing.py's own DATA_SOURCE value.
+                    billing_summary = billing_gate.gather_and_run(conn, f"pir_billing_{yr}", "TRAVIS", yr)
+                    print(f"  billing_gate ({yr}): {'PASS' if billing_summary['passed'] else 'FAIL'}")
+                    for code, result in billing_summary["checks"].items():
+                        print(f"    {code}: {'PASS' if result[0] else 'FAIL'} — {result[1]}")
                 update_coverage_level(conn, all_years)
         else:
             print("\n[11/11] PIR billing: no files configured yet — skipping.")

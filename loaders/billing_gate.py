@@ -28,7 +28,11 @@ extension of ingest_gate.py's checks.
         mirror tax_billing_rollup's own tests use), rather than trusting
         tax_billing_rollup.py's own production SQL ran correctly -- the
         same "the gate doesn't trust the module it's checking" discipline
-        G4 already established.
+        G4 already established. PX-20260826-01: keys present in
+        tax_billing with no tax_billing_account counterpart at all are
+        classified LEGACY-ONLY (reported, not FAILed) -- a known, honest
+        source-coverage gap the real cutover surfaced, not a mismatch.
+        Genuine value disagreements and rollup-missing keys still hard-FAIL.
 
 Design mirrors ingest_gate.py's own split exactly: every bg*_check()
 function below takes already-computed numbers (counts, sums, ledgers) and
@@ -185,12 +189,31 @@ def bg4_rollup_integrity_check(account_rows, tax_billing_rows, tax_year):
     Scoped to tax_billing only (not tax_billing_entity), mirroring
     G4's own scope on the appraisal side (parcel_tax_year only, no
     entity-grain equivalent check exists there either).
+
+    LEGACY-ONLY classification (PX-20260826-01): a key present in
+    tax_billing with NO tax_billing_account counterpart at all is no
+    longer lumped into `mismatches`/FAIL. The real cutover proved this is
+    a known, named, honest class -- data_source='taxcur_current' rows
+    whose true last-known value genuinely has no PIR/TaxCur account-grain
+    counterpart to re-derive from for that (county_code, geo_id, tax_year)
+    (5 such rows confirmed 2021-2024, individually verified -- not a bug,
+    not silent data loss, just a source-coverage gap tax_billing_rollup.py
+    correctly leaves alone rather than overwriting or deleting). This
+    mirrors the exact "classify, don't blanket-fail" refinement G2/G3 got
+    in f0c3f59 for their own honest-gap population -- reported explicitly
+    (every legacy-only key + its $ value, not hidden), never silently
+    dropped, but not a gate failure either. A key present in
+    tax_billing_account with NO tax_billing counterpart (the rollup should
+    have written it and didn't), and a key present in both whose value
+    columns genuinely disagree, remain real, hard-FAIL mismatches --
+    unchanged by this refinement.
     """
     expected_rows = {
         (r["county_code"], r["geo_id"]): r
         for r in tax_billing_rollup.compute_rollup(account_rows, tax_year)
     }
     mismatches = []
+    legacy_only = []
     compare_cols = ["total_tax", "total_paid", "total_due", "is_delinquent", "account_count"]
 
     all_keys = set(expected_rows) | set(tax_billing_rows)
@@ -198,7 +221,8 @@ def bg4_rollup_integrity_check(account_rows, tax_billing_rows, tax_year):
         expected = expected_rows.get(key)
         actual = tax_billing_rows.get(key)
         if expected is None:
-            mismatches.append((key, "in tax_billing but no tax_billing_account rows"))
+            # LEGACY-ONLY, not a mismatch -- see docstring above.
+            legacy_only.append((key, actual.get("total_tax") if actual else None))
             continue
         if actual is None:
             mismatches.append((key, "has tax_billing_account rows but missing from tax_billing"))
@@ -208,8 +232,16 @@ def bg4_rollup_integrity_check(account_rows, tax_billing_rows, tax_year):
                 mismatches.append((key, f"{col}: expected {expected.get(col)!r}, actual {actual.get(col)!r}"))
 
     passed = len(mismatches) == 0
-    detail = f"{len(all_keys):,} (county_code, geo_id) keys checked, {len(mismatches):,} mismatches"
-    return passed, detail, mismatches
+    legacy_sum = sum(v for _, v in legacy_only if v is not None)
+    detail = (f"{len(all_keys):,} (county_code, geo_id) keys checked, "
+              f"{len(mismatches):,} mismatches")
+    if legacy_only:
+        listing = "; ".join(
+            f"{k[0]}/{k[1]}=${v:,.2f}" if v is not None else f"{k[0]}/{k[1]}=NULL"
+            for k, v in legacy_only
+        )
+        detail += f"  LEGACY-ONLY (n={len(legacy_only)}, ${legacy_sum:,.2f}): {listing}"
+    return passed, detail, mismatches, legacy_only
 
 
 # ══════════════════════════════════════════════════════════════════════

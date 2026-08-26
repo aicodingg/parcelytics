@@ -329,6 +329,53 @@ def check_run_all_wires_rollup():
     return passed, detail, problems
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Check 7 (PX-20260826-01): run_all.py wires billing_gate in, at both
+# billing steps, non-blocking (never depends on someone remembering to
+# run loaders/billing_gate.py by hand -- same discipline check 6 above
+# already established for tax_billing_rollup.run() itself).
+# ══════════════════════════════════════════════════════════════════════
+def check_run_all_wires_billing_gate():
+    full = os.path.join(REPO_ROOT, "loaders/run_all.py")
+    text = _read(full)
+    if text is None:
+        return False, "loaders/run_all.py not found", [("loaders/run_all.py", "file not found")]
+    problems = []
+    if "from loaders import billing_gate" not in text and "import billing_gate" not in text:
+        problems.append(("loaders/run_all.py", "does not import billing_gate"))
+
+    # Only count real call sites, not this comment's own mention of the
+    # function name or any other prose reference -- filter to lines whose
+    # stripped text doesn't start with '#' before matching.
+    call_pattern = re.compile(r"billing_gate\.gather_and_run\s*\(")
+    calls = [
+        line for line in text.splitlines()
+        if not line.strip().startswith("#") and call_pattern.search(line)
+    ]
+    if len(calls) < 2:
+        problems.append(("loaders/run_all.py",
+                          f"expected 2 billing_gate.gather_and_run() call sites "
+                          f"(2025 TaxCur step + PIR-billing-year loop), found {len(calls)}"))
+
+    # Non-blocking check: each gather_and_run() call site's own immediate
+    # neighborhood must be plain print()s, not a `return`/`sys.exit()` --
+    # a genuinely blocking wiring would abort the run on a billing_gate
+    # FAIL, which the brief explicitly says NOT to do (loud, post-hoc,
+    # non-blocking, mirroring ceda1f0's load_certified_historical.py wiring).
+    for m in call_pattern.finditer(text):
+        window = text[m.end(): m.end() + 400]
+        if re.search(r"\breturn\b|\bsys\.exit\(", window):
+            problems.append(("loaders/run_all.py",
+                              "a billing_gate.gather_and_run() call site is followed by "
+                              "return/sys.exit() within 400 chars -- looks blocking, not "
+                              "loud-post-hoc-non-blocking as required"))
+
+    passed = len(problems) == 0
+    detail = (f"{len(calls)} billing_gate.gather_and_run() call site(s), imported, non-blocking"
+              if passed else "missing/blocking billing_gate wiring")
+    return passed, detail, problems
+
+
 def main():
     checks = [
         ("Hard rule: tax_billing/tax_billing_entity value-column writes", check_hard_rule),
@@ -337,6 +384,7 @@ def main():
         ("Portal writers (scraper + app.py) target tax_billing_portal_scrape", check_portal_writers_target_scrape_table),
         ("No re-typed rollup SQL outside tax_billing_rollup.py", check_no_retyped_rollup_sql),
         ("run_all.py wires tax_billing_rollup in", check_run_all_wires_rollup),
+        ("run_all.py wires billing_gate in (non-blocking)", check_run_all_wires_billing_gate),
     ]
 
     overall_pass = True
