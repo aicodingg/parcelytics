@@ -46,6 +46,107 @@ Everything else in the pre-rev1 design stands as approved (BPP exclusion
 policy, exemption-table handling, the two still-open value-mapping
 semantic gaps on HMSTD_CAP_VAL and per-jurisdiction taxable value).
 ══════════════════════════════════════════════════════════════════════════
+PX-20260826-04 ("the bodies") — implements the rev1 skeleton fully, per PM
+value-mapping rulings verified against real 2026 rows. Changelog:
+
+  1. HMSTD_CAP_VAL semantics RESOLVED (was the pre-rev1 unresolved gap):
+     it is the CAPPED VALUE ITSELF (post-cap assessed value), not a loss
+     amount — CONFIRMED, PM-verified. assessed_value = HMSTD_CAP_VAL when
+     HMSTD_CAP_VAL > 0 (cap present, whether or not it's currently
+     binding), else TOT_VAL (no cap at all). hs_cap_loss is derived, not
+     sourced directly: TOT_VAL − HMSTD_CAP_VAL when a cap is present
+     (this is 0, not missing, when the cap isn't binding — HMSTD_CAP_VAL
+     == TOT_VAL in that case), else NULL. See derive_value_mapping()
+     below — this is now the one place this arithmetic lives.
+  2. Per-jurisdiction taxable_value shape RESOLVED for the one jurisdiction
+     this design needs: taxable_value = COUNTY_TAXABLE_VAL (CONFIRMED,
+     PM-verified) — the county-entity taxable value, the same real-world
+     quantity Travis's own TCO_ENTITY_CODES check picks out of PROP_ENT.TXT.
+     The other five jurisdictions' own taxable/ceiling/split columns remain
+     DELIBERATELY UNLOADED (documented in TABLE_LOAD_POLICY below) — this
+     design only ever populates the one column prop_unit_tax_year has room
+     for.
+  3. SPTD_CODE → classification_map_dallas.classify_dallas_sptb_code()
+     wired for real (classify_account_sptd() below) — verified its
+     interface: the function takes a bare code string (e.g. "A11", "F10")
+     and matches on the first character only, uppercased; SPTD_CODE's own
+     real values are exactly that shape, so no adapter is needed. ONE real
+     terminology inconsistency surfaced and is flagged, not silently
+     smoothed over: classification_map_dallas.py's own
+     DALLAS_SPTB_FIELD_NAME constant says the field is named "SPTB CLASS
+     CODE", while this brief (and DCAD's own ACCOUNT_APPRL_YEAR table,
+     confirmed rev1) calls it SPTD_CODE — SPTB vs SPTD, a one-letter
+     difference across two different DCAD-sourced documents (the module's
+     own SPTD_CD_XREF.pdf citation actually also says "SPTD", suggesting
+     "SPTB" in that module's field-name constant may itself be the
+     drifted one). The DATA VALUES match either way (A11/F10-shaped
+     codes); this is a documentation-terminology question, not a data-
+     shape mismatch, so it does not block wiring — flagged in this
+     brief's own report as the one open item for PM to confirm against
+     the real data dictionary.
+  4. Real CSV header validation added (validate_header() below): each
+     loaded table's iter_*_records() function now checks the real CSV's
+     header row against an EXPECTED_HEADERS set before yielding any row,
+     raising HeaderDriftError (fail-loud) if a column this design's LOGIC
+     depends on (not just a soft, optional field) is missing — the
+     concrete backstop for the "wrong field name silently returns None
+     forever, no gate ever fires" hazard this module's own top-level
+     disclosure has warned about since PX-20260826-03. Only CONFIRMED,
+     logic-critical columns are in each table's expected set — the
+     still-UNCONFIRMED optional fields (owner/situs names, EXEMPT_CODE)
+     are deliberately NOT hard-failed on, consistent with this module's
+     existing tiered-confidence discipline (a wrong optional-field name
+     degrades gracefully to None; a wrong identity/value-critical one
+     stops the load).
+  5. BPP exclusion is now a NAMED G1 skip-bucket ("bpp_excluded"), not a
+     later, loader-only filter step — per this brief's own explicit
+     instruction. iter_account_info_records() now sets skip_reason=
+     "bpp_excluded" for DIVISION_CD-BPP rows directly, so scan_table_ledger()
+     surfaces the excluded count as its own named bucket in G1's real
+     output, same as "no_account_num" — visible in the conservation
+     ledger itself, not just in filter_bpp_accounts()'s return value one
+     layer up. (Supersedes the pre-rev1 docstring's stated design, which
+     deliberately kept BPP OUT of skip_reason — this brief overrides that
+     with a direct instruction; filter_bpp_accounts() in
+     load_dallas_certified.py is updated to match.)
+══════════════════════════════════════════════════════════════════════════
+PX-20260826-04 FINDING #2 (real dry-run, PM re-ruling) — the "ACCOUNT_NUM
+must be all-digits or fail loud" rule above (rev1's own CONFIRMED item 3)
+was WRONG, not just incomplete: 205,049 of 806,563 real ACCOUNT_NUMs are
+alphanumeric — letters are STRUCTURAL block/unit designators, not
+corruption — including 190,375 loadable RES/COM accounts. Failing loud on
+all of them, as the pre-this-finding code did, would have silently thrown
+away 23.6% of the real, loadable population disguised as a data-integrity
+stop. PM re-ruling, now the confirmed design:
+
+  geo_id  — UNCHANGED: ACCOUNT_NUM verbatim (text).
+  prop_id — now two-tier:
+      all-digit ACCOUNT_NUM    -> int(ACCOUNT_NUM)                  (unchanged)
+      alphanumeric ACCOUNT_NUM -> first 8 bytes of SHA-256('DALLAS:'
+                                   + ACCOUNT_NUM), with bit 62 forced
+                                   set — disjoint-by-construction from
+                                   the all-digit numeric range. See
+                                   _hashed_prop_id() below for the exact
+                                   bit-layout this instruction requires
+                                   (one necessary, disclosed
+                                   concretization: bit 63 must also be
+                                   masked off, or the hashed prop_id
+                                   would overflow/negate a signed BIGINT
+                                   for roughly half of all alphanumeric
+                                   accounts — see that function's own
+                                   docstring).
+
+Two REQUIRED fail-loud guards accompany this (an identity collision is a
+qualitatively different risk once prop_id is no longer a 1:1 deterministic
+function of a validated-numeric string):
+  1. In-run duplicate-prop_id detection across a single build — see
+     DuplicatePropIdError and check_in_run_prop_id_collisions() below.
+  2. A persistent, write-time guard rejecting a write whose prop_id
+     already exists in prop_unit under a DIFFERENT geo_id — see
+     find_prop_id_geo_id_conflicts() below for the pure comparison logic
+     (the DB-querying wrapper lives in load_dallas_certified.py, keeping
+     this module's own "no DB access" purity).
+══════════════════════════════════════════════════════════════════════════
 HONEST, LOAD-BEARING DISCLOSURE — READ BEFORE TRUSTING ANY FIELD NAME BELOW
 ══════════════════════════════════════════════════════════════════════════
 This sandbox has NO direct access to the real DCAD delivery — not the 14
@@ -86,6 +187,7 @@ session's own honesty norms: nothing below is asserted with more confidence
 than its tag allows.
 """
 import csv
+import hashlib
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -151,12 +253,74 @@ def is_bpp_division(division_cd):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Header validation — PX-20260826-04 Task 1: real, fail-loud backstop
+# against a drifted/wrong field name silently returning None for every
+# row of a column this design's LOGIC (not just optional metadata)
+# depends on. Only CONFIRMED, logic-critical columns are listed per
+# table — see this module's own PX-20260826-04 changelog (top of file)
+# for why the still-UNCONFIRMED optional fields are deliberately excluded
+# from this hard-fail set.
+# ══════════════════════════════════════════════════════════════════════
+class HeaderDriftError(RuntimeError):
+    """Raised when a real CSV's header row is missing a column this
+    module's logic depends on. A real identity/value-integrity condition,
+    not a per-row data-quality skip — mirrors derive_prop_id_geo_id()'s
+    own fail-loud convention (see that function's docstring for the same
+    "soft skip vs. hard stop" distinction)."""
+    pass
+
+
+EXPECTED_HEADERS = {
+    "ACCOUNT_INFO": {ACCOUNT_NUM_FIELD, DIVISION_CD_FIELD},
+    "ACCOUNT_APPRL_YEAR": {
+        ACCOUNT_NUM_FIELD, "TOT_VAL", "LAND_VAL", "IMPR_VAL",
+        "HMSTD_CAP_VAL", "SPTD_CODE", "COUNTY_TAXABLE_VAL", "APPRAISAL_YR",
+    },
+    "APPLIED_STD_EXEMPT": {ACCOUNT_NUM_FIELD},
+}
+# PRE-COMMIT FIX (real, disclosed correction): the field this design
+# guessed as "TAX_YR" does not exist on the real CSV -- it was UNCONFIRMED
+# and always came back None, which is why 100% of rows were silently
+# falling back to the run's own --year argument. The real column is
+# APPRAISAL_YR. Now CONFIRMED and promoted into EXPECTED_HEADERS above
+# (hard-validated, HeaderDriftError on drift) -- no more soft degrade.
+# The --year fallback is DELETED outright: every row's APPRAISAL_YR is now
+# asserted to equal the run's own --year, fail-loud on mismatch (see
+# AppraisalYearMismatchError / validate_appraisal_year() below, and
+# build_unit_rows()'s own call site in load_dallas_certified.py).
+
+
+def validate_header(table_name, fieldnames):
+    """
+    Fail loud if the real CSV's header row (fieldnames, as returned by
+    csv.DictReader) is missing any column EXPECTED_HEADERS[table_name]
+    requires. No entry for table_name (e.g. a deliberately-unloaded table)
+    is a silent no-op, not an error — this function only ever validates
+    tables this module actually parses.
+    """
+    expected = EXPECTED_HEADERS.get(table_name)
+    if expected is None:
+        return
+    actual = set(fieldnames or [])
+    missing = expected - actual
+    if missing:
+        raise HeaderDriftError(
+            f"{table_name}: real CSV header is missing expected column(s) "
+            f"{sorted(missing)} — got header {sorted(actual) if actual else '(empty)'}. "
+            f"This is a fail-loud stop (PX-20260826-04 Task 1), not a soft "
+            f"skip: a wrong/drifted field name would otherwise silently "
+            f"return None for every row of that column, with no downstream "
+            f"signal until a much harder-to-diagnose failure later."
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Low-level CSV primitive — generic across all 14 tables, mirroring
 # ears_format.py's `_resolve_lines` + per-line dict-yielding shape, adapted
 # for a header-having, comma-delimited, multi-column source instead of a
 # fixed-width one.
 # ══════════════════════════════════════════════════════════════════════
-def iter_csv_rows(path=None, lines=None):
+def iter_csv_rows(path=None, lines=None, table_name=None):
     """
     Yield one OrderedDict per data row (csv.DictReader shape) plus a
     1-based `_lineno` key (data rows only — the header is consumed, not
@@ -165,9 +329,16 @@ def iter_csv_rows(path=None, lines=None):
     unconfirmed either way for these files) or `lines` (an iterable of
     already-decoded CSV text lines, for fixture tests) must be given.
 
-    Deliberately thin: no column validation, no type coercion — that's
-    each per-table iter_*_records() function's job, same division of
-    labor as ears_format.py's iter_prop_lines vs iter_prop_records.
+    table_name (PX-20260826-04): if given, the real header row is checked
+    against EXPECTED_HEADERS[table_name] via validate_header() before any
+    row is yielded — fail-loud on drift. Optional and defaults to None
+    (no validation) so this primitive stays usable for ad hoc/exploratory
+    reads of tables with no registered expectation.
+
+    Deliberately thin otherwise: no further column validation, no type
+    coercion — that's each per-table iter_*_records() function's job,
+    same division of labor as ears_format.py's iter_prop_lines vs
+    iter_prop_records.
     """
     if lines is not None:
         reader = csv.DictReader(lines)
@@ -176,6 +347,9 @@ def iter_csv_rows(path=None, lines=None):
         reader = csv.DictReader(f)
     else:
         raise ValueError("iter_csv_rows requires either path= or lines=")
+
+    if table_name is not None:
+        validate_header(table_name, reader.fieldnames)
 
     for lineno, row in enumerate(reader, 1):
         row["_lineno"] = lineno
@@ -198,12 +372,19 @@ def iter_account_info_records(path=None, lines=None):
     owner_name, situs_address, skip_reason.
 
     skip_reason is one of:
-      None            — normal, usable row (has an ACCOUNT_NUM)
-      'no_account_num'— blank/missing ACCOUNT_NUM (mirrors ears_format's
-                        'no_geo_id' bucket — a genuinely unusable row, not
-                        a BPP exclusion, which is a separate, later
-                        loader-level filter, not a G1 skip bucket, since a
-                        BPP row still has a real, well-formed ACCOUNT_NUM.
+      None             — normal, usable, non-BPP row
+      'no_account_num' — blank/missing ACCOUNT_NUM (mirrors ears_format's
+                         'no_geo_id' bucket — a genuinely unusable row)
+      'bpp_excluded'   — PX-20260826-04: DIVISION_CD marks this account as
+                         Business Personal Property. REVISED from
+                         PX-20260826-03-rev1's design (which deliberately
+                         kept BPP OUT of skip_reason, treating it as a
+                         separate, later loader-level filter only) per
+                         this brief's own explicit instruction: BPP
+                         exclusion must be a NAMED G1 skip-bucket, visible
+                         directly in scan_table_ledger()'s own bucket
+                         counts, not just in filter_bpp_accounts()'s return
+                         value one layer up in load_dallas_certified.py.
 
     Field name confidence: ACCOUNT_NUM (CONFIRMED), DIVISION_CD (CONFIRMED).
     GIS_PARCEL_ID (UNCONFIRMED — named in the brief's own open question
@@ -214,16 +395,22 @@ def iter_account_info_records(path=None, lines=None):
     it "includes identity/owner/situs/legal" but names no specific columns;
     OWNER_NAME/SITUS_ADDR below are placeholders, not evidenced strings.
     """
-    for row in iter_csv_rows(path, lines):
+    for row in iter_csv_rows(path, lines, table_name="ACCOUNT_INFO"):
         account_num = (row.get(ACCOUNT_NUM_FIELD) or "").strip() or None
         division_cd = (row.get(DIVISION_CD_FIELD) or "").strip() or None
-        skip_reason = "no_account_num" if not account_num else None
+        is_bpp = is_bpp_division(division_cd)
+        if not account_num:
+            skip_reason = "no_account_num"
+        elif is_bpp:
+            skip_reason = "bpp_excluded"
+        else:
+            skip_reason = None
         yield {
             "_lineno": row["_lineno"],
             "skip_reason": skip_reason,
             "account_num": account_num,
             "division_cd": division_cd,
-            "is_bpp": is_bpp_division(division_cd),
+            "is_bpp": is_bpp,
             "gis_parcel_id": (row.get("GIS_PARCEL_ID") or "").strip() or None,       # UNCONFIRMED field name
             "owner_name": (row.get("OWNER_NAME") or "").strip() or None,             # UNCONFIRMED field name
             "situs_address": (row.get("SITUS_ADDR") or "").strip() or None,          # UNCONFIRMED field name
@@ -231,40 +418,193 @@ def iter_account_info_records(path=None, lines=None):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# prop_id / geo_id derivation — REV1, CONFIRMED against the real files.
-# geo_id = ACCOUNT_NUM verbatim (text — satisfies MC-1 rule 3 exactly,
-# VARCHAR(20) already fits 17 chars). prop_id = int(ACCOUNT_NUM) (an
-# internal BIGINT surrogate, same role as Travis's own "TCAD short
-# integer ID" — no schema change needed either side).
+# prop_id / geo_id derivation — PX-20260826-04 finding #2 PM re-ruling
+# (supersedes rev1's "all-digit or fail loud" rule; see this module's own
+# changelog block at the top for why that rule was wrong, not just
+# incomplete). geo_id = ACCOUNT_NUM verbatim (text — UNCHANGED, satisfies
+# MC-1 rule 3 exactly, VARCHAR(20) already fits 17 chars). prop_id is now
+# two-tier: int(ACCOUNT_NUM) for all-digit accounts, a truncated-SHA-256
+# derivation for alphanumeric ones — both fit BIGINT with zero schema
+# change, and are disjoint-by-construction from each other (see
+# _hashed_prop_id() below for the exact bit-layout reasoning).
 # ══════════════════════════════════════════════════════════════════════
+class DuplicatePropIdError(RuntimeError):
+    """Raised when two different ACCOUNT_NUMs (geo_ids) derive the same
+    prop_id — an identity collision. Two independent, required guards use
+    this: check_in_run_prop_id_collisions() (within a single build, pure)
+    and load_dallas_certified.py's write-time guard (against what's
+    already durably written, built on find_prop_id_geo_id_conflicts()
+    below). Both are genuine identity-integrity stops, not per-row data-
+    quality skips — same class of hard-stop as classification_map.py's
+    UNKNOWN convention."""
+    pass
+
+
+_HASH_PREFIX = "DALLAS:"
+_HASH_BIT62 = 1 << 62             # forces the hashed prop_id into [2**62, 2**63-1]
+_HASH_LOW62_MASK = _HASH_BIT62 - 1  # low 62 bits of the truncated hash
+
+
+def _hashed_prop_id(account_num):
+    """
+    PX-20260826-04 finding #2: prop_id derivation for an alphanumeric
+    ACCOUNT_NUM. Per the PM's ruling: first 8 bytes of
+    SHA-256('DALLAS:' + ACCOUNT_NUM), with bit 62 forced set — disjoint-
+    by-construction from the all-digit numeric range (a 17-digit
+    ACCOUNT_NUM maxes out under 10**17, i.e. well under 2**57 — far below
+    2**62).
+
+    One necessary, disclosed concretization of that instruction: the raw
+    8 bytes are also masked down to their low 62 bits BEFORE bit 62 is
+    OR'd on. Without that mask, bit 63 (the sign bit of Postgres's signed
+    64-bit BIGINT) would be left at whatever the hash naturally produced —
+    roughly half of all alphanumeric accounts would then derive a prop_id
+    that either overflows BIGINT's positive range or, if inserted as a
+    Python int, silently becomes negative depending on the driver's
+    handling. Masking to the low 62 bits first guarantees every hashed
+    prop_id lands in [2**62, 2**63-1]: always positive, always fits
+    BIGINT, and the disjointness the PM asked for is preserved exactly
+    (only which sub-range within "definitely not the digit range" changes,
+    not whether it's disjoint). Flagged for PM sign-off same as any other
+    real, load-bearing interpretation of an instruction that wasn't fully
+    pinned down to the bit.
+    """
+    digest = hashlib.sha256((_HASH_PREFIX + account_num).encode("utf-8")).digest()
+    raw = int.from_bytes(digest[:8], "big")
+    return (raw & _HASH_LOW62_MASK) | _HASH_BIT62
+
+
 def derive_prop_id_geo_id(account_num):
     """
-    CONFIRMED (PX-20260826-03-rev1): prop_id = int(ACCOUNT_NUM), geo_id =
-    ACCOUNT_NUM verbatim.
+    PX-20260826-04 finding #2 (PM re-ruling, supersedes PX-20260826-03-
+    rev1's "all-digit or fail loud" rule — see this module's own changelog
+    at the top for why that rule was wrong: 205,049 of 806,563 real
+    ACCOUNT_NUMs are alphanumeric by design, not corruption).
 
-    Fail-loud validation, by design: ACCOUNT_NUM must be all-digits or
-    this raises ValueError rather than returning a soft skip_reason. This
-    is an identity-integrity check, not a per-row data-quality skip — a
-    non-numeric ACCOUNT_NUM would silently corrupt prop_id's BIGINT cast
-    (Postgres would reject it at write time anyway, but with a much less
-    diagnosable error, potentially mid-batch) rather than cleanly drop one
-    bad row up front. Mirrors this codebase's existing hard-stop
-    convention for identity-breaking conditions (e.g. classification_map.py's
-    UNKNOWN hard-stop) rather than its soft, ledger-counted skip_reason
-    convention (which is for expected, countable exceptions, not identity
-    corruption).
+    geo_id — UNCHANGED: ACCOUNT_NUM verbatim (text).
+    prop_id — two-tier:
+        all-digit ACCOUNT_NUM    -> int(ACCOUNT_NUM)
+        alphanumeric ACCOUNT_NUM -> _hashed_prop_id(ACCOUNT_NUM) (see that
+                                     function's own docstring)
+
+    The only remaining fail-loud case here is a None/blank ACCOUNT_NUM —
+    a genuinely missing identity, not a shape question hashing can
+    answer. Duplicate-prop_id detection is NOT this function's job (it
+    has no visibility across calls) — see DuplicatePropIdError,
+    check_in_run_prop_id_collisions() below, and
+    load_dallas_certified.py's write-time guard.
 
     Returns (prop_id: int, geo_id: str).
     """
     if account_num is None:
         raise ValueError("derive_prop_id_geo_id: ACCOUNT_NUM is None")
     geo_id = str(account_num).strip()
-    if not geo_id.isdigit():
-        raise ValueError(
-            f"derive_prop_id_geo_id: ACCOUNT_NUM {account_num!r} is not all-digits — "
-            f"fail-loud per PX-20260826-03-rev1's confirmed prop_id=int(ACCOUNT_NUM) rule"
+    if not geo_id:
+        raise ValueError("derive_prop_id_geo_id: ACCOUNT_NUM is blank")
+    if geo_id.isdigit():
+        prop_id = int(geo_id)
+    else:
+        prop_id = _hashed_prop_id(geo_id)
+    return prop_id, geo_id
+
+
+def check_in_run_prop_id_collisions(unit_rows):
+    """
+    PX-20260826-04 finding #2, required guard 1 of 2: fail-loud, in-run
+    duplicate-prop_id detection across a single build_unit_rows() output.
+    Raises DuplicatePropIdError the instant two DIFFERENT geo_ids (i.e.
+    different real ACCOUNT_NUMs) derive the same prop_id within this one
+    run — before any row reaches the DB. Pure, no I/O; expects a list of
+    dicts each with at least "prop_id" and "geo_id" keys (the
+    build_unit_rows() row shape).
+
+    This is deliberately separate from find_prop_id_geo_id_conflicts()
+    below (which checks against rows already durably written in a PRIOR
+    run) — a real collision could, in principle, happen within either
+    scope, and this module's stance is to guard both rather than assume
+    one implies the other.
+    """
+    seen = {}
+    for row in unit_rows:
+        prop_id = row["prop_id"]
+        geo_id = row["geo_id"]
+        prior_geo_id = seen.get(prop_id)
+        if prior_geo_id is not None and prior_geo_id != geo_id:
+            raise DuplicatePropIdError(
+                f"In-run prop_id collision: ACCOUNT_NUM {geo_id!r} and "
+                f"{prior_geo_id!r} both derive prop_id={prop_id} — "
+                f"fail-loud per PX-20260826-04 finding #2's required "
+                f"in-run duplicate-prop_id guard."
+            )
+        seen[prop_id] = geo_id
+
+
+class AppraisalYearMismatchError(RuntimeError):
+    """Raised when an ACCOUNT_APPRL_YEAR row's real APPRAISAL_YR column
+    does not equal the run's own --year argument. PRE-COMMIT FIX (real
+    correction): this design previously guessed the column was named
+    "TAX_YR" (UNCONFIRMED, and wrong -- that column does not exist), so
+    every row's value came back None and silently fell back to --year.
+    That fallback masked what should have been a fail-loud signal: a real
+    mismatch here means either the wrong archive folder was pointed at
+    (e.g. --year 2026 against a 2025 extract) or a genuine per-account
+    data anomaly worth surfacing, not papering over. The fallback is now
+    DELETED outright -- see validate_appraisal_year() below."""
+    pass
+
+
+def validate_appraisal_year(appraisal_yr, expected_year, account_num=None):
+    """
+    PRE-COMMIT FIX: fail-loud, per-row cross-check between ACCOUNT_APPRL_
+    YEAR.APPRAISAL_YR and the run's own --year argument. No fallback --
+    a None/missing appraisal_yr (e.g. an account with no matching
+    ACCOUNT_APPRL_YEAR row at all) is treated exactly the same as a real
+    mismatch: it does not equal expected_year, so it raises. Pure, no I/O.
+    """
+    if appraisal_yr != expected_year:
+        acct = f" (ACCOUNT_NUM={account_num!r})" if account_num else ""
+        raise AppraisalYearMismatchError(
+            f"APPRAISAL_YR mismatch{acct}: row's real APPRAISAL_YR is "
+            f"{appraisal_yr!r}, but this run's --year is {expected_year!r}. "
+            f"Fail-loud, no fallback (PRE-COMMIT FIX) -- either the wrong "
+            f"archive folder is being loaded for this --year, or this is a "
+            f"genuine per-account anomaly that must be investigated, not "
+            f"silently coerced."
         )
-    return int(geo_id), geo_id
+
+
+def find_prop_id_geo_id_conflicts(existing_prop_id_geo_id, unit_rows):
+    """
+    PX-20260826-04 finding #2, required guard 2 of 2: pure comparison
+    logic for the persistent, write-time identity guard.
+    existing_prop_id_geo_id is a {prop_id: geo_id} map of what's ALREADY
+    on file in prop_unit for this county (the caller — see
+    load_dallas_certified.py's _fetch_existing_prop_id_geo_id() — does the
+    actual DB query; this function stays DB-free, matching this module's
+    own "no DB access" purity). unit_rows is this run's own
+    build_unit_rows() output.
+
+    A real conflict here means one of two things: (a) a genuine SHA-256
+    collision between two different alphanumeric ACCOUNT_NUMs
+    (astronomically unlikely at this population size, not provably
+    impossible), or (b) — far more likely in practice — this run is about
+    to silently corrupt an unrelated, already-loaded account's geo_id via
+    PROP_UNIT_UPSERT_SQL's own ON CONFLICT (county_code, prop_id) DO
+    UPDATE, which has no way to know the two geo_ids belong to different
+    real-world accounts and would simply overwrite in place. Either way
+    this is a fail-loud stop, not a per-row skip.
+
+    Returns a list of (prop_id, existing_geo_id, incoming_geo_id) tuples —
+    empty if clean.
+    """
+    conflicts = []
+    for row in unit_rows:
+        prop_id = row["prop_id"]
+        incoming_geo_id = row["geo_id"]
+        existing_geo_id = existing_prop_id_geo_id.get(prop_id)
+        if existing_geo_id is not None and existing_geo_id != incoming_geo_id:
+            conflicts.append((prop_id, existing_geo_id, incoming_geo_id))
+    return conflicts
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -298,8 +638,17 @@ def derive_prop_id_geo_id(account_num):
 # ══════════════════════════════════════════════════════════════════════
 def iter_account_apprl_year_records(path=None, lines=None):
     """
-    Yields dicts with keys: account_num, tax_yr, impr_val, land_val,
-    tot_val, hmstd_cap_val, sptd_code, skip_reason.
+    Yields dicts with keys: account_num, appraisal_yr, impr_val, land_val,
+    tot_val, hmstd_cap_val, sptd_code, county_taxable_val, skip_reason.
+
+    appraisal_yr (PRE-COMMIT FIX, real correction): the real column is
+    APPRAISAL_YR — CONFIRMED against the real file, replacing the earlier
+    UNCONFIRMED "TAX_YR" guess, which does not exist on the real CSV (it
+    always came back None, silently masked by a --year fallback that has
+    now been deleted). Now header-validated (see EXPECTED_HEADERS) and
+    cross-checked per row against the run's own --year argument — see
+    validate_appraisal_year() below and build_unit_rows()'s own call site
+    in load_dallas_certified.py.
 
     sptd_code (CONFIRMED, PX-20260826-03-rev1): column 47 of this table,
     field name SPTD_CODE. This is the real input to
@@ -315,66 +664,125 @@ def iter_account_apprl_year_records(path=None, lines=None):
     same as it was pre-rev1 — this field just makes the INPUT side no
     longer a guess.
 
-    VALUE-COLUMN MAPPING TO THE UNIT MODEL — the brief's own required
-    decision, stated here with its honest gap:
-      TOT_VAL      -> prop_unit_tax_year.market_value   (CONFIRMED-shape:
-                       DCAD's own total appraised value; direct analog)
-      LAND_VAL     -> prop_unit_tax_year.land_value       (direct analog)
-      IMPR_VAL     -> prop_unit_tax_year.imprv_value       (direct analog)
-      HMSTD_CAP_VAL -> UNRESOLVED SEMANTIC GAP, flagged loudly per the
-                       brief's own instruction: Travis's hs_cap_loss column
-                       stores the CAP LOSS AMOUNT (market value MINUS the
-                       capped assessed value — see ears_format.py's own
-                       PROP_ENT_SLICES/exemption derivation). DCAD's
-                       HMSTD_CAP_VAL name suggests it may instead be the
-                       CAPPED VALUE ITSELF (the post-cap assessed value),
-                       not the loss amount — the same field NAME pattern,
-                       a materially different NUMBER if so (a $400,000
-                       home capped at $350,000 would report a $50,000 loss
-                       under Travis's semantics but a $350,000 capped
-                       value under the literal DCAD name). This is exactly
-                       the class of gap MC-7.1 exists to catch before it
-                       becomes a wrong-answer bug with a press release —
-                       NOT resolved here; requires either the real data
-                       dictionary text or a direct row-level sanity check
-                       (HMSTD_CAP_VAL should be LESS than TOT_VAL for a
-                       capped homestead account if it's a value; roughly
-                       TOT_VAL minus a plausible assessed value if it's a
-                       loss amount) once a real file is available.
-      assessed_value/taxable_value -> UNRESOLVED SHAPE GAP: Travis's
-                       assessed_value/taxable_value are single, county-
-                       level numbers (picked from the TCO entity's own
-                       PROP_ENT.TXT row — see ears_format.py's
-                       iter_prop_ent_aggregates()'s is_tco logic). DCAD's
-                       own "per-jurisdiction *_TAXABLE_VAL" phrasing
-                       implies EITHER a repeated column per jurisdiction
-                       (e.g. one column per taxing entity, wide-format) OR
-                       a separate per-jurisdiction row keyed by a
-                       jurisdiction code (long-format, more like PROP_ENT's
-                       own per-entity-line shape). Which shape applies,
-                       and which literal column/jurisdiction-code
-                       identifies "Dallas County" itself (the county-level
-                       entity, analogous to Travis's TCO_ENTITY_CODES
-                       check), is UNCONFIRMED and NOT guessed at here —
-                       this function intentionally does NOT populate
-                       assessed_value/taxable_value at all, leaving that
-                       mapping as an explicit, named follow-up rather than
-                       a silently wrong placeholder value.
+    VALUE-COLUMN MAPPING TO THE UNIT MODEL — PX-20260826-04: PM-verified
+    against real 2026 rows, baked in here rather than re-derived:
+      TOT_VAL           -> prop_unit_tax_year.market_value  (direct analog)
+      LAND_VAL          -> prop_unit_tax_year.land_value     (direct analog)
+      IMPR_VAL          -> prop_unit_tax_year.imprv_value     (direct analog)
+      HMSTD_CAP_VAL      -> RESOLVED (was the pre-rev1 unresolved semantic
+                       gap): confirmed to be the CAPPED VALUE ITSELF (the
+                       post-cap assessed value), not a loss amount, unlike
+                       Travis's own hs_cap_loss column (which stores the
+                       loss amount directly). See derive_value_mapping()
+                       below for the actual arithmetic this resolution
+                       implies: assessed_value = HMSTD_CAP_VAL when > 0
+                       (cap present — whether or not currently binding),
+                       else TOT_VAL; hs_cap_loss = TOT_VAL − HMSTD_CAP_VAL
+                       when a cap is present (0 when not binding, i.e.
+                       HMSTD_CAP_VAL == TOT_VAL), else NULL.
+      COUNTY_TAXABLE_VAL -> prop_unit_tax_year.taxable_value (RESOLVED, PM-
+                       verified): the county-jurisdiction taxable value,
+                       matching Travis's own county-entity semantic (see
+                       ears_format.py's TCO_ENTITY_CODES/is_tco logic for
+                       the Travis-side analog of "which jurisdiction is
+                       the county itself"). The other five jurisdictions'
+                       own taxable/ceiling/split columns remain
+                       DELIBERATELY UNLOADED (TABLE_LOAD_POLICY below) —
+                       prop_unit_tax_year has room for exactly one
+                       taxable_value column, and COUNTY_TAXABLE_VAL is it.
+      SPTD_CODE          -> classification input, see classify_account_sptd()
+                       below and this module's PX-20260826-04 changelog
+                       for the interface-reconciliation note (SPTB vs
+                       SPTD naming).
     """
-    for row in iter_csv_rows(path, lines):
+    for row in iter_csv_rows(path, lines, table_name="ACCOUNT_APPRL_YEAR"):
         account_num = (row.get(ACCOUNT_NUM_FIELD) or "").strip() or None
         skip_reason = "no_account_num" if not account_num else None
         yield {
             "_lineno": row["_lineno"],
             "skip_reason": skip_reason,
             "account_num": account_num,
-            "tax_yr": _int_or_none(row.get("TAX_YR")),               # UNCONFIRMED exact field name
+            "appraisal_yr": _int_or_none(row.get("APPRAISAL_YR")),   # CONFIRMED field name (PRE-COMMIT FIX -- replaces the wrong "TAX_YR" guess)
             "impr_val": _int_or_none(row.get("IMPR_VAL")),           # CONFIRMED field name
             "land_val": _int_or_none(row.get("LAND_VAL")),           # CONFIRMED field name
             "tot_val": _int_or_none(row.get("TOT_VAL")),             # CONFIRMED field name
-            "hmstd_cap_val": _int_or_none(row.get("HMSTD_CAP_VAL")), # CONFIRMED field name, UNCONFIRMED semantics (see docstring)
+            "hmstd_cap_val": _int_or_none(row.get("HMSTD_CAP_VAL")), # CONFIRMED field name + semantics (rev2/PX-20260826-04): capped VALUE, not loss
             "sptd_code": (row.get("SPTD_CODE") or "").strip() or None,  # CONFIRMED field name + location (col 47), rev1
+            "county_taxable_val": _int_or_none(row.get("COUNTY_TAXABLE_VAL")),  # CONFIRMED field name (PX-20260826-04, PM-verified)
         }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# derive_value_mapping — PX-20260826-04: the one place the PM's confirmed
+# value-mapping arithmetic lives, so build_unit_rows() (and any future
+# caller) never has to re-derive it. Pure function, no I/O.
+# ══════════════════════════════════════════════════════════════════════
+def derive_value_mapping(tot_val, land_val, impr_val, hmstd_cap_val, county_taxable_val):
+    """
+    Returns {market_value, land_value, imprv_value, assessed_value,
+    hs_cap_loss, taxable_value} per the PM's confirmed PX-20260826-04
+    rulings (bake in, don't re-derive):
+
+      market_value   = TOT_VAL
+      land_value     = LAND_VAL
+      imprv_value    = IMPR_VAL
+      assessed_value = HMSTD_CAP_VAL if HMSTD_CAP_VAL > 0 else TOT_VAL
+      hs_cap_loss    = TOT_VAL - HMSTD_CAP_VAL where a cap is present
+                       (HMSTD_CAP_VAL > 0), else NULL. A present-but-not-
+                       binding cap (HMSTD_CAP_VAL == TOT_VAL) correctly
+                       yields 0, not NULL — a real, meaningful zero, not
+                       an absent value.
+      taxable_value  = COUNTY_TAXABLE_VAL, verbatim
+
+    None-safe: a None tot_val alongside a real (>0) hmstd_cap_val cannot
+    produce a numeric hs_cap_loss (nothing to subtract from) — returns
+    None for hs_cap_loss in that genuinely-incomplete-row case rather than
+    raising or guessing. This is an ordinary data-quality gap (some
+    expected fields missing on some rows), not the identity-integrity
+    class of problem derive_prop_id_geo_id() fails loud on.
+    """
+    market_value = tot_val
+    has_cap = hmstd_cap_val is not None and hmstd_cap_val > 0
+    if has_cap:
+        assessed_value = hmstd_cap_val
+        hs_cap_loss = (tot_val - hmstd_cap_val) if tot_val is not None else None
+    else:
+        assessed_value = tot_val
+        hs_cap_loss = None
+    return {
+        "market_value": market_value,
+        "land_value": land_val,
+        "imprv_value": impr_val,
+        "assessed_value": assessed_value,
+        "hs_cap_loss": hs_cap_loss,
+        "taxable_value": county_taxable_val,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# classify_account_sptd — PX-20260826-04 Task 1: real wiring of
+# ACCOUNT_APPRL_YEAR.SPTD_CODE into classification_map_dallas.py. Lazy
+# import (not a module-level import) so this module keeps its own stated
+# "no DB access, no config import" purity for callers that never need
+# classification — matches this codebase's existing convention of keeping
+# cross-cutting imports out of a pure-parsing module's top level wherever
+# reasonably possible.
+# ══════════════════════════════════════════════════════════════════════
+def classify_account_sptd(sptd_code):
+    """
+    Classify one account's SPTD_CODE into a benchmark label (or the
+    UNMAPPED_DALLAS sentinel) via classification_map_dallas.
+    classify_dallas_sptb_code(). Verified interface (PX-20260826-04 Task
+    1): that function takes a bare code string and matches on the FIRST
+    CHARACTER only, uppercased — SPTD_CODE's own real values (A11, F10,
+    etc.) are exactly that shape, so this is a direct pass-through, no
+    adapter needed. See this module's own PX-20260826-04 changelog for
+    the one open SPTB-vs-SPTD field-name terminology question this
+    wiring surfaced (a documentation inconsistency, not a data-shape
+    mismatch — does not block this wiring).
+    """
+    import classification_map_dallas as _cmd
+    return _cmd.classify_dallas_sptb_code(sptd_code)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -394,7 +802,7 @@ def iter_applied_std_exempt_records(path=None, lines=None):
     TABLE_LOAD_POLICY below for which of the 14 real tables this design
     loads versus deliberately leaves unloaded.
     """
-    for row in iter_csv_rows(path, lines):
+    for row in iter_csv_rows(path, lines, table_name="APPLIED_STD_EXEMPT"):
         account_num = (row.get(ACCOUNT_NUM_FIELD) or "").strip() or None
         skip_reason = "no_account_num" if not account_num else None
         yield {
@@ -431,8 +839,15 @@ TABLE_LOAD_POLICY = {
     ),
     "ACCOUNT_APPRL_YEAR": (
         "LOADED. REV1: confirmed hub table -- carries both the value "
-        "columns (TOT_VAL/LAND_VAL/IMPR_VAL/HMSTD_CAP_VAL) AND the "
-        "classification code (SPTD_CODE, column 47). One row per account."
+        "columns (TOT_VAL/LAND_VAL/IMPR_VAL/HMSTD_CAP_VAL/COUNTY_TAXABLE_VAL) "
+        "AND the classification code (SPTD_CODE, column 47). One row per "
+        "account. PX-20260826-04: HMSTD_CAP_VAL semantics and the "
+        "taxable_value column are now both RESOLVED (see "
+        "derive_value_mapping()) -- COUNTY_TAXABLE_VAL is the one "
+        "per-jurisdiction column this design loads; the other five "
+        "jurisdictions' own taxable/ceiling/split columns remain outside "
+        "this table's own loaded-column set (this table is still LOADED "
+        "overall -- only those specific extra columns are not read)."
     ),
     "APPLIED_STD_EXEMPT": (
         "LOADED. Direct analog to Travis's exemption_codes column -- the "
@@ -567,23 +982,40 @@ def _int_or_none(v):
 # sandbox does not.
 # ══════════════════════════════════════════════════════════════════════
 FIELD_NAME_VERIFICATION_CHECKLIST = """
-REV1 UPDATE: three items PM already resolved against the real files are
-REMOVED from this list -- TAXABLE_OBJECT's grain/key (moot; the table is
-deliberately unloaded), SPTD_CD's location (confirmed: ACCOUNT_APPRL_YEAR.
-SPTD_CODE, column 47), and prop_id/geo_id derivation (confirmed: int(
-ACCOUNT_NUM) / ACCOUNT_NUM verbatim). What remains genuinely open:
+PX-20260826-04 UPDATE: HMSTD_CAP_VAL semantics and the taxable_value
+column (COUNTY_TAXABLE_VAL) are now RESOLVED (PM-verified against real
+2026 rows) and REMOVED from this list, alongside rev1's three prior
+resolutions (TAXABLE_OBJECT's grain/key, SPTD_CODE's location, prop_id/
+geo_id derivation).
+
+PRE-COMMIT FIX UPDATE: TAX_YR is also REMOVED from this list -- it was
+never the real column name (a wrong, UNCONFIRMED guess). The real column
+is APPRAISAL_YR, now CONFIRMED, hard-validated via EXPECTED_HEADERS, and
+cross-checked per row against --year (fail-loud on mismatch, no fallback
+-- see validate_appraisal_year()). What remains genuinely open:
 
 Run against the real, extracted DCAD2026_CERTIFIED_07232026/ folder
-(PARCELYTICS_ARCHIVE_ROOT/dallas/certified_roll/2026-07-23/...), one
-command per table, before load_dallas_certified.py touches a live row:
+(PARCELYTICS_ARCHIVE_ROOT/dallas/certified_roll/2026-08-26/2026 Certified/...),
+one command per table, before load_dallas_certified.py touches a live row:
 
-  head -1 ACCOUNT_INFO.CSV        # confirm GIS_PARCEL_ID, owner/situs field names
-  head -1 ACCOUNT_APPRL_YEAR.CSV  # confirm TAX_YR name + the per-jurisdiction *_TAXABLE_VAL column shape + HMSTD_CAP_VAL semantics (value vs loss amount)
-  head -1 APPLIED_STD_EXEMPT.CSV  # confirm EXEMPT_CODE's real name
+  head -1 ACCOUNT_INFO.CSV        # confirm GIS_PARCEL_ID, owner/situs field names (soft -- not header-validated, see EXPECTED_HEADERS)
+  head -1 APPLIED_STD_EXEMPT.CSV  # confirm EXEMPT_CODE's real name (soft -- not header-validated)
 
-Also open DCAD Data Dictionary.rtf and TABLES AND FIELD NAMES.xlsx directly
-for the two still-open value-mapping semantic gaps (HMSTD_CAP_VAL,
-per-jurisdiction assessed_value/taxable_value shape) -- neither was
-accessible to this session (see this module's top-level HONEST,
-LOAD-BEARING DISCLOSURE).
+The six CONFIRMED/logic-critical columns per loaded table (ACCOUNT_NUM,
+DIVISION_CD; TOT_VAL/LAND_VAL/IMPR_VAL/HMSTD_CAP_VAL/SPTD_CODE/
+COUNTY_TAXABLE_VAL/APPRAISAL_YR) are now hard-validated at load time by
+validate_header() -- a real header mismatch on any of THOSE fails loud
+immediately, rather than needing this manual checklist run first. This
+checklist now covers only the remaining soft/optional fields, which
+degrade gracefully (None) rather than blocking the load if their real
+names differ.
+
+One open reconciliation item for PM (PX-20260826-04, Task 1): confirm
+whether classification_map_dallas.py's own DALLAS_SPTB_FIELD_NAME
+constant ("SPTB CLASS CODE") and this session's confirmed ACCOUNT_APPRL_
+YEAR.SPTD_CODE are the same real DCAD field under two different names
+across two different source documents (SPTB vs SPTD) -- see this module's
+own PX-20260826-04 changelog for the full reasoning; does not block
+wiring (classify_account_sptd() works either way on the real code
+VALUES), but the naming discrepancy itself should be closed out.
 """

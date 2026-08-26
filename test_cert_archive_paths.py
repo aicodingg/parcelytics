@@ -8,6 +8,23 @@ and proves the laziness fix (PEP 562 module __getattr__ in config.py,
 _cert_dir_for_year() in loaders/load_certified_historical.py) actually
 defers the archive-mount check to point-of-use rather than import time.
 
+PX-20260826-04 follow-up (real finding from Diego's own dry-run against
+the physical vault): extended with a Dallas archive-grammar pinning check
+(check_dallas_archive_grammar(), below) after the FIRST version of
+config.py's Dallas grammar was found to derive a per-year re-dated folder
+straight from vault_manifest.md's own "Vault path" TABLE COLUMN -- which
+is itself wrong relative to the real, physical vault layout (the whole
+5-year Dallas acquisition was archived as ONE dated event, per the
+manifest's own prose, not five independently-dated folders). This class of
+drift -- manifest table column vs. real filesystem vs. brief's own
+paraphrase, three sources that can each independently be wrong -- is
+exactly the failure mode this test extension exists to catch at test time,
+not just discover again at the next real dry-run. Pins config's resolved
+Dallas paths against vault_manifest.md's own "Delivered path (as
+received)" column (parsed directly from the table, not re-typed) and
+against the migration's own prose-stated acquisition date, for all 5
+Dallas years.
+
 Entirely "dry": runs with no live DB, no live filesystem access to the
 real external drive, and no other file mutation. Where a real-mount check
 needs to be exercised, PARCELYTICS_ARCHIVE_ROOT is monkeypatched to either
@@ -64,6 +81,55 @@ ROW_RE = re.compile(
 )
 
 REQUIRED_FILES = {"PROP.TXT", "PROP_ENT.TXT", "LAND_DET.TXT"}
+
+# ── PX-20260826-04 follow-up: Migration 4's table has a DIFFERENT column
+# shape than the Travis rows above (County | Source slug | Year | Delivered
+# path (as received) | Vault path | SHA-256 | Notes -- no Original-path/
+# Size/Vault-date/Status columns at all) -- a separate regex, not a reuse
+# of ROW_RE, same "don't trust the same regex a bug could be hiding
+# behind" reasoning that regex's own comment already states. ─────────────
+DALLAS_ROW_RE = re.compile(
+    r"^\|\s*dallas\s*\|\s*certified_roll\s*\|\s*(?P<year>\d{4})\s*\|\s*`(?P<delivered_path>[^`]+)`\s*\|"
+)
+
+
+def parse_dallas_migration4_rows():
+    """Returns {year: set(delivered_path strings)} for every real Migration 4
+    'dallas' row in vault_manifest.md -- parsed from the table's own
+    'Delivered path (as received)' column.
+
+    Deliberately NOT the table's own 'Vault path' column: that column was
+    the source of a real, disclosed bug (config.py's first cut of the
+    Dallas archive grammar trusted it at face value and got the folder
+    structure wrong -- see config.py's own Dallas archive grammar comment
+    for the full correction). The delivered-path column records DCAD's own
+    as-received folder names, which Diego's real dry-run finding confirmed
+    the vault preserves verbatim under one shared acquisition-dated folder
+    -- that combination (acquisition date + delivered-path column) is the
+    real ground truth this test pins against, not a second guess.
+    """
+    by_year = {}
+    with open(MANIFEST_PATH) as f:
+        for line in f:
+            m = DALLAS_ROW_RE.match(line)
+            if not m:
+                continue
+            year = int(m.group("year"))
+            by_year.setdefault(year, set()).add(m.group("delivered_path"))
+    return by_year
+
+
+def parse_dallas_acquisition_date():
+    """Extracts the one real acquisition-event date Migration 4's own prose
+    states ("archived to the vault <date>") -- the ground truth for the
+    single shared folder all 5 Dallas years sit under. Parsed from the
+    manifest text directly rather than re-typed, so a future manifest edit
+    that changes this date fails this test instead of silently drifting
+    from config.py's own DALLAS_ACQUISITION_DATE constant."""
+    with open(MANIFEST_PATH) as f:
+        text = f.read()
+    m = re.search(r"archived to the vault (\d{4}-\d{2}-\d{2})", text)
+    return m.group(1) if m else None
 
 
 def parse_manifest_certified_dirs():
@@ -217,6 +283,99 @@ def main():
     finally:
         config.PARCELYTICS_ARCHIVE_ROOT = real_root
         shutil.rmtree(tmp_root, ignore_errors=True)
+
+    # ── Checks 8+: PX-20260826-04 follow-up -- pin config.py's Dallas
+    #    archive grammar against vault_manifest.md's own Migration 4 rows,
+    #    parsed directly (not re-typed), so the exact drift class Diego's
+    #    real dry-run caught (per-year re-dated folders instead of one
+    #    shared acquisition-dated folder) fails a test, not just a live
+    #    run. Pure string checks, same as Check 1 above -- never touches
+    #    the mount guard. ──────────────────────────────────────────────
+    dallas_rows = parse_dallas_migration4_rows()
+    manifest_acq_date = parse_dallas_acquisition_date()
+    all_ok &= check(
+        "Dallas acquisition date: config.DALLAS_ACQUISITION_DATE matches vault_manifest.md's own prose "
+        "('archived to the vault <date>')",
+        config.DALLAS_ACQUISITION_DATE == manifest_acq_date,
+        f"config={config.DALLAS_ACQUISITION_DATE!r} manifest={manifest_acq_date!r}",
+    )
+
+    # 2026 is the only year with real extracted-table rows in the manifest
+    # -- full directory-level pinning against the manifest's own
+    # delivered-path column for every one of those rows (not just one).
+    year = 2026
+    delivered_paths = dallas_rows.get(year, set())
+    csv_dirs = {p.rsplit("/", 1)[0] for p in delivered_paths if "/" in p and not p.upper().endswith(".ZIP")}
+    all_ok &= check(
+        "Dallas Migration 4: all 2026 extracted-table rows share exactly one delivered-path directory",
+        len(csv_dirs) == 1,
+        f"csv_dirs={csv_dirs}",
+    )
+    if len(csv_dirs) == 1:
+        delivered_dir = next(iter(csv_dirs))
+        expected_2026 = os.path.join(
+            real_root, "dallas", "certified_roll", manifest_acq_date or config.DALLAS_ACQUISITION_DATE,
+            *delivered_dir.split("/"),
+        )
+        year_folder, dcad_folder = config._DALLAS_CERT_ARCHIVE_INFO["DALLAS_CERT_DIR_2026"]
+        resolved_2026 = os.path.join(
+            real_root, "dallas", "certified_roll", config.DALLAS_ACQUISITION_DATE, year_folder, dcad_folder,
+        )
+        all_ok &= check(
+            "DALLAS_CERT_DIR_2026: config's resolved path matches vault_manifest.md's own delivered-path "
+            "column, under the one real acquisition-dated folder (not a per-year re-dated one)",
+            resolved_2026 == expected_2026,
+            f"resolved={resolved_2026!r} expected={expected_2026!r}",
+        )
+        # Also confirm this is what config.DALLAS_CERT_DIR_2026 itself
+        # resolves to (mounted case, same technique as Check 5 above) --
+        # not just that the two internal pieces happen to agree.
+        tmp_root2 = tempfile.mkdtemp(prefix="px_dallas_archive_test_")
+        try:
+            config.PARCELYTICS_ARCHIVE_ROOT = tmp_root2
+            expected_live = os.path.join(tmp_root2, "dallas", "certified_roll", manifest_acq_date, *delivered_dir.split("/"))
+            resolved_live = config.DALLAS_CERT_DIR_2026
+            all_ok &= check(
+                "config.DALLAS_CERT_DIR_2026 (live attribute access) matches the manifest-derived expected path",
+                resolved_live == expected_live,
+                f"resolved={resolved_live!r} expected={expected_live!r}",
+            )
+        finally:
+            config.PARCELYTICS_ARCHIVE_ROOT = real_root
+            shutil.rmtree(tmp_root2, ignore_errors=True)
+
+    # 2022-2025: not yet extracted (zip only) -- the manifest's own
+    # delivered-path for the relational-product zip still names the exact
+    # folder DCAD's own extraction would produce (its filename minus
+    # extension). Pin config's registered (year_folder, dcad_folder) tuple
+    # against that name for all 4 remaining years, so a typo here fails a
+    # test today rather than only surfacing once those years are actually
+    # extracted.
+    for year in (2022, 2023, 2024, 2025):
+        rows = dallas_rows.get(year, set())
+        relational_zip_paths = [p for p in rows if "DCAD" in p and p.upper().endswith(".ZIP")]
+        all_ok &= check(
+            f"Dallas Migration 4: exactly one relational-product zip row found for {year}",
+            len(relational_zip_paths) == 1,
+            f"found: {relational_zip_paths}",
+        )
+        if len(relational_zip_paths) != 1:
+            continue
+        zip_path = relational_zip_paths[0]
+        expected_year_folder, zip_filename = zip_path.rsplit("/", 1)
+        expected_dcad_folder = re.sub(r"\.zip$", "", zip_filename, flags=re.IGNORECASE)
+        cfg_year_folder, cfg_dcad_folder = config._DALLAS_CERT_ARCHIVE_INFO[f"DALLAS_CERT_DIR_{year}"]
+        all_ok &= check(
+            f"DALLAS_CERT_DIR_{year}: registered year-folder matches manifest ({expected_year_folder!r})",
+            cfg_year_folder == expected_year_folder,
+            f"cfg={cfg_year_folder!r} expected={expected_year_folder!r}",
+        )
+        all_ok &= check(
+            f"DALLAS_CERT_DIR_{year}: registered DCAD-folder name matches manifest's own zip filename "
+            f"(minus .zip -- the folder DCAD's own extraction would produce)",
+            cfg_dcad_folder == expected_dcad_folder,
+            f"cfg={cfg_dcad_folder!r} expected={expected_dcad_folder!r}",
+        )
 
     # ── Check 7: a genuinely unknown attribute still raises a normal
     #    AttributeError (the __getattr__ fix must not swallow real typos). ──

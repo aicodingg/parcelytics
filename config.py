@@ -260,14 +260,70 @@ _CERT_ARCHIVE_DATES = {
 }
 
 
+# ── Dallas archive grammar (PX-20260826-04, DCAD relational certified-roll
+# product) ────────────────────────────────────────────────────────────────
+# Same real, PEP 562 lazy-resolution pattern as the CERT_DIR family above,
+# now extended to a second county.
+#
+# REAL CORRECTION (PX-20260826-04 follow-up finding, from Diego's own
+# real-dry-run check against the physical vault): the FIRST version of this
+# block (committed to this session's own working tree, never pushed to
+# Diego) derived a per-year dated folder (e.g. "2026-07-23") directly under
+# certified_roll/ from vault_manifest.md's own "Vault path" TABLE COLUMN --
+# reading that column at face value. That column is WRONG relative to the
+# real, physical archive layout: the whole 5-year Dallas acquisition was
+# archived as ONE event on 2026-08-26 (vault_manifest.md's own Migration 4
+# prose says so explicitly: "archived to the vault 2026-08-26"), which
+# means one acquisition-dated folder contains all five years' own
+# "<year> Certified/" subfolders, preserving the delivered structure --
+# NOT five independently-dated top-level folders keyed by each year's own
+# certification date. The per-row "Vault path" column in the manifest's own
+# Migration 4 table is itself stale/wrong on this point (a real, disclosed
+# manifest-vs-filesystem mismatch, not a values judgment call) -- the
+# correct ground truth is the acquisition date (2026-08-26, from the
+# migration's own header/prose) PLUS each row's own "Delivered path (as
+# received)" column, preserved verbatim as the sub-path under that one
+# acquisition folder. Real, corrected shape:
+#     PARCELYTICS_ARCHIVE_ROOT/dallas/certified_roll/2026-08-26/<year> Certified/DCAD<year>_CERTIFIED_<certdate>/
+# test_cert_archive_paths.py pins this exact shape against vault_manifest.md's
+# own Migration 4 rows (parsed from the table directly, not re-typed) so
+# this specific drift class fails loud in a test, not just at runtime.
+#
+# Real, honest disclosure: only 2026 has been EXTRACTED (vault_manifest.md's
+# own 2026 rows hash 14 individual per-table CSVs directly; every other
+# year's 2022-2025 rows hash only the still-zipped .ZIP file itself) --
+# 2022-2025 extraction is a separate, later, not-yet-done step (this
+# brief's own text says so explicitly). DALLAS_EXTRACTED_YEARS records
+# that real, current state so load_dallas_certified.py can fail loud with
+# a clear, correct message ("this year's zip hasn't been extracted yet")
+# distinct from a generic "directory not found".
+DALLAS_ACQUISITION_DATE = "2026-08-26"  # the one real archival-event date for all 5 years (Migration 4 prose)
+_DALLAS_CERT_ARCHIVE_INFO = {
+    "DALLAS_CERT_DIR_2022": ("2022 Certified", "DCAD2022_CERTIFIED_07252022"),
+    "DALLAS_CERT_DIR_2023": ("2023 Certified", "DCAD2023_CERTIFIED_07252023"),
+    "DALLAS_CERT_DIR_2024": ("2024 Certified", "DCAD2024_CERTIFIED_07252024"),
+    "DALLAS_CERT_DIR_2025": ("2025 Certified", "DCAD2025_CERTIFIED_07242025"),
+    "DALLAS_CERT_DIR_2026": ("2026 Certified", "DCAD2026_CERTIFIED_07232026"),
+}
+DALLAS_EXTRACTED_YEARS = frozenset({2026})
+
+
+def _dallas_archive(*parts):
+    return _county_source_archive("dallas", "certified_roll", *parts)
+
+
 def __getattr__(name):
     """PEP 562 module-level lazy attribute resolution -- see the CERT_DIR
-    family comment block above for why this exists. Only intercepts the 5
-    names in _CERT_ARCHIVE_DATES; anything else is a genuine AttributeError,
+    family comment block above for why this exists. Intercepts the 5
+    Travis names in _CERT_ARCHIVE_DATES and the 5 Dallas names in
+    _DALLAS_CERT_ARCHIVE_INFO; anything else is a genuine AttributeError,
     same as normal module attribute lookup (this function is only consulted
     when a plain lookup in this module's __dict__ already failed)."""
     if name in _CERT_ARCHIVE_DATES:
         return _travis_archive("certified_roll", _CERT_ARCHIVE_DATES[name])
+    if name in _DALLAS_CERT_ARCHIVE_INFO:
+        year_folder, dcad_folder = _DALLAS_CERT_ARCHIVE_INFO[name]
+        return _dallas_archive(DALLAS_ACQUISITION_DATE, year_folder, dcad_folder)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ── Raw Vault (DATA_LIFECYCLE.md Stage 0 / Phase 1 backfill, Aug 2026) ──────
