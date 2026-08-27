@@ -12,6 +12,24 @@
   </p>
 </div>
 
+{% if not info_content_available %}
+{# PX-20260827-03-rev1: honest "not populated for this county yet" state --
+   same pattern as any other unset COUNTY_PROFILES field, not a silent
+   fallback to Travis's researched content under this county's URL. #}
+<div class="card">
+  <div class="card-body text-center" style="padding:48px 24px;">
+    <h2 class="fw-bold mb-2" style="font-size:20px;">Not available for {{ county_profile.county_name }} yet</h2>
+    <p class="text-muted mb-3" style="max-width:520px; margin-left:auto; margin-right:auto;">
+      This page's exemption, protest, and delinquency explainers are researched and written per
+      county — that research hasn't been done for {{ county_profile.county_name }} yet. It's
+      live today for Travis County, TX.
+    </p>
+    <a href="{{ url_for('info', county_slug='travis-tx') }}" class="btn btn-outline-primary btn-sm">
+      View Travis County, TX Info →
+    </a>
+  </div>
+</div>
+{% else %}
 <div class="row g-4">
 
   {# ── Topic sidebar — one topic today, structured for more later ─────────── #}
@@ -852,6 +870,7 @@
 
   </div>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}

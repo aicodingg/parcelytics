@@ -1675,7 +1675,7 @@ def resolve_prop_id_to_geo_id(prop_id):
     return row["geo_id"] if row else None
 
 
-def resolve_exact_parcel(q):
+def resolve_exact_parcel(q, county_code=None):
     """
     Try to resolve `q` as an exact TCAD account number / prop_id — the same
     numeric-first behavior index() has always had (10-char geo_id, 14-char
@@ -1683,23 +1683,42 @@ def resolve_exact_parcel(q):
     situs_address, owner_name, ...) or None. Used by BOTH index() and
     api_address_search(), so a typed account number now resolves identically
     from the navbar typeahead as it does from the full-results submit path.
-    """
-    # DALLAS-GATE-1 Part 2: county_code-scoped, same rationale as
-    # resolve_prop_id_to_geo_id() above.
+
+    PX-20260827-03-rev1: county_code is now an explicit optional param
+    rather than an implicit g.county_code read, so the neutral home page
+    (Task 1 -- bare '/', no county in the URL, g.county_code unset) can
+    search "any live county from anywhere" (Diego's ruling (b)) instead of
+    only ever finding a Travis parcel. Resolution order: explicit
+    county_code arg (unchanged behavior for every existing county-anchored
+    call site) > g.county_code (same fallback every other call site in
+    this file already relies on) > loop over every county in
+    _live_counties() (only reached from a genuinely neutral request with
+    no county context at all -- e.g. the bare home page)."""
+    target_county = county_code or getattr(g, "county_code", None)
     geo_id = normalize_parcel_id(q)
-    parcel = query(
-        "SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s",
-        (geo_id, g.county_code), one=True)
-    if not parcel and q.isdigit():
-        fallback_geo_id = resolve_prop_id_to_geo_id(int(q))
-        if fallback_geo_id:
-            parcel = query(
-                "SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s",
-                (fallback_geo_id, g.county_code), one=True)
-    return dict(parcel) if parcel else None
+    if target_county:
+        parcel = query(
+            "SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s",
+            (geo_id, target_county), one=True)
+        if not parcel and q.isdigit():
+            fallback_geo_id = resolve_prop_id_to_geo_id(int(q))
+            if fallback_geo_id:
+                parcel = query(
+                    "SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s",
+                    (fallback_geo_id, target_county), one=True)
+        return dict(parcel) if parcel else None
+
+    # No county context at all -- neutral request. Try every live county in
+    # turn; geo_id is only unique WITHIN a county (PARTITION-1's own
+    # finding), so this cannot be collapsed into one county_code-less query.
+    for entry in _live_counties():
+        found = resolve_exact_parcel(q, county_code=entry["county_code"])
+        if found:
+            return found
+    return None
 
 
-def search_parcels_by_address(q, limit=8):
+def search_parcels_by_address(q, limit=8, county_code=None):
     """
     The one shared address-text matcher (D2). Algorithm, informed by Phase
     1's finding that there is no queryable city column and zip_code is 0%
@@ -1741,6 +1760,25 @@ def search_parcels_by_address(q, limit=8):
     purely for determinism. rank_candidates()'s own boost-token ranking
     runs on top of this pool afterward and is unchanged.
     """
+    # PX-20260827-03-rev1: same county-context resolution order as
+    # resolve_exact_parcel() above -- explicit arg > g.county_code > (for a
+    # genuinely neutral request, e.g. the bare home page) every live
+    # county in turn. Every returned row gets a county_slug alongside its
+    # existing fields so a caller with no g.county_slug of its own (the
+    # neutral home page) can still build a correct, non-defaulted link to
+    # whichever county the match actually lives in -- _add_county_slug()'s
+    # own DEFAULT_COUNTY_SLUG fallback would otherwise silently point every
+    # result at Travis regardless of where the match was actually found.
+    target_county = county_code or getattr(g, "county_code", None)
+    if target_county is None:
+        results = []
+        for entry in _live_counties():
+            results.extend(search_parcels_by_address(q, limit=limit, county_code=entry["county_code"]))
+            if len(results) >= limit:
+                break
+        return results[:limit]
+
+    county_slug = next((slug for slug, code in COUNTY_SLUGS.items() if code == target_county), DEFAULT_COUNTY_SLUG)
     tokens = search_logic.normalize_query_tokens(q)
     if not tokens:
         return []
@@ -1764,11 +1802,13 @@ def search_parcels_by_address(q, limit=8):
                 CASE WHEN UPPER(situs_address) LIKE %(prefix_pattern)s THEN 0 ELSE 1 END,
                 situs_address
             LIMIT  200
-        """, {"pattern": f"%{pattern}%", "prefix_pattern": f"{pattern}%", "county_code": g.county_code})
+        """, {"pattern": f"%{pattern}%", "prefix_pattern": f"{pattern}%", "county_code": target_county})
         if rows:
             ranked = search_logic.rank_candidates(
                 [dict(r) for r in rows], boost_tokens, pattern_tokens
             )
+            for r in ranked:
+                r["county_slug"] = county_slug
             return ranked[:limit]
     return []
 
@@ -1929,6 +1969,16 @@ COUNTY_PROFILES = {
         "cad_contact_url": "https://traviscad.org/contact",
         "tax_office_name": "Travis County Tax Office",
         "tax_office_website": "https://tax-office.traviscountytx.gov",
+        # PX-20260827-03-rev1 Task 1: gates the /info page's substantive
+        # legal/exemption content (currently real, researched Texas Tax
+        # Code + Travis-specific taxing-entity figures -- not boilerplate).
+        # True here because that research has actually been done for
+        # Travis. Per Diego's ruling, a county without this flag renders an
+        # honest "not available for this county yet" state instead of
+        # silently reusing Travis's copy -- same pattern as any other
+        # unpopulated profile field (e.g. cad_interactive_map_url = None),
+        # not a special case.
+        "info_content_available": True,
     },
     "DALLAS": {
         "display_name": "Dallas County, TX",
@@ -1946,6 +1996,15 @@ COUNTY_PROFILES = {
         "cad_contact_url": "https://www.dallascad.org/contact.aspx",
         "tax_office_name": "Dallas County Tax Office",
         "tax_office_website": "https://www.dallascounty.org/tax",
+        # PX-20260827-03-rev1: no Dallas-specific exemption/protest/ag/
+        # delinquency legal research has been done yet (that's real,
+        # separate content work -- Texas Tax Code sections are state-wide
+        # and would carry over, but the county-level sections on /info are
+        # genuinely Travis-specific taxing-entity facts that do not).
+        # Omitted (falls back to False via .get() at the read site) rather
+        # than guessed True -- same "unknown renders as absent" rule this
+        # profile already applies to every URL field above.
+        "info_content_available": False,
     },
     # HARRIS intentionally NOT registered here yet -- COUNTY_SLUGS reserves
     # the routing slug, but Notion's County Public Profile row for Harris
@@ -2097,6 +2156,23 @@ def _inject_county_helpers():
         "county_url": county_url,
         "county_profile": COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"]),
         "county_cad_link": county_cad_link,
+        # PX-20260827-03-rev1: the one registry-driven "what's live" list,
+        # available on every template render (not just search/info/home)
+        # so the nav-level county switcher (Task 2) and the footer's
+        # coverage block (Task 3) both read from the same source. Includes
+        # a real (TTL-cached, see _live_counties_with_counts()'s own
+        # docstring) parcel_count on each entry -- pickers/switchers simply
+        # don't reference that key, so one list serves both uses.
+        "live_counties": _live_counties_with_counts(),
+        # Distinct from county_slug's own DEFAULT_COUNTY_SLUG fallback
+        # above -- hasattr checks whether _pull_county_slug() actually ran
+        # and set a REAL g.county_slug for this request (a county-anchored
+        # route), vs. a neutral bare route where county_slug above is only
+        # ever the fallback value. base.html's nav-level county switcher
+        # (Task 2) needs this distinction: Diego's ruling calls for the
+        # switcher on county-anchored pages specifically, not the neutral
+        # ones, where county_slug being "truthy" can't tell them apart.
+        "is_county_anchored": hasattr(g, "county_slug"),
     }
 
 
@@ -2114,9 +2190,15 @@ def _inject_county_helpers():
 # /healthz is deliberately excluded -- it was never given a county prefix
 # (see COUNTY_SLUGS block above), so there is no old-vs-new shape to redirect
 # between; it is the same single DB-free path either way.
+# PX-20260827-03-rev1: '/', '/search', '/about', '/terms', '/privacy',
+# '/disclaimer', and '/styleguide' are REMOVED from this list -- each is now
+# a real, directly-served neutral bare-path route in its own right (home(),
+# search_landing(), about(), terms(), privacy(), disclaimer(), styleguide()
+# below), not a redirect target. Leaving their old entries here would
+# register two different view functions at the same literal path. '/info'
+# stays -- info() stays county-anchored (Diego's ruling (b)), so a bare
+# '/info' request still needs the 301-to-Travis this list already provides.
 _LEGACY_REDIRECT_ROUTES = [
-    ("/", "index"),
-    ("/search", "search_page"),
     ("/parcel/<geo_id>", "property_detail"),
     ("/parcel/<geo_id>/export.pdf", "export_due_diligence_pdf"),
     ("/rates", "tax_rates"),
@@ -2138,11 +2220,6 @@ _LEGACY_REDIRECT_ROUTES = [
     ("/parcels", "parcel_list"),
     ("/compare", "compare_parcels"),
     ("/info", "info"),
-    ("/about", "about"),
-    ("/terms", "terms"),
-    ("/privacy", "privacy"),
-    ("/disclaimer", "disclaimer"),
-    ("/styleguide", "styleguide"),
 ]
 
 
@@ -2185,21 +2262,33 @@ for _old_path, _endpoint in _LEGACY_REDIRECT_ROUTES:
 # Flask request-context value -- they do NOT receive county_slug as an
 # argument (Flask's url_value_preprocessor pops it before dispatch).
 
-@app.route("/<county_slug>")
-@limiter.limit(_LIMIT_HEAVY)
-def index():
-    q = request.args.get("q", "").strip()
+def _home_search_response(q, county_code=None):
+    """PX-20260827-03-rev1: shared body for both index() (county-anchored,
+    '/<county_slug>') and home() (neutral, bare '/'). county_code=None
+    (the neutral case) makes resolve_exact_parcel()/search_parcels_by_
+    address() search every live county in turn, per Diego's ruling (b)
+    ("users reach any live county from anywhere") -- county_code=g.
+    county_code (the anchored case) keeps the exact prior single-county
+    behavior. The redirect below uses the MATCHED parcel's own
+    county_code/county_slug explicitly rather than relying on
+    _add_county_slug()'s DEFAULT_COUNTY_SLUG fallback, which would
+    otherwise silently send a Dallas match to a Travis-prefixed URL when
+    called from the neutral, county-less home page."""
     error = None
 
     if q:
-        parcel = resolve_exact_parcel(q)
+        parcel = resolve_exact_parcel(q, county_code=county_code)
 
         if parcel:
-            return redirect(url_for("property_detail", geo_id=parcel["geo_id"]))
+            match_slug = next(
+                (slug for slug, code in COUNTY_SLUGS.items() if code == parcel["county_code"]),
+                DEFAULT_COUNTY_SLUG,
+            )
+            return redirect(url_for("property_detail", geo_id=parcel["geo_id"], county_slug=match_slug))
 
         # Address-like query (contains letters) — show disambiguation list
         elif any(c.isalpha() for c in q):
-            addr_matches = search_parcels_by_address(q, limit=20)
+            addr_matches = search_parcels_by_address(q, limit=20, county_code=county_code)
             if addr_matches:
                 return render_template(
                     "index.html",
@@ -2220,6 +2309,34 @@ def index():
             )
 
     return render_template("index.html", q=q, error=error)
+
+
+@app.route("/<county_slug>")
+@limiter.limit(_LIMIT_HEAVY)
+def index():
+    q = request.args.get("q", "").strip()
+    return _home_search_response(q, county_code=g.county_code)
+
+
+@app.route("/")
+@limiter.limit(_LIMIT_HEAVY)
+def home():
+    """PX-20260827-03-rev1 Task 1: the real neutral, bare-path home page --
+    NOT a redirect (the old _LEGACY_REDIRECT_ROUTES 301-to-Travis entry for
+    '/' is removed; see that list's own comment). index() above (registered
+    at '/<county_slug>') is kept as a SEPARATE, still-real route rather
+    than being torn out: base.html's COUNTY_BASE JS constant is built from
+    url_for('index') and is the one mechanism every page's JS fetches use
+    to call the CURRENT county's own /api/* endpoints (see base.html) --
+    collapsing index() into this bare route would silently break that for
+    every other page on the site, a much bigger blast radius than "make
+    home reachable at a bare URL" was ever asking for. '/dallas-tx' (and
+    any future county) remains a real, useful county-specific landing page
+    in its own right; '/' is the county-agnostic entry point Diego's
+    ruling (b) actually wants. county_code=None here is what makes the
+    home search box reach any live county, not just Travis."""
+    q = request.args.get("q", "").strip()
+    return _home_search_response(q, county_code=None)
 
 
 @app.route("/healthz")
@@ -2265,7 +2382,27 @@ def search_page():
         "AND data_source = 'preliminary' AND county_code = %s) AS x",
         (g.county_code,), one=True,
     )["x"])
-    return render_template("search.html", has_preliminary_2026=has_preliminary_2026)
+    return render_template("search.html", has_preliminary_2026=has_preliminary_2026, county_selected=True)
+
+
+@app.route("/search")
+def search_landing():
+    """PX-20260827-03-rev1 Task 1/2: the neutral, bare-path search LANDING --
+    the filter form + a real county picker (Task 2), no results, no
+    g.county_code (this route has no <county_slug> segment at all). Diego's
+    ruling: "search landing (county is a filter on the form)" is neutral;
+    "search results when county-filtered" stays county-anchored. Rather
+    than duplicate search.html's ~800 lines of filter/map/pagination JS
+    into a second template, this renders the SAME template with
+    county_selected=False -- search.html's own JS (Task 2 edit) reads that
+    flag to skip the results-fetching path entirely and instead have its
+    County selector NAVIGATE to '/<slug>/search' on selection (preserving
+    whatever filter values are already filled in), landing the user on the
+    existing, fully-working anchored page. Matches Diego's stated
+    preference: "clean navigation over clever state-carryover" -- no new
+    cross-county fetch/state logic, just a real page load into the
+    county-anchored route that already does this correctly."""
+    return render_template("search.html", has_preliminary_2026=False, county_selected=False)
 
 
 @app.route("/<county_slug>/parcel/<geo_id>")
@@ -4667,6 +4804,88 @@ def _county_has_data(county_code):
     )["has_data"]
 
 
+def _live_counties():
+    """PX-20260827-03-rev1 Task 2/3: the one, real "what's live" list every
+    county picker (search/info dropdowns, nav switcher) and every launch
+    surface (homepage coverage map/legend/cards, footer coverage block)
+    should render from -- registered (COUNTY_SLUGS) AND has real loaded
+    data (_county_has_data), same two-part definition Task 3's brief spells
+    out. Deliberately NOT "has a COUNTY_PROFILES entry" -- Dallas had a
+    profile before it had data (see COUNTY_PROFILES' own comments), and a
+    profile-only county should not show as live anywhere. Returns a list of
+    dicts (not a bare county_code list) so templates/JS get slug + display
+    name for free, in COUNTY_SLUGS' own declared order -- one query per
+    registered slug (currently 3 max), each an index-only prefix scan per
+    _county_has_data's own docstring, so this is cheap enough to call on
+    every page render via the context processor below."""
+    live = []
+    for slug, county_code in COUNTY_SLUGS.items():
+        if _county_has_data(county_code):
+            profile = COUNTY_PROFILES.get(county_code, {})
+            live.append({
+                "slug": slug,
+                "county_code": county_code,
+                "value": slug.split("-")[0],
+                "display_name": profile.get("display_name", county_code.title()),
+                "county_name": profile.get("county_name", county_code.title()),
+            })
+    return live
+
+
+# PX-20260827-03-rev1 Task 3: parcel counts for the coverage map / footer /
+# market cards are real per-county COUNT(*) queries (Task 3's own rule: "no
+# invented numbers"), NOT a hardcoded marketing figure like the old "508K+"
+# text was -- but _live_counties() above is called from the SITE-WIDE
+# context processor (base.html's footer coverage block needs it on every
+# page, not just the homepage), and a full COUNT(*) against a 500K+-row
+# table on every single request, once per live county, is exactly the class
+# of per-request aggregate cost this codebase has already had to walk back
+# reactively elsewhere (see AGGPRECOMP-1/2's group_stats/snapshot_summary
+# precomputation). A short in-process TTL cache is the minimal fix that
+# keeps the number real and DB-sourced (not invented) without adding a live
+# COUNT(*) to every page load -- worth graduating to a real precomputed
+# table later if this stops being cheap enough (e.g. once Harris's larger
+# parcel count is also live).
+_COUNTY_PARCEL_COUNT_CACHE = {}
+_COUNTY_PARCEL_COUNT_CACHE_TTL_SECONDS = 300
+
+
+def _cached_county_parcel_count(county_code):
+    now = time.monotonic()
+    cached = _COUNTY_PARCEL_COUNT_CACHE.get(county_code)
+    if cached is not None and (now - cached[1]) < _COUNTY_PARCEL_COUNT_CACHE_TTL_SECONDS:
+        return cached[0]
+    # Real-property-only, same exclusion every other "parcel count" figure
+    # on this site already uses (CANONICAL_PARCEL_EXCL + the L-class gap
+    # fix from AGGPRECOMP-1-FIX) -- not a different, inconsistent count.
+    count_row = query(
+        f"SELECT COUNT(*) AS n FROM parcel p WHERE p.county_code = %(county_code)s "
+        f"{CANONICAL_PARCEL_EXCL} AND {exclude_non_real_property_gap_sql('p.state_cd1')}",
+        {"county_code": county_code}, one=True,
+    )
+    count = count_row["n"] if count_row else 0
+    _COUNTY_PARCEL_COUNT_CACHE[county_code] = (count, now)
+    return count
+
+
+def _live_counties_with_counts():
+    """Same list as _live_counties(), with a real (TTL-cached) parcel_count
+    added to each entry. Used specifically by surfaces that display a
+    count (homepage trust strip/market cards, footer coverage block) --
+    the county picker/switcher (Task 2) uses the cheaper _live_counties()
+    directly since it has no count to show."""
+    live = _live_counties()
+    for entry in live:
+        count = _cached_county_parcel_count(entry["county_code"])
+        entry["parcel_count"] = count
+        # Real, exact, comma-formatted -- deliberately NOT rounded to a
+        # "508K+"-style marketing shorthand the way the old hardcoded
+        # footer text was; Task 3's own rule is "no invented numbers," and
+        # an exact real count is more honest than a rounded one, not less.
+        entry["parcel_count_display"] = f"{count:,}"
+    return live
+
+
 @app.route("/<county_slug>/api/search_filter")
 @limiter.limit(_LIMIT_HEAVY)
 def api_search_filter():
@@ -6767,11 +6986,38 @@ def info():
     """Informational reference page -- topic sections (starting with Homestead
     Exemptions) filtered by state / county. Static content today (Texas /
     Travis County only), no parcel or DB data involved -- structured so more
-    topics/states/counties can be added later without a route change."""
-    return render_template("info.html")
+    topics/states/counties can be added later without a route change.
+
+    PX-20260827-03-rev1: Info stays county-anchored (kept its existing
+    <county_slug> prefix -- Diego's ruling (b): its body content is real,
+    researched legal/exemption material, not a name-and-logo template, so
+    treating it as neutral would either silently show Travis content under
+    a Dallas URL or require inventing Dallas content neither of us has
+    researched. info_content_available comes straight from COUNTY_PROFILES
+    (default False if the field is missing entirely, e.g. a future county
+    profile that hasn't set it yet) -- an honest "not populated for this
+    county" render, the same pattern as any other unset profile field,
+    not a silent Travis fallback."""
+    profile = COUNTY_PROFILES.get(g.county_code, COUNTY_PROFILES["TRAVIS"])
+    return render_template(
+        "info.html",
+        info_content_available=profile.get("info_content_available", False),
+    )
 
 
-@app.route("/<county_slug>/about")
+# PX-20260827-03-rev1 Task 1: about/terms/privacy/disclaimer/styleguide are
+# now NEUTRAL, bare-path routes (no leading <county_slug> segment) --
+# Diego's ruling: reachable from anywhere, not tied to any one county's
+# silo. Each one's corresponding _LEGACY_REDIRECT_ROUTES entry is removed
+# below (that list's own comment explains why: these ARE the real routes
+# now, not redirect targets). county_profile/county_slug in their
+# templates fall back to TRAVIS via _inject_county_helpers()'s existing
+# DEFAULT_COUNTY_SLUG convention (g.county_code is never set on a route
+# with no <county_slug> segment) -- About discloses this fallback
+# explicitly per Diego's ruling (a); terms/privacy/disclaimer/styleguide
+# have no county-scoped content to begin with (confirmed by reading each
+# template -- static legal text / a design-token reference).
+@app.route("/about")
 def about():
     return render_template("about.html")
 
@@ -6780,22 +7026,22 @@ def about():
 # Popup, Footer Notice", July 2026. Static legal content, no DB/network
 # involved -- same undecorated (global-rate-limit-only) treatment as /about,
 # /info, /styleguide above.
-@app.route("/<county_slug>/terms")
+@app.route("/terms")
 def terms():
     return render_template("terms.html")
 
 
-@app.route("/<county_slug>/privacy")
+@app.route("/privacy")
 def privacy():
     return render_template("privacy.html")
 
 
-@app.route("/<county_slug>/disclaimer")
+@app.route("/disclaimer")
 def disclaimer():
     return render_template("disclaimer.html")
 
 
-@app.route("/<county_slug>/styleguide")
+@app.route("/styleguide")
 def styleguide():
     """Design-system reference: renders every token and component.
     Single source of truth for the visual language — review here before

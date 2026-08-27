@@ -6,7 +6,8 @@
   <h1 class="page-title mb-1">Search Property Records</h1>
   <p class="text-muted mb-0" style="max-width:680px;">
     Look up a parcel by account number or street address, or filter by neighborhood, property type,
-    value, and more. Live today in Travis County, TX — 508,000+ parcels — with more counties coming
+    value, and more. Live today in {{ live_counties | map(attribute='display_name') | join(' and ') }} —
+    {{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+ parcels — with more counties coming
     as Parcelytics expands.
   </p>
 </div>
@@ -34,15 +35,20 @@
         <svg id="usMap" viewBox="0 0 975 610" preserveAspectRatio="xMidYMid meet"
              style="width:100%; height:auto; display:block;"></svg>
         <div id="usMapFallback" class="text-muted small" style="display:none;">
-          Map preview unavailable offline. Live today: Travis County, TX. Roadmap (not yet live): New York City,
-          Los Angeles, Chicago, Dallas, and Houston metro counties.
+          Map preview unavailable offline. Live today: {{ live_counties | map(attribute='display_name') | join(', ') }}.
+          Roadmap (not yet live): the remaining largest U.S. commercial real estate markets.
         </div>
         <div class="d-flex flex-wrap gap-3 mt-2" style="font-size:11.5px; color:var(--text-2);">
-          <span><span style="display:inline-block;width:11px;height:11px;background:#94B0DA;border:1px solid #7d97c2;vertical-align:-1px;border-radius:2px;"></span> Travis County, TX — live today</span>
+          {% for c in live_counties %}
+          <span><span style="display:inline-block;width:11px;height:11px;background:#94B0DA;border:1px solid #7d97c2;vertical-align:-1px;border-radius:2px;"></span> {{ c.display_name }} — live today</span>
+          {% endfor %}
           <span><span style="display:inline-block;width:11px;height:11px;background:#DCEDFF;border:1px dashed #94B0DA;vertical-align:-1px;border-radius:2px;"></span> Roadmap markets — not yet live</span>
         </div>
+        {# PX-20260827-03-rev1 Task 3: was hardcoded "Currently covering
+           Travis County, TX" -- now lists every live_counties entry so
+           this stops silently omitting Dallas the moment Dallas has data. #}
         <p class="text-muted mt-2 mb-0" style="font-size:12px;">
-          Currently covering <strong>Travis County, TX</strong> — expanding next to the five largest U.S. commercial
+          Currently covering <strong>{{ live_counties | map(attribute='display_name') | join(' and ') }}</strong> — expanding next to the largest U.S. commercial
           real estate markets.
         </p>
       </div>
@@ -400,17 +406,44 @@
     if (fallback) fallback.style.display = "";
     return;
   }
-  const TRAVIS = "48453", TX = "48", W = 975, H = 610;
-  // Roadmap targets (July 2026, per Fable review "Markets framing (b)") —
-  // kept identical to index.html's own ROADMAP object (core county per
-  // metro; see that file's comment for the FIPS-to-metro mapping) so both
-  // pages' maps and legends tell the same expansion story.
-  const ROADMAP = {
-    "36061": "New York City, NY — roadmap, not yet live",
-    "06037": "Los Angeles, CA — roadmap, not yet live",
-    "17031": "Chicago, IL — roadmap, not yet live",
-    "48113": "Dallas, TX — roadmap, not yet live",
-    "48201": "Houston, TX — roadmap, not yet live",
+  const TX = "48", W = 975, H = 610;
+  // PX-20260827-03-rev1 (Diego's ruling): this was previously a second,
+  // independent hardcoded "what's live" source (a single TRAVIS constant
+  // plus a ROADMAP object that listed Dallas as permanently "not yet
+  // live") — completely decoupled from index.html's own MARKETS array, so
+  // the two pages could silently drift out of sync as counties actually
+  // went live. Both now derive from the same registry-driven
+  // live_counties/live_slugs values app.py's _live_counties() produces;
+  // the FIPS-to-slug map below is the one static piece of knowledge left
+  // (a county's FIPS code doesn't change), kept identical to index.html's
+  // MARKETS array's fips fields on purpose. See Task 4's enforcement test
+  // (verify_launch_surface_registry.py) for the check that keeps these in
+  // sync going forward.
+  const LIVE_SLUGS = {{ live_counties | map(attribute='slug') | list | tojson }};
+  const FIPS_BY_SLUG = {
+    "travis-tx": "48453",
+    "dallas-tx": "48113",
+    "harris-tx": "48201",
+  };
+  const LIVE_FIPS = LIVE_SLUGS.map(s => FIPS_BY_SLUG[s]).filter(Boolean);
+  // Live counties' display names, sourced from live_counties itself (not
+  // re-hardcoded) so a name change in COUNTY_PROFILES doesn't require a
+  // second edit here.
+  const LIVE_NAME_BY_FIPS = {};
+  ({{ live_counties | tojson }}).forEach(c => {
+    const f = FIPS_BY_SLUG[c.slug];
+    if (f) LIVE_NAME_BY_FIPS[f] = c.county_name + ", TX";
+  });
+  // Everything else on the roadmap (no COUNTY_SLUGS entry yet, or a
+  // registered slug that isn't live yet) still renders as "roadmap, not
+  // yet live" — Dallas moves out of this object automatically once it's
+  // in live_counties, it is never hand-removed.
+  const ROADMAP_LABELS = {
+    "36061": "New York City, NY",
+    "06037": "Los Angeles, CA",
+    "17031": "Chicago, IL",
+    "48113": "Dallas, TX",
+    "48201": "Houston, TX",
   };
   const svg = d3.select("#usMap");
   d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json")
@@ -427,8 +460,8 @@
         .attr("d", path)
         .attr("fill", d => {
           const id = String(d.id);
-          if (id === TRAVIS) return "#94B0DA";          // Travis — live today
-          if (id in ROADMAP) return "#DCEDFF";           // roadmap target — distinct, lighter fill
+          if (LIVE_FIPS.includes(id)) return "#94B0DA";      // live today
+          if (id in ROADMAP_LABELS) return "#DCEDFF";         // roadmap target — distinct, lighter fill
           if (id.slice(0, 2) === TX) return "#eef2f7";
           return "#e6e9ed";                              // everything else
         })
@@ -437,8 +470,8 @@
         .append("title")
         .text(d => {
           const id = String(d.id);
-          if (id === TRAVIS) return "Travis County, TX — live today";
-          if (id in ROADMAP) return ROADMAP[id];
+          if (LIVE_FIPS.includes(id)) return `${LIVE_NAME_BY_FIPS[id] || "County"} — live today`;
+          if (id in ROADMAP_LABELS) return `${ROADMAP_LABELS[id]} — roadmap, not yet live`;
           return "";
         });
 
@@ -448,22 +481,28 @@
         .attr("d", path).attr("fill", "none")
         .attr("stroke", "#9aa5b1").attr("stroke-width", 0.6);
 
-      // Marker so Travis County is unmistakable despite its small size
-      const tf = counties.features.find(d => String(d.id) === TRAVIS);
-      const c = tf ? path.centroid(tf) : null;
-      if (c && !isNaN(c[0])) {
-        svg.append("circle").attr("cx", c[0]).attr("cy", c[1]).attr("r", 16)
-          .attr("fill", "none").attr("stroke", "#94B0DA").attr("stroke-width", 1.4).attr("opacity", 0.7);
-        svg.append("circle").attr("cx", c[0]).attr("cy", c[1]).attr("r", 6)
-          .attr("fill", "#94B0DA").attr("stroke", "#ffffff").attr("stroke-width", 1.5);
-        svg.append("text").attr("x", c[0] + 22).attr("y", c[1] + 4)
-          .attr("font-size", "14").attr("font-weight", "600").attr("fill", "#505A5B")
-          .text("Travis County, TX");
-      }
+      // Marker(s) so every live county is unmistakable despite small size —
+      // was Travis-only; now loops over every live FIPS so a second live
+      // county (Dallas) gets its own marker the moment it goes live.
+      LIVE_FIPS.forEach(fipsId => {
+        const tf = counties.features.find(d => String(d.id) === fipsId);
+        const c = tf ? path.centroid(tf) : null;
+        if (c && !isNaN(c[0])) {
+          svg.append("circle").attr("cx", c[0]).attr("cy", c[1]).attr("r", 16)
+            .attr("fill", "none").attr("stroke", "#94B0DA").attr("stroke-width", 1.4).attr("opacity", 0.7);
+          svg.append("circle").attr("cx", c[0]).attr("cy", c[1]).attr("r", 6)
+            .attr("fill", "#94B0DA").attr("stroke", "#ffffff").attr("stroke-width", 1.5);
+          svg.append("text").attr("x", c[0] + 22).attr("y", c[1] + 4)
+            .attr("font-size", "14").attr("font-weight", "600").attr("fill", "#505A5B")
+            .text(LIVE_NAME_BY_FIPS[fipsId] || "");
+        }
+      });
 
       // Roadmap markers — hollow, dashed ring, explicitly NOT the "live" style
-      // (same visual language as index.html's roadmap map)
-      Object.keys(ROADMAP).forEach(id => {
+      // (same visual language as index.html's roadmap map). Skips any FIPS
+      // that's already live (drawn above) so a newly-live county doesn't get
+      // both marker styles at once.
+      Object.keys(ROADMAP_LABELS).filter(id => !LIVE_FIPS.includes(id)).forEach(id => {
         const f = counties.features.find(d => String(d.id) === id);
         if (!f) return;
         const rc = path.centroid(f);
@@ -565,17 +604,39 @@ ParcelTypeahead.attach({ inputId: "spQ" });
   const useCodeTA      = initTypeaheadSelect("useCode", "UseCode");
   if (!countyTA || !neighborhoodTA || !propTypeTA || !useCodeTA) return;
 
-  // County: one real option today. Pre-selected and effectively fixed, but
-  // built as a real typeahead-select so a second county is just another
-  // entry in this options array — no restructuring.
-  // PX-20260824-06: un-reverted (was hardcoded to "travis"/"Travis County,
-  // TX" by PX-20260824-01, which flagged this as paired with app.py's
-  // api_search_filter() gate -- see that gate's own comment for the fix).
-  // Now sourced from county_profile like every other converted dropdown
-  // (rates.html, snapshot.html) -- same convention, not a new one.
-  countyTA.setOptions([{ value: {{ county_slug.split('-')[0] | tojson }}, label: {{ county_profile.display_name | tojson }} }]);
+  // County: PX-20260827-03-rev1 Task 2 -- was hardcoded to a single
+  // {{ county_profile }}-derived option (found to be the actual root cause
+  // of "the dropdown only shows one county": it was never a real loop over
+  // registered-with-data counties, just one hardcoded entry per page
+  // render). Now built from live_counties (app.py's _live_counties(),
+  // injected into every template via the context processor) -- the same
+  // registered-AND-has-data list Task 3's launch surfaces read from, so
+  // this can't drift out of sync with what's actually live.
+  const LIVE_COUNTIES = {{ live_counties | tojson }};
+  countyTA.setOptions(LIVE_COUNTIES.map(c => ({ value: c.value, label: c.display_name })));
+  {% if county_selected %}
   document.getElementById("fltCountyInput").value = {{ county_profile.display_name | tojson }};
   document.getElementById("fltCountyValue").value = {{ county_slug.split('-')[0] | tojson }};
+  {% endif %}
+
+  // Selecting a DIFFERENT county navigates to that county's own anchored
+  // search page rather than trying to swap results in place -- "clean
+  // navigation over clever state-carryover" (Diego's stated preference).
+  // Works identically whether this page is the neutral bare '/search'
+  // landing (county_selected=False, nothing pre-filled above) or the
+  // county-anchored '/<slug>/search' (county_selected=True) -- the bare
+  // landing has no county of its own to compare against, so it always
+  // navigates on any real selection.
+  document.getElementById("fltCountyInput").addEventListener("ta:select", (e) => {
+    const picked = LIVE_COUNTIES.find(c => c.value === e.detail);
+    if (!picked) return;
+    {% if county_selected %}
+    if (picked.slug === {{ county_slug | tojson }}) return;
+    {% endif %}
+    const params = new URLSearchParams(window.location.search);
+    const qs = params.toString();
+    window.location.href = `/${picked.slug}/search` + (qs ? `?${qs}` : "");
+  });
 
   // Property Type / Sector — classify.py's 5-category taxonomy, populated
   // from /api/benchmark/meta's prop_types (same source as the nav sector
@@ -734,6 +795,17 @@ ParcelTypeahead.attach({ inputId: "spQ" });
   };
 
   function runSearch(page) {
+    // PX-20260827-03-rev1: on the neutral bare '/search' landing
+    // (county_selected=False) there is no county to scope this query to --
+    // COUNTY_BASE would silently fall back to Travis (DEFAULT_COUNTY_SLUG)
+    // otherwise. In practice the county picker's own ta:select handler
+    // above navigates away the instant a county is chosen, so this only
+    // fires if someone tries Apply/a Quick Filter before picking one.
+    {% if not county_selected %}
+    errorBox.textContent = "Pick a county above to search its parcels.";
+    errorBox.style.display = "";
+    return;
+    {% endif %}
     currentPage = page || 1;
     errorBox.style.display = "none";
     // Captured once per request (not re-read after the fetch resolves) so a

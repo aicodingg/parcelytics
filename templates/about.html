@@ -9,6 +9,11 @@
   <div class="hero-inner" style="max-width:760px;">
     <span class="hero-eyebrow"><span class="dot"></span> {{ county_profile.county_name }}, Texas</span>
     <h1 style="max-width:20ch;">Property-tax intelligence you can <span class="accent">cite</span>.</h1>
+    {# PX-20260827-03-rev1: About is a neutral, bare-path page (no county
+       prefix), so county_profile below falls back to Travis via the
+       existing context-processor default -- this one-line disclosure makes
+       that fallback visible rather than silent, per Diego's ruling (a). #}
+    <p class="text-muted mb-0" style="font-size:12.5px;">Showing {{ county_profile.county_name }}, TX coverage details below.</p>
     <p class="hero-sub">
       Parcelytics turns certified government records into investment-grade analysis —
       verified appraisal data, 35 years of tax-rate history, and parcel-level benchmarks,

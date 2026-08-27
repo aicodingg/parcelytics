@@ -4,7 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Parcelytics{% endblock %}</title>
-  <meta name="description" content="Verified Travis County, Texas property-tax intelligence — sourced directly from TCAD and the Travis County Tax Office, honestly labeled.">
+  {# PX-20260827-03-rev1 Task 3: was a hardcoded, Travis-only description
+     appearing on EVERY page site-wide (a real "what's live" SEO
+     declaration nobody had inventoried before this brief) -- now lists
+     every live_counties entry so it stops silently omitting Dallas the
+     moment Dallas has real data. #}
+  <meta name="description" content="Verified {{ live_counties | map(attribute='county_name') | join(' and ') }}, Texas property-tax intelligence — sourced directly from official government records, honestly labeled.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
@@ -87,6 +92,32 @@
             <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='agricultural') }}">Agricultural</a></li>
           </ul>
         </div>
+
+        {# PX-20260827-03-rev1 Task 2: nav-level county switcher, rendered
+           from the same live_counties (registered AND has real data) list
+           the search dropdown and Task 3's launch surfaces all read from --
+           one registry, not a second hand-maintained list. Shown only on
+           county-anchored pages (is_county_anchored) and only once a
+           second county is actually live -- Diego's ruling (b), "users
+           reach any live county from anywhere," not a switcher with
+           nothing to switch to. Links to that county's own home
+           ('/<slug>') rather than trying to carry the current page over --
+           a parcel/snapshot/rate view has no equivalent in another county,
+           so "go to that county's home" is the one always-correct target. #}
+        {% if is_county_anchored and live_counties|length > 1 %}
+        <div class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" role="button"
+             data-bs-toggle="dropdown" aria-expanded="false" id="countySwitcherDropdown">
+            {{ county_profile.county_name }}
+          </a>
+          <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="countySwitcherDropdown">
+            <li class="dropdown-header">Switch county</li>
+            {% for c in live_counties %}
+            <li><a class="dropdown-item {% if c.slug == county_slug %}active{% endif %}" href="/{{ c.slug }}">{{ c.display_name }}</a></li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -113,7 +144,15 @@
       <div class="footer-brand-word">Parcel<b>ytics</b></div>
       <p class="footer-tagline">
         Verified property-tax intelligence, sourced directly from official government records
-        and labeled by confidence. No third-party aggregators. Live today in {{ county_profile.display_name }} —
+        and labeled by confidence. No third-party aggregators.
+        {# PX-20260827-03-rev1 Task 3: was county_profile.display_name --
+           county-SCOPED to the CURRENT request's county, not a true
+           site-wide "what's live" statement (wrong on a neutral page, and
+           wrong even on a Dallas-scoped page, which would say "Live today
+           in Dallas" while omitting that Travis is also live). Now lists
+           every live_counties entry -- the same registered-AND-has-data
+           list every other coverage surface on this site reads from. #}
+        Live today in {{ live_counties | map(attribute='display_name') | join(' and ') }} —
         expanding market by market, each one verified before it goes live.
       </p>
     </div>
@@ -135,7 +174,14 @@
     </div>
     <div class="footer-col">
       <div class="footer-col-title">Coverage</div>
-      <span>Travis County, TX — 508K+ parcels · Dallas County, TX — next</span>
+      {# PX-20260827-03-rev1 Task 3: was a hardcoded "Travis ... · Dallas —
+         next" string that would never have flipped to "live" on its own
+         when Dallas's data actually landed. Now registry-driven off
+         live_counties (registered AND has real data) with real per-county
+         COUNT(*) figures (_live_counties_with_counts(), TTL-cached) --
+         Dallas appears here the moment it has data, with its own real
+         count, not a hand-edited guess. #}
+      <span>{% for c in live_counties %}{{ c.display_name }} — {{ c.parcel_count_display }} parcels{% if not loop.last %} · {% endif %}{% endfor %}</span>
       <span>Rates back to 1990</span>
       <span>Certified 2021–2026</span>
       <a href="mailto:parcelytics@gmail.com">Contact &amp; feedback</a>

@@ -290,6 +290,35 @@ history — are previews of coordination load at two-counties-concurrent scale.
    in the registry, with no edit to the scanner required — the county-level
    punch line MC-2 established for data writes, generalized to institutional
    links.
+8. **Public launch surfaces must read one "what's live" registry, never
+   hand-declare it (PX-20260827-03-rev1).** Before this fix, "which counties
+   are live" was answered independently in at least two places: the homepage
+   coverage map's JS `MARKETS` array (a hardcoded `"live"`/`"soon"` literal
+   per county) and the search page's D3 coverage map (a single hardcoded
+   `TRAVIS` FIPS constant plus a `ROADMAP` object that listed Dallas as
+   permanently not-yet-live). The two could silently drift the moment either
+   one was edited without the other. **Rule:** the backend exposes exactly
+   one "what's live" fact — `_live_counties()` (app.py; registered in
+   `COUNTY_SLUGS` AND has real loaded data via `_county_has_data()`), surfaced
+   to every template via the `live_counties`/`live_slugs` context-processor
+   values — and every public launch surface (homepage coverage map/cards/
+   trust strip, search page coverage map/legend, footer coverage block, nav
+   county switcher, county pickers) renders its live/not-live state as a
+   direct function of that value, never a second hand-maintained judgment
+   call. A county's FIPS code (a static geographic fact, not a "what's live"
+   judgment) may still be hardcoded per file where a map library needs it,
+   but the *live/roadmap classification* applied to that FIPS code must
+   always route through `live_slugs`. **Enforcement:**
+   `verify_launch_surface_registry.py` — checks (A) every launch-surface
+   template actually binds a JS constant to `{{ live_counties | ... |
+   tojson }}` / `{{ live_slugs | ... | tojson }}` rather than a bare literal,
+   (B) no market/county entry hardcodes a `status: "live"`/`"soon"` literal
+   outside the sanctioned `LIVE_SLUGS.includes(...) ? "live" : "soon"`
+   ternary, and (C) the per-file FIPS-to-slug lookups used by different
+   surfaces (e.g. index.html's `MARKETS` array vs. search.html's
+   `FIPS_BY_SLUG`) agree with each other for every registered slug —
+   catching exactly the "onboarded a new county's FIPS code in one file,
+   forgot the other" drift by name.
 
 ---
 
@@ -310,6 +339,7 @@ Per new county, in order; each line names its standard:
 10. Live load (Diego, per human/live workflow) with per-county Sentry/audit tagging (MC-7.6)
 11. Conservation gates green; figures sealed; Published Metrics Log updated with vintage (MC-6.5, MC-7.2)
 12. County marked marketing-eligible on the county-state surface; copy generalization proceeds only from here (MC-6.4, MC-6.5)
+12b. County appears correctly, with no per-surface edit, on every public launch surface (homepage coverage map/cards, search page coverage map/legend, footer coverage block, nav county switcher) the moment `_live_counties()` starts returning it (MC-7.8) — **`verify_launch_surface_registry.py` green**
 
 ---
 
@@ -319,6 +349,27 @@ edit. Standards that failed in practice are amended with the incident named,
 the same way the §9.2 revisit trigger was corrected on the record.*
 
 **Changelog**
+
+- **2026-08-27 (PX-20260827-03-rev1):** Added MC-7.8 (public launch surfaces
+  read one "what's live" registry) and Appendix A line 12b, gated on the new
+  `verify_launch_surface_registry.py`. Provenance: this brief's own routing
+  and county-picker work (Tasks 1-2) surfaced that "which counties are live"
+  was being answered independently in two places — the homepage coverage
+  map's `MARKETS` array (a hardcoded `"live"`/`"soon"` literal per county) and
+  the search page's D3 coverage map (a single hardcoded `TRAVIS` FIPS constant
+  plus a `ROADMAP` object hardcoding Dallas as permanently not-yet-live).
+  Diego's ruling was explicit that this is exactly the class of drift the
+  brief exists to prevent. Closed by making both surfaces derive live/soon
+  status from the same `live_counties`/`live_slugs` context-processor values
+  (backed by app.py's `_live_counties()` — registered AND has real data), and
+  building `verify_launch_surface_registry.py` to keep it that way: it checks
+  that both templates actually bind to the registry (not a bare hardcoded
+  array), that no market/county entry hardcodes a status literal outside the
+  sanctioned `LIVE_SLUGS.includes(...)` ternary, and that the two files'
+  independent FIPS-to-slug lookups agree with each other for every registered
+  slug — the concrete mechanism that would have caught the original bug and
+  will catch it again if a future county onboarding updates one file's FIPS
+  map and forgets the other.
 
 - **2026-08-27 (PX-20260827-01):** Added MC-7.7 (institutional link fields per
   county) and Appendix A line 2b, gated on `verify_template_county_scoping.py`'s

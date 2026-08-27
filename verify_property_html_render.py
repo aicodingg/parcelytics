@@ -156,6 +156,28 @@ def make_env():
         return value
 
     env.globals["county_cad_link"] = _mock_county_cad_link
+
+    # PX-20260827-03-rev1 incidental fix: live_counties/is_county_anchored
+    # (from app.py's @app.context_processor, added this brief for the new
+    # registry-driven launch surfaces / nav county switcher) were NEVER
+    # registered here either -- same gap class as the county_profile fix
+    # above, this time raising UndefinedError on base.html's <meta
+    # name="description">, footer coverage block, and footer tagline the
+    # moment those were made registry-driven. Mocked as a single Travis
+    # entry (matching this harness's existing Travis-only property fixtures)
+    # with is_county_anchored=True (every property.html render IS a real
+    # county-anchored request in production, since property_detail is a
+    # <county_slug>-prefixed route).
+    env.globals["live_counties"] = [{
+        "slug": "travis-tx",
+        "county_code": "TRAVIS",
+        "value": "travis",
+        "display_name": _MOCK_TRAVIS_PROFILE["display_name"],
+        "county_name": _MOCK_TRAVIS_PROFILE["county_name"],
+        "parcel_count": 508231,
+        "parcel_count_display": "508,231",
+    }]
+    env.globals["is_county_anchored"] = True
     return env
 
 

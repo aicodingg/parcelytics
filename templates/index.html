@@ -76,7 +76,13 @@
           <ul class="list-group list-group-flush mb-0" style="font-size:13px;">
             {% for m in addr_matches %}
             <li class="list-group-item py-2 px-3">
-              <a href="{{ url_for('property_detail', geo_id=m.geo_id) }}" class="text-decoration-none d-flex justify-content-between align-items-center">
+              {# PX-20260827-03-rev1: explicit county_slug=m.county_slug --
+                 on the neutral home page (bare '/', no g.county_slug of its
+                 own) _add_county_slug()'s DEFAULT_COUNTY_SLUG fallback
+                 would otherwise silently link every match to Travis
+                 regardless of which live county the match actually came
+                 from (see search_parcels_by_address()'s own docstring). #}
+              <a href="{{ url_for('property_detail', geo_id=m.geo_id, county_slug=m.county_slug) }}" class="text-decoration-none d-flex justify-content-between align-items-center">
                 <span>{{ m.situs_address or '(address unknown)' }}</span>
                 <span class="text-muted ms-3" style="font-family:var(--font-mono); font-size:11.5px; white-space:nowrap;">{{ m.geo_id }}</span>
               </a>
@@ -114,9 +120,12 @@
       </div>
     </div>
 
-    {# Trust strip — unchanged; already specific + honest #}
+    {# PX-20260827-03-rev1 Task 3: was hardcoded "508K+ Travis County
+       parcels" -- now the sum of every live county's real parcel_count
+       (live_counties, TTL-cached COUNT(*)), so this stops silently
+       excluding Dallas the moment Dallas has real data. #}
     <div class="trust-strip">
-      <div class="trust-stat"><div class="num">508K+</div><div class="lbl">Travis County parcels</div></div>
+      <div class="trust-stat"><div class="num">{{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+</div><div class="lbl">Parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }}</div></div>
       <div class="trust-stat"><div class="num">1990</div><div class="lbl">Tax rates tracked since</div></div>
       <div class="trust-stat"><div class="num">2021–26</div><div class="lbl">Certified + preliminary appraisals</div></div>
       <div class="trust-stat"><div class="num">2</div><div class="lbl">Government sources, zero aggregators</div></div>
@@ -154,14 +163,15 @@
   </div>
 </section>
 
-{# ══ TRUST PANEL (dark) — still explicitly Travis, scoped as "live today" ═══ #}
+{# ══ TRUST PANEL (dark) — PX-20260827-03-rev1: registry-driven, not
+   hardcoded to Travis ═══════════════════════════════════════════════════ #}
 <section class="fd-section-tight">
   <div class="fd-trust-panel">
     <div class="row g-5 align-items-center">
       <div class="col-lg-6">
-        <div class="fd-kicker">Provenance · Travis County, TX — live today</div>
+        <div class="fd-kicker">Provenance · {{ live_counties | map(attribute='display_name') | join(' and ') }} — live today</div>
         <h2 class="fd-h2" style="color:#fff;">Certified data, shown proudly.</h2>
-        <p class="fd-lead" style="color:var(--text-on-dark-2);">Two official sources, named on every figure — live in Travis County today, with coverage and as-of dates stated plainly.</p>
+        <p class="fd-lead" style="color:var(--text-on-dark-2);">Two official sources per county, named on every figure — live in {{ live_counties | map(attribute='county_name') | join(' and ') }} today, with coverage and as-of dates stated plainly.</p>
       </div>
       <div class="col-lg-6">
         <div class="provenance-row">
@@ -195,13 +205,19 @@
    county coloring approach), adapted with a second visual state — a "roadmap"
    marker style distinct from Travis's "live" styling — plus a text list and
    an explicit "not current coverage" disclaimer. ═══════════════════════════ #}
+{# PX-20260827-03-rev1 Task 3: live_slugs is the one registry-driven set
+   this whole section reads from -- live_counties (registered AND has real
+   data) mapped to its slugs, so "is this market live" below is never a
+   second, hand-maintained answer to a question _live_counties() already
+   answers correctly. #}
+{% set live_slugs = live_counties | map(attribute='slug') | list %}
 <section class="fd-section">
   <div class="fd-kicker">Where we're headed</div>
-  <h2 class="fd-h2">Live today in Travis County. Expanding to the country's largest markets next.</h2>
+  <h2 class="fd-h2">Live today in {{ live_counties | map(attribute='county_name') | join(' and ') }}. Expanding to the country's largest markets next.</h2>
   <p class="fd-lead mb-4">
-    Parcelytics starts in Travis County because that's where the data pipeline is built and verified end-to-end.
-    The roadmap below — not current coverage — targets the five largest U.S. commercial real estate markets,
-    built out county by county the same way Travis was.
+    Parcelytics started in Travis County because that's where the data pipeline was built and verified
+    end-to-end, then expanded county by county from there. The roadmap below — not current coverage —
+    targets the remaining largest U.S. commercial real estate markets.
   </p>
 
   {# ══ COVERAGE MAP — Fable design spec, July 20, 2026 ═══════════════════
@@ -233,13 +249,15 @@
         <div>Coverage &amp; roadmap</div>
         <div class="text-muted"
              style="text-transform:none; font-weight:400; letter-spacing:normal; font-size:12px; margin-top:2px;">
-          Live in one market today. Five more mapped. Every market verified before it goes live.
+          Live in {{ live_counties|length }} market{{ 's' if live_counties|length != 1 }} today. {{ 6 - live_counties|length }} more mapped. Every market verified before it goes live.
         </div>
       </div>
       <div class="d-flex flex-column align-items-end gap-1"
            style="text-transform:none; font-weight:400; letter-spacing:normal;">
-        <span class="map-legend-chip"><span class="map-legend-swatch is-live"></span>Travis County, TX — Live</span>
-        <span class="map-legend-chip"><span class="map-legend-swatch is-soon"></span>5 markets — Coming soon</span>
+        {% for c in live_counties %}
+        <span class="map-legend-chip"><span class="map-legend-swatch is-live"></span>{{ c.display_name }} — Live</span>
+        {% endfor %}
+        <span class="map-legend-chip"><span class="map-legend-swatch is-soon"></span>{{ 6 - live_counties|length }} markets — Coming soon</span>
         {# Honesty microcopy (Diego's "magnify market counties in place"
            brief, item 4): a quiet, factual disclosure that the five
            non-Travis county shapes are shown larger than true national
@@ -253,8 +271,8 @@
       <svg id="roadmapMap" viewBox="0 0 975 610" preserveAspectRatio="xMidYMid meet"
            style="width:100%; height:auto; display:block;"></svg>
       <div id="roadmapMapFallback" class="text-muted small p-3" style="display:none;">
-        Map preview unavailable offline. Live today: Travis County, TX. Roadmap (not yet live): New York City,
-        Los Angeles, Chicago, Dallas, and Houston metro counties.
+        Map preview unavailable offline. Live today: {{ live_counties | map(attribute='display_name') | join(', ') }}.
+        Roadmap (not yet live): the remaining markets shown as "Coming soon" above.
       </div>
       <div id="mapTooltip" class="map-tooltip" style="display:none;"></div>
     </div>
@@ -268,23 +286,23 @@
      content unchanged, per spec §6 ("keep their current content and
      gain..."); only new elements (thumbnail, pill, data-market) are added. #}
   <div class="market-card-grid mt-4">
-    <div class="market-card is-live audience-card" data-market="travis-tx" style="padding:14px 16px;">
-      <svg class="market-thumb" data-market="travis-tx" data-status="live" width="56" height="56" viewBox="0 0 56 56"></svg>
+    {# PX-20260827-03-rev1 Task 3: is-live/is-soon, the pill text, and the
+       parcel-count detail line all now come from live_slugs/live_counties
+       instead of being hand-set per card -- Dallas flips to live here (and
+       everywhere else on this page) the instant it's registered AND has
+       real data, no second edit required. NYC/LA/Chicago have no
+       COUNTY_SLUGS entry at all (not real registered counties yet), so
+       they're never anything but "soon" -- correctly, not by omission. #}
+    <div class="market-card {{ 'is-live' if 'travis-tx' in live_slugs else 'is-soon' }} audience-card" data-market="travis-tx" style="padding:14px 16px;">
+      <svg class="market-thumb" data-market="travis-tx" data-status="{{ 'live' if 'travis-tx' in live_slugs else 'soon' }}" width="56" height="56" viewBox="0 0 56 56"></svg>
       <div class="market-card-title">Austin</div>
       <div class="market-card-sub text-muted">Travis County, TX</div>
+      {% if 'travis-tx' in live_slugs %}
       <span class="market-pill is-live">Live</span>
-      {# "508K+ parcels" and "certified 2021–2025" are both EXISTING site
-         claims, not new figures invented for this card -- "508K+ parcels"
-         already appears in templates/base.html and search.html; "Certified
-         2021–2025" already appears verbatim in base.html/snapshot.html/
-         about.html (2026 is Preliminary, not certified yet -- TCAD's own
-         certification date is July 25, 2026, per KNOWN_LIMITATIONS.md, a
-         few days after today). Flagged to Diego: 508K+ is itself a rounded
-         figure that doesn't cleanly reconcile with the 517,614 total
-         asserted in KNOWN_LIMITATIONS.md -- a pre-existing site-wide
-         inconsistency, not something introduced here; not fixed as part of
-         this brief. #}
-      <div class="market-card-detail text-muted">508K+ parcels · certified 2021–2025</div>
+      <div class="market-card-detail text-muted">{{ live_counties | selectattr('slug', 'equalto', 'travis-tx') | map(attribute='parcel_count_display') | first }}+ parcels · certified 2021–2025</div>
+      {% else %}
+      <span class="market-pill is-soon">Coming soon</span>
+      {% endif %}
     </div>
     <div class="market-card is-soon audience-card" data-market="newyork-ny" style="padding:14px 16px;">
       <svg class="market-thumb" data-market="newyork-ny" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
@@ -304,17 +322,27 @@
       <div class="market-card-sub text-muted">Cook County</div>
       <span class="market-pill is-soon">Coming soon</span>
     </div>
-    <div class="market-card is-soon audience-card" data-market="dallas-tx" style="padding:14px 16px;">
-      <svg class="market-thumb" data-market="dallas-tx" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
+    <div class="market-card {{ 'is-live' if 'dallas-tx' in live_slugs else 'is-soon' }} audience-card" data-market="dallas-tx" style="padding:14px 16px;">
+      <svg class="market-thumb" data-market="dallas-tx" data-status="{{ 'live' if 'dallas-tx' in live_slugs else 'soon' }}" width="56" height="56" viewBox="0 0 56 56"></svg>
       <div class="market-card-title">Dallas</div>
       <div class="market-card-sub text-muted">Dallas County</div>
+      {% if 'dallas-tx' in live_slugs %}
+      <span class="market-pill is-live">Live</span>
+      <div class="market-card-detail text-muted">{{ live_counties | selectattr('slug', 'equalto', 'dallas-tx') | map(attribute='parcel_count_display') | first }}+ parcels</div>
+      {% else %}
       <span class="market-pill is-soon">Coming soon</span>
+      {% endif %}
     </div>
-    <div class="market-card is-soon audience-card" data-market="harris-tx" style="padding:14px 16px;">
-      <svg class="market-thumb" data-market="harris-tx" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
+    <div class="market-card {{ 'is-live' if 'harris-tx' in live_slugs else 'is-soon' }} audience-card" data-market="harris-tx" style="padding:14px 16px;">
+      <svg class="market-thumb" data-market="harris-tx" data-status="{{ 'live' if 'harris-tx' in live_slugs else 'soon' }}" width="56" height="56" viewBox="0 0 56 56"></svg>
       <div class="market-card-title">Houston</div>
       <div class="market-card-sub text-muted">Harris County</div>
+      {% if 'harris-tx' in live_slugs %}
+      <span class="market-pill is-live">Live</span>
+      <div class="market-card-detail text-muted">{{ live_counties | selectattr('slug', 'equalto', 'harris-tx') | map(attribute='parcel_count_display') | first }}+ parcels</div>
+      {% else %}
       <span class="market-pill is-soon">Coming soon</span>
+      {% endif %}
     </div>
   </div>
   {# Necessary factual-consistency edit (not a spec copy string, but a
@@ -324,7 +352,7 @@
      the original wording would flatly contradict the card two lines above
      it. Re-scoped to name the five expansion markets specifically. #}
   <p class="text-muted mt-3 mb-0" style="font-size:11.5px;">
-    Roadmap, not current coverage, for the five expansion markets above — only Travis County, TX has live
+    Roadmap, not current coverage, for the markets above still marked "Coming soon" — {{ live_counties | map(attribute='display_name') | join(' and ') }} {{ 'has' if live_counties|length == 1 else 'have' }} live
     Parcelytics data today. Timing depends on each county's data pipeline and public-records access.
   </p>
 </section>
@@ -432,13 +460,22 @@
   // Single source of truth (spec §9): every county fill, thumbnail, and
   // card attribute below is built from this one array. Statuses/names
   // match the market card row's own data-market values exactly.
+  //
+  // PX-20260827-03-rev1 Task 3: status is no longer a hand-set literal per
+  // market -- LIVE_SLUGS comes straight from app.py's live_counties (the
+  // same registered-AND-has-data list every other coverage surface on this
+  // page reads from), so this array can't drift from the market-card row
+  // above it, or from search.html's own coverage map (see that file for
+  // the equivalent fix -- Task 4's enforcement test checks BOTH stay in
+  // sync with the registry).
+  const LIVE_SLUGS = {{ live_slugs | tojson }};
   const MARKETS = [
-    { fips: "48453", slug: "travis-tx",     status: "live", name: "Travis County, TX" },
-    { fips: "36061", slug: "newyork-ny",    status: "soon", name: "New York County, NY" },
-    { fips: "06037", slug: "losangeles-ca", status: "soon", name: "Los Angeles County, CA" },
-    { fips: "17031", slug: "cook-il",       status: "soon", name: "Cook County, IL" },
-    { fips: "48113", slug: "dallas-tx",     status: "soon", name: "Dallas County, TX" },
-    { fips: "48201", slug: "harris-tx",     status: "soon", name: "Harris County, TX" },
+    { fips: "48453", slug: "travis-tx",     status: LIVE_SLUGS.includes("travis-tx") ? "live" : "soon", name: "Travis County, TX" },
+    { fips: "36061", slug: "newyork-ny",    status: LIVE_SLUGS.includes("newyork-ny") ? "live" : "soon", name: "New York County, NY" },
+    { fips: "06037", slug: "losangeles-ca", status: LIVE_SLUGS.includes("losangeles-ca") ? "live" : "soon", name: "Los Angeles County, CA" },
+    { fips: "17031", slug: "cook-il",       status: LIVE_SLUGS.includes("cook-il") ? "live" : "soon", name: "Cook County, IL" },
+    { fips: "48113", slug: "dallas-tx",     status: LIVE_SLUGS.includes("dallas-tx") ? "live" : "soon", name: "Dallas County, TX" },
+    { fips: "48201", slug: "harris-tx",     status: LIVE_SLUGS.includes("harris-tx") ? "live" : "soon", name: "Harris County, TX" },
   ];
   const BY_FIPS = {};
   MARKETS.forEach(m => { BY_FIPS[m.fips] = m; });

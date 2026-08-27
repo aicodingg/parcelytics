@@ -316,6 +316,18 @@ def _strip_comments(text: str) -> str:
 
     text = re.sub(r"\{#.*?#\}", _blank, text, flags=re.DOTALL)
     text = re.sub(r"<!--.*?-->", _blank, text, flags=re.DOTALL)
+    # JS line comments (`// ...` to end of line) -- added PX-20260827-03-rev1
+    # after this repo's own Task 1 routing-split comments (documenting the
+    # new bare '/search' landing route) quoted the route name in single
+    # quotes inside a `//` comment, tripping Class-A on a comment, the exact
+    # false-positive class this function already exists to prevent for
+    # Jinja/HTML comments. Negative lookbehind for ':' so a real URL embedded
+    # in JS (e.g. `d3.json("https://cdn.jsdelivr.net/...")`) is never
+    # blanked -- only an actual `//` comment marker (never immediately
+    # preceded by ':') is stripped. Safe for this codebase's JS specifically
+    # because JS has no `//` operator (unlike Python's integer division) and
+    # this repo doesn't use protocol-relative `//host/path` URLs anywhere.
+    text = re.sub(r"(?<!:)//[^\n]*", _blank, text)
     return text
 
 
