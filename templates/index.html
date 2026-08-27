@@ -468,7 +468,7 @@
   // above it, or from search.html's own coverage map (see that file for
   // the equivalent fix -- Task 4's enforcement test checks BOTH stay in
   // sync with the registry).
-  const LIVE_SLUGS = {{ live_slugs | tojson }};
+  const LIVE_SLUGS = {{ live_counties | map(attribute='slug') | list | tojson }};
   const MARKETS = [
     { fips: "48453", slug: "travis-tx",     status: LIVE_SLUGS.includes("travis-tx") ? "live" : "soon", name: "Travis County, TX" },
     { fips: "36061", slug: "newyork-ny",    status: LIVE_SLUGS.includes("newyork-ny") ? "live" : "soon", name: "New York County, NY" },
