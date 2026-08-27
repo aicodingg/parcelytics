@@ -135,14 +135,24 @@ def make_env():
     }
     env.globals["county_profile"] = _MOCK_TRAVIS_PROFILE
 
-    def _mock_county_cad_link(field, prop_id=None):
+    def _mock_county_cad_link(field, prop_id=None, geo_id=None):
+        # PX-20260827-02b: mirrors app.py's real county_cad_link() dual-
+        # placeholder fix ({prop_id} and/or {geo_id}, whichever the field's
+        # own URL template actually contains). Travis's mock templates here
+        # are unchanged (still {prop_id} only, matching the real profile),
+        # but the signature must accept geo_id= too since every real call
+        # site now passes it.
         value = _MOCK_TRAVIS_PROFILE.get(field)
         if value is None:
             return None
-        if "{prop_id}" in value:
-            if not prop_id:
-                return None
-            return value.replace("{prop_id}", str(prop_id))
+        needs_prop_id = "{prop_id}" in value
+        needs_geo_id = "{geo_id}" in value
+        if (needs_prop_id and not prop_id) or (needs_geo_id and not geo_id):
+            return None
+        if needs_prop_id:
+            value = value.replace("{prop_id}", str(prop_id))
+        if needs_geo_id:
+            value = value.replace("{geo_id}", str(geo_id))
         return value
 
     env.globals["county_cad_link"] = _mock_county_cad_link

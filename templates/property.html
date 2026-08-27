@@ -476,7 +476,7 @@
    preliminary-year value to compute its cap term against, so it's deliberately
    not offered on the 2025 — Verified card, which describes a real, already-
    settled year with no "what if" framing to attach it to. #}
-{% macro homestead_savings_card(is_residential, bench_label, has_hs, mv, tv, rate, year, ceiling_check_tax, excodes_year, hs_potential=none, parcel_prop_id=none) %}
+{% macro homestead_savings_card(is_residential, bench_label, has_hs, mv, tv, rate, year, ceiling_check_tax, excodes_year, hs_potential=none, parcel_prop_id=none, parcel_geo_id=none) %}
   {% if not is_residential %}
   <div style="font-size:18px; font-weight:700;">Not applicable</div>
   <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
@@ -610,10 +610,13 @@
   {# PX-20260827-01: sourced from county_profile, not hardcoded to Travis.
      A generic (non-parcel-specific) homestead URL is preferred when the
      county has one (Travis); otherwise the per-parcel template is tried
-     with this card's own parcel_prop_id (Dallas's real, confirmed
-     hstead.dallascad.org pattern); if neither resolves, the link is
-     omitted rather than falling back to another county's URL. #}
-  {% set hs_link = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel_prop_id) %}
+     with this card's own parcel_prop_id/parcel_geo_id (Dallas's real,
+     confirmed hstead.dallascad.org pattern); if neither resolves, the
+     link is omitted rather than falling back to another county's URL.
+     PX-20260827-02b: also passes parcel_geo_id -- Dallas's template now
+     needs the real ACCOUNT_NUM (geo_id), not prop_id; see
+     county_cad_link()'s docstring in app.py for why. #}
+  {% set hs_link = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel_prop_id, geo_id=parcel_geo_id) %}
   {% if hs_link %}
   <div class="text-muted" style="font-size:11px; line-height:1.45; margin-top:6px;">
     <a href="{{ hs_link }}" target="_blank" rel="noopener noreferrer">Apply for a homestead exemption ↗</a>
@@ -622,7 +625,7 @@
   {% else %}
   <div style="font-size:18px; font-weight:700;">No homestead exemption on record</div>
   <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
-    {% set hs_link2 = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel_prop_id) %}
+    {% set hs_link2 = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel_prop_id, geo_id=parcel_geo_id) %}
     {% if hs_link2 %}
     If this is your primary residence, you may be eligible —
     <a href="{{ hs_link2 }}" target="_blank" rel="noopener noreferrer">apply for a homestead exemption ↗</a>.
@@ -782,7 +785,7 @@
   <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Your homestead savings (2025){% else %}Homestead Exemption{% endif %}</div>
-      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv25, tv25, rate, 2025, tax25, excodes_year, parcel_prop_id=parcel.prop_id) }}
+      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv25, tv25, rate, 2025, tax25, excodes_year, parcel_prop_id=parcel.prop_id, parcel_geo_id=parcel.geo_id) }}
     </div></div>
   </div>
 </div>
@@ -879,7 +882,7 @@
   <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Estimated 2026 homestead savings{% else %}Homestead Exemption{% endif %}</div>
-      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv26, tv26, assumed_rate_2026, 2026, estimated_tax_2026, excodes_year, hs_potential_savings, parcel_prop_id=parcel.prop_id) }}
+      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv26, tv26, assumed_rate_2026, 2026, estimated_tax_2026, excodes_year, hs_potential_savings, parcel_prop_id=parcel.prop_id, parcel_geo_id=parcel.geo_id) }}
       {% if is_residential and (has_hs or bench_label == 'Residential' or not bench_label) %}
       {# Tightened (July 2026, per Diego, item 19b + the P0-4 crowding fix
          above): was a full explanatory sentence about why this card's badge
@@ -1288,7 +1291,7 @@
     {# PX-20260827-01: county_profile-driven, same fallback chain as the KPI-card
        homestead links above (generic county URL, else per-parcel template, else
        omit the link entirely rather than guess or fall back to another county). #}
-    {% set hs_link3 = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel.prop_id) %}
+    {% set hs_link3 = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel.prop_id, geo_id=parcel.geo_id) %}
     <p class="mb-0">No exemptions are currently applied.
       {% if is_residential %}If this is your primary residence, you may qualify for a homestead exemption
       {% if hs_link3 %} — <a href="{{ hs_link3 }}" target="_blank" rel="noopener noreferrer">apply ↗</a>{% endif %}.
@@ -1551,8 +1554,8 @@
    hstead.dallascad.org subdomain; interactive map has no confirmed URL yet). #}
 <div class="card mb-3"><div class="card-header">Helpful Links</div>
   <div class="card-body">
-    {% set hl_hs = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel.prop_id) %}
-    {% set hl_protest = county_profile.cad_protest_url or county_cad_link('cad_protest_url_template', parcel.prop_id) %}
+    {% set hl_hs = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel.prop_id, geo_id=parcel.geo_id) %}
+    {% set hl_protest = county_profile.cad_protest_url or county_cad_link('cad_protest_url_template', parcel.prop_id, geo_id=parcel.geo_id) %}
     <div class="row" style="font-size:14px; line-height:2;">
       <div class="col-sm-6">
         {# Coherence fix (July 2026, per Fable review finding 4): this link used to
@@ -1593,7 +1596,7 @@
        has a confirmed map URL (Travis's ProdigyCAD map is a client-side SPA
        with no parcel-specific deep-linking, confirmed live; Dallas has none
        confirmed yet). #}
-    {% set hl_parcel = county_cad_link('cad_parcel_detail_url_template', parcel.prop_id) %}
+    {% set hl_parcel = county_cad_link('cad_parcel_detail_url_template', parcel.prop_id, geo_id=parcel.geo_id) %}
     {% set hl_search = county_profile.cad_property_search_url %}
     {% if hl_parcel or hl_search or county_profile.cad_interactive_map_url %}
     <div class="mt-2 pt-2" style="font-size:12px; border-top:1px solid var(--border, #e5e7eb);">
@@ -2476,7 +2479,7 @@
       {# Deed search link removed (per Diego, round 2 of this brief): deed
          info is available via the "View this property on {{ county_profile.cad_abbr }}" deep link
          just below, so a separate deed-search tool isn't needed here. #}
-      {% set hl2_protest = county_profile.cad_protest_url or county_cad_link('cad_protest_url_template', parcel.prop_id) %}
+      {% set hl2_protest = county_profile.cad_protest_url or county_cad_link('cad_protest_url_template', parcel.prop_id, geo_id=parcel.geo_id) %}
       <div class="row" style="font-size:14px; line-height:2;">
         <div class="col-sm-6">
           {% if hl2_protest %}
@@ -2498,7 +2501,7 @@
           {% endif %}
         </div>
       </div>
-      {% set hl2_parcel = county_cad_link('cad_parcel_detail_url_template', parcel.prop_id) %}
+      {% set hl2_parcel = county_cad_link('cad_parcel_detail_url_template', parcel.prop_id, geo_id=parcel.geo_id) %}
       {% set hl2_search = county_profile.cad_property_search_url %}
       {% if hl2_parcel or hl2_search %}
       <div class="mt-2 pt-2" style="font-size:12px; border-top:1px solid var(--border, #e5e7eb);">

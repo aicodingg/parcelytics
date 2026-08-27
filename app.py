@@ -1874,33 +1874,44 @@ DEFAULT_COUNTY_SLUG = "travis-tx"
 #     template here, since doing so is outside this brief's scope (see the
 #     PX-20260827-02 report) -- a real, disclosed opportunity for a
 #     follow-up brief, not a guess.
-#   - CONFIRMED BUG (not fixed here -- outside this brief's scope, reported
-#     to the PM instead): cad_parcel_detail_url_template,
-#     cad_homestead_exemption_url_template, and cad_protest_url_template are
-#     all called from property.html with parcel.prop_id, but DCAD's real
-#     "ID=" parameter requires the literal ACCOUNT_NUM string (== this
-#     schema's geo_id), not prop_id. Per REV1's derive_prop_id_geo_id()
-#     (dcad_format.py): for an all-digit ACCOUNT_NUM, prop_id is
-#     int(ACCOUNT_NUM), so county_cad_link()'s str(prop_id) substitution
-#     silently drops leading zeros -- live-verified to break the deep link
-#     (DCAD returns "Error in Account Details: Account Number is missing or
-#     in wrong format" for the zero-stripped form). For an alphanumeric
-#     ACCOUNT_NUM (~25% of real Dallas accounts), prop_id is instead a
-#     synthetic SHA-256-derived integer disjoint from any real account
-#     number, so the substituted URL cannot resolve at all. Travis is NOT
-#     affected (its prop_id was independently confirmed correct against
-#     ProdigyCAD's URL shape in JOHNNY-FEEDBACK-1). The fix is to substitute
-#     parcel.geo_id instead of parcel.prop_id for these three Dallas
-#     fields -- deferred to a follow-up brief per PX-20260827-02's explicit
-#     "no code changes beyond profile-field additions" rule.
+#   - FIXED in PX-20260827-02b (was: CONFIRMED BUG, disclosed but
+#     deliberately not fixed in PX-20260827-02 -- outside that brief's
+#     scope): cad_parcel_detail_url_template, cad_homestead_exemption_url_
+#     template, and cad_protest_url_template were all called from
+#     property.html with parcel.prop_id, but DCAD's real "ID=" parameter
+#     requires the literal ACCOUNT_NUM string (== this schema's geo_id),
+#     not prop_id. Per REV1's derive_prop_id_geo_id() (dcad_format.py): for
+#     an all-digit ACCOUNT_NUM, prop_id is int(ACCOUNT_NUM), so the old
+#     str(prop_id) substitution silently dropped leading zeros --
+#     live-verified in PX-20260827-02 to break the deep link (DCAD returned
+#     "Error in Account Details: Account Number is missing or in wrong
+#     format" for the zero-stripped form). For an alphanumeric ACCOUNT_NUM
+#     (~25% of real Dallas accounts), prop_id is instead a synthetic
+#     SHA-256-derived integer disjoint from any real account number, so the
+#     substituted URL could not resolve at all. Travis was NOT affected --
+#     see county_cad_link()'s docstring for exactly why (Travis's prop_id
+#     is a genuine TCAD-native id read off PROP.TXT, not a value we
+#     synthesize the way Dallas's is). FIX: the three Dallas fields above
+#     now use a "{geo_id}" placeholder instead of "{prop_id}"; every real
+#     call site in property.html now passes both parcel.prop_id and
+#     parcel.geo_id to county_cad_link(), which substitutes whichever
+#     placeholder(s) the requested field's URL actually contains. NOT YET
+#     confirmed live by Diego as of this fix landing -- see the
+#     PX-20260827-02b report for the required live spot-check before this
+#     is trusted in production (a URL-substitution bug is exactly the class
+#     that can pass every automated check here and still be wrong live).
 #   - Also newly confirmed (informational, not yet used anywhere): DCAD
 #     serves a SEPARATE commercial-account detail page at
 #     "AcctDetailCom.aspx?ID=<account_number>", distinct from
 #     AcctDetailRes.aspx (residential). This updates the "no separate
 #     commercial-account URL shape has been confirmed" note above -- one
 #     now has been, though cad_parcel_detail_url_template here still points
-#     only at the residential shape (unchanged; disclosed, not silently
-#     left stale).
+#     only at the residential shape. PX-20260827-02b considered building
+#     residential-vs-commercial routing (state_cd1-based) here but left it
+#     out: it's not a trivial addition (needs a per-parcel property-type
+#     check threaded through every call site, not just a field rename) and
+#     wasn't asked for beyond "note as a possible future refinement" --
+#     flagging for a future brief rather than scope-creeping this fix.
 COUNTY_PROFILES = {
     "TRAVIS": {
         "display_name": "Travis County, TX",
@@ -1927,11 +1938,11 @@ COUNTY_PROFILES = {
         "cad_website": "https://www.dallascad.org",
         "cad_interactive_map_url": "https://maps.dcad.org/prd/dpm/",   # PX-20260827-02 Task 3: confirmed live -- see note above (deep-linkable via ?parcelid=<geo_id>, not wired here; see report)
         "cad_property_search_url": "https://www.dallascad.org/SearchOwner.aspx",
-        "cad_parcel_detail_url_template": "https://www.dallascad.org/AcctDetailRes.aspx?ID={prop_id}",
+        "cad_parcel_detail_url_template": "https://www.dallascad.org/AcctDetailRes.aspx?ID={geo_id}",   # PX-20260827-02b: {prop_id} -> {geo_id} (see county_cad_link() docstring)
         "cad_homestead_exemption_url": None,
-        "cad_homestead_exemption_url_template": "https://hstead.dallascad.org/ns/HomesteadExemption.aspx?ID={prop_id}",
+        "cad_homestead_exemption_url_template": "https://hstead.dallascad.org/ns/HomesteadExemption.aspx?ID={geo_id}",   # PX-20260827-02b: {prop_id} -> {geo_id}
         "cad_protest_url": None,
-        "cad_protest_url_template": "https://www.dallascad.org/AcctDetailRes.aspx?ID={prop_id}",
+        "cad_protest_url_template": "https://www.dallascad.org/AcctDetailRes.aspx?ID={geo_id}",   # PX-20260827-02b: {prop_id} -> {geo_id}
         "cad_contact_url": "https://www.dallascad.org/contact.aspx",
         "tax_office_name": "Dallas County Tax Office",
         "tax_office_website": "https://www.dallascounty.org/tax",
@@ -2009,27 +2020,64 @@ def county_url(path):
     return f"/{slug}{path}"
 
 
-def county_cad_link(field, prop_id=None):
-    """PX-20260827-01 template-facing helper: resolves one of the
-    institutional-link fields added to COUNTY_PROFILES this brief (e.g.
-    "cad_parcel_detail_url_template", "cad_protest_url") for the CURRENT
-    request's county. "*_template" fields carry a literal "{prop_id}"
-    placeholder substituted with the given prop_id; a plain field is
-    returned as-is. Returns None whenever the field is genuinely unset for
-    this county, OR a *_template field is requested with no prop_id to
-    substitute -- in both cases the caller MUST render nothing (or an
-    explicit "not yet available" state), never fall back to another
-    county's value or synthesize a guessed URL. This mirrors county_url()'s
-    same-file fallback convention for use outside a real request context."""
+def county_cad_link(field, prop_id=None, geo_id=None):
+    """PX-20260827-01 template-facing helper, FIXED in PX-20260827-02b:
+    resolves one of the institutional-link fields added to COUNTY_PROFILES
+    (e.g. "cad_parcel_detail_url_template", "cad_protest_url") for the
+    CURRENT request's county.
+
+    PX-20260827-02b BUGFIX: "*_template" fields used to carry only a
+    "{prop_id}" placeholder, substituted with a single prop_id argument.
+    PX-20260827-02 live-confirmed this was wrong for Dallas: DCAD's real
+    "ID=" URL parameter requires the literal ACCOUNT_NUM (this schema's
+    geo_id), not prop_id. For Dallas, prop_id is a value WE derive/
+    synthesize purely to satisfy our own BIGINT primary-key uniqueness
+    (int(ACCOUNT_NUM), or a synthetic SHA-256 hash for the ~25% of
+    accounts that are alphanumeric) -- it is not a real DCAD identifier,
+    so substituting it into a DCAD URL produced either a leading-zero-
+    stripped account number (broken) or a nonsense disjoint number
+    (broken) live on the real site.
+
+    Travis is NOT the same situation and was correctly unaffected: Travis
+    loads prop_id directly off TCAD's own PROP.TXT export (ears_format.py's
+    PROP_SLICES["prop_id"], slice(0,12)) -- a genuine, TCAD-native internal
+    property ID, completely separate from geo_id (PROP_SLICES["geo_id"],
+    the account number). ProdigyCAD's property-detail URLs were
+    independently verified (JOHNNY-FEEDBACK-1) to want exactly that
+    TCAD-native ID. So Travis's prop_id is the CORRECT id for its own CAD
+    website's URL shape; Dallas's prop_id never was, because Dallas's
+    prop_id isn't a CAD-native id at all.
+
+    Fix: a "*_template" field's placeholder(s) now declare which id(s)
+    they need, by name -- "{prop_id}" and/or "{geo_id}" may each appear
+    (independently substituted if present). This lets each county's own
+    URL template say which id its own CAD website actually expects,
+    instead of this function guessing or every caller needing per-county
+    knowledge. Travis's templates keep "{prop_id}" (correct, unchanged --
+    see above); Dallas's cad_parcel_detail_url_template,
+    cad_homestead_exemption_url_template, and cad_protest_url_template
+    were switched to "{geo_id}" as part of this fix.
+
+    Returns None whenever the field is genuinely unset for this county, OR
+    a *_template field is requested and any placeholder it actually
+    contains lacks a corresponding non-empty id argument -- in all cases
+    the caller MUST render nothing (or an explicit "not yet available"
+    state), never fall back to another county's value or synthesize a
+    guessed URL. This mirrors county_url()'s same-file fallback convention
+    for use outside a real request context."""
     county_code = getattr(g, "county_code", COUNTY_SLUGS[DEFAULT_COUNTY_SLUG])
     profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
     value = profile.get(field)
     if value is None:
         return None
-    if "{prop_id}" in value:
-        if not prop_id:
-            return None
-        return value.replace("{prop_id}", str(prop_id))
+    needs_prop_id = "{prop_id}" in value
+    needs_geo_id = "{geo_id}" in value
+    if (needs_prop_id and not prop_id) or (needs_geo_id and not geo_id):
+        return None
+    if needs_prop_id:
+        value = value.replace("{prop_id}", str(prop_id))
+    if needs_geo_id:
+        value = value.replace("{geo_id}", str(geo_id))
     return value
 
 
