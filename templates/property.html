@@ -476,7 +476,7 @@
    preliminary-year value to compute its cap term against, so it's deliberately
    not offered on the 2025 — Verified card, which describes a real, already-
    settled year with no "what if" framing to attach it to. #}
-{% macro homestead_savings_card(is_residential, bench_label, has_hs, mv, tv, rate, year, ceiling_check_tax, excodes_year, hs_potential=none) %}
+{% macro homestead_savings_card(is_residential, bench_label, has_hs, mv, tv, rate, year, ceiling_check_tax, excodes_year, hs_potential=none, parcel_prop_id=none) %}
   {% if not is_residential %}
   <div style="font-size:18px; font-weight:700;">Not applicable</div>
   <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
@@ -607,14 +607,28 @@
     {% endif %}
     <span class="badge-estimated" style="font-size:9px; display:inline-block; margin-top:3px;">Estimated</span>
   </div>
+  {# PX-20260827-01: sourced from county_profile, not hardcoded to Travis.
+     A generic (non-parcel-specific) homestead URL is preferred when the
+     county has one (Travis); otherwise the per-parcel template is tried
+     with this card's own parcel_prop_id (Dallas's real, confirmed
+     hstead.dallascad.org pattern); if neither resolves, the link is
+     omitted rather than falling back to another county's URL. #}
+  {% set hs_link = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel_prop_id) %}
+  {% if hs_link %}
   <div class="text-muted" style="font-size:11px; line-height:1.45; margin-top:6px;">
-    <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">Apply at traviscad.org ↗</a>
+    <a href="{{ hs_link }}" target="_blank" rel="noopener noreferrer">Apply for a homestead exemption ↗</a>
   </div>
+  {% endif %}
   {% else %}
   <div style="font-size:18px; font-weight:700;">No homestead exemption on record</div>
   <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
+    {% set hs_link2 = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel_prop_id) %}
+    {% if hs_link2 %}
     If this is your primary residence, you may be eligible —
-    <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">apply at traviscad.org ↗</a>.
+    <a href="{{ hs_link2 }}" target="_blank" rel="noopener noreferrer">apply for a homestead exemption ↗</a>.
+    {% else %}
+    If this is your primary residence, you may be eligible for a homestead exemption.
+    {% endif %}
   </div>
   {% endif %}
 {% endmacro %}
@@ -768,7 +782,7 @@
   <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Your homestead savings (2025){% else %}Homestead Exemption{% endif %}</div>
-      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv25, tv25, rate, 2025, tax25, excodes_year) }}
+      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv25, tv25, rate, 2025, tax25, excodes_year, parcel_prop_id=parcel.prop_id) }}
     </div></div>
   </div>
 </div>
@@ -865,7 +879,7 @@
   <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Estimated 2026 homestead savings{% else %}Homestead Exemption{% endif %}</div>
-      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv26, tv26, assumed_rate_2026, 2026, estimated_tax_2026, excodes_year, hs_potential_savings) }}
+      {{ homestead_savings_card(is_residential, bench_label, has_hs, mv26, tv26, assumed_rate_2026, 2026, estimated_tax_2026, excodes_year, hs_potential_savings, parcel_prop_id=parcel.prop_id) }}
       {% if is_residential and (has_hs or bench_label == 'Residential' or not bench_label) %}
       {# Tightened (July 2026, per Diego, item 19b + the P0-4 crowding fix
          above): was a full explanatory sentence about why this card's badge
@@ -1271,9 +1285,13 @@
        parcels where it can't legally apply -- the same gate already used on the
        KPI-level savings card (is_residential, set once at line 31), reused here
        rather than reimplemented. #}
+    {# PX-20260827-01: county_profile-driven, same fallback chain as the KPI-card
+       homestead links above (generic county URL, else per-parcel template, else
+       omit the link entirely rather than guess or fall back to another county). #}
+    {% set hs_link3 = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel.prop_id) %}
     <p class="mb-0">No exemptions are currently applied.
-      {% if is_residential %}If this is your primary residence, you may qualify for a homestead exemption —
-      <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">visit traviscad.org to apply ↗</a>.
+      {% if is_residential %}If this is your primary residence, you may qualify for a homestead exemption
+      {% if hs_link3 %} — <a href="{{ hs_link3 }}" target="_blank" rel="noopener noreferrer">apply ↗</a>{% endif %}.
       {% else %}This parcel is classified {{ bench_label or "non-residential" }}, so the homestead exemption (which requires an owner-occupied primary residence) doesn't apply here.
       {% endif %}</p>
     {% endif %}
@@ -1350,7 +1368,17 @@
       Delinquent taxes become a lien on the property and transfer to the buyer at closing unless negotiated otherwise.
     </p>
     <p class="mb-0 text-muted" style="font-size:11.5px;">
-      As of {{ delinquent_export_date.strftime('%B %-d, %Y') }} — Travis County Tax Office snapshot. This balance may have grown since then due to ongoing statutory penalty and interest (Tax Code §33.01); verify the exact current amount with the <a href="https://tax-office.traviscountytx.gov/properties/taxes/delinquent/penalties-interest" target="_blank" rel="noopener noreferrer">Travis County Tax Office ↗</a> before relying on it.
+      {# PX-20260827-01: county_profile-driven tax-office name/URL, not hardcoded
+         to Travis. tax_office_website has no per-county sub-path research behind
+         it (unlike the CAD-specific fields above) -- links to the office's own
+         root domain, which is honest for every registered county today. #}
+      As of {{ delinquent_export_date.strftime('%B %-d, %Y') }} — {{ county_profile.tax_office_name }} snapshot. This balance may have grown since then due to ongoing statutory penalty and interest (Tax Code §33.01); verify the exact current amount with the
+      {% if county_profile.tax_office_website %}
+      <a href="{{ county_profile.tax_office_website }}" target="_blank" rel="noopener noreferrer">{{ county_profile.tax_office_name }} ↗</a>
+      {% else %}
+      {{ county_profile.tax_office_name }}
+      {% endif %}
+      before relying on it.
     </p>
   </div>
 </div>
@@ -1511,9 +1539,20 @@
 {# ── PARCEL-REORG-1 (2026-08-16): section header, real visible content unchanged, moved/regrouped only ── #}
 <div class="section-hdr" style="margin-top:24px;">More Resources</div>
 
-{# ── Helpful links (PARCEL-REORG-1: moved to "More resources", bottom of page) ── #}
+{# ── Helpful links (PARCEL-REORG-1: moved to "More resources", bottom of page) ──
+   PX-20260827-01: rewired to render entirely from county_profile /
+   county_cad_link() -- no hardcoded CAD name, domain, or URL path below. Every
+   href resolves via the same fallback rule: a genuinely unknown or
+   not-yet-derivable link for this county renders nothing (or a clearly labeled
+   "not yet available" span), never another county's URL. See app.py's
+   COUNTY_PROFILES docstring for exactly what's confirmed real vs. still open
+   per county, and this brief's report for the Dallas-specific design notes
+   (uFile protest reuses the per-account detail page; homestead uses the
+   hstead.dallascad.org subdomain; interactive map has no confirmed URL yet). #}
 <div class="card mb-3"><div class="card-header">Helpful Links</div>
   <div class="card-body">
+    {% set hl_hs = county_profile.cad_homestead_exemption_url or county_cad_link('cad_homestead_exemption_url_template', parcel.prop_id) %}
+    {% set hl_protest = county_profile.cad_protest_url or county_cad_link('cad_protest_url_template', parcel.prop_id) %}
     <div class="row" style="font-size:14px; line-height:2;">
       <div class="col-sm-6">
         {# Coherence fix (July 2026, per Fable review finding 4): this link used to
@@ -1521,49 +1560,60 @@
            exemption cannot legally apply -- the same contradiction the KPI-card
            gating fix addressed a few nights ago, just not caught here too. Reuses
            the exact same is_residential check (set once, line 31), not a new one. #}
-        {% if is_residential %}
-        <a href="https://traviscad.org" target="_blank" rel="noopener noreferrer">Apply for a homestead exemption ↗</a><br>
+        {% if is_residential and hl_hs %}
+        <a href="{{ hl_hs }}" target="_blank" rel="noopener noreferrer">Apply for a homestead exemption ↗</a><br>
         {% endif %}
-        <a href="https://traviscad.org/protests" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a>
+        {% if hl_protest %}
+        <a href="{{ hl_protest }}" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a>
+        {% else %}
+        <span class="text-muted" title="No protest-portal URL confirmed for this county yet">Protest your property value (not yet available)</span>
+        {% endif %}
       </div>
       <div class="col-sm-6">
-        <a href="https://tax-office.traviscountytx.gov" target="_blank" rel="noopener noreferrer">Pay your property taxes ↗</a><br>
-        <a href="https://traviscad.org/contact" target="_blank" rel="noopener noreferrer">Contact TCAD ↗</a>
+        {% if county_profile.tax_office_website %}
+        <a href="{{ county_profile.tax_office_website }}" target="_blank" rel="noopener noreferrer">Pay your property taxes ↗</a><br>
+        {% endif %}
+        {% if county_profile.cad_contact_url %}
+        <a href="{{ county_profile.cad_contact_url }}" target="_blank" rel="noopener noreferrer">Contact {{ county_profile.cad_abbr }} ↗</a>
+        {% endif %}
       </div>
     </div>
-    {# Direct TCAD property-detail link — shown on every parcel page, both
+    {# Direct CAD property-detail link — shown on every parcel page, both
        modes (Bug fix: this card previously had no equivalent in Homeowner
        mode at all — the only other copy of this link lived inside the
        Property Info card, which sits entirely inside the investor-only
        {% else %} branch of the top-level mode split, lines 387–2187).
-       Deep-links via parcel.prop_id (TCAD's internal short numeric ID) when
-       available: https://travis.prodigycad.com/property-detail/<prop_id>/<year>.
-       Mapping confirmed by live-navigating the actual TCAD portal for 3 known
-       parcels (see Property Info card comment for full mapping detail).
-       Falls back to the generic property-search page when prop_id is missing.
-       Open County Interactive Map (JOHNNY-FEEDBACK-2 Part 1a, relocated from
-       the now-removed Documents & Sources panel -- JOHNNY-FEEDBACK-1's
-       original placement, commit 37735a3): same honest copy (confirmed live
-       this round: travis.prodigycad.com/maps is a client-side SPA with no
-       parcel-specific deep-linking), added as a second line in this same
-       bordered footer rather than a new UI element, right below the
-       parcel-specific TCAD deep link above -- both are "go look at TCAD"
-       links, this one just isn't scoped to this one parcel. #}
+       Deep-links via parcel.prop_id when the CURRENT county has a confirmed
+       real per-parcel URL template registered in COUNTY_PROFILES (Travis:
+       ProdigyCAD; Dallas: dallascad.org/AcctDetailRes.aspx -- see that dict's
+       docstring for how each was verified). Falls back to the county's
+       generic property-search page when prop_id is missing OR no per-parcel
+       template exists for this county; omits the line entirely if NEITHER
+       resolves. Open County Interactive Map: only rendered when this county
+       has a confirmed map URL (Travis's ProdigyCAD map is a client-side SPA
+       with no parcel-specific deep-linking, confirmed live; Dallas has none
+       confirmed yet). #}
+    {% set hl_parcel = county_cad_link('cad_parcel_detail_url_template', parcel.prop_id) %}
+    {% set hl_search = county_profile.cad_property_search_url %}
+    {% if hl_parcel or hl_search or county_profile.cad_interactive_map_url %}
     <div class="mt-2 pt-2" style="font-size:12px; border-top:1px solid var(--border, #e5e7eb);">
-      {% if parcel.prop_id %}
-      <a href="https://travis.prodigycad.com/property-detail/{{ parcel.prop_id }}/2026"
+      {% if hl_parcel %}
+      <a href="{{ hl_parcel }}"
          target="_blank" rel="noopener noreferrer"
-         style="color:var(--accent, #94B0DA); text-decoration:none;">View this property on TCAD ↗</a>
-      {% else %}
-      <a href="https://traviscad.org/propertysearch/"
+         style="color:var(--accent, #94B0DA); text-decoration:none;">View this property on {{ county_profile.cad_abbr }} ↗</a>
+      {% elif hl_search %}
+      <a href="{{ hl_search }}"
          target="_blank" rel="noopener noreferrer"
-         style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on TCAD ↗</a>
+         style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on {{ county_profile.cad_abbr }} ↗</a>
       {% endif %}
-      <br>
-      <a href="https://travis.prodigycad.com/maps" target="_blank" rel="noopener noreferrer"
+      {% if county_profile.cad_interactive_map_url %}
+      {% if hl_parcel or hl_search %}<br>{% endif %}
+      <a href="{{ county_profile.cad_interactive_map_url }}" target="_blank" rel="noopener noreferrer"
          title="Opens the county's map tool itself, not this specific parcel — the map has no way to link directly to one parcel"
          style="color:var(--accent, #94B0DA); text-decoration:none;">Open County Interactive Map ↗</a>
+      {% endif %}
     </div>
+    {% endif %}
   </div>
 </div>
 
@@ -2336,7 +2386,17 @@
          for how it was sourced (the loaded CSV's own file-modified date;
          no export-date field exists inside the file or its loader). #}
       <div class="text-muted" style="font-size:11.5px; margin-top:8px; padding-top:8px; border-top:1px solid var(--border, #e5e7eb);">
-        As of {{ delinquent_export_date.strftime('%B %-d, %Y') }} — Travis County Tax Office snapshot. This balance may have grown since then due to ongoing statutory penalty and interest (Tax Code §33.01); verify the exact current amount with the <a href="https://tax-office.traviscountytx.gov/properties/taxes/delinquent/penalties-interest" target="_blank" rel="noopener noreferrer">Travis County Tax Office ↗</a> before relying on it.
+        {# PX-20260827-01: county_profile-driven tax-office name/URL, not hardcoded
+         to Travis. tax_office_website has no per-county sub-path research behind
+         it (unlike the CAD-specific fields above) -- links to the office's own
+         root domain, which is honest for every registered county today. #}
+      As of {{ delinquent_export_date.strftime('%B %-d, %Y') }} — {{ county_profile.tax_office_name }} snapshot. This balance may have grown since then due to ongoing statutory penalty and interest (Tax Code §33.01); verify the exact current amount with the
+      {% if county_profile.tax_office_website %}
+      <a href="{{ county_profile.tax_office_website }}" target="_blank" rel="noopener noreferrer">{{ county_profile.tax_office_name }} ↗</a>
+      {% else %}
+      {{ county_profile.tax_office_name }}
+      {% endif %}
+      before relying on it.
       </div>
     </div>
   </div>
@@ -2408,33 +2468,51 @@
      legally apply to non-residential property, and Investor mode has no
      is_residential concept to gate it on (Diego didn't ask for it either;
      flagging the omission here rather than silently deciding either way). #}
+  {# PX-20260827-01: rewired to render entirely from county_profile /
+     county_cad_link(), same mechanism and fallback rules as the Homeowner
+     card above -- see that card's comment for the full explanation. #}
   <div class="card mb-4"><div class="card-header">Helpful Links</div>
     <div class="card-body">
       {# Deed search link removed (per Diego, round 2 of this brief): deed
-         info is available via the "View this property on TCAD" deep link
+         info is available via the "View this property on {{ county_profile.cad_abbr }}" deep link
          just below, so a separate deed-search tool isn't needed here. #}
+      {% set hl2_protest = county_profile.cad_protest_url or county_cad_link('cad_protest_url_template', parcel.prop_id) %}
       <div class="row" style="font-size:14px; line-height:2;">
         <div class="col-sm-6">
-          <a href="https://traviscad.org/protests" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a><br>
-          <a href="https://travis.prodigycad.com/maps" target="_blank" rel="noopener noreferrer"
+          {% if hl2_protest %}
+          <a href="{{ hl2_protest }}" target="_blank" rel="noopener noreferrer">Protest your property value ↗</a><br>
+          {% else %}
+          <span class="text-muted" title="No protest-portal URL confirmed for this county yet">Protest your property value (not yet available)</span><br>
+          {% endif %}
+          {% if county_profile.cad_interactive_map_url %}
+          <a href="{{ county_profile.cad_interactive_map_url }}" target="_blank" rel="noopener noreferrer"
              title="Opens the county's map tool itself, not this specific parcel — the map has no way to link directly to one parcel">Open County Interactive Map ↗</a>
+          {% endif %}
         </div>
         <div class="col-sm-6">
-          <a href="https://tax-office.traviscountytx.gov" target="_blank" rel="noopener noreferrer">Pay your property taxes ↗</a><br>
-          <a href="https://traviscad.org/contact" target="_blank" rel="noopener noreferrer">Contact TCAD ↗</a>
+          {% if county_profile.tax_office_website %}
+          <a href="{{ county_profile.tax_office_website }}" target="_blank" rel="noopener noreferrer">Pay your property taxes ↗</a><br>
+          {% endif %}
+          {% if county_profile.cad_contact_url %}
+          <a href="{{ county_profile.cad_contact_url }}" target="_blank" rel="noopener noreferrer">Contact {{ county_profile.cad_abbr }} ↗</a>
+          {% endif %}
         </div>
       </div>
+      {% set hl2_parcel = county_cad_link('cad_parcel_detail_url_template', parcel.prop_id) %}
+      {% set hl2_search = county_profile.cad_property_search_url %}
+      {% if hl2_parcel or hl2_search %}
       <div class="mt-2 pt-2" style="font-size:12px; border-top:1px solid var(--border, #e5e7eb);">
-        {% if parcel.prop_id %}
-        <a href="https://travis.prodigycad.com/property-detail/{{ parcel.prop_id }}/2026"
+        {% if hl2_parcel %}
+        <a href="{{ hl2_parcel }}"
            target="_blank" rel="noopener noreferrer"
-           style="color:var(--accent, #94B0DA); text-decoration:none;">View this property on TCAD ↗</a>
+           style="color:var(--accent, #94B0DA); text-decoration:none;">View this property on {{ county_profile.cad_abbr }} ↗</a>
         {% else %}
-        <a href="https://traviscad.org/propertysearch/"
+        <a href="{{ hl2_search }}"
            target="_blank" rel="noopener noreferrer"
-           style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on TCAD ↗</a>
+           style="color:var(--accent, #94B0DA); text-decoration:none;">Search this property on {{ county_profile.cad_abbr }} ↗</a>
         {% endif %}
       </div>
+      {% endif %}
     </div>
   </div>
 

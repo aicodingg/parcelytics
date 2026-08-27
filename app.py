@@ -1817,20 +1817,52 @@ DEFAULT_COUNTY_SLUG = "travis-tx"
 # None field means: don't render that link for this county yet; that's a
 # real, honest gap, not a bug to paper over.
 #
-# NOT included, and deliberately so: a "cad_property_search_url" /
-# "cad_efile_portal_url" field. Several real links already live in
-# property.html (traviscad.org/propertysearch/, traviscad.org/protests,
-# traviscad.org/contact, traviscad.org/homesteadexemptions/, the
-# travis.prodigycad.com/property-detail/<prop_id>/... deep link) append a
-# Travis/ProdigyCAD-specific URL PATH on top of a real domain -- Notion has
-# no corresponding "CAD Property Search URL" / "CAD e-File / Protest Portal
-# URL" value for EITHER county yet (confirmed via direct query), and there
-# is no evidence Dallas's CAD software vendor uses the same path
-# conventions as Travis's (ProdigyCAD). Synthesizing those paths from
-# cad_website would produce a plausible-looking but unverified URL for any
-# future county -- exactly the kind of guess this brief's rules forbid.
-# These specific links are flagged in the final report as needing real
-# per-county URL research, not converted.
+# PX-20260827-01: the fields below (cad_property_search_url through
+# cad_contact_url) close the exact gap this docstring used to flag as
+# deliberately unclosed. Their provenance is DIFFERENT from the fields
+# above: Notion has no corresponding columns for these (still true), so
+# these were NOT pulled from Notion. Instead each URL was independently
+# verified by live web research against the real CAD site (WebSearch +
+# direct page fetch, cross-checked against multiple independent hits with
+# matching page titles/content) as part of this brief's explicit mandate to
+# do that per-county URL research rather than defer it again. Every value
+# is either a real, confirmed, currently-live URL, or None where research
+# could not confirm one -- per this brief's rule, a genuinely unknown URL
+# renders as absent, never a guessed pattern and never a fallback to
+# another county's URL.
+#
+# "_template" fields contain a literal "{prop_id}" placeholder substituted
+# at render time with the parcel's own prop_id -- never another county's ID
+# shape. A template that is None (Dallas has none yet for the interactive
+# map) means: render the non-parcel-specific fallback, or omit entirely if
+# no fallback exists either.
+#
+# DALLAS-SPECIFIC NOTES (so a future editor doesn't "fix" these as bugs):
+#   - cad_parcel_detail_url_template uses dallascad.org's confirmed-real
+#     AcctDetailRes.aspx?ID=<account_number> pattern (the "Res" suffix is
+#     DCAD's own naming for its residential account-detail page; no
+#     separate commercial-account URL shape has been confirmed, so this
+#     template is applied uniformly and may not resolve for non-residential
+#     Dallas accounts -- a disclosed limitation, not a guess).
+#   - cad_homestead_exemption_url_template points at a DIFFERENT, confirmed
+#     real subdomain (hstead.dallascad.org) DCAD uses specifically for
+#     homestead applications -- not a guess; Dallas has no single top-level
+#     homestead URL the way traviscad.org's root conveniently doubles as.
+#   - cad_protest_url_template reuses the same AcctDetailRes.aspx page,
+#     because DCAD's real uFile protest system is launched FROM that
+#     per-account page (confirmed: "search your account, then select uFile
+#     Online Protest") -- there is no separate standalone protest-portal
+#     URL to point to. This is a disclosed design choice, not a guess of a
+#     URL that doesn't exist; flagged in the PX-20260827-01 report for the
+#     PM to override if a "not yet available" rendering is preferred instead.
+#   - tax_office_website is Dallas COUNTY's own tax-office payment domain
+#     (dallascounty.org/tax), confirmed via DCAD's own "Paying Taxes" page
+#     content -- distinct from dallascad.org, mirroring Travis's own
+#     pattern of a separate tax-office domain from the CAD's domain.
+#   - cad_interactive_map_url remains None: research surfaced several
+#     candidate map-tool domains (maps.dcad.org, esearch.dallascad.org)
+#     without independent confirmation strong enough to trust, so this
+#     stays unset rather than guessed -- unchanged from the prior brief.
 COUNTY_PROFILES = {
     "TRAVIS": {
         "display_name": "Travis County, TX",
@@ -1839,6 +1871,13 @@ COUNTY_PROFILES = {
         "cad_abbr": "TCAD",
         "cad_website": "https://traviscad.org",
         "cad_interactive_map_url": "https://travis.prodigycad.com/maps",
+        "cad_property_search_url": "https://traviscad.org/propertysearch/",
+        "cad_parcel_detail_url_template": "https://travis.prodigycad.com/property-detail/{prop_id}/2026",
+        "cad_homestead_exemption_url": "https://traviscad.org",
+        "cad_homestead_exemption_url_template": None,
+        "cad_protest_url": "https://traviscad.org/protests",
+        "cad_protest_url_template": None,
+        "cad_contact_url": "https://traviscad.org/contact",
         "tax_office_name": "Travis County Tax Office",
         "tax_office_website": "https://tax-office.traviscountytx.gov",
     },
@@ -1848,9 +1887,16 @@ COUNTY_PROFILES = {
         "cad_name": "Dallas Central Appraisal District",
         "cad_abbr": "DCAD",
         "cad_website": "https://www.dallascad.org",
-        "cad_interactive_map_url": None,   # not yet in Notion
+        "cad_interactive_map_url": None,   # not confirmed -- see note above
+        "cad_property_search_url": "https://www.dallascad.org/SearchOwner.aspx",
+        "cad_parcel_detail_url_template": "https://www.dallascad.org/AcctDetailRes.aspx?ID={prop_id}",
+        "cad_homestead_exemption_url": None,
+        "cad_homestead_exemption_url_template": "https://hstead.dallascad.org/ns/HomesteadExemption.aspx?ID={prop_id}",
+        "cad_protest_url": None,
+        "cad_protest_url_template": "https://www.dallascad.org/AcctDetailRes.aspx?ID={prop_id}",
+        "cad_contact_url": "https://www.dallascad.org/contact.aspx",
         "tax_office_name": "Dallas County Tax Office",
-        "tax_office_website": None,        # not yet in Notion
+        "tax_office_website": "https://www.dallascounty.org/tax",
     },
     # HARRIS intentionally NOT registered here yet -- COUNTY_SLUGS reserves
     # the routing slug, but Notion's County Public Profile row for Harris
@@ -1858,6 +1904,9 @@ COUNTY_PROFILES = {
     # (per that database's own note). Registering a profile with guessed
     # names would be worse than a template falling back to raw text for a
     # county nobody can reach today anyway (harris-tx has no loaded data).
+    # Per PX-20260827-01 Task 4, Harris's registration is also now gated on
+    # having the institutional link fields above populated or explicitly
+    # None -- not just the pre-existing name/website fields.
 }
 
 
@@ -1922,6 +1971,30 @@ def county_url(path):
     return f"/{slug}{path}"
 
 
+def county_cad_link(field, prop_id=None):
+    """PX-20260827-01 template-facing helper: resolves one of the
+    institutional-link fields added to COUNTY_PROFILES this brief (e.g.
+    "cad_parcel_detail_url_template", "cad_protest_url") for the CURRENT
+    request's county. "*_template" fields carry a literal "{prop_id}"
+    placeholder substituted with the given prop_id; a plain field is
+    returned as-is. Returns None whenever the field is genuinely unset for
+    this county, OR a *_template field is requested with no prop_id to
+    substitute -- in both cases the caller MUST render nothing (or an
+    explicit "not yet available" state), never fall back to another
+    county's value or synthesize a guessed URL. This mirrors county_url()'s
+    same-file fallback convention for use outside a real request context."""
+    county_code = getattr(g, "county_code", COUNTY_SLUGS[DEFAULT_COUNTY_SLUG])
+    profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
+    value = profile.get(field)
+    if value is None:
+        return None
+    if "{prop_id}" in value:
+        if not prop_id:
+            return None
+        return value.replace("{prop_id}", str(prop_id))
+    return value
+
+
 @app.context_processor
 def _inject_county_helpers():
     """PX-20260824-01: county_profile added alongside the existing
@@ -1930,12 +2003,14 @@ def _inject_county_helpers():
     context (matching county_slug/county_url's own DEFAULT_COUNTY_SLUG
     fallback above) so a template read never raises for a KeyError on a
     profile that isn't registered -- .get() with the TRAVIS profile as a
-    safety net, not a silent assumption that every county IS Travis."""
+    safety net, not a silent assumption that every county IS Travis.
+    PX-20260827-01 adds county_cad_link alongside these, same mechanism."""
     county_code = getattr(g, "county_code", COUNTY_SLUGS[DEFAULT_COUNTY_SLUG])
     return {
         "county_slug": getattr(g, "county_slug", DEFAULT_COUNTY_SLUG),
         "county_url": county_url,
         "county_profile": COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"]),
+        "county_cad_link": county_cad_link,
     }
 
 

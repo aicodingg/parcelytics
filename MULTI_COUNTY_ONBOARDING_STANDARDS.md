@@ -267,6 +267,29 @@ history — are previews of coordination load at two-counties-concurrent scale.
    rows are tagged with `county_code`, so a Dallas ingestion incident is
    attributable at triage speed instead of after a diff. One line of tagging
    now; one saved incident-hour every time after.
+7. **Institutional link fields, per county (PX-20260827-01).** A live Dallas
+   spot-check found the property page's "Helpful Links" block hardcoded to
+   Travis/TCAD's institutional URLs (protest portal, homestead-exemption
+   portal, CAD contact, per-parcel deep link, tax-payment) for every county —
+   a general-purpose page silently assuming Travis, the same pattern MC-1/MC-2
+   exist to catch for data writes, just for user-facing links instead. **Rule:**
+   every field this component needs (`cad_property_search_url`,
+   `cad_parcel_detail_url_template`, `cad_homestead_exemption_url`(`_template`),
+   `cad_protest_url`(`_template`), `cad_contact_url`) is added to `COUNTY_PROFILES`
+   (app.py) for a county before that county reaches "data loaded" — populated
+   with a real, independently-verified URL, or explicitly `None` where no real
+   URL is confirmable yet (a `None` renders the link absent or a
+   "not yet available" state; it must never fall back to another county's
+   value). **Enforcement:** `verify_template_county_scoping.py`'s Class (C)
+   check — a denylist of every real CAD abbreviation/name/domain already
+   registered in `COUNTY_PROFILES`, checked against every `<a>` tag in every
+   template — fails the moment a page hardcodes a literal CAD name or URL
+   instead of sourcing it from `county_profile`/`county_cad_link()`. Because
+   the denylist is derived from `COUNTY_PROFILES` itself (not hand-typed),
+   this fires automatically the day a future county's real name/domain lands
+   in the registry, with no edit to the scanner required — the county-level
+   punch line MC-2 established for data writes, generalized to institutional
+   links.
 
 ---
 
@@ -276,6 +299,7 @@ Per new county, in order; each line names its standard:
 
 1. Source Registry entry incl. license/terms + §25.025 obligations (MC-7.4) — **Fable-reviewed**
 2. County Profile incl. field-semantics baseline vs Travis (MC-7.1) — **Fable-reviewed**
+2b. `COUNTY_PROFILES` (app.py) institutional-link fields populated or explicitly `None` (MC-7.7) — **`verify_template_county_scoping.py` Class (C) green**
 3. Classification Map as evidenced overlay against the canonical root (MC-5) — **Fable-reviewed**
 4. Identity Scope Checklist for any new tables; text keys; born partitioned (MC-1)
 5. New data types ship as unit-grain + rollup + gate + tested alarms, or not at all (MC-3)
@@ -293,3 +317,19 @@ Per new county, in order; each line names its standard:
 change — by reviewed revision with a dated changelog entry, never by silent
 edit. Standards that failed in practice are amended with the incident named,
 the same way the §9.2 revisit trigger was corrected on the record.*
+
+**Changelog**
+
+- **2026-08-27 (PX-20260827-01):** Added MC-7.7 (institutional link fields per
+  county) and Appendix A line 2b, gated on `verify_template_county_scoping.py`'s
+  new Class (C) check. Provenance: a live Dallas spot-check found the property
+  page's Helpful Links block hardcoded to Travis/TCAD for every county — the
+  ~70-site copy pass (PX-20260826-01) didn't cover this component. Closed by
+  extending `COUNTY_PROFILES` with real, independently-verified per-CAD URL
+  fields (Dallas's confirmed via live web research: `dallascad.org`'s
+  `SearchOwner.aspx`/`AcctDetailRes.aspx` and `hstead.dallascad.org`'s
+  per-account homestead application — genuinely new URL shapes, not guessed
+  from Travis's ProdigyCAD conventions) and rewiring the template to render
+  entirely from `county_profile`/`county_cad_link()`, with a denylist scanner
+  (derived from `COUNTY_PROFILES` itself, so it covers future counties
+  automatically) enforcing it never regresses.

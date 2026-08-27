@@ -62,9 +62,19 @@ TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
 # ── Flask-Jinja integration stubs ───────────────────────────────────────────
 class _FakeRequest:
-    def __init__(self, path="/parcel/0100030109"):
+    # PX-20260827-01 incidental fix: base.html's nav links compare
+    # request.endpoint (added by an earlier brief's nav-active-state fix,
+    # Task 3 of PX-20260823-03) -- this stub never carried an .endpoint
+    # attribute, so EVERY scenario in this harness that renders property.html
+    # (which extends base.html) has been raising UndefinedError before ever
+    # reaching this brief's own template changes. Pre-existing harness
+    # staleness, unrelated to this brief's edits -- fixed here only because
+    # it blocks verifying this brief's own render changes. "property_detail"
+    # matches the real route's endpoint name (app.py).
+    def __init__(self, path="/parcel/0100030109", endpoint="property_detail"):
         self.path = path
         self.args = {}
+        self.endpoint = endpoint
 
 
 def _url_for(endpoint, **kwargs):
@@ -93,6 +103,49 @@ def make_env():
     env.globals["request"] = _FakeRequest()
     env.globals["config"] = _real_config
     env.filters["tojson"] = _tojson
+    # PX-20260827-01 incidental fix: county_profile/county_url/county_cad_link
+    # (from app.py's @app.context_processor, PX-20260824-01 and this brief)
+    # were NEVER registered here -- every scenario rendering property.html has
+    # been raising UndefinedError on 'county_profile' since PX-20260824-01
+    # landed, pre-dating and unrelated to this brief's own edits. Fixed here,
+    # same independent-copy pattern as _CERTIFIED_TIER_DATA_SOURCES below (no
+    # live app.py import in this harness -- must change together if the real
+    # COUNTY_PROFILES["TRAVIS"] entry ever does). county_cad_link() mirrors
+    # app.py's real implementation exactly (same {prop_id} substitution rule,
+    # same None-on-unresolved contract) against this static TRAVIS profile,
+    # since every existing scenario's parcel fixtures are Travis-shaped.
+    env.globals["county_slug"] = "travis-tx"
+    env.globals["county_url"] = lambda path: "/travis-tx" + path
+    _MOCK_TRAVIS_PROFILE = {
+        "display_name": "Travis County, TX",
+        "county_name": "Travis County",
+        "cad_name": "Travis Central Appraisal District",
+        "cad_abbr": "TCAD",
+        "cad_website": "https://traviscad.org",
+        "cad_interactive_map_url": "https://travis.prodigycad.com/maps",
+        "cad_property_search_url": "https://traviscad.org/propertysearch/",
+        "cad_parcel_detail_url_template": "https://travis.prodigycad.com/property-detail/{prop_id}/2026",
+        "cad_homestead_exemption_url": "https://traviscad.org",
+        "cad_homestead_exemption_url_template": None,
+        "cad_protest_url": "https://traviscad.org/protests",
+        "cad_protest_url_template": None,
+        "cad_contact_url": "https://traviscad.org/contact",
+        "tax_office_name": "Travis County Tax Office",
+        "tax_office_website": "https://tax-office.traviscountytx.gov",
+    }
+    env.globals["county_profile"] = _MOCK_TRAVIS_PROFILE
+
+    def _mock_county_cad_link(field, prop_id=None):
+        value = _MOCK_TRAVIS_PROFILE.get(field)
+        if value is None:
+            return None
+        if "{prop_id}" in value:
+            if not prop_id:
+                return None
+            return value.replace("{prop_id}", str(prop_id))
+        return value
+
+    env.globals["county_cad_link"] = _mock_county_cad_link
     return env
 
 

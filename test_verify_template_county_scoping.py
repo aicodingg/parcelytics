@@ -30,9 +30,9 @@ from pathlib import Path
 import verify_template_county_scoping as vtcs
 
 
-def _scan_text(text: str):
+def _scan_text(text: str, filename: str = "fixture.html"):
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "fixture.html"
+        p = Path(d) / filename
         p.write_text(text)
         return vtcs.scan_file(p)
 
@@ -174,6 +174,61 @@ def main():
         f"({len(real_findings)} findings)",
         len(real_findings) == 0,
         real_findings,
+    )
+
+    # ── PX-20260827-01 Task 3: Class (C) hardcoded-CAD-institution fixtures ──
+    # Fixture 9: a planted Class-C violation -- the EXACT pattern this brief
+    # found hardcoded in property.html's Helpful Links card (a real CAD
+    # abbreviation as the anchor's visible text, a real CAD domain as its
+    # href) -- must be caught.
+    fixture9 = """
+    <a href="https://traviscad.org/contact" target="_blank" rel="noopener noreferrer">Contact TCAD ↗</a>
+    """
+    findings9 = _scan_text(fixture9)
+    all_ok &= check(
+        "Fixture 9: hardcoded href=\"https://traviscad.org/contact\" + \"Contact TCAD\" "
+        "produces a hardcoded-cad-institution FAIL",
+        any(f.kind == "hardcoded-cad-institution" and f.severity == "FAIL" for f in findings9),
+        findings9,
+    )
+
+    # Fixture 9b: the same violation class for Dallas's real domain/abbr --
+    # proves the denylist isn't hand-typed to only catch Travis's leak.
+    fixture9b = """
+    <a href="https://www.dallascad.org/AcctDetailRes.aspx?ID=123">View this property on DCAD ↗</a>
+    """
+    findings9b = _scan_text(fixture9b)
+    all_ok &= check(
+        "Fixture 9b: hardcoded dallascad.org/\"DCAD\" (not just Travis) "
+        "produces a hardcoded-cad-institution FAIL",
+        any(f.kind == "hardcoded-cad-institution" and f.severity == "FAIL" for f in findings9b),
+        findings9b,
+    )
+
+    # Fixture 10: the corrected, profile-driven pattern -- must stay quiet.
+    # This is the real shape property.html's Helpful Links cards now use.
+    fixture10 = """
+    <a href="{{ county_profile.cad_contact_url }}" target="_blank" rel="noopener noreferrer">Contact {{ county_profile.cad_abbr }} ↗</a>
+    <a href="{{ county_cad_link('cad_parcel_detail_url_template', parcel.prop_id) }}">View this property on {{ county_profile.cad_abbr }} ↗</a>
+    """
+    findings10 = _scan_text(fixture10)
+    all_ok &= check(
+        "Fixture 10: county_profile/county_cad_link()-driven anchor tags produce zero findings",
+        len(findings10) == 0,
+        findings10,
+    )
+
+    # Fixture 11: EXEMPT_FILES actually exempts -- the SAME planted violation
+    # as Fixture 9, but saved under "info.html" (a real exempted filename),
+    # must NOT fire. Proves the exemption is real and file-scoped, not a
+    # blanket bypass -- Fixture 9 (a non-exempt filename) with the identical
+    # markup DID fire above.
+    findings11 = _scan_text(fixture9, filename="info.html")
+    all_ok &= check(
+        "Fixture 11: the identical Fixture-9 violation under the exempted "
+        "filename 'info.html' produces zero Class-C findings",
+        not any(f.kind == "hardcoded-cad-institution" for f in findings11),
+        findings11,
     )
 
     print()

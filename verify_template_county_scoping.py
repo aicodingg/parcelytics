@@ -63,14 +63,35 @@ Acceptance bar (per brief): zero findings after Tasks 1-3 land, and a
 fixture test proving the scanner actually fires on a planted violation of
 EACH class (the alarm-must-fire rule) -- see
 test_verify_template_county_scoping.py.
+
+PX-20260827-01 Task 3 adds a third, independent violation class:
+
+  (C) A hardcoded, county-institution-specific string or domain (a real CAD
+      abbreviation, CAD/tax-office name, or domain literal registered in
+      app.py's COUNTY_PROFILES) appearing inside an <a>...</a> anchor tag's
+      href or visible text, instead of being sourced from
+      county_profile/county_cad_link(). This is the generalized version of
+      the Travis/TCAD leak this brief found hardcoded into property.html's
+      Helpful Links cards: a denylist, not a one-off pattern match, derived
+      dynamically from COUNTY_PROFILES via static source parsing (see
+      _load_county_institution_denylist()) so it grows automatically the
+      day a future county (e.g. Harris) gets a real profile entry, with no
+      edit to this file required. Scoped to <a> tags specifically (not all
+      template text) because this repo has real, disclosed, single-county
+      educational pages (info.html, compare.html) that cite real government
+      documents by name in ordinary prose -- see EXEMPT_FILES for the
+      narrow, reasoned exception for those two pages' own <a> tags.
 """
 
+import ast
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+APP_PY = Path(__file__).resolve().parent / "app.py"
 
 # Real route prefixes this app owns (mirrors app.py's _LEGACY_REDIRECT_ROUTES'
 # old, pre-county-prefix path shapes -- the exact set of paths that used to
@@ -120,6 +141,164 @@ REQUEST_PATH_CMP_RE = re.compile(
 # `COUNTY_BASE + "/api/billing/"`. 40 chars comfortably covers all of them
 # with room to spare.
 _COUNTY_BASE_LOOKBACK = 40
+
+# ── Class (C), PX-20260827-01 Task 3: hardcoded county-institution references ──
+# The self-enforcing part of this brief: a denylist of every real CAD/tax-office
+# abbreviation, name, and domain currently registered in app.py's
+# COUNTY_PROFILES, checked against every <a ...>...</a> anchor tag's full span
+# (href attribute AND visible link text) in every template. This is what
+# caught the original bug (property.html hardcoding "TCAD" / traviscad.org
+# for every county), and -- because the denylist is DERIVED from
+# COUNTY_PROFILES via static source parsing rather than hand-typed here --
+# it grows automatically the day Harris (or any future county) gets a real
+# entry, with zero edit to this file required. That's the difference between
+# "a scanner that caught today's known leak" and "a scanner that catches
+# tomorrow's leak too," which is what the brief actually asked for.
+#
+# Scope is deliberately "inside <a> tags," not "anywhere in the template
+# text": this repo has real, disclosed, single-county educational/reference
+# pages (info.html, compare.html) that cite real Travis government documents
+# by name in ordinary prose ("TCAD's own guidance...", "Travis County Tax
+# Office — Truth in Taxation Summary") -- that prose is not a bug, it's
+# accurate citation of a real source on a page that already discloses "Only
+# Texas / Travis County are built out today" and gates its content via
+# data-county="travis" panels, a DIFFERENT and already-honest county-scoping
+# mechanism from the one this brief is about (institutional ACTION links --
+# apply/protest/pay/contact -- rendered from county_profile). Restricting to
+# <a> tags catches exactly the violation class this brief is about (a link
+# whose target or label silently assumes one county) without alarming on
+# every citation of a real document by its real name.
+#
+# EXEMPT_FILES: pages whose <a> tags legitimately cite real, county-specific
+# institutional names/URLs as disclosed SOURCE CITATIONS on an
+# already-single-county-scoped educational page, not as user-facing action
+# links meant to work for every county. Each entry names the file and the
+# reason -- same visibility bar as verify_county_scoping.py's EXEMPTIONS
+# registry (PX-20260823-02). Adding a file here is not a decision this
+# scanner should be trusted to make silently: if a future page's exemption
+# claim doesn't hold up (e.g. it turns out to be a general-purpose page that
+# should have been profile-driven), that's a Fable-reviewable call, not a
+# scanner bug.
+EXEMPT_FILES = {
+    "info.html": (
+        "Learn/education page: cites real Travis government and regulatory "
+        "documents by name (TCAD FAQ pages, Travis County Tax Office "
+        "publications, Texas Comptroller PDFs) as disclosed SOURCE "
+        "CITATIONS inside data-county=\"travis\" panels. The page's own "
+        "header text already discloses 'Only Texas / Travis County are "
+        "built out today; more states will show here as Parcelytics "
+        "expands' -- this is honest, structurally-scoped, single-county "
+        "reference content, not a silent institutional-link leak."
+    ),
+    "compare.html": (
+        "Same data-county-gated educational-page pattern as info.html; its "
+        "only hardcoded-CAD-string occurrence is prose explaining a "
+        "methodology footnote, not an <a> tag, but listed here defensively "
+        "in case future edits add a real Travis citation link to this page."
+    ),
+}
+
+
+def _load_county_institution_denylist():
+    """Statically parses app.py's real COUNTY_PROFILES dict (via `ast`, the
+    same static-analysis technique verify_county_scoping.py already uses on
+    this same file -- no live app.py import, so no Flask/Sentry/DB
+    side-effects in what's meant to be a fast, dependency-free CI check).
+    Returns (abbrs, names_and_domains): abbrs is matched as a whole word
+    (TCAD/DCAD/...); names_and_domains is matched as a substring (full CAD
+    names, tax-office names, and every URL value's hostname, www.-stripped).
+    Falls back to an empty denylist (scanner finds nothing, never crashes)
+    if app.py's shape ever changes enough that this parse can't find
+    COUNTY_PROFILES -- a loud print(), not a silent False, so CI notices."""
+    abbrs = set()
+    names_and_domains = set()
+    try:
+        tree = ast.parse(APP_PY.read_text())
+    except (OSError, SyntaxError) as exc:
+        print(f"WARNING: could not parse {APP_PY} for COUNTY_PROFILES ({exc}) "
+              f"-- Class (C) denylist will be empty this run.")
+        return abbrs, names_and_domains
+
+    profiles_dict = None
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "COUNTY_PROFILES" for t in node.targets)
+                and isinstance(node.value, ast.Dict)):
+            profiles_dict = node.value
+            break
+
+    if profiles_dict is None:
+        print("WARNING: COUNTY_PROFILES assignment not found in app.py "
+              "-- Class (C) denylist will be empty this run.")
+        return abbrs, names_and_domains
+
+    for county_node in profiles_dict.values:
+        if not isinstance(county_node, ast.Dict):
+            continue
+        for key_node, val_node in zip(county_node.keys, county_node.values):
+            if not (isinstance(key_node, ast.Constant) and isinstance(key_node.value, str)):
+                continue
+            if not (isinstance(val_node, ast.Constant) and isinstance(val_node.value, str)):
+                continue  # None values (unresolved links) carry nothing to denylist
+            key, val = key_node.value, val_node.value
+            if key == "cad_abbr":
+                abbrs.add(val)
+            elif key in ("cad_name", "tax_office_name"):
+                names_and_domains.add(val)
+            elif "://" in val:
+                host = urlsplit(val).netloc
+                if host:
+                    names_and_domains.add(host)
+                    if host.startswith("www."):
+                        names_and_domains.add(host[len("www."):])
+    return abbrs, names_and_domains
+
+
+# Anchor-tag span: opening <a ...> through its closing </a>, non-greedy so
+# adjacent, unrelated anchors on the same line don't get merged into one
+# match. DOTALL via re.S so a multi-line anchor (this repo's real style,
+# e.g. property.html's Helpful Links hrefs) is still one span.
+_ANCHOR_TAG_RE = re.compile(r"<a\b.*?</a>", re.IGNORECASE | re.DOTALL)
+
+
+def _find_hardcoded_cad_institution_findings(text: str, rel: str):
+    """Class (C): scans every <a>...</a> span in `text` (already
+    comment-stripped) for a denylisted CAD abbreviation, name, or domain not
+    sourced from county_profile. Skipped entirely for EXEMPT_FILES."""
+    if Path(rel).name in EXEMPT_FILES:
+        return []
+    abbrs, names_and_domains = _load_county_institution_denylist()
+    if not abbrs and not names_and_domains:
+        return []
+    abbr_re = re.compile(r"\b(?:" + "|".join(re.escape(a) for a in sorted(abbrs)) + r")\b") if abbrs else None
+    findings = []
+    for anchor in _ANCHOR_TAG_RE.finditer(text):
+        span = anchor.group(0)
+        hit = None
+        if abbr_re is not None:
+            m = abbr_re.search(span)
+            if m:
+                hit = m.group(0)
+        if hit is None:
+            for token in names_and_domains:
+                if token in span:
+                    hit = token
+                    break
+        if hit is None:
+            continue
+        findings.append(Finding(
+            rel, _line_number(text, anchor.start()), "hardcoded-cad-institution", "FAIL",
+            f"Anchor tag hardcodes {hit!r} -- a real county-institution "
+            f"name/domain found in COUNTY_PROFILES, but not sourced from "
+            f"county_profile/county_cad_link() here. This link will render "
+            f"the same for every county regardless of which county's page "
+            f"the user is on. Use {{{{ county_profile.<field> }}}} or "
+            f"county_cad_link('<field>', ...) instead; if no real URL is "
+            f"confirmed for this county yet, render the link absent or a "
+            f"clearly-labeled 'not yet available' state -- never a "
+            f"hardcoded fallback to another county's value.",
+        ))
+    return findings
 
 
 def _strip_comments(text: str) -> str:
@@ -183,6 +362,8 @@ def scan_file(filepath: Path) -> list:
             "request.endpoint against the real endpoint name instead -- "
             "immune to any URL prefix by construction.",
         ))
+
+    findings.extend(_find_hardcoded_cad_institution_findings(text, rel))
 
     return findings
 
