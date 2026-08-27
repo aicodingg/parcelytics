@@ -147,6 +147,19 @@ function of a validated-numeric string):
      (the DB-querying wrapper lives in load_dallas_certified.py, keeping
      this module's own "no DB access" purity).
 ══════════════════════════════════════════════════════════════════════════
+PX-20260826-05 Task 2 (PM BLOCKER, real dry-run runbook finding) —
+load_dallas_certified.py never wrote `parcel` at all before this: only
+Travis's three legacy loaders (load_ajr.py, load_certified_2025.py,
+load_2026_preliminary.py) ever issued an INSERT INTO parcel. That's a
+real gap, not a stylistic one — app.py's _county_has_data() and every
+route gated on it query `parcel` directly, so a fully successful,
+gate-PASS Dallas load into prop_unit/prop_unit_tax_year/parcel_tax_year
+would still present as "hasn't been loaded yet" everywhere. Fixed by
+adding derive_parcel_class_fields() below (the SPTD-derived state_cd1/
+prop_type_cd class fields parcel needs) — the write itself
+(write_parcel(), PARCEL_SQL) lives in load_dallas_certified.py, mirroring
+load_certified_2025.py's own PROP.TXT -> parcel account-layer write.
+══════════════════════════════════════════════════════════════════════════
 HONEST, LOAD-BEARING DISCLOSURE — READ BEFORE TRUSTING ANY FIELD NAME BELOW
 ══════════════════════════════════════════════════════════════════════════
 This sandbox has NO direct access to the real DCAD delivery — not the 14
@@ -783,6 +796,58 @@ def classify_account_sptd(sptd_code):
     """
     import classification_map_dallas as _cmd
     return _cmd.classify_dallas_sptb_code(sptd_code)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# derive_parcel_class_fields — PX-20260826-05 Task 2 (PM BLOCKER): the
+# SPTD-derived class fields for `parcel`, the account-layer table
+# load_dallas_certified.py's write_parcel() upserts (see that module's
+# own PX-20260826-05 changelog for why `parcel` was never written before
+# this — a real, load-bearing gap the PX-20260826-05 runbook surfaced:
+# _county_has_data() and every route gated on it query `parcel` directly,
+# not prop_unit/prop_unit_tax_year).
+# ══════════════════════════════════════════════════════════════════════
+def derive_parcel_class_fields(sptd_code):
+    """
+    Returns {"prop_type_cd": ..., "state_cd1": ...} for one account's real
+    SPTD_CODE, mirroring Travis's own parcel.prop_type_cd / parcel.state_cd1
+    columns so Dallas's `parcel` rows carry the same real-world class
+    information Travis's do, sourced from DCAD's own confirmed data rather
+    than guessed:
+
+    prop_type_cd -> the raw SPTD_CODE itself, verbatim. Same convention
+        prop_unit.prop_type_cd already uses (build_unit_rows() sets
+        "prop_type_cd": sptd_code there too) — mirrors Travis's own
+        parcel.prop_type_cd, which stores a raw source code the same way
+        (R/P/MH/MN, straight from PROP.TXT, per schema.sql's own comment).
+
+    state_cd1 -> the real PTAD property class code DCAD_SPTD_CD_XREF_2011
+        (classification_map_dallas.py's own real, official DCAD cross-
+        reference — see that module's docstring) maps this SPTD code to,
+        e.g. "A11" -> "A", "F10" -> "F1", "D10" -> "D1". This is the direct
+        Dallas analog of Travis's own parcel.state_cd1 (AJR's own
+        ptd_state_cd field — schema.sql's comment: "PTD state property
+        code (e.g. A, F1, B)") — the SAME real-world quantity, the SAME
+        statewide Comptroller/PTAD taxonomy both counties' EARS/DCAD
+        submissions follow, sourced here from DCAD's own confirmed
+        cross-reference rather than re-derived or guessed.
+
+    None-safe: a None/blank sptd_code, or one absent from
+    DCAD_SPTD_CD_XREF_2011 (e.g. a real SPTD code observed in the wild
+    that isn't in the 2011 document's own list — see that dict's own
+    DALLAS_SPTB_DOCUMENTED_BUT_UNOBSERVED sibling for known gaps), returns
+    state_cd1=None rather than raising. This is a display-field
+    derivation, not the identity-integrity class of check
+    derive_prop_id_geo_id() fails loud on — an unrecognized class code
+    should degrade to an absent field, not block the load.
+    """
+    import classification_map_dallas as _cmd
+    state_cd1 = None
+    if sptd_code:
+        entry = _cmd.DCAD_SPTD_CD_XREF_2011.get(str(sptd_code).strip().upper())
+        if entry:
+            state_cd1 = entry[0]
+    return {"prop_type_cd": sptd_code, "state_cd1": state_cd1}
 
 
 # ══════════════════════════════════════════════════════════════════════

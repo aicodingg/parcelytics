@@ -53,6 +53,17 @@ which cannot be engineered on demand); test_find_prop_id_geo_id_conflicts()
 (the pure write-time-guard comparison logic, both a clean case and a
 forced conflict).
 
+PX-20260826-05 Task 2 changes (PM BLOCKER): added
+test_derive_parcel_class_fields() (state_cd1/prop_type_cd derivation via
+DCAD_SPTD_CD_XREF_2011, including None/unknown-code degrade-gracefully
+cases), test_build_unit_rows_carries_state_cd1() (proving build_unit_rows()
+actually folds the derived state_cd1 into each row), and
+test_write_parcel_idempotent_on_rerun()/test_write_parcel_dry_run_zero_db_access()
+(a FakeConn + monkeypatched psycopg2.extras.execute_batch proving
+write_parcel()'s real idempotency comes from PARCEL_SQL's own
+ON CONFLICT ... DO UPDATE SET <col>=EXCLUDED.<col> shape, not app-level
+dedup logic).
+
 Run: python3 loaders/test_dcad_format.py
 """
 import sys
@@ -434,6 +445,166 @@ def test_derive_value_mapping_no_cap():
           vm_none["hs_cap_loss"] is None)
 
 
+def test_derive_parcel_class_fields():
+    """PX-20260826-05 Task 2 (PM BLOCKER): the SPTD-derived class fields
+    write_parcel() needs for `parcel` -- prop_type_cd is the raw SPTD_CODE
+    passthrough, state_cd1 is DCAD_SPTD_CD_XREF_2011's own confirmed PTAD
+    class code for that SPTD code."""
+    a11 = dcad_format.derive_parcel_class_fields("A11")
+    check("derive_parcel_class_fields: A11 -> prop_type_cd verbatim", a11["prop_type_cd"] == "A11")
+    check("derive_parcel_class_fields: A11 -> state_cd1 'A' (DCAD_SPTD_CD_XREF_2011)", a11["state_cd1"] == "A")
+
+    f10 = dcad_format.derive_parcel_class_fields("F10")
+    check("derive_parcel_class_fields: F10 -> state_cd1 'F1'", f10["state_cd1"] == "F1")
+
+    d10 = dcad_format.derive_parcel_class_fields("D10")
+    check("derive_parcel_class_fields: D10 -> state_cd1 'D1'", d10["state_cd1"] == "D1")
+
+    lower = dcad_format.derive_parcel_class_fields("a11")
+    check("derive_parcel_class_fields: lowercase input still resolves (case-insensitive lookup)",
+          lower["state_cd1"] == "A")
+
+    none_case = dcad_format.derive_parcel_class_fields(None)
+    check("derive_parcel_class_fields: None sptd_code -> state_cd1 None, prop_type_cd None, no raise",
+          none_case["state_cd1"] is None and none_case["prop_type_cd"] is None)
+
+    unknown = dcad_format.derive_parcel_class_fields("ZZ9")
+    check("derive_parcel_class_fields: an SPTD code absent from DCAD_SPTD_CD_XREF_2011 degrades to state_cd1=None, not a raise",
+          unknown["state_cd1"] is None and unknown["prop_type_cd"] == "ZZ9")
+
+
+def test_build_unit_rows_carries_state_cd1():
+    """PX-20260826-05 Task 2: build_unit_rows() must fold
+    derive_parcel_class_fields()'s state_cd1 into each row, since
+    write_parcel() reads it straight off unit_rows."""
+    from loaders import load_dallas_certified as loader  # noqa
+
+    account_info_recs = [r for r in dcad_format.iter_account_info_records(lines=ACCOUNT_INFO_CSV.splitlines())
+                          if r["skip_reason"] is None and not r["is_bpp"]]
+    account_info_by_num = {r["account_num"]: r for r in account_info_recs}
+    appr_recs = {r["account_num"]: r for r in dcad_format.iter_account_apprl_year_records(lines=ACCOUNT_APPRL_YEAR_CSV.splitlines())}
+    unit_rows = loader.build_unit_rows(account_info_by_num, appr_recs, {}, 2026)
+    by_geo = {r["geo_id"]: r for r in unit_rows}
+
+    check("build_unit_rows: state_cd1 present and correct for an A11 (Residential) account",
+          by_geo["00000123456789012"]["state_cd1"] == "A")
+    check("build_unit_rows: state_cd1 correct for the F10 (Commercial) account",
+          by_geo["00000123456789014"]["state_cd1"] == "F1")
+
+
+class _FakeCursor:
+    """Minimal DB-API cursor stub -- records every execute_batch-style call
+    (via psycopg2.extras.execute_batch's own call into cur.executemany
+    under the hood is bypassed here; this fixture directly monkeypatches
+    psycopg2.extras.execute_batch itself, see test below, to avoid needing
+    a real psycopg2 install in this sandbox)."""
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakeConn:
+    def __init__(self):
+        self.commits = 0
+
+    def cursor(self):
+        return _FakeCursor()
+
+    def commit(self):
+        self.commits += 1
+
+
+def test_write_parcel_idempotent_on_rerun():
+    """PX-20260826-05 Task 2 (PM ruling: 'fixtures for the parcel write +
+    idempotency'). Real idempotency here comes from PARCEL_SQL's own
+    ON CONFLICT (county_code, geo_id) DO UPDATE SET <col> = EXCLUDED.<col>
+    for every written column (no COALESCE-preserving branch) -- this test
+    proves that SQL shape is what's actually shipping, and that calling
+    write_parcel() twice with the same unit_rows sends the IDENTICAL batch
+    both times (same rows, same SQL, same count) -- exactly the property
+    that, combined with a real Postgres ON CONFLICT DO UPDATE, guarantees
+    re-running this loader against the same archive converges `parcel` to
+    the same values rather than accumulating duplicates or drifting.
+
+    No live DB in this sandbox (no psycopg2 installed) -- psycopg2.extras
+    is monkeypatched with a fake execute_batch that just records its
+    arguments, same class of mock this session has used for the
+    write-time prop_id/geo_id guard's own DB-facing tests.
+    """
+    import sys as _sys
+    import types as _types
+    from loaders import load_dallas_certified as loader  # noqa
+
+    calls = []
+
+    def _fake_execute_batch(cur, sql, rows, page_size=None):
+        calls.append((sql, list(rows)))
+
+    fake_psycopg2_extras = _types.ModuleType("psycopg2.extras")
+    fake_psycopg2_extras.execute_batch = _fake_execute_batch
+    fake_psycopg2 = _types.ModuleType("psycopg2")
+    fake_psycopg2.extras = fake_psycopg2_extras
+
+    real_psycopg2 = _sys.modules.get("psycopg2")
+    real_psycopg2_extras = _sys.modules.get("psycopg2.extras")
+    _sys.modules["psycopg2"] = fake_psycopg2
+    _sys.modules["psycopg2.extras"] = fake_psycopg2_extras
+    try:
+        unit_rows = [
+            {"county_code": "DALLAS", "geo_id": "00000123456789012", "prop_id": 123456789012,
+             "prop_type_cd": "A11", "state_cd1": "A", "owner_name": "SMITH JOHN",
+             "situs_address": "123 MAIN ST"},
+            {"county_code": "DALLAS", "geo_id": "00000123456789014", "prop_id": 123456789014,
+             "prop_type_cd": "F10", "state_cd1": "F1", "owner_name": "ACME LLC",
+             "situs_address": "789 COMMERCE ST"},
+        ]
+        conn = _FakeConn()
+
+        n1 = loader.write_parcel(conn, unit_rows, dry_run=False)
+        n2 = loader.write_parcel(conn, unit_rows, dry_run=False)
+
+        check("write_parcel: returns len(unit_rows) on first call", n1 == 2)
+        check("write_parcel: returns the SAME count on a second, identical call (idempotent count)", n2 == 2)
+        check("write_parcel: exactly 2 execute_batch calls total (one per write_parcel() call, single-batch since < BATCH_SIZE)",
+              len(calls) == 2)
+        check("write_parcel: both calls send the IDENTICAL SQL text", calls[0][0] == calls[1][0])
+        check("write_parcel: both calls send the IDENTICAL row batch", calls[0][1] == calls[1][1])
+        check("write_parcel: PARCEL_SQL targets the real (county_code, geo_id) conflict key",
+              "ON CONFLICT (county_code, geo_id) DO UPDATE" in loader.PARCEL_SQL)
+        check("write_parcel: PARCEL_SQL overwrites (EXCLUDED), not COALESCE-preserves -- this loader IS "
+              "the authoritative account-layer source for a first Dallas load",
+              "COALESCE" not in loader.PARCEL_SQL and "EXCLUDED.prop_type_cd" in loader.PARCEL_SQL)
+        check("write_parcel: row tuple column order matches PARCEL_SQL's own column list "
+              "(county_code, geo_id, prop_id, prop_type_cd, state_cd1, owner_name, situs_address)",
+              calls[0][1][0] == ("DALLAS", "00000123456789012", 123456789012, "A11", "A",
+                                  "SMITH JOHN", "123 MAIN ST"))
+    finally:
+        if real_psycopg2 is not None:
+            _sys.modules["psycopg2"] = real_psycopg2
+        else:
+            _sys.modules.pop("psycopg2", None)
+        if real_psycopg2_extras is not None:
+            _sys.modules["psycopg2.extras"] = real_psycopg2_extras
+        else:
+            _sys.modules.pop("psycopg2.extras", None)
+
+
+def test_write_parcel_dry_run_zero_db_access():
+    """dry_run=True must return a count with conn=None and zero DB access --
+    same convention as write_prop_unit_and_tax_year()."""
+    from loaders import load_dallas_certified as loader  # noqa
+
+    unit_rows = [
+        {"county_code": "DALLAS", "geo_id": "00000123456789012", "prop_id": 123456789012,
+         "prop_type_cd": "A11", "state_cd1": "A", "owner_name": "SMITH JOHN",
+         "situs_address": "123 MAIN ST"},
+    ]
+    n = loader.write_parcel(conn=None, unit_rows=unit_rows, dry_run=True)
+    check("write_parcel: dry_run=True returns len(unit_rows) with conn=None, no raise", n == 1)
+
+
 def test_classify_account_sptd_wiring():
     """PX-20260826-04 Task 1: verify classify_account_sptd()'s real wiring
     into classification_map_dallas.classify_dallas_sptb_code() against
@@ -568,6 +739,10 @@ if __name__ == "__main__":
     test_derive_value_mapping_cap_binding()
     test_derive_value_mapping_cap_present_not_binding()
     test_derive_value_mapping_no_cap()
+    test_derive_parcel_class_fields()
+    test_build_unit_rows_carries_state_cd1()
+    test_write_parcel_idempotent_on_rerun()
+    test_write_parcel_dry_run_zero_db_access()
     test_classify_account_sptd_wiring()
     test_header_drift_fails_loud_on_missing_confirmed_column()
     test_exemption_codes_aggregation()

@@ -114,6 +114,23 @@ made real: one G1 check per loaded table (conservation identity:
 sum(buckets) == total_lines, with the real named bucket breakdown --
 accepted / no_account_num / bpp_excluded -- visible in the detail string)
 plus a G2-analog cross-table orphan check (find_orphan_accounts()).
+
+PX-20260826-05 Task 2 (PM BLOCKER, real finding from the PX-20260826-05
+dry-run runbook): this loader now ALSO writes `parcel`, via write_parcel()
+below -- it never did before. That gap was real and load-bearing, not
+stylistic: app.py's _county_has_data() (and every route gated on it)
+queries `parcel` directly, so a fully successful, gate-PASS Dallas load
+into prop_unit/prop_unit_tax_year/parcel_tax_year alone would still
+present the site as "Dallas hasn't been loaded yet" everywhere. See
+write_parcel()'s own docstring for the write shape (mirrors
+load_certified_2025.py's own PROP.TXT -> parcel account-layer write) and
+dcad_format.derive_parcel_class_fields() for the SPTD-derived state_cd1/
+prop_type_cd fields it needs. compute_metrics.py's own
+compute_county_benchmarks() bug (its INSERT...SELECT has no WHERE
+county_code filter at all, so --county DALLAS would mislabel Travis's
+aggregate stats as Dallas's) is a real, separate, pre-existing issue this
+brief does NOT fix -- see the PX-20260826-05 runbook's own §5 for why
+compute_metrics.py must stay deferred for Dallas regardless of this fix.
 ══════════════════════════════════════════════════════════════════════════
 """
 import argparse
@@ -281,6 +298,13 @@ def build_unit_rows(account_info_rows, appraisal_year_rows, exempt_rows_by_accou
         prop_id, geo_id = dcad_format.derive_prop_id_geo_id(account_num)
         sptd_code = appr.get("sptd_code")
         benchmark_label = dcad_format.classify_account_sptd(sptd_code)
+        # PX-20260826-05 Task 2 (PM BLOCKER): the SPTD-derived class fields
+        # write_parcel() below needs for `parcel` -- see
+        # dcad_format.derive_parcel_class_fields()'s own docstring for the
+        # full reasoning (state_cd1 is Dallas's real analog of Travis's own
+        # AJR-sourced parcel.state_cd1, via DCAD's own confirmed
+        # SPTD-code-to-PTAD-class cross-reference).
+        parcel_class_fields = dcad_format.derive_parcel_class_fields(sptd_code)
         values = dcad_format.derive_value_mapping(
             tot_val=appr.get("tot_val"),
             land_val=appr.get("land_val"),
@@ -306,6 +330,7 @@ def build_unit_rows(account_info_rows, appraisal_year_rows, exempt_rows_by_accou
             "situs_address": info.get("situs_address"),
             "sptd_code": sptd_code,
             "benchmark_label": benchmark_label,
+            "state_cd1": parcel_class_fields["state_cd1"],
         })
     # PX-20260826-04 finding #2, required guard 1 of 2: fail-loud, in-run
     # duplicate-prop_id detection across this whole build -- now that
@@ -429,6 +454,91 @@ def write_prop_unit_and_tax_year(conn, unit_rows, dry_run=False):
         conn.commit()
 
     return len(prop_unit_rows), len(tax_year_rows)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Step 4b — write `parcel`. PX-20260826-05 Task 2 (PM BLOCKER, real
+# finding from the PX-20260826-05 dry-run runbook): this loader never
+# wrote `parcel` before this -- only Travis's three legacy loaders
+# (load_ajr.py, load_certified_2025.py, load_2026_preliminary.py) ever
+# issue INSERT INTO parcel. That is a real, load-bearing gap, not a
+# stylistic omission: app.py's _county_has_data() (and every route gated
+# on it) queries `parcel` directly, not prop_unit/prop_unit_tax_year --
+# so a fully successful, gate-PASS Dallas load would still present as
+# "hasn't been loaded yet" everywhere without this write.
+#
+# Mirrors load_certified_2025.py's own PROP.TXT -> parcel write (the
+# Travis account-layer precedent this brief asked to mirror): PROP.TXT is
+# Travis's own authoritative, first-write account-layer source, exactly
+# the same relationship ACCOUNT_INFO/ACCOUNT_APPRL_YEAR jointly have for
+# Dallas -- so this uses that loader's unconditional EXCLUDED-overwrite
+# ON CONFLICT shape, not load_ajr.py's own COALESCE-preserving "fill in
+# what's missing" shape (load_ajr.py is a supplementary, fill-in-the-gaps
+# source layered on TOP of an already-authoritative parcel row; this
+# loader IS the authoritative source for a first Dallas load, so an
+# unconditional overwrite on re-run is the correct, idempotent behavior --
+# re-running this loader against the same archive should always converge
+# `parcel` to the same real values, not silently preserve a stale one).
+# ══════════════════════════════════════════════════════════════════════
+PARCEL_SQL = """
+    INSERT INTO parcel
+        (county_code, geo_id, prop_id, prop_type_cd, state_cd1, owner_name, situs_address)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (county_code, geo_id) DO UPDATE
+        SET prop_id       = EXCLUDED.prop_id,
+            prop_type_cd  = EXCLUDED.prop_type_cd,
+            state_cd1     = EXCLUDED.state_cd1,
+            owner_name    = EXCLUDED.owner_name,
+            situs_address = EXCLUDED.situs_address
+"""
+
+
+def write_parcel(conn, unit_rows, dry_run=False):
+    """
+    Upsert `parcel` from this run's own unit_rows -- one parcel row per
+    account: geo_id=ACCOUNT_NUM verbatim, prop_id via the same two-tier
+    derivation prop_unit already used (unit_rows already carries the
+    final prop_id, not re-derived here), state_cd1/prop_type_cd from
+    dcad_format.derive_parcel_class_fields() (already folded into each
+    unit_rows dict by build_unit_rows()).
+
+    dry_run=True: count only, ZERO DB access (conn may be None) -- same
+    convention as write_prop_unit_and_tax_year().
+
+    Idempotent by construction: re-running this against the same unit_rows
+    always upserts to the identical final values (ON CONFLICT ... DO
+    UPDATE SET <col> = EXCLUDED.<col> for every written column, no
+    COALESCE-preserving branch) -- a second run is a no-op in effect, not
+    merely "doesn't crash." See test_dcad_format.py's
+    test_write_parcel_idempotent_on_rerun() for the fixture proof (a
+    FakeConn/FakeCursor mock, since this sandbox has no live DB -- the
+    proof is that PARCEL_SQL's own ON CONFLICT clause, not any
+    apply-level dedup logic, is what guarantees this).
+
+    Returns n_parcel_rows (== len(unit_rows) always -- one parcel row per
+    account, since geo_id IS ACCOUNT_NUM and build_unit_rows() already
+    iterates a {account_num: dict}, so there is no possibility of two
+    different accounts colliding into one parcel row the way a multi-unit
+    PARCEL/geo_id split can for Travis).
+    """
+    if dry_run:
+        return len(unit_rows)
+
+    import psycopg2.extras  # lazy -- see module-level comment on the import block above
+
+    parcel_rows = [
+        (row["county_code"], row["geo_id"], row["prop_id"], row["prop_type_cd"],
+         row["state_cd1"], row["owner_name"], row["situs_address"])
+        for row in unit_rows
+    ]
+
+    for i in range(0, len(parcel_rows), BATCH_SIZE):
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_batch(
+                cur, PARCEL_SQL, parcel_rows[i:i + BATCH_SIZE], page_size=2000)
+        conn.commit()
+
+    return len(parcel_rows)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -615,12 +725,25 @@ def main():
             print(f"    {code}: {'PASS' if passed else 'FAIL'} — {detail}")
         print(f"  GATE OVERALL (dry-run, not written to ingest_audit): "
               f"{'PASS' if gate_summary['passed'] else 'FAIL'}")
+
+        # PX-20260826-05 Task 2 (PM BLOCKER): report the would-be `parcel`
+        # count too, now that this loader actually writes that table --
+        # always == len(unit_rows) (one parcel row per account; see
+        # write_parcel()'s own docstring for why no collision is possible
+        # here), but reported explicitly rather than left implicit, so a
+        # dry-run reviewer sees every table this run will touch, not just
+        # prop_unit/prop_unit_tax_year.
+        n_parcel_would_write = write_parcel(conn=None, unit_rows=unit_rows, dry_run=True)
+        print(f"  {n_parcel_would_write:,} parcel rows would be upserted "
+              f"(county={county_code}; 1 per account)")
+
         print(f"\n  *** --dry-run: no DB connection opened, zero writes ***")
         print(f"  Total elapsed: {time.time()-t_total:.1f}s")
         print(f"\nDone (dry-run). {len(unit_rows):,} rows would be written to "
-              f"prop_unit/prop_unit_tax_year for tax_year={year}, county={county_code}. "
-              f"Live load is out of scope for this brief -- the runbook (pre-flight "
-              f"checks, rollback plan, canary-first sequencing) is the next brief.")
+              f"prop_unit/prop_unit_tax_year/parcel for tax_year={year}, "
+              f"county={county_code}. Live load is out of scope for this brief -- "
+              f"the runbook (pre-flight checks, rollback plan, canary-first "
+              f"sequencing) is the next brief.")
         return
 
     import psycopg2  # lazy -- see module-level comment on the import block above
@@ -633,6 +756,13 @@ def main():
 
     n_prop_unit, n_tax_year = write_prop_unit_and_tax_year(conn, unit_rows, dry_run=False)
     print(f"  → {n_prop_unit:,} prop_unit rows upserted, {n_tax_year:,} prop_unit_tax_year rows upserted")
+
+    # PX-20260826-05 Task 2 (PM BLOCKER): write `parcel` too -- see
+    # write_parcel()'s own module-level comment block for why this was
+    # missing before and why it matters (_county_has_data() and every
+    # route gated on it query `parcel` directly).
+    n_parcel = write_parcel(conn, unit_rows, dry_run=False)
+    print(f"  → {n_parcel:,} parcel rows upserted")
 
     print(f"  Rolling up prop_unit_tax_year → parcel_tax_year for {year} (county={county_code})…")
     result = parcel_rollup.run(conn, tax_year=year, county_code=county_code)

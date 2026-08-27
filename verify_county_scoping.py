@@ -228,6 +228,7 @@ COUNTY_SCOPED_TABLES = {
             "loaders/load_imp_det_sqft.py": "improvement sqft loader",
             "loaders/load_certified_2025.py": "2025 certified loader",
             "loaders/load_2026_preliminary.py": "2026 preliminary loader",
+            "loaders/load_dallas_certified.py": "PX-20260826-05 Task 2 (PM BLOCKER): DCAD certified-roll loader's write_parcel() -- this loader never wrote `parcel` before this brief, a real gap since _county_has_data() reads it directly",
         },
     },
     "parcel_tax_year": {
