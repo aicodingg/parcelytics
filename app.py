@@ -2311,9 +2311,16 @@ def _home_search_response(q, county_code=None):
     return render_template("index.html", q=q, error=error)
 
 
-@app.route("/<county_slug>")
+@app.route("/<county_slug>", strict_slashes=False)
 @limiter.limit(_LIMIT_HEAVY)
 def index():
+    """PX-20260827-05: strict_slashes=False -- Flask's default exact-match
+    trailing-slash behavior meant '/dallas-tx' (this route's real registered
+    shape) resolved fine but '/dallas-tx/' 404'd instead of also matching.
+    Standard Flask footgun, not new to this session, low severity (no
+    app-generated link produces the trailing-slash form) -- fixed by
+    opting this route out of strict matching so both forms resolve
+    identically, rather than adding a second explicit redirect rule."""
     q = request.args.get("q", "").strip()
     return _home_search_response(q, county_code=g.county_code)
 
