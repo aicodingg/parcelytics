@@ -169,9 +169,13 @@
   <div class="fd-trust-panel">
     <div class="row g-5 align-items-center">
       <div class="col-lg-6">
-        <div class="fd-kicker">Provenance · {{ live_counties | map(attribute='display_name') | join(' and ') }} — live today</div>
+        {# PX-20260827-04 Task 3: was a per-name join (Diego's ruling: stop
+           enumerating counties in running prose as the list grows) --
+           total-parcels-across-live-counties framing instead, same
+           live_counties source, summed not invented. #}
+        <div class="fd-kicker">Provenance · {{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+ parcels, {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} — live today</div>
         <h2 class="fd-h2" style="color:#fff;">Certified data, shown proudly.</h2>
-        <p class="fd-lead" style="color:var(--text-on-dark-2);">Two official sources per county, named on every figure — live in {{ live_counties | map(attribute='county_name') | join(' and ') }} today, with coverage and as-of dates stated plainly.</p>
+        <p class="fd-lead" style="color:var(--text-on-dark-2);">Two official sources per county, named on every figure — live across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} today, with coverage and as-of dates stated plainly.</p>
       </div>
       <div class="col-lg-6">
         <div class="provenance-row">
@@ -213,7 +217,12 @@
 {% set live_slugs = live_counties | map(attribute='slug') | list %}
 <section class="fd-section">
   <div class="fd-kicker">Where we're headed</div>
-  <h2 class="fd-h2">Live today in {{ live_counties | map(attribute='county_name') | join(' and ') }}. Expanding to the country's largest markets next.</h2>
+  {# PX-20260827-04 Task 3: per-name join replaced with the same
+     total-parcels/county-count framing used elsewhere on this page --
+     matches the map card's own "Live in N markets today" line just below,
+     rather than telling a names-enumerated story here and a count-based
+     one two lines down. #}
+  <h2 class="fd-h2">Live today across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} — {{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+ parcels. Expanding to the country's largest markets next.</h2>
   <p class="fd-lead mb-4">
     Parcelytics started in Travis County because that's where the data pipeline was built and verified
     end-to-end, then expanded county by county from there. The roadmap below — not current coverage —
@@ -351,8 +360,13 @@
      five roadmap-only cards. The row now LEADS with a live Travis card, so
      the original wording would flatly contradict the card two lines above
      it. Re-scoped to name the five expansion markets specifically. #}
+  {# PX-20260827-04 Task 3: per-name join replaced with count framing --
+     the market cards two lines above already name each live county
+     individually (the "coverage map's own cards" Diego's ruling keeps
+     names on); this sentence just needs to say how many are live, not
+     re-enumerate them. #}
   <p class="text-muted mt-3 mb-0" style="font-size:11.5px;">
-    Roadmap, not current coverage, for the markets above still marked "Coming soon" — {{ live_counties | map(attribute='display_name') | join(' and ') }} {{ 'has' if live_counties|length == 1 else 'have' }} live
+    Roadmap, not current coverage, for the markets above still marked "Coming soon" — {{ live_counties|length }} {{ 'market has' if live_counties|length == 1 else 'markets have' }} live
     Parcelytics data today. Timing depends on each county's data pipeline and public-records access.
   </p>
 </section>

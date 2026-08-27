@@ -97,17 +97,74 @@ def rank_candidates(rows, boost_tokens, pattern_tokens):
     return sorted(rows, key=sort_key)
 
 
-def is_numeric_account_query(q):
+def is_account_number_query(q):
     """
     True if `q` looks like it's meant to be resolved as an exact account
-    number / prop_id rather than an address-text search -- i.e. once
-    whitespace/dashes are stripped, what's left is all digits. Mirrors the
-    character class app.py's normalize_parcel_id()/the "/" route's
-    numeric-first branch already accept; kept here (rather than duplicated)
-    so api_address_search() and the "/" route agree on what counts as
-    "numeric" without re-deriving it independently.
+    number / prop_id rather than an address-text search.
+
+    PX-20260827-04: renamed from is_numeric_account_query() and extended
+    beyond all-digit strings. That original all-digit-only check was
+    written before Dallas onboarding and silently excluded Dallas's real
+    ACCOUNT_NUM shape: per derive_prop_id_geo_id()'s own validation logic
+    (loaders/dcad_format.py, PX-20260826-04 -- the authoritative source
+    read for this fix rather than guessed at) a Dallas ACCOUNT_NUM is any
+    non-blank string, and DCAD's own real export data confirms 205,049 of
+    806,563 real ACCOUNT_NUMs are alphanumeric, with the letters serving as
+    STRUCTURAL block/unit designators (e.g. "381077000C0250000") rather
+    than being some kind of corruption -- so an all-digit-only gate here
+    made every one of those accounts unfindable through any of the four
+    shared typeahead boxes (api_address_search() below is the one real
+    call site), even though direct-URL / full-page-search resolution
+    (resolve_exact_parcel(), which has no digit gate at all) already
+    handled them correctly. Confirmed live pre-fix:
+    GET /dallas-tx/api/address_search?q=381077000C0250000 -> {"results": []}
+    while the same account resolves fine at
+    GET /dallas-tx/parcel/381077000C0250000 and via full-page search
+    (GET /dallas-tx/?q=381077000C0250000).
+
+    Rather than simply accepting "any non-blank string" (derive_prop_id_
+    geo_id()'s own rule) -- which would swallow genuine address text too,
+    defeating the whole point of this function -- this applies a tighter,
+    still-real-shape-grounded rule so address queries keep falling through
+    to search_parcels_by_address() as before:
+      1. once whitespace/dashes are stripped, what remains must be
+         non-empty and alphanumeric only (letters + digits, no other
+         punctuation) -- real account numbers never contain punctuation
+         beyond the dashes/spaces already stripped; address text routinely
+         does ("123 Main St, Apt #4").
+      2. it must contain at least one digit -- excludes pure-word address
+         tokens ("AUSTIN", "MAIN") that would otherwise pass the
+         alphanumeric check once their spaces are stripped.
+      3. digits must be the majority of the stripped characters (>=50%) --
+         real ACCOUNT_NUMs are "digits with occasionally embedded letters"
+         per DCAD's own confirmed finding above (in the 17-char real-world
+         example, 16 of 17 characters are digits); address text with an
+         embedded number ("100 Highway", "5C Main") is letter-majority
+         once its spaces are stripped and is correctly rejected here.
+      4. length must fit schema.sql's real geo_id column width
+         (VARCHAR(20)) -- anything longer literally cannot be a geo_id.
+    All-digit strings (the original, unextended behavior) always satisfy
+    every one of these unchanged, so no existing all-digit account number
+    query is affected by this change.
+
+    Kept here (rather than duplicated) so api_address_search() and the "/"
+    route agree on what counts as an account number without re-deriving it
+    independently.
     """
     if not q:
         return False
     stripped = q.strip().replace("-", "").replace(" ", "")
-    return stripped.isdigit()
+    if not stripped or not stripped.isalnum():
+        return False
+    if len(stripped) > 20:
+        return False
+    digit_count = sum(1 for c in stripped if c.isdigit())
+    if digit_count == 0:
+        return False
+    return digit_count >= len(stripped) / 2.0
+
+
+# Backward-compatible alias -- PX-20260827-04 renamed this function (see
+# is_account_number_query()'s own docstring for why); kept in case any
+# future call site still imports the old name.
+is_numeric_account_query = is_account_number_query

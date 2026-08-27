@@ -2099,11 +2099,20 @@ def run():
     print("── base.html: version display ──")
     _version_ctx = base_context()
     _version_html = tmpl.render(**_version_ctx)
+    # PX-20260827-04 incidental fix: this assertion used to additionally
+    # require `_real_config.VERSION == "1.0.0"` -- a hardcoded pin to
+    # whatever VERSION happened to read the day this check was written,
+    # not part of what it's actually verifying (that the real VERSION
+    # file's contents reach the real footer markup). That pin has been
+    # silently failing this check on every run since VERSION was
+    # legitimately bumped past "1.0.0" (now "1.10.0" per BUILD_WORKFLOW.md's
+    # normal release process), unrelated to this brief's own edits. Fixed
+    # to check what the comment above already says it checks.
     _expected_version_str = f"v{_real_config.VERSION}"
-    if _real_config.VERSION == "1.0.0" and _expected_version_str in _version_html:
-        print(f"PASS [base.html footer] '{_expected_version_str}' found in rendered output, sourced from the real VERSION file (config.VERSION == '1.0.0')")
+    if _expected_version_str in _version_html:
+        print(f"PASS [base.html footer] '{_expected_version_str}' found in rendered output, sourced from the real VERSION file (config.VERSION == {_real_config.VERSION!r})")
     else:
-        print(f"FAIL [base.html footer] expected '{_expected_version_str}' in rendered output (VERSION file contents: {_real_config.VERSION!r}) -- not found, or VERSION file no longer reads '1.0.0'")
+        print(f"FAIL [base.html footer] expected '{_expected_version_str}' in rendered output (VERSION file contents: {_real_config.VERSION!r}) -- not found")
         all_ok = False
 
     # ── Cowork brief "Terms of Service, Privacy Policy, Disclaimer Page,

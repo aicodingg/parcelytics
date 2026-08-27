@@ -5424,8 +5424,12 @@ def api_address_search():
     # didn't before — this endpoint never did geo_id/prop_id matching,
     # only address text), so typing an account number into any of the four
     # search boxes shows a typeahead suggestion, not just a blank dropdown
-    # until Enter is pressed.
-    if search_logic.is_numeric_account_query(q):
+    # until Enter is pressed. PX-20260827-04: is_account_number_query() (
+    # renamed from is_numeric_account_query(), see search_logic.py) also
+    # now recognizes Dallas's real alphanumeric ACCOUNT_NUM shape, not
+    # just all-digit strings -- this was the one confirmed gate preventing
+    # 205,049 real Dallas accounts from being found via typeahead.
+    if search_logic.is_account_number_query(q):
         exact = resolve_exact_parcel(q)
         if exact:
             return jsonify({"ok": True, "results": [{

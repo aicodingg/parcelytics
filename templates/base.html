@@ -93,27 +93,50 @@
           </ul>
         </div>
 
-        {# PX-20260827-03-rev1 Task 2: nav-level county switcher, rendered
-           from the same live_counties (registered AND has real data) list
-           the search dropdown and Task 3's launch surfaces all read from --
-           one registry, not a second hand-maintained list. Shown only on
-           county-anchored pages (is_county_anchored) and only once a
-           second county is actually live -- Diego's ruling (b), "users
-           reach any live county from anywhere," not a switcher with
-           nothing to switch to. Links to that county's own home
-           ('/<slug>') rather than trying to carry the current page over --
-           a parcel/snapshot/rate view has no equivalent in another county,
-           so "go to that county's home" is the one always-correct target. #}
-        {% if is_county_anchored and live_counties|length > 1 %}
+        {# PX-20260827-03-rev1 Task 2 / PX-20260827-04 Task 2: nav-level
+           county switcher, rendered from the same live_counties
+           (registered AND has real data) list the search dropdown and
+           Task 3's launch surfaces all read from -- one registry, not a
+           second hand-maintained list. Shown once a second county is
+           actually live -- Diego's ruling (b), "users reach any live
+           county from anywhere," not a switcher with nothing to switch
+           to. Links to that county's own home ('/<slug>') rather than
+           trying to carry the current page over -- a parcel/snapshot/rate
+           view has no equivalent in another county, so "go to that
+           county's home" is the one always-correct target.
+
+           PX-20260827-04 Task 2: previously gated on is_county_anchored,
+           so this was hidden entirely on neutral/bare pages (no county in
+           the URL) -- Diego's live spot-check found the wrong problem
+           with that: it isn't that the selector should stay hidden there,
+           it's that a real selector belongs on neutral pages too, but
+           NOT looking like this same populated, one-county-highlighted
+           dropdown -- that would silently imply Travis (the
+           DEFAULT_COUNTY_SLUG fallback) is already the active choice,
+           when a neutral request has made no real choice at all
+           (is_county_anchored is False precisely because
+           _pull_county_slug() never ran for this request -- see its own
+           context-processor comment above). So the gate is now just
+           "is there more than one county to choose between," and the
+           label/style/active-highlighting branch on is_county_anchored:
+           a genuine "county-selector-pill" visual (dashed border, muted
+           "Select a county" label, no item marked active) whenever
+           there's genuinely no county context, vs. today's solid,
+           county-named, active-highlighted dropdown once one is real.
+           Selecting an item works identically either way -- same
+           '/<slug>' links, same mechanism, nothing about the navigation
+           itself changed. #}
+        {% if live_counties|length > 1 %}
         <div class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" role="button"
+          <a class="nav-link dropdown-toggle {% if not is_county_anchored %}county-selector-pill{% endif %}"
+             href="#" role="button"
              data-bs-toggle="dropdown" aria-expanded="false" id="countySwitcherDropdown">
-            {{ county_profile.county_name }}
+            {% if is_county_anchored %}{{ county_profile.county_name }}{% else %}Select a county{% endif %}
           </a>
           <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="countySwitcherDropdown">
-            <li class="dropdown-header">Switch county</li>
+            <li class="dropdown-header">{% if is_county_anchored %}Switch county{% else %}Choose a county{% endif %}</li>
             {% for c in live_counties %}
-            <li><a class="dropdown-item {% if c.slug == county_slug %}active{% endif %}" href="/{{ c.slug }}">{{ c.display_name }}</a></li>
+            <li><a class="dropdown-item {% if is_county_anchored and c.slug == county_slug %}active{% endif %}" href="/{{ c.slug }}">{{ c.display_name }}</a></li>
             {% endfor %}
           </ul>
         </div>
@@ -149,10 +172,18 @@
            county-SCOPED to the CURRENT request's county, not a true
            site-wide "what's live" statement (wrong on a neutral page, and
            wrong even on a Dallas-scoped page, which would say "Live today
-           in Dallas" while omitting that Travis is also live). Now lists
-           every live_counties entry -- the same registered-AND-has-data
-           list every other coverage surface on this site reads from. #}
-        Live today in {{ live_counties | map(attribute='display_name') | join(' and ') }} —
+           in Dallas" while omitting that Travis is also live). Then
+           briefly listed every live_counties entry by name.
+           PX-20260827-04 Task 3: per Diego's ruling ("we're not going to
+           list every county, we can just reference total number of
+           parcels or something"), enumerating names in running prose
+           doesn't scale as the live-county list grows -- switched to a
+           summed total-parcels-across-live-counties framing, still
+           sourced from the same live_counties list (sum, not invented).
+           Per-county names stay on the coverage map's own legend/cards
+           below (index.html's market cards, search.html's map legend),
+           which is where they're actually useful. #}
+        {{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+ parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} —
         expanding market by market, each one verified before it goes live.
       </p>
     </div>
@@ -176,12 +207,15 @@
       <div class="footer-col-title">Coverage</div>
       {# PX-20260827-03-rev1 Task 3: was a hardcoded "Travis ... · Dallas —
          next" string that would never have flipped to "live" on its own
-         when Dallas's data actually landed. Now registry-driven off
+         when Dallas's data actually landed. Made registry-driven off
          live_counties (registered AND has real data) with real per-county
-         COUNT(*) figures (_live_counties_with_counts(), TTL-cached) --
-         Dallas appears here the moment it has data, with its own real
-         count, not a hand-edited guess. #}
-      <span>{% for c in live_counties %}{{ c.display_name }} — {{ c.parcel_count_display }} parcels{% if not loop.last %} · {% endif %}{% endfor %}</span>
+         COUNT(*) figures (_live_counties_with_counts(), TTL-cached).
+         PX-20260827-04 Task 3: that per-county enumeration was correct but
+         doesn't scale as more counties go live (Diego's ruling) -- summed
+         into one total-parcels-across-live-counties figure instead, same
+         underlying data (sum, not invented). Per-county names/counts stay
+         on the coverage map's own legend/cards, not here. #}
+      <span>{{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }} parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }}</span>
       <span>Rates back to 1990</span>
       <span>Certified 2021–2026</span>
       <a href="mailto:parcelytics@gmail.com">Contact &amp; feedback</a>

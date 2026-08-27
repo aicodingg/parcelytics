@@ -301,6 +301,25 @@ main.container.is-frontdoor { max-width: var(--maxw); }
 }
 .navbar .nav-link.active { color: var(--accent) !important; font-weight: var(--fw-semibold); }
 
+/* PX-20260827-04 Task 2: neutral-page county selector, styled as a pill
+   that visibly "needs a choice" rather than as a normal populated
+   dropdown that reads as if a county is already active. Dashed border +
+   accent color (vs. the solid/no-border look of a plain nav-link) is the
+   one non-color-dependent + color cue combo, matching this codebase's own
+   existing convention of pairing an accent color with a distinct border
+   treatment (see the roadmap map's status legend) rather than relying on
+   color alone. */
+.navbar .nav-link.county-selector-pill {
+  border: 1px dashed var(--accent);
+  color: var(--accent) !important;
+  padding: 0.35rem 0.75rem !important;
+}
+.navbar .nav-link.county-selector-pill:hover,
+.navbar .nav-link.county-selector-pill:focus {
+  background: var(--accent-ring);
+  color: var(--accent) !important;
+}
+
 /* Mobile collapse toggler — dark icon for the light bar */
 .navbar-toggler {
   border-color: var(--border-strong) !important;

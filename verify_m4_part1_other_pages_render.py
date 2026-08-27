@@ -46,6 +46,50 @@ def make_env():
     import config as _real_config
     env.globals["config"] = _real_config
     env.filters["tojson"] = lambda v: "null"
+
+    # PX-20260827-04 incidental fix: county_profile/county_url/live_counties/
+    # is_county_anchored (from app.py's @app.context_processor) were NEVER
+    # registered here -- every one of this harness's scenarios has been
+    # raising UndefinedError on 'county_profile' via base.html's footer since
+    # PX-20260824-01/PX-20260827-03-rev1 landed, pre-dating and unrelated to
+    # this brief's own Task 2 edit. Same gap class already fixed in
+    # verify_property_html_render.py (see its own comment there) -- mirrored
+    # here rather than shared, since this harness has no live app.py import
+    # either. live_counties intentionally carries TWO entries (unlike that
+    # harness's single-Travis mock) so Task 2's new
+    # `live_counties|length > 1` gate actually renders the switcher in these
+    # scenarios too, not just silently no-ops it. All six templates here are
+    # real county-anchored (<county_slug>-prefixed) routes in production, so
+    # is_county_anchored=True throughout, matching property.html's harness.
+    env.globals["county_slug"] = "travis-tx"
+    env.globals["county_url"] = lambda path: "/travis-tx" + path
+    _MOCK_TRAVIS_PROFILE = {
+        "display_name": "Travis County, TX",
+        "county_name": "Travis County",
+        "cad_name": "Travis Central Appraisal District",
+        "tax_office_name": "Travis County Tax Office",
+    }
+    env.globals["county_profile"] = _MOCK_TRAVIS_PROFILE
+    env.globals["county_cad_link"] = lambda field, prop_id=None, geo_id=None: None
+    env.globals["live_counties"] = [
+        {
+            "slug": "travis-tx",
+            "county_code": "TRAVIS",
+            "display_name": "Travis County, TX",
+            "county_name": "Travis County",
+            "parcel_count": 430147,
+            "parcel_count_display": "430,147",
+        },
+        {
+            "slug": "dallas-tx",
+            "county_code": "DALLAS",
+            "display_name": "Dallas County, TX",
+            "county_name": "Dallas County",
+            "parcel_count": 705536,
+            "parcel_count_display": "705,536",
+        },
+    ]
+    env.globals["is_county_anchored"] = True
     return env
 
 
