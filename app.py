@@ -1863,6 +1863,44 @@ DEFAULT_COUNTY_SLUG = "travis-tx"
 #     candidate map-tool domains (maps.dcad.org, esearch.dallascad.org)
 #     without independent confirmation strong enough to trust, so this
 #     stays unset rather than guessed -- unchanged from the prior brief.
+#
+# PX-20260827-02 (verification brief) UPDATES to the notes above:
+#   - cad_interactive_map_url is NO LONGER None: maps.dcad.org/prd/dpm/ was
+#     independently live-verified this brief (real DCAD Property Map tool,
+#     linked from DCAD's own site nav as "Find Property on Map"). It is
+#     ALSO deep-linkable per-parcel via "?parcelid=<ACCOUNT_NUM>" (verified
+#     live against a real account -- correct address/owner/value rendered)
+#     but that deep-link capability is NOT wired into COUNTY_PROFILES or any
+#     template here, since doing so is outside this brief's scope (see the
+#     PX-20260827-02 report) -- a real, disclosed opportunity for a
+#     follow-up brief, not a guess.
+#   - CONFIRMED BUG (not fixed here -- outside this brief's scope, reported
+#     to the PM instead): cad_parcel_detail_url_template,
+#     cad_homestead_exemption_url_template, and cad_protest_url_template are
+#     all called from property.html with parcel.prop_id, but DCAD's real
+#     "ID=" parameter requires the literal ACCOUNT_NUM string (== this
+#     schema's geo_id), not prop_id. Per REV1's derive_prop_id_geo_id()
+#     (dcad_format.py): for an all-digit ACCOUNT_NUM, prop_id is
+#     int(ACCOUNT_NUM), so county_cad_link()'s str(prop_id) substitution
+#     silently drops leading zeros -- live-verified to break the deep link
+#     (DCAD returns "Error in Account Details: Account Number is missing or
+#     in wrong format" for the zero-stripped form). For an alphanumeric
+#     ACCOUNT_NUM (~25% of real Dallas accounts), prop_id is instead a
+#     synthetic SHA-256-derived integer disjoint from any real account
+#     number, so the substituted URL cannot resolve at all. Travis is NOT
+#     affected (its prop_id was independently confirmed correct against
+#     ProdigyCAD's URL shape in JOHNNY-FEEDBACK-1). The fix is to substitute
+#     parcel.geo_id instead of parcel.prop_id for these three Dallas
+#     fields -- deferred to a follow-up brief per PX-20260827-02's explicit
+#     "no code changes beyond profile-field additions" rule.
+#   - Also newly confirmed (informational, not yet used anywhere): DCAD
+#     serves a SEPARATE commercial-account detail page at
+#     "AcctDetailCom.aspx?ID=<account_number>", distinct from
+#     AcctDetailRes.aspx (residential). This updates the "no separate
+#     commercial-account URL shape has been confirmed" note above -- one
+#     now has been, though cad_parcel_detail_url_template here still points
+#     only at the residential shape (unchanged; disclosed, not silently
+#     left stale).
 COUNTY_PROFILES = {
     "TRAVIS": {
         "display_name": "Travis County, TX",
@@ -1887,7 +1925,7 @@ COUNTY_PROFILES = {
         "cad_name": "Dallas Central Appraisal District",
         "cad_abbr": "DCAD",
         "cad_website": "https://www.dallascad.org",
-        "cad_interactive_map_url": None,   # not confirmed -- see note above
+        "cad_interactive_map_url": "https://maps.dcad.org/prd/dpm/",   # PX-20260827-02 Task 3: confirmed live -- see note above (deep-linkable via ?parcelid=<geo_id>, not wired here; see report)
         "cad_property_search_url": "https://www.dallascad.org/SearchOwner.aspx",
         "cad_parcel_detail_url_template": "https://www.dallascad.org/AcctDetailRes.aspx?ID={prop_id}",
         "cad_homestead_exemption_url": None,
