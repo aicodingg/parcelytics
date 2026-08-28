@@ -289,14 +289,14 @@ _CERT_ARCHIVE_DATES = {
 # own Migration 4 rows (parsed from the table directly, not re-typed) so
 # this specific drift class fails loud in a test, not just at runtime.
 #
-# Real, honest disclosure: only 2026 has been EXTRACTED (vault_manifest.md's
-# own 2026 rows hash 14 individual per-table CSVs directly; every other
-# year's 2022-2025 rows hash only the still-zipped .ZIP file itself) --
-# 2022-2025 extraction is a separate, later, not-yet-done step (this
-# brief's own text says so explicitly). DALLAS_EXTRACTED_YEARS records
-# that real, current state so load_dallas_certified.py can fail loud with
-# a clear, correct message ("this year's zip hasn't been extracted yet")
-# distinct from a generic "directory not found".
+# Real, honest disclosure: 2022 and 2026 have been EXTRACTED (2026 at
+# original acquisition; 2022 extracted 2026-08-28, verified via live
+# dry-run against real Werkzeug/DB-free gate scan -- see vault_manifest.md
+# row 210). 2023-2025 remain still-zipped, not yet extracted.
+# DALLAS_EXTRACTED_YEARS records that real, current state so
+# load_dallas_certified.py can fail loud with a clear, correct message
+# ("this year's zip hasn't been extracted yet") distinct from a generic
+# "directory not found".
 DALLAS_ACQUISITION_DATE = "2026-08-26"  # the one real archival-event date for all 5 years (Migration 4 prose)
 _DALLAS_CERT_ARCHIVE_INFO = {
     "DALLAS_CERT_DIR_2022": ("2022 Certified", "DCAD2022_CERTIFIED_07252022"),
@@ -305,7 +305,7 @@ _DALLAS_CERT_ARCHIVE_INFO = {
     "DALLAS_CERT_DIR_2025": ("2025 Certified", "DCAD2025_CERTIFIED_07242025"),
     "DALLAS_CERT_DIR_2026": ("2026 Certified", "DCAD2026_CERTIFIED_07232026"),
 }
-DALLAS_EXTRACTED_YEARS = frozenset({2026})
+DALLAS_EXTRACTED_YEARS = frozenset({2022, 2026})
 
 
 def _dallas_archive(*parts):
