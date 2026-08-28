@@ -20,7 +20,12 @@
       every figure traceable to its source.
     </p>
     <div class="hero-actions">
-      <a href="{{ url_for('index') }}" class="btn-cta">Search a parcel →</a>
+      {# PX-20260828-07: was url_for('index') -- /about is a neutral page (no
+         g.county_slug set), so this silently resolved to '/travis-tx' via
+         _add_county_slug()'s DEFAULT_COUNTY_SLUG fallback instead of landing
+         on the neutral homepage. Same fix/reasoning as index.html's hero
+         search form above -- url_for('home') mirrors base.html's navbar. #}
+      <a href="{{ url_for('home') }}" class="btn-cta">Search a parcel →</a>
     </div>
   </div>
 </section>

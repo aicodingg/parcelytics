@@ -41,7 +41,16 @@
            shared static/parcel-typeahead.js (Cowork brief "Search overhaul
            — Phase 2 go-ahead", July 2026, D1) instead of this page's own
            inline script (deleted from {% block scripts %} below). #}
-        <form method="get" action="{{ url_for('index') }}" class="hero-search">
+        {# PX-20260828-07: was url_for('index') -- on the bare homepage (no
+           g.county_slug set), Flask's @app.url_defaults hook (_add_county_
+           slug() in app.py) silently injects DEFAULT_COUNTY_SLUG for any
+           bare url_for('index') call, so this form used to submit to
+           '/travis-tx?q=...' (forcing Travis-only search via index()) even
+           though the neutral cross-county typeahead work earlier tonight
+           (PX-20260828-02/03/04/06/06b) made '/?q=...' (home()) the correct,
+           cross-county destination. url_for('home') is the same pattern
+           base.html's navbar search form already uses correctly. #}
+        <form method="get" action="{{ url_for('home') }}" class="hero-search">
           <div class="search-input-wrap">
             <input
               type="text" name="q" id="heroSearchInput"
@@ -370,7 +379,19 @@
     <div class="col-md-4">
       <div class="audience-card">
         <h3>Developers</h3>
-        <p>Evaluate submarkets on certified value trends and tax-rate history by entity, and see how a site's tax burden compares across the market — live in Travis County today, with 2026 preliminary values ahead of certification.</p>
+        {# PX-20260828-07: was "...— live in Travis County today, with 2026
+           preliminary values ahead of certification." Dropped per Diego's
+           ruling -- Rate Trends has zero Dallas data today (Task 1 finding,
+           now honestly surfaced on that page itself rather than claimed
+           here), and Market Snapshot's certified-value-trend numbers depend
+           on a per-county precompute refresh that also hasn't run for
+           Dallas yet. Naming Travis specifically here would either go stale
+           the moment a second county's data lands, or (worse) read as a
+           claim that Dallas already has the same rate-history depth Travis
+           does, which isn't true. Left generic — describes the capability,
+           not a per-county coverage claim; live_counties-driven coverage
+           copy already lives in the section above this one. #}
+        <p>Evaluate submarkets on value trends and tax-rate history by entity, and see how a site's tax burden compares across the market.</p>
       </div>
     </div>
     <div class="col-md-4">

@@ -3792,6 +3792,32 @@ def _rates_response(county_code, county_slug_val):
         ORDER  BY entity_code, tax_year
     """, {"county_code": county_code})
 
+    profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
+
+    # PX-20260828-07 Task 1 (real bug, fixed under the same brief's Task 3
+    # go-ahead): _rates_response()'s own SQL above has been county_code-
+    # scoped since DALLAS-GATE-2, but county_tax_rate has never actually had
+    # any Dallas rows loaded -- loaders/load_tax_rates.py only ever reads
+    # config.TAX_RATES_XL, a single hardcoded Travis-only workbook, and no
+    # Dallas rates source file is registered anywhere. Before this fix, a
+    # zero-row county silently rendered an empty "Entities" sidebar under a
+    # header that STILL claimed a real "1990-2025" range (the year_min/
+    # year_max fallback further below exists ONLY for this empty case, and
+    # was never meant to be read as a genuine coverage claim -- but with no
+    # honesty affordance at all, it looked like one). Same data_unavailable
+    # / data_unavailable_reason mechanism _compute_snapshot_data() (app.py)
+    # / snapshot.html already use for Market Snapshot's own "missing
+    # precomputed data" case -- not a new pattern, per Diego's explicit
+    # instruction to mirror it rather than invent something new.
+    data_unavailable = not rates
+    data_unavailable_reason = None
+    if data_unavailable:
+        data_unavailable_reason = (
+            f"Tax rate history has not been loaded yet for {profile['county_name']} -- "
+            "county_tax_rate has no rows for this county. This page reads only loaded "
+            "rate data -- run loaders/load_tax_rates.py for this county to populate it."
+        )
+
     # Build {entity_code: [{year, rate}, …]} structure for JS
     by_entity = {}
     entity_names = {}
@@ -3830,9 +3856,10 @@ def _rates_response(county_code, county_slug_val):
     )
     entity_category = {e["code"]: e["category"] for e in all_entities}
 
-    profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
     return render_template(
         "rates.html",
+        data_unavailable=data_unavailable,
+        data_unavailable_reason=data_unavailable_reason,
         by_entity_json=json.dumps(by_entity),
         entity_names_json=json.dumps(entity_names),
         entity_category_json=json.dumps(entity_category),

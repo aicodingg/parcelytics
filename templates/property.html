@@ -5697,6 +5697,15 @@ if (rCtx) {
   // rendered "broad category" caveat above (benchBroadCaveat's initial render)
   // reads from, so the JS-rebuilt version below can't drift from it.
   const CAD_ABBR = {{ county_profile.cad_abbr | tojson }};
+  // PX-20260828-07 Task 2: same single-sourcing for the "Partial" billing
+  // badge's client-side re-render (updateBillingCells(), further down this
+  // block) -- that function was hardcoding "Travis County" in its
+  // innerHTML-built tooltip regardless of which county's parcel is being
+  // viewed, a real duplication bug: the Jinja-rendered initial version of
+  // this same tooltip (search this file for "Partial" badge markup) already
+  // read county_profile.county_name correctly; the JS-rebuilt copy just
+  // never got the same treatment.
+  const COUNTY_NAME = {{ county_profile.county_name | tojson }};
   const parcelNeighborhood = {{ (parcel.neighborhood_cd or "") | tojson }};  // Task 8: default nbhd filter
 
   const selYear      = document.getElementById('benchYearFilter');
@@ -6632,7 +6641,7 @@ function ordinalSuffix(n) {
             " <span class='badge-partial ms-1' style='font-size:9px;'>Partial</span>";
           if (srcCell) {
             srcCell.innerHTML =
-              "<span class='badge-partial' title='Payment receipt from Travis County portal — amount paid, not levied; entity breakdown unavailable'>Partial</span>";
+              "<span class='badge-partial' title='Payment receipt from " + COUNTY_NAME + " portal — amount paid, not levied; entity breakdown unavailable'>Partial</span>";
           }
         } else {
           // No receipt for this year — restore na-cell

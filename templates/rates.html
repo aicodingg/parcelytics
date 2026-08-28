@@ -5,12 +5,39 @@
 
 <div class="d-flex align-items-baseline gap-3 mb-1">
   <h2 class="fw-bold mb-0" style="letter-spacing: -0.025em;">Tax Rate Trends</h2>
-  <span style="font-size: 13px; color: var(--text-3);">{{ county_profile.county_name }} · {{ year_min }}–{{ year_max }}</span>
+  <span style="font-size: 13px; color: var(--text-3);">{{ county_profile.county_name }}{% if not data_unavailable %} · {{ year_min }}–{{ year_max }}{% endif %}</span>
 </div>
+{% if not data_unavailable %}
 <p style="font-size: 13px; color: var(--text-3); margin-bottom: 1.5rem;">
   Rates per $100 of taxable value. Select one or more entities to compare.
 </p>
+{% endif %}
 
+{# ── PX-20260828-07 Task 3 (rates honesty affordance) ──────────────────────
+   Mirrors _compute_snapshot_data()/snapshot.html's own "no live fallback,
+   ever" data_unavailable pattern (app.py, Market Snapshot) rather than
+   inventing a new one -- when county_tax_rate has zero rows for the
+   selected county (Dallas today), say so loudly instead of silently
+   rendering an empty "Entities" sidebar under a header that used to still
+   claim a real "1990-2025" range. Mechanism differs slightly from
+   snapshot.html's own scattered JS-level null-checks: this page instead
+   gates the whole {% block scripts %} body below on the same flag (see
+   that block's own comment) -- simpler to get right for equivalent
+   user-facing behavior, since nothing in this page's script has anything
+   to do once the interactive markup below isn't rendered. #}
+{% if data_unavailable %}
+<div class="alert alert-warning" role="alert" style="border-left:4px solid #b8860b;">
+  <strong>Tax rate history is not yet available for {{ county_profile.county_name }}.</strong>
+  <p class="mb-0 mt-1" style="font-size:13px;">
+    {{ data_unavailable_reason }}
+  </p>
+  <p class="mb-0 mt-2 text-muted" style="font-size:12px;">
+    This page only ever shows loaded rate data — it never fabricates a range or falls back
+    to another county's numbers. Please check back once this county's rate history has been
+    loaded, or reach out via the Contact & feedback link below if you believe this is an error.
+  </p>
+</div>
+{% else %}
 {# ── Filters: County / Year Range / "Which entities apply to my property?" ── #}
 <div class="card mb-4">
   <div class="card-header">Filters</div>
@@ -178,9 +205,11 @@
   </div>
 
 </div>
+{% endif %}{# /data_unavailable #}
 {% endblock %}
 
 {% block scripts %}
+{% if not data_unavailable %}
 <script>
 const BY_ENTITY        = {{ by_entity_json | safe }};
 const ENTITY_NAMES     = {{ entity_names_json | safe }};
@@ -671,4 +700,5 @@ document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
 selectKey();
 buildSummary();
 </script>
+{% endif %}{# /not data_unavailable #}
 {% endblock %}
