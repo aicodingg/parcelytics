@@ -40,6 +40,21 @@
  * resolves to the correct county (including a bare-page-with-?county=
  * filter, since PX-20260828-01) -- this fix's only job is to actually USE
  * it here, not to change what it resolves to.
+ *
+ * PX-20260828-04: runQuery()/select() below already read global.COUNTY_BASE
+ * fresh, at call time, only when a user actually types/clicks -- they never
+ * captured it into a closure at attach() time, so a fix along those lines
+ * would not have changed anything. The REAL bug this brief found live
+ * (navbar box 404ing to "/undefined/api/address_search") was in base.html:
+ * COUNTY_BASE was declared with `const`, which never becomes a `window`
+ * property, so `global.COUNTY_BASE` here (global === window, per this
+ * file's own last line) was always undefined -- independent of which
+ * <script> tag ran first. base.html now sets `window.COUNTY_BASE`
+ * explicitly. CONTRACT: this file requires COUNTY_BASE to exist as a real
+ * property of `window`/`global`, not merely as a same-document inline
+ * <script>'s top-level `const`/`let` binding -- an external <script src>
+ * like this one has no lexical access to another script tag's block-scoped
+ * declarations, only to `window`.
  */
 (function (global) {
   "use strict";

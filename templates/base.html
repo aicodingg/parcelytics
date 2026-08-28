@@ -305,6 +305,16 @@
   // — Phase 2 go-ahead", July 2026, D1. The other three boxes (homepage
   // hero, /search, Rate Trends) attach their own instances from their own
   // per-page scripts block further down this file — see those templates.
+  //
+  // PX-20260828-04: this call sits BEFORE the COUNTY_BASE <script> tag
+  // below in source order -- looks like a declare-after-use bug, but isn't
+  // one, and reordering these two tags would NOT have been the real fix
+  // (see that tag's own comment for why). attach() only registers event
+  // listeners here; it never reads COUNTY_BASE itself, at attach-time or
+  // otherwise -- static/parcel-typeahead.js's runQuery()/select() read
+  // window.COUNTY_BASE fresh, only when a user actually types/clicks,
+  // which cannot happen until every synchronous <script> on this page
+  // (including the one below) has already finished running.
   ParcelTypeahead.attach({ inputId: "navSearchInput" });
 </script>
 <script>
@@ -328,7 +338,31 @@
   // would flip is_county_anchored (hasattr(g, "county_slug")) to True on a
   // page whose whole point is staying URL-neutral, incorrectly triggering
   // the nav-level county-switcher's "anchored page" treatment.
-  const COUNTY_BASE = {{ url_for('index', county_slug=api_county_slug) | tojson }}.replace(/\/$/, '');
+  //
+  // PX-20260828-04 REAL FIX: this used to be `const COUNTY_BASE = ...`.
+  // Top-level `const`/`let` declared inside a <script> tag create a
+  // binding in the page's shared GLOBAL LEXICAL scope -- visible as a bare
+  // `COUNTY_BASE` identifier to every OTHER INLINE <script> tag that runs
+  // later in the same document (property.html/search.html/rates.html/
+  // parcel_list.html all do exactly this, and were never affected) -- but
+  // that binding is NOT a property of `window`. static/parcel-typeahead.js
+  // is loaded as a separate, external <script src="..."> and only ever
+  // receives the page's state via `window` (its own IIFE takes `window` as
+  // its `global` param, per that file's last line) -- `global.COUNTY_BASE`
+  // there was reading `window.COUNTY_BASE`, which a `const` declaration
+  // NEVER sets, no matter what order the two <script> tags run in. This
+  // silently 404'd every one of the four typeahead boxes' fetch()/navigate
+  // calls to "/undefined/..." since PX-20260828-02 shipped -- confirmed
+  // live on the navbar box, and NOT something the homepage/search/Rate-
+  // Trends boxes were escaping "by luck" from a favorable tag order; they
+  // were reading the exact same always-undefined window.COUNTY_BASE.
+  // `window.COUNTY_BASE = ...` is a real global-object property (the
+  // classic-script equivalent of `var`) -- fixes the external-script gap
+  // AND keeps working as a bare `COUNTY_BASE` identifier for every
+  // existing inline-script consumer (unqualified identifier lookup falls
+  // through to the global object when no lexical binding shadows it), so
+  // this is a strict superset fix, not a trade-off between the two.
+  window.COUNTY_BASE = {{ url_for('index', county_slug=api_county_slug) | tojson }}.replace(/\/$/, '');
 </script>
 {% block scripts %}{% endblock %}
 </body>
