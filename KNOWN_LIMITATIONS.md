@@ -318,6 +318,50 @@ brief (D5: document, don't build). A future fix would need a fallback match
 against another field (e.g. owner_name, legal_desc) for the blank-address
 population specifically, which is a separate scoping decision.
 
+### Dallas (DCAD): `prop_unit`/`parcel` situs_address and owner_name were unconditionally blank — RESOLVED (PX-20260827-06, August 2026)
+
+Every Dallas `ACCOUNT_INFO` row parsed since the loader's first working
+version (PX-20260826-03) silently returned `situs_address=None` and
+`owner_name=None` for 100% of rows — `iter_account_info_records()` was
+reading two placeholder column names (`OWNER_NAME`, `SITUS_ADDR`) that do
+not exist on the real file; both were explicitly flagged `# UNCONFIRMED
+field name` in the code but nothing downstream ever hard-checked their
+actual coverage, so the gap shipped undetected through several later
+briefs. Fixed by deriving both fields from DCAD's real, PM-confirmed
+column names: `situs_address` = space-join of non-empty `STREET_NUM,
+STREET_HALF_NUM, FULL_STREET_NAME, BLDG_ID, UNIT_ID`; `owner_name` =
+space-join of non-empty `OWNER_NAME1, OWNER_NAME2`, EXCEPT rows where
+`EXCLUDE_OWNER` flags Tax Code §25.025 confidentiality suppression (see
+below) — those store `owner_name` empty **deliberately**, tracked
+separately via a new `owner_suppressed` flag so a low owner-coverage
+percentage can be told apart from genuinely missing data. `parcel.zip_code`
+is now also populated from `PROPERTY_ZIPCODE` (the column exists on
+`parcel`; `city` does not, so city is never attempted at all, deliberately
+not replicating the Travis situs_address entry above's own ~38%
+embedded-city inconsistency).
+
+**Real distinct `EXCLUDE_OWNER` values are UNCONFIRMED** — this sandbox has
+no mounted vault access to the real `ACCOUNT_INFO.CSV`, so
+`is_owner_excluded()` uses a deliberately conservative encoding: any
+non-empty value that isn't recognizably falsy (`""`, `N`, `NO`, `0`, `F`,
+`FALSE`, case-insensitive) is treated as a suppression flag. This should be
+confirmed against the real column's actual values at first live load and
+this note updated with the real distinct values observed.
+
+**New backstop:** `G3_FIELD_COVERAGE`, a hard-FAIL ingest-gate check
+(`loaders/load_dallas_certified.py`'s `run_dallas_ingest_gate()`) requiring
+non-empty `situs_address` in ≥99% of accepted rows and non-empty
+`owner_name` in ≥95% (the lower owner floor deliberately leaves room for
+legitimate `EXCLUDE_OWNER` suppressions) — the concrete backstop for
+exactly this failure mode: an all-empty field can no longer pass silently
+forever, since G3 hard-fails and prints both percentages on every dry-run
+and live load.
+
+**Standing rule (PX-20260827-06 item 4):** loader fixtures must be built
+from a real source header row verbatim going forward — a hand-typed,
+unverified header/field-name guess is how this specific bug survived
+undetected for as long as it did.
+
 ### tax_billing.data_source / confidence_level — write-time fix (July 2026)
 
 `load_tax_current.py` now tags every row it writes with

@@ -89,13 +89,34 @@ def check(label, condition):
 # ── Constructed ACCOUNT_INFO sample: 3 real all-digit accounts + 1 real
 # alphanumeric account (PX-20260826-04 finding #2 -- letters are structural
 # block/unit designators, not corruption) + 1 BPP + 1 blank ─────────────
-ACCOUNT_INFO_CSV = """ACCOUNT_NUM,DIVISION_CD,GIS_PARCEL_ID,OWNER_NAME,SITUS_ADDR
-00000123456789012,RES,GISP001,SMITH JOHN,123 MAIN ST
-00000123456789013,RES,GISP002,DOE JANE,456 OAK ST
-00000123456789014,COM,GISP003,ACME LLC,789 COMMERCE ST
-00000123456789015,BPP,,BIZCO INC,
-0000012A456789016,RES,GISP005,BLOCK-UNIT OWNER,321 BLOCK-UNIT AVE
-,RES,GISP004,BLANK ACCOUNT,999 NOWHERE
+#
+# PX-20260827-06 REBUILD (standing rule, brief item 4): the OWNER_NAME/
+# SITUS_ADDR header this fixture used since PX-20260826-03 was itself the
+# hand-typed guess that let the real bug (those two columns don't exist --
+# iter_account_info_records() silently returned None for both, forever)
+# ship undetected. Rebuilt against the PM's own PX-20260827-06 ruling's
+# real field names (STREET_NUM/STREET_HALF_NUM/FULL_STREET_NAME/BLDG_ID/
+# UNIT_ID, OWNER_NAME1/OWNER_NAME2/EXCLUDE_OWNER, PROPERTY_ZIPCODE) -- see
+# this file's own HONEST DISCLOSURE at the top and the PX-20260827-06
+# report's own sandbox-vs-live section for what this rebuild can and can't
+# prove: no vault access in this sandbox means the full real header
+# (column order, completeness, whether any OTHER situs/owner column
+# exists) still cannot be independently verified byte-for-byte against the
+# real ACCOUNT_INFO.CSV -- these are the PM's own given field names, not
+# re-derived. Row count/order/account_num/division_cd/skip_reason
+# semantics are UNCHANGED from the original fixture (same 6 rows, same
+# accepted/bpp_excluded/no_account_num bucket shape) -- only the owner/
+# situs columns changed shape. Row 4 (the alphanumeric account) now also
+# doubles as the "every situs/owner component populated" case (half-
+# number, building, unit, AND a second owner) so the full space-join gets
+# real coverage without a 7th fixture row.
+ACCOUNT_INFO_CSV = """ACCOUNT_NUM,DIVISION_CD,GIS_PARCEL_ID,STREET_NUM,STREET_HALF_NUM,FULL_STREET_NAME,BLDG_ID,UNIT_ID,OWNER_NAME1,OWNER_NAME2,EXCLUDE_OWNER,PROPERTY_ZIPCODE
+00000123456789012,RES,GISP001,123,,MAIN ST,,,SMITH JOHN,,N,75201
+00000123456789013,RES,GISP002,456,,OAK ST,,,DOE JANE,,N,75202
+00000123456789014,COM,GISP003,789,,COMMERCE ST,,,ACME LLC,,N,75203
+00000123456789015,BPP,,,,,,,BIZCO INC,,N,
+0000012A456789016,RES,GISP005,321,1/2,BLOCK-UNIT AVE,BLDG A,UNIT 200,BLOCK OWNER,UNIT CO-OWNER,N,75205
+,RES,GISP004,999,,NOWHERE AVE,,,BLANK ACCOUNT,,N,75299
 """
 
 # ── Constructed ACCOUNT_APPRL_YEAR sample -- REV1: includes SPTD_CODE
@@ -147,6 +168,31 @@ def test_account_info_basic_parse_and_bpp_flag():
           rows[4]["account_num"] == "0000012A456789016" and rows[4]["skip_reason"] is None)
     check("ACCOUNT_INFO: blank account_num gets skip_reason", rows[5]["skip_reason"] == "no_account_num")
     check("ACCOUNT_INFO: normal rows have skip_reason None", rows[0]["skip_reason"] is None)
+
+    # PX-20260827-06: the actual bug fix -- these were unconditionally None
+    # before this brief (OWNER_NAME/SITUS_ADDR don't exist on the real
+    # file), regardless of what was in the fixture's own owner/situs
+    # columns. Asserting real, non-None values here is the fixture's own
+    # proof the derivation is wired to the real field names, not just that
+    # the old placeholder lookup still silently returns None.
+    check("ACCOUNT_INFO: PX-20260827-06 -- situs_address derived from real STREET_NUM+FULL_STREET_NAME (space-join, no punctuation)",
+          rows[0]["situs_address"] == "123 MAIN ST")
+    check("ACCOUNT_INFO: PX-20260827-06 -- owner_name derived from real OWNER_NAME1",
+          rows[0]["owner_name"] == "SMITH JOHN")
+    check("ACCOUNT_INFO: PX-20260827-06 -- zip_code derived from real PROPERTY_ZIPCODE",
+          rows[0]["zip_code"] == "75201")
+    check("ACCOUNT_INFO: PX-20260827-06 -- not suppressed (EXCLUDE_OWNER=N) has owner_suppressed=False",
+          rows[0]["owner_suppressed"] is False)
+    check("ACCOUNT_INFO: PX-20260827-06 -- full 5-component situs join (STREET_NUM, STREET_HALF_NUM, "
+          "FULL_STREET_NAME, BLDG_ID, UNIT_ID all populated) on the alphanumeric-account row",
+          rows[4]["situs_address"] == "321 1/2 BLOCK-UNIT AVE BLDG A UNIT 200")
+    check("ACCOUNT_INFO: PX-20260827-06 -- owner_name joins BOTH OWNER_NAME1 and OWNER_NAME2 (co-owner)",
+          rows[4]["owner_name"] == "BLOCK OWNER UNIT CO-OWNER")
+    check("ACCOUNT_INFO: PX-20260827-06 -- BPP row's owner_name still parses (OWNER_NAME1 present) even "
+          "though the row itself is separately BPP-excluded from acceptance",
+          rows[3]["owner_name"] == "BIZCO INC")
+    check("ACCOUNT_INFO: PX-20260827-06 -- BPP row's situs_address is None (all 5 components blank in fixture)",
+          rows[3]["situs_address"] is None)
 
 
 def test_bpp_exclusion_filters_at_loader_boundary():
@@ -555,10 +601,10 @@ def test_write_parcel_idempotent_on_rerun():
         unit_rows = [
             {"county_code": "DALLAS", "geo_id": "00000123456789012", "prop_id": 123456789012,
              "prop_type_cd": "A11", "state_cd1": "A", "owner_name": "SMITH JOHN",
-             "situs_address": "123 MAIN ST"},
+             "situs_address": "123 MAIN ST", "zip_code": "75201"},
             {"county_code": "DALLAS", "geo_id": "00000123456789014", "prop_id": 123456789014,
              "prop_type_cd": "F10", "state_cd1": "F1", "owner_name": "ACME LLC",
-             "situs_address": "789 COMMERCE ST"},
+             "situs_address": "789 COMMERCE ST", "zip_code": "75203"},
         ]
         conn = _FakeConn()
 
@@ -577,9 +623,10 @@ def test_write_parcel_idempotent_on_rerun():
               "the authoritative account-layer source for a first Dallas load",
               "COALESCE" not in loader.PARCEL_SQL and "EXCLUDED.prop_type_cd" in loader.PARCEL_SQL)
         check("write_parcel: row tuple column order matches PARCEL_SQL's own column list "
-              "(county_code, geo_id, prop_id, prop_type_cd, state_cd1, owner_name, situs_address)",
+              "(county_code, geo_id, prop_id, prop_type_cd, state_cd1, owner_name, situs_address, "
+              "zip_code -- PX-20260827-06 adds zip_code as the 8th column)",
               calls[0][1][0] == ("DALLAS", "00000123456789012", 123456789012, "A11", "A",
-                                  "SMITH JOHN", "123 MAIN ST"))
+                                  "SMITH JOHN", "123 MAIN ST", "75201"))
     finally:
         if real_psycopg2 is not None:
             _sys.modules["psycopg2"] = real_psycopg2
@@ -722,6 +769,255 @@ def test_build_unit_rows_uses_confirmed_prop_id_geo_id_derivation():
     check("build_unit_rows: no 'taxable_object' key anywhere in output (rev1 removes the join entirely)",
           all("object_id" not in r and "taxable_object" not in r for r in unit_rows))
 
+    # PX-20260827-06: owner_name/situs_address/zip_code/owner_suppressed
+    # must survive build_unit_rows()'s own passthrough (info.get(...)) end
+    # to end -- this is the same real fix proven at the iter_account_info_
+    # records() layer above, now proven all the way through the function
+    # write_parcel()/write_prop_unit_and_tax_year() actually read from.
+    check("build_unit_rows: PX-20260827-06 -- owner_name carried through end-to-end",
+          by_geo["00000123456789012"]["owner_name"] == "SMITH JOHN")
+    check("build_unit_rows: PX-20260827-06 -- situs_address carried through end-to-end",
+          by_geo["00000123456789012"]["situs_address"] == "123 MAIN ST")
+    check("build_unit_rows: PX-20260827-06 -- zip_code carried through end-to-end",
+          by_geo["00000123456789012"]["zip_code"] == "75201")
+    check("build_unit_rows: PX-20260827-06 -- owner_suppressed carried through end-to-end (False here, EXCLUDE_OWNER=N)",
+          by_geo["00000123456789012"]["owner_suppressed"] is False)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# PX-20260827-06: dedicated fixtures for the situs/owner backfill + the
+# new G3_FIELD_COVERAGE gate. Kept as their OWN small CSVs (not folded
+# into the shared ACCOUNT_INFO_CSV/ACCOUNT_APPRL_YEAR_CSV pair above) --
+# adding more accounts to that shared pair would require matching
+# ACCOUNT_APPRL_YEAR_CSV rows too (build_unit_rows() fails loud on any
+# account with no APPRAISAL_YR match, by design), which would bloat every
+# other test that reuses those two fixtures for something unrelated.
+# ══════════════════════════════════════════════════════════════════════
+
+EXCLUDE_OWNER_CSV = """ACCOUNT_NUM,DIVISION_CD,GIS_PARCEL_ID,STREET_NUM,STREET_HALF_NUM,FULL_STREET_NAME,BLDG_ID,UNIT_ID,OWNER_NAME1,OWNER_NAME2,EXCLUDE_OWNER,PROPERTY_ZIPCODE
+00000200000000001,RES,GISPA01,100,,ALPHA ST,,,YES OWNER,,Y,75001
+00000200000000002,RES,GISPA02,200,,BETA ST,,,NO OWNER,,N,75002
+00000200000000003,RES,GISPA03,300,,GAMMA ST,,,BLANK OWNER,,,75003
+00000200000000004,RES,GISPA04,400,,DELTA ST,,,ONE OWNER,,1,75004
+00000200000000005,RES,GISPA05,500,,EPSILON ST,,,ZERO OWNER,,0,75005
+"""
+
+
+def test_exclude_owner_suppression_conservative_encoding():
+    """PX-20260827-06 item 2: EXCLUDE_OWNER's real distinct values are
+    UNCONFIRMED in this sandbox (no vault access -- see this file's own
+    top-level disclosure and the PX-20260827-06 report). is_owner_excluded()
+    is deliberately conservative: 'Y'/'1' (and anything else not
+    recognizably falsy) suppress owner_name; 'N'/'0'/blank do not."""
+    rows = {r["account_num"]: r for r in
+            dcad_format.iter_account_info_records(lines=EXCLUDE_OWNER_CSV.splitlines())}
+
+    check("EXCLUDE_OWNER='Y': owner_name suppressed to None, owner_suppressed=True",
+          rows["00000200000000001"]["owner_name"] is None
+          and rows["00000200000000001"]["owner_suppressed"] is True)
+    check("EXCLUDE_OWNER='N': owner_name NOT suppressed",
+          rows["00000200000000002"]["owner_name"] == "NO OWNER"
+          and rows["00000200000000002"]["owner_suppressed"] is False)
+    check("EXCLUDE_OWNER='' (blank): owner_name NOT suppressed (blank treated as falsy)",
+          rows["00000200000000003"]["owner_name"] == "BLANK OWNER"
+          and rows["00000200000000003"]["owner_suppressed"] is False)
+    check("EXCLUDE_OWNER='1': owner_name suppressed (conservative -- unrecognized-but-not-falsy treated as excluded)",
+          rows["00000200000000004"]["owner_name"] is None
+          and rows["00000200000000004"]["owner_suppressed"] is True)
+    check("EXCLUDE_OWNER='0': owner_name NOT suppressed",
+          rows["00000200000000005"]["owner_name"] == "ZERO OWNER"
+          and rows["00000200000000005"]["owner_suppressed"] is False)
+    # situs_address must be entirely unaffected by owner suppression --
+    # these are independent fields (Sec. 25.025 covers the OWNER's
+    # identity, not the property's situs).
+    check("EXCLUDE_OWNER='Y' row still gets a real situs_address (suppression is owner-only)",
+          rows["00000200000000001"]["situs_address"] == "100 ALPHA ST")
+
+
+BLANK_SITUS_CSV = """ACCOUNT_NUM,DIVISION_CD,GIS_PARCEL_ID,STREET_NUM,STREET_HALF_NUM,FULL_STREET_NAME,BLDG_ID,UNIT_ID,OWNER_NAME1,OWNER_NAME2,EXCLUDE_OWNER,PROPERTY_ZIPCODE
+00000300000000001,RES,GISPB01,,,,,,SOME OWNER,,N,
+"""
+
+
+def test_situs_address_none_when_all_components_blank():
+    """A row with all 5 situs components blank must get situs_address=None
+    (not an empty string, not a string of stray spaces) -- this is exactly
+    the shape the G3_FIELD_COVERAGE gate's denominator has to handle
+    correctly (a falsy/None situs_address, not a truthy blank one that
+    would silently inflate the coverage percentage)."""
+    rows = list(dcad_format.iter_account_info_records(lines=BLANK_SITUS_CSV.splitlines()))
+    check("All-blank situs components -> situs_address is None, not '' or whitespace",
+          rows[0]["situs_address"] is None)
+    check("PROPERTY_ZIPCODE blank -> zip_code is None",
+          rows[0]["zip_code"] is None)
+
+
+NO_ZIPCODE_COLUMN_CSV = """ACCOUNT_NUM,DIVISION_CD,GIS_PARCEL_ID,STREET_NUM,STREET_HALF_NUM,FULL_STREET_NAME,BLDG_ID,UNIT_ID,OWNER_NAME1,OWNER_NAME2,EXCLUDE_OWNER
+00000400000000001,RES,GISPC01,600,,ZETA ST,,,ZETA OWNER,,N
+"""
+
+
+def test_property_zipcode_is_soft_optional_column():
+    """PROPERTY_ZIPCODE is deliberately NOT in EXPECTED_HEADERS (soft/
+    optional, per PROPERTY_ZIPCODE_FIELD's own comment) -- a real export
+    that omits the column entirely must degrade to zip_code=None, not
+    raise HeaderDriftError. Distinct from the hard-validated columns
+    (STREET_NUM/FULL_STREET_NAME/OWNER_NAME1/EXCLUDE_OWNER), which DO
+    raise on omission -- see test_account_info_header_drift_* below."""
+    raised = False
+    rows = []
+    try:
+        rows = list(dcad_format.iter_account_info_records(lines=NO_ZIPCODE_COLUMN_CSV.splitlines()))
+    except dcad_format.HeaderDriftError:
+        raised = True
+    check("PROPERTY_ZIPCODE column entirely absent: does NOT raise HeaderDriftError (soft/optional)",
+          not raised)
+    check("PROPERTY_ZIPCODE column entirely absent: zip_code degrades to None, situs/owner unaffected",
+          rows and rows[0]["zip_code"] is None and rows[0]["situs_address"] == "600 ZETA ST"
+          and rows[0]["owner_name"] == "ZETA OWNER")
+
+
+def test_account_info_header_drift_on_missing_confirmed_situs_owner_column():
+    """PX-20260827-06: STREET_NUM/FULL_STREET_NAME/OWNER_NAME1/EXCLUDE_OWNER
+    are now hard-validated (promoted from soft/UNCONFIRMED once the PM's
+    brief confirmed these real field names -- same treatment APPRAISAL_YR
+    got once IT was confirmed). A real ACCOUNT_INFO export missing any one
+    of them must fail loud immediately, not silently return None for every
+    row's situs_address/owner_name forever -- exactly the failure mode
+    this whole brief exists to close off."""
+    missing_full_street_name = ("ACCOUNT_NUM,DIVISION_CD,STREET_NUM,OWNER_NAME1,EXCLUDE_OWNER\n"
+                                 "00000123456789012,RES,123,SMITH JOHN,N\n")
+    raised = False
+    try:
+        list(dcad_format.iter_account_info_records(lines=missing_full_street_name.splitlines()))
+    except dcad_format.HeaderDriftError:
+        raised = True
+    check("HeaderDriftError: raised when ACCOUNT_INFO header is missing FULL_STREET_NAME",
+          raised)
+
+    missing_exclude_owner = ("ACCOUNT_NUM,DIVISION_CD,STREET_NUM,FULL_STREET_NAME,OWNER_NAME1\n"
+                              "00000123456789012,RES,123,MAIN ST,SMITH JOHN\n")
+    raised2 = False
+    try:
+        list(dcad_format.iter_account_info_records(lines=missing_exclude_owner.splitlines()))
+    except dcad_format.HeaderDriftError:
+        raised2 = True
+    check("HeaderDriftError: raised when ACCOUNT_INFO header is missing EXCLUDE_OWNER "
+          "(the Sec. 25.025 suppression flag itself -- must never silently degrade)",
+          raised2)
+
+
+def test_is_owner_excluded_pure_function():
+    """Direct unit coverage of is_owner_excluded()'s own truth table,
+    independent of CSV parsing."""
+    check("is_owner_excluded('Y') -> True", dcad_format.is_owner_excluded("Y") is True)
+    check("is_owner_excluded('y') -> True (case-insensitive)", dcad_format.is_owner_excluded("y") is True)
+    check("is_owner_excluded('N') -> False", dcad_format.is_owner_excluded("N") is False)
+    check("is_owner_excluded('') -> False", dcad_format.is_owner_excluded("") is False)
+    check("is_owner_excluded(None) -> False", dcad_format.is_owner_excluded(None) is False)
+    check("is_owner_excluded('  ') -> False (whitespace-only treated as blank)", dcad_format.is_owner_excluded("   ") is False)
+    check("is_owner_excluded('TRUE') -> True (unrecognized-but-not-falsy -> conservative exclude)",
+          dcad_format.is_owner_excluded("TRUE") is True)
+
+
+def test_join_nonempty_pure_function():
+    """Direct unit coverage of _join_nonempty()'s own behavior."""
+    check("_join_nonempty full join", dcad_format._join_nonempty("123", "1/2", "MAIN ST", "BLDG A", "UNIT 1") == "123 1/2 MAIN ST BLDG A UNIT 1")
+    check("_join_nonempty skips blanks/None", dcad_format._join_nonempty("123", "", "MAIN ST", None, "") == "123 MAIN ST")
+    check("_join_nonempty all blank -> ''", dcad_format._join_nonempty("", None, "   ") == "")
+
+
+# ── G3_FIELD_COVERAGE gate fixtures ──────────────────────────────────────
+
+def _make_unit_row(geo_id, situs_address, owner_name, owner_suppressed=False):
+    return {"geo_id": geo_id, "situs_address": situs_address, "owner_name": owner_name,
+            "owner_suppressed": owner_suppressed}
+
+
+def test_compute_field_coverage_pass_case():
+    from loaders import load_dallas_certified as loader  # noqa
+
+    unit_rows = [_make_unit_row(f"G{i}", "100 MAIN ST", "SOME OWNER") for i in range(100)]
+    coverage = loader.compute_field_coverage(unit_rows)
+    check("compute_field_coverage: 100% situs/owner coverage computed correctly",
+          coverage["situs_pct"] == 100.0 and coverage["owner_pct"] == 100.0)
+    check("compute_field_coverage: n_rows correct", coverage["n_rows"] == 100)
+    check("compute_field_coverage: owner_suppressed count is 0 when none suppressed", coverage["owner_suppressed"] == 0)
+
+
+def test_compute_field_coverage_fail_on_situs_below_threshold():
+    from loaders import load_dallas_certified as loader  # noqa
+
+    # 90 rows with situs, 10 without -- 90% < 99% threshold.
+    unit_rows = ([_make_unit_row(f"G{i}", "100 MAIN ST", "OWNER") for i in range(90)]
+                 + [_make_unit_row(f"H{i}", None, "OWNER") for i in range(10)])
+    coverage = loader.compute_field_coverage(unit_rows)
+    g3_passed = (coverage["situs_pct"] >= loader.G3_SITUS_MIN_PCT
+                 and coverage["owner_pct"] >= loader.G3_OWNER_MIN_PCT)
+    check("compute_field_coverage: situs_pct == 90.0 for 90/100 non-empty", coverage["situs_pct"] == 90.0)
+    check("G3_FIELD_COVERAGE: FAILS when situs coverage (90%) is below the 99% threshold", not g3_passed)
+
+
+def test_compute_field_coverage_pass_with_legitimate_owner_suppression():
+    """PX-20260827-06 item 5's own explicit reasoning: the owner threshold
+    (95%, lower than situs's 99%) exists precisely so that legitimate
+    EXCLUDE_OWNER suppressions don't false-positive a gate failure. 6% of
+    rows deliberately suppressed (owner_suppressed=True, owner_name=None)
+    should still PASS the 95% floor (94% non-empty is NOT below 95%...
+    use a case that's comfortably inside the margin to avoid float-
+    rounding ambiguity at the exact boundary)."""
+    from loaders import load_dallas_certified as loader  # noqa
+
+    unit_rows = ([_make_unit_row(f"G{i}", "100 MAIN ST", "OWNER") for i in range(97)]
+                 + [_make_unit_row(f"S{i}", "100 MAIN ST", None, owner_suppressed=True) for i in range(3)])
+    coverage = loader.compute_field_coverage(unit_rows)
+    g3_passed = (coverage["situs_pct"] >= loader.G3_SITUS_MIN_PCT
+                 and coverage["owner_pct"] >= loader.G3_OWNER_MIN_PCT)
+    check("compute_field_coverage: owner_suppressed count == 3", coverage["owner_suppressed"] == 3)
+    check("compute_field_coverage: owner_pct == 97.0 (97/100 non-empty, 3 legitimately suppressed)",
+          coverage["owner_pct"] == 97.0)
+    check("G3_FIELD_COVERAGE: PASSES at 97% owner coverage (>= 95% floor) despite 3 real EXCLUDE_OWNER suppressions",
+          g3_passed)
+
+
+def test_compute_field_coverage_empty_unit_rows_no_crash():
+    from loaders import load_dallas_certified as loader  # noqa
+
+    coverage = loader.compute_field_coverage([])
+    check("compute_field_coverage: empty unit_rows list does not raise (ZeroDivisionError guard)",
+          coverage["n_rows"] == 0 and coverage["situs_pct"] == 100.0 and coverage["owner_pct"] == 100.0)
+
+
+def test_run_dallas_ingest_gate_includes_g3_check():
+    """End-to-end: run_dallas_ingest_gate() must include a G3_FIELD_COVERAGE
+    check whose detail string reports BOTH percentages (brief item 6:
+    'Dry-run must print both coverage percentages') alongside the existing
+    G1/G2 checks, in dry_run mode (conn=None, no DB access)."""
+    from loaders import load_dallas_certified as loader  # noqa
+
+    ledgers = {
+        "ACCOUNT_INFO": {"total_lines": 2, "buckets": {"accepted": 2}},
+    }
+    unit_rows = [
+        _make_unit_row("G1", "100 MAIN ST", "OWNER ONE"),
+        _make_unit_row("G2", None, None, owner_suppressed=True),
+    ]
+    summary = loader.run_dallas_ingest_gate(
+        conn=None, ledgers=ledgers, orphans=set(), unit_rows=unit_rows,
+        tax_year=2026, county_code="DALLAS", dry_run=True)
+
+    check("run_dallas_ingest_gate: G3_FIELD_COVERAGE key present in checks", "G3_FIELD_COVERAGE" in summary["checks"])
+    g3_passed, g3_detail = summary["checks"]["G3_FIELD_COVERAGE"]
+    check("run_dallas_ingest_gate: G3_FIELD_COVERAGE detail string reports situs_address percentage",
+          "situs_address" in g3_detail and "%" in g3_detail)
+    check("run_dallas_ingest_gate: G3_FIELD_COVERAGE detail string reports owner_name percentage",
+          "owner_name" in g3_detail and g3_detail.count("%") >= 2)
+    # 1/2 situs non-empty = 50% < 99%, 1/2 owner non-empty = 50% < 95% -- must fail.
+    check("run_dallas_ingest_gate: G3_FIELD_COVERAGE correctly FAILS on this 50%-coverage synthetic run",
+          g3_passed is False)
+    check("run_dallas_ingest_gate: overall gate 'passed' reflects the G3 failure (not masked by G1/G2 passing)",
+          summary["passed"] is False)
+
 
 if __name__ == "__main__":
     test_account_info_basic_parse_and_bpp_flag()
@@ -749,6 +1045,19 @@ if __name__ == "__main__":
     test_g1_style_ledger_conservation()
     test_table_load_policy_covers_all_14_tables()
     test_build_unit_rows_uses_confirmed_prop_id_geo_id_derivation()
+
+    # PX-20260827-06
+    test_exclude_owner_suppression_conservative_encoding()
+    test_situs_address_none_when_all_components_blank()
+    test_property_zipcode_is_soft_optional_column()
+    test_account_info_header_drift_on_missing_confirmed_situs_owner_column()
+    test_is_owner_excluded_pure_function()
+    test_join_nonempty_pure_function()
+    test_compute_field_coverage_pass_case()
+    test_compute_field_coverage_fail_on_situs_below_threshold()
+    test_compute_field_coverage_pass_with_legitimate_owner_suppression()
+    test_compute_field_coverage_empty_unit_rows_no_crash()
+    test_run_dallas_ingest_gate_includes_g3_check()
 
     print(f"\n{PASS_COUNT} passed, {FAIL_COUNT} failed")
     if FAIL_COUNT == 0:

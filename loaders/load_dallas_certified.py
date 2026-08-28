@@ -327,7 +327,9 @@ def build_unit_rows(account_info_rows, appraisal_year_rows, exempt_rows_by_accou
             "exemption_codes": dcad_format.exemption_codes_for_account(exempt_rows_by_account.get(account_num, [])),
             "data_source": DATA_SOURCE,
             "owner_name": info.get("owner_name"),
+            "owner_suppressed": info.get("owner_suppressed", False),
             "situs_address": info.get("situs_address"),
+            "zip_code": info.get("zip_code"),
             "sptd_code": sptd_code,
             "benchmark_label": benchmark_label,
             "state_cd1": parcel_class_fields["state_cd1"],
@@ -480,16 +482,25 @@ def write_prop_unit_and_tax_year(conn, unit_rows, dry_run=False):
 # re-running this loader against the same archive should always converge
 # `parcel` to the same real values, not silently preserve a stale one).
 # ══════════════════════════════════════════════════════════════════════
+# PX-20260827-06: zip_code added -- `parcel` has a zip_code column
+# (schema.sql) but no city column, so ZIP is now populated from
+# ACCOUNT_INFO's PROPERTY_ZIPCODE (via dcad_format.iter_account_info_
+# records() -> build_unit_rows()'s "zip_code" key) and city is never
+# attempted at all (not merely excluded from situs_address -- see
+# dcad_format.PROPERTY_ZIPCODE_FIELD's own comment for the full
+# reasoning). This is additive only -- every other column/behavior here
+# is unchanged from PX-20260826-05.
 PARCEL_SQL = """
     INSERT INTO parcel
-        (county_code, geo_id, prop_id, prop_type_cd, state_cd1, owner_name, situs_address)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
+        (county_code, geo_id, prop_id, prop_type_cd, state_cd1, owner_name, situs_address, zip_code)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (county_code, geo_id) DO UPDATE
         SET prop_id       = EXCLUDED.prop_id,
             prop_type_cd  = EXCLUDED.prop_type_cd,
             state_cd1     = EXCLUDED.state_cd1,
             owner_name    = EXCLUDED.owner_name,
-            situs_address = EXCLUDED.situs_address
+            situs_address = EXCLUDED.situs_address,
+            zip_code      = EXCLUDED.zip_code
 """
 
 
@@ -528,7 +539,7 @@ def write_parcel(conn, unit_rows, dry_run=False):
 
     parcel_rows = [
         (row["county_code"], row["geo_id"], row["prop_id"], row["prop_type_cd"],
-         row["state_cd1"], row["owner_name"], row["situs_address"])
+         row["state_cd1"], row["owner_name"], row["situs_address"], row.get("zip_code"))
         for row in unit_rows
     ]
 
@@ -546,7 +557,47 @@ def write_parcel(conn, unit_rows, dry_run=False):
 # "Ingestion gate" section for why this is NOT a call into
 # ingest_gate.gather_and_run().
 # ══════════════════════════════════════════════════════════════════════
-def run_dallas_ingest_gate(conn, ledgers, orphans, tax_year, county_code, dry_run=False):
+G3_SITUS_MIN_PCT = 99.0  # hard FAIL below -- brief's own threshold
+G3_OWNER_MIN_PCT = 95.0  # lower than situs -- leaves room for legitimate EXCLUDE_OWNER suppressions
+
+
+def compute_field_coverage(unit_rows):
+    """
+    PX-20260827-06 item 5/6: pure, DB-free computation of the two
+    G3_FIELD_COVERAGE percentages over this run's own accepted unit_rows
+    (BPP-excluded/no_account_num rows never reach unit_rows at all, so this
+    is coverage among ACCEPTED rows only, matching the brief's own wording).
+
+    Returns a dict: n_rows, situs_nonempty, situs_pct, owner_nonempty,
+    owner_pct, owner_suppressed (count of rows where EXCLUDE_OWNER
+    deliberately zeroed owner_name -- reported separately so a low
+    owner_pct can be told apart from "genuinely missing data" vs
+    "legitimate Sec. 25.025 suppression").
+
+    n_rows == 0 is treated as 100%/100% (vacuously true, avoids a
+    ZeroDivisionError on an empty/all-excluded run) -- an empty run has
+    bigger problems than this gate, and those are caught by G1 instead.
+    """
+    n_rows = len(unit_rows)
+    if n_rows == 0:
+        return {
+            "n_rows": 0, "situs_nonempty": 0, "situs_pct": 100.0,
+            "owner_nonempty": 0, "owner_pct": 100.0, "owner_suppressed": 0,
+        }
+    situs_nonempty = sum(1 for r in unit_rows if r.get("situs_address"))
+    owner_nonempty = sum(1 for r in unit_rows if r.get("owner_name"))
+    owner_suppressed = sum(1 for r in unit_rows if r.get("owner_suppressed"))
+    return {
+        "n_rows": n_rows,
+        "situs_nonempty": situs_nonempty,
+        "situs_pct": situs_nonempty / n_rows * 100.0,
+        "owner_nonempty": owner_nonempty,
+        "owner_pct": owner_nonempty / n_rows * 100.0,
+        "owner_suppressed": owner_suppressed,
+    }
+
+
+def run_dallas_ingest_gate(conn, ledgers, orphans, unit_rows, tax_year, county_code, dry_run=False):
     """
     Builds one G1_<TABLE> check per loaded table (conservation identity:
     sum(ledger['buckets'].values()) == ledger['total_lines'] -- true by
@@ -560,11 +611,21 @@ def run_dallas_ingest_gate(conn, ledgers, orphans, tax_year, county_code, dry_ru
     and count per PX-20260826-01's own "must be listed, not hidden" rule;
     a non-empty orphan set does not by itself fail this check, matching
     BG4's own LEGACY-ONLY-style non-blocking classification -- a real,
-    disclosed judgment call, not silently assumed).
+    disclosed judgment call, not silently assumed) plus a NEW
+    G3_FIELD_COVERAGE check (PX-20260827-06 item 5, the gate-parity item
+    made concrete): non-empty situs_address must be >= G3_SITUS_MIN_PCT
+    (99%) and non-empty owner_name >= G3_OWNER_MIN_PCT (95%) of unit_rows
+    -- hard FAIL below either threshold. This is the concrete backstop for
+    exactly the bug this brief fixes: an all-empty situs_address/owner_name
+    field (the OWNER_NAME/SITUS_ADDR placeholder bug, 0% coverage) could
+    previously pass G1/G2 silently forever, since neither check ever
+    inspected these two columns' actual content -- only their presence.
 
     dry_run=True: builds and returns the same summary dict, prints nothing
     to ingest_audit, requires no DB connection (conn may be None) --
-    matches this loader's own --dry-run convention.
+    matches this loader's own --dry-run convention. unit_rows must still
+    be the real, fully-built list even in dry-run (see compute_field_
+    coverage() -- pure/DB-free, so this costs nothing extra).
 
     Reuses ingest_gate._write_audit() (also imported cross-module by
     billing_gate.py) to land rows in the real ingest_audit table with the
@@ -584,6 +645,20 @@ def run_dallas_ingest_gate(conn, ledgers, orphans, tax_year, county_code, dry_ru
                          if orphans else ""))
     # Non-blocking by design (see docstring) -- reported, not hidden.
     checks["G2_ORPHAN_ACCOUNTS"] = (True, orphan_detail)
+
+    coverage = compute_field_coverage(unit_rows)
+    g3_passed = (coverage["situs_pct"] >= G3_SITUS_MIN_PCT
+                 and coverage["owner_pct"] >= G3_OWNER_MIN_PCT)
+    g3_detail = (
+        f"situs_address non-empty: {coverage['situs_pct']:.2f}% "
+        f"({coverage['situs_nonempty']:,}/{coverage['n_rows']:,}, threshold "
+        f">={G3_SITUS_MIN_PCT:.0f}%); owner_name non-empty: "
+        f"{coverage['owner_pct']:.2f}% ({coverage['owner_nonempty']:,}/"
+        f"{coverage['n_rows']:,}, threshold >={G3_OWNER_MIN_PCT:.0f}%, "
+        f"{coverage['owner_suppressed']:,} of those blanks are deliberate "
+        f"EXCLUDE_OWNER Sec. 25.025 suppressions, not missing data)"
+    )
+    checks["G3_FIELD_COVERAGE"] = (g3_passed, g3_detail)
 
     overall_passed = all(passed for passed, _ in checks.values())
 
@@ -719,8 +794,8 @@ def main():
 
     if args.dry_run:
         gate_summary = run_dallas_ingest_gate(
-            conn=None, ledgers=ledgers, orphans=orphans, tax_year=year,
-            county_code=county_code, dry_run=True)
+            conn=None, ledgers=ledgers, orphans=orphans, unit_rows=unit_rows,
+            tax_year=year, county_code=county_code, dry_run=True)
         for code, (passed, detail) in gate_summary["checks"].items():
             print(f"    {code}: {'PASS' if passed else 'FAIL'} — {detail}")
         print(f"  GATE OVERALL (dry-run, not written to ingest_audit): "
@@ -775,7 +850,7 @@ def main():
     else:
         print(f"\n  Running Dallas ingestion gate for {DATA_SOURCE}…")
         gate_summary = run_dallas_ingest_gate(
-            conn, ledgers, orphans, tax_year=year, county_code=county_code, dry_run=False)
+            conn, ledgers, orphans, unit_rows, tax_year=year, county_code=county_code, dry_run=False)
         for code, (passed, detail) in gate_summary["checks"].items():
             print(f"    {code}: {'PASS' if passed else 'FAIL'} — {detail}")
         print(f"  GATE OVERALL: {'PASS' if gate_summary['passed'] else 'FAIL'}")

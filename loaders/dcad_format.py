@@ -235,6 +235,75 @@ TABLE_FILENAMES = {
 # convention. ─────────────────────────────────────────────────────────────
 ACCOUNT_NUM_FIELD = "ACCOUNT_NUM"  # CONFIRMED
 
+# ── PX-20260827-06 (PM ruling, "don't re-derive"): real ACCOUNT_INFO field
+# names for situs_address / owner_name, superseding the OWNER_NAME/SITUS_ADDR
+# placeholders this module carried since PX-20260826-03 (see
+# iter_account_info_records()'s pre-PX-20260827-06 docstring below, kept as
+# historical changelog, not deleted). These are CONFIRMED per the PM's own
+# brief text, not independently re-derived from a real header in this
+# sandbox (no vault access here -- see this module's own top-level
+# disclosure and the PX-20260827-06 report for the honest sandbox-vs-live
+# split on that point).
+#
+# situs_address = space-join of non-empty STREET_NUM, STREET_HALF_NUM,
+# FULL_STREET_NAME, BLDG_ID, UNIT_ID, in that order (matches DCAD's own
+# rendering; plain text, no punctuation -- keeps token search working).
+# STREET_NUM/FULL_STREET_NAME are logic-critical (a situs with neither is
+# meaningless) and hard-validated below; STREET_HALF_NUM/BLDG_ID/UNIT_ID are
+# legitimately blank on the vast majority of rows (no half-number, no
+# building/unit subdivision) and stay soft/optional -- same tiered-
+# confidence discipline this module already applies elsewhere.
+STREET_NUM_FIELD = "STREET_NUM"                # CONFIRMED (PM ruling)
+STREET_HALF_NUM_FIELD = "STREET_HALF_NUM"      # CONFIRMED (PM ruling), optional per-row
+FULL_STREET_NAME_FIELD = "FULL_STREET_NAME"    # CONFIRMED (PM ruling)
+BLDG_ID_FIELD = "BLDG_ID"                      # CONFIRMED (PM ruling), optional per-row
+UNIT_ID_FIELD = "UNIT_ID"                      # CONFIRMED (PM ruling), optional per-row
+
+# owner_name = space-join of non-empty OWNER_NAME1, OWNER_NAME2 -- UNLESS
+# EXCLUDE_OWNER flags the row, in which case owner_name is stored empty
+# deliberately (Tax Code Sec. 25.025 confidentiality -- respecting DCAD's
+# own suppression, not a bug). OWNER_NAME1 and the EXCLUDE_OWNER flag itself
+# are logic-critical and hard-validated below; OWNER_NAME2 (co-owner) is
+# legitimately blank whenever there's a single owner and stays soft.
+OWNER_NAME1_FIELD = "OWNER_NAME1"      # CONFIRMED (PM ruling)
+OWNER_NAME2_FIELD = "OWNER_NAME2"      # CONFIRMED (PM ruling), optional per-row
+EXCLUDE_OWNER_FIELD = "EXCLUDE_OWNER"  # CONFIRMED (PM ruling)
+
+# EXCLUDE_OWNER's real encoding (Y/N? 1/0? T/F?) is NOT independently
+# confirmed in this sandbox (no vault access to inspect real distinct
+# values -- see PX-20260827-06 report). Deliberately conservative reading,
+# consistent with respecting DCAD's own Sec. 25.025 suppression: any
+# non-empty value that ISN'T recognizably a negative/false token is treated
+# as "excluded" -- over-suppressing on an unrecognized encoding is the safe
+# failure direction here (a false positive drops one legitimate owner_name
+# to empty; a false negative would leak a name DCAD itself is suppressing).
+_EXCLUDE_OWNER_FALSY = frozenset({"", "N", "NO", "0", "F", "FALSE"})
+
+
+def is_owner_excluded(raw_value):
+    """True if EXCLUDE_OWNER's raw string value indicates this row's owner
+    name must be suppressed. See _EXCLUDE_OWNER_FALSY's own comment for the
+    conservative-by-design reasoning; real distinct values are UNCONFIRMED
+    pending vault access and MUST be reported once observed against the
+    real file (PX-20260827-06 item 2)."""
+    return (raw_value or "").strip().upper() not in _EXCLUDE_OWNER_FALSY
+
+
+# PROPERTY_ZIPCODE: parcel.zip_code exists (schema.sql) but parcel.city does
+# NOT -- so per the PM's own ruling, ZIP is populated from PROPERTY_ZIPCODE
+# when present, and city is deliberately never attempted (no column to put
+# it in, and situs_address must NOT absorb it -- see Travis's own ~38%
+# embedded-city situs_address inconsistency, a known wart this must not
+# replicate). Soft/optional: some exports may not carry it at all.
+PROPERTY_ZIPCODE_FIELD = "PROPERTY_ZIPCODE"  # CONFIRMED (PM ruling), optional per-row
+
+
+def _join_nonempty(*parts):
+    """space-join of the given values, skipping None/blank/whitespace-only
+    ones, each individually stripped first. Plain text, no punctuation --
+    e.g. _join_nonempty("123", "", "MAIN ST", "", "") == "123 MAIN ST"."""
+    return " ".join(p.strip() for p in parts if p and p.strip())
+
 # ── DIVISION_CD — CONFIRMED to exist on ACCOUNT_INFO (brief's own text:
 # "includes BPP via DIVISION_CD"), and CONFIRMED by Notion research
 # (DALLAS-CLASS-1/2) to span RES/COM/BPP. The literal code VALUES are
@@ -284,7 +353,19 @@ class HeaderDriftError(RuntimeError):
 
 
 EXPECTED_HEADERS = {
-    "ACCOUNT_INFO": {ACCOUNT_NUM_FIELD, DIVISION_CD_FIELD},
+    # PX-20260827-06: promoted STREET_NUM/FULL_STREET_NAME/OWNER_NAME1/
+    # EXCLUDE_OWNER from soft/UNCONFIRMED to hard-validated, now that the
+    # PM's brief confirms these real field names -- same treatment
+    # APPRAISAL_YR got once ITS name was confirmed (see this file's
+    # PRE-COMMIT FIX changelog comment below EXPECTED_HEADERS). The
+    # remaining situs/owner components (STREET_HALF_NUM, BLDG_ID, UNIT_ID,
+    # OWNER_NAME2, PROPERTY_ZIPCODE) stay soft/optional -- legitimately
+    # blank on most rows, not logic-critical the way these four are.
+    "ACCOUNT_INFO": {
+        ACCOUNT_NUM_FIELD, DIVISION_CD_FIELD,
+        STREET_NUM_FIELD, FULL_STREET_NAME_FIELD,
+        OWNER_NAME1_FIELD, EXCLUDE_OWNER_FIELD,
+    },
     "ACCOUNT_APPRL_YEAR": {
         ACCOUNT_NUM_FIELD, "TOT_VAL", "LAND_VAL", "IMPR_VAL",
         "HMSTD_CAP_VAL", "SPTD_CODE", "COUNTY_TAXABLE_VAL", "APPRAISAL_YR",
@@ -382,7 +463,7 @@ def iter_csv_rows(path=None, lines=None, table_name=None):
 def iter_account_info_records(path=None, lines=None):
     """
     Yields dicts with keys: account_num, division_cd, is_bpp, gis_parcel_id,
-    owner_name, situs_address, skip_reason.
+    owner_name, owner_suppressed, situs_address, zip_code, skip_reason.
 
     skip_reason is one of:
       None             — normal, usable, non-BPP row
@@ -403,10 +484,47 @@ def iter_account_info_records(path=None, lines=None):
     GIS_PARCEL_ID (UNCONFIRMED — named in the brief's own open question
     "does GIS_PARCEL_ID play the geo_id role" but never independently
     confirmed as the literal column header; kept here as the best-guess
-    field name pending a real header read). owner_name/situs_address field
-    names are UNCONFIRMED entirely — ACCOUNT_INFO's brief description says
-    it "includes identity/owner/situs/legal" but names no specific columns;
-    OWNER_NAME/SITUS_ADDR below are placeholders, not evidenced strings.
+    field name pending a real header read).
+
+    PX-20260827-06 (real fix, PM ruling — supersedes the paragraph below):
+    owner_name/situs_address are no longer read from the OWNER_NAME/
+    SITUS_ADDR placeholders that shipped since PX-20260826-03 (both always
+    returned None — this is the confirmed bug the brief describes as
+    "hand-typed field names are how this bug survived"). They are now
+    derived:
+      situs_address = _join_nonempty(STREET_NUM, STREET_HALF_NUM,
+                       FULL_STREET_NAME, BLDG_ID, UNIT_ID) — matches DCAD's
+                       own rendering, plain text/no punctuation, keeps
+                       token search working. City is deliberately NEVER
+                       folded in here (see PROPERTY_ZIPCODE_FIELD's own
+                       comment above) — Travis's own ~38% embedded-city
+                       situs_address inconsistency is a known wart, not
+                       replicated.
+      owner_name    = _join_nonempty(OWNER_NAME1, OWNER_NAME2) — UNLESS
+                       EXCLUDE_OWNER flags this row (is_owner_excluded()),
+                       in which case owner_name is "" (empty) DELIBERATELY:
+                       Tax Code Sec. 25.025 confidentiality territory,
+                       respecting DCAD's own suppression rather than
+                       treating it as missing/bad data. owner_suppressed
+                       (bool) carries this distinction through explicitly
+                       so downstream code (the G3_FIELD_COVERAGE gate,
+                       specifically) can tell "suppressed on purpose" apart
+                       from "genuinely missing" instead of conflating both
+                       into one blank-owner_name bucket.
+      zip_code      = PROPERTY_ZIPCODE, stripped — `parcel` has a zip_code
+                       column (schema.sql) but no city column, so ZIP is
+                       populated and city is not (not merely "not joined
+                       into situs_address" — never read here at all).
+
+    (Original, pre-PX-20260827-06 field-name UNCONFIRMED disclosure, kept
+    as changelog rather than deleted: "owner_name/situs_address field names
+    are UNCONFIRMED entirely — ACCOUNT_INFO's brief description says it
+    'includes identity/owner/situs/legal' but names no specific columns;
+    OWNER_NAME/SITUS_ADDR below are placeholders, not evidenced strings."
+    This is now resolved per the PX-20260827-06 PM ruling — see that
+    brief's own report for the honest disclosure that the real header
+    still could not be independently vault-verified in-sandbox; these
+    field names are taken as given, not re-derived.)
     """
     for row in iter_csv_rows(path, lines, table_name="ACCOUNT_INFO"):
         account_num = (row.get(ACCOUNT_NUM_FIELD) or "").strip() or None
@@ -418,6 +536,24 @@ def iter_account_info_records(path=None, lines=None):
             skip_reason = "bpp_excluded"
         else:
             skip_reason = None
+
+        owner_suppressed = is_owner_excluded(row.get(EXCLUDE_OWNER_FIELD))
+        if owner_suppressed:
+            owner_name = None
+        else:
+            owner_name = _join_nonempty(
+                row.get(OWNER_NAME1_FIELD) or "",
+                row.get(OWNER_NAME2_FIELD) or "",
+            ) or None
+
+        situs_address = _join_nonempty(
+            row.get(STREET_NUM_FIELD) or "",
+            row.get(STREET_HALF_NUM_FIELD) or "",
+            row.get(FULL_STREET_NAME_FIELD) or "",
+            row.get(BLDG_ID_FIELD) or "",
+            row.get(UNIT_ID_FIELD) or "",
+        ) or None
+
         yield {
             "_lineno": row["_lineno"],
             "skip_reason": skip_reason,
@@ -425,8 +561,10 @@ def iter_account_info_records(path=None, lines=None):
             "division_cd": division_cd,
             "is_bpp": is_bpp,
             "gis_parcel_id": (row.get("GIS_PARCEL_ID") or "").strip() or None,       # UNCONFIRMED field name
-            "owner_name": (row.get("OWNER_NAME") or "").strip() or None,             # UNCONFIRMED field name
-            "situs_address": (row.get("SITUS_ADDR") or "").strip() or None,          # UNCONFIRMED field name
+            "owner_name": owner_name,
+            "owner_suppressed": owner_suppressed,
+            "situs_address": situs_address,
+            "zip_code": (row.get(PROPERTY_ZIPCODE_FIELD) or "").strip() or None,
         }
 
 
