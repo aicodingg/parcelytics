@@ -2362,7 +2362,7 @@ def _resolve_quick_search(q, county_code=None):
     )}
 
 
-def _home_search_response(q, county_code=None):
+def _home_search_response(q, county_code=None, api_county_slug=None):
     """PX-20260827-03-rev1: shared body for both index() (county-anchored,
     '/<county_slug>') and home() (neutral, bare '/'). PX-20260828-03: now a
     thin wrapper over _resolve_quick_search() (see that function's
@@ -2370,11 +2370,26 @@ def _home_search_response(q, county_code=None):
     kept as its own function because index()/home() render index.html
     unconditionally on every non-redirect outcome, unlike search_page()/
     search_landing() below, which merge the same result into a page that
-    also has its own, separate Filter Parcels context."""
+    also has its own, separate Filter Parcels context.
+
+    PX-20260828-06b: api_county_slug is passed straight through to
+    render_template() as an explicit kwarg, same mechanism as
+    _rates_response()/_info_response()/_snapshot_response() (an explicit
+    render_template() kwarg overrides the _inject_county_helpers() context
+    processor's own same-named default, per Jinja's normal precedence --
+    no new mechanism). Both callers below pass their own real value
+    unconditionally, not just the neutral one -- index() passes
+    g.county_slug (identical to what the context processor would already
+    default to there, so anchored pages are byte-for-byte unaffected);
+    home() passes "" (see home()'s own docstring for why empty, not a
+    slug, is the correct neutral value here)."""
     result = _resolve_quick_search(q, county_code=county_code)
     if "redirect" in result:
         return result["redirect"]
-    return render_template("index.html", q=q, error=result.get("error"), addr_matches=result.get("addr_matches"))
+    return render_template(
+        "index.html", q=q, error=result.get("error"), addr_matches=result.get("addr_matches"),
+        api_county_slug=api_county_slug,
+    )
 
 
 @app.route("/<county_slug>", strict_slashes=False)
@@ -2388,7 +2403,7 @@ def index():
     opting this route out of strict matching so both forms resolve
     identically, rather than adding a second explicit redirect rule."""
     q = request.args.get("q", "").strip()
-    return _home_search_response(q, county_code=g.county_code)
+    return _home_search_response(q, county_code=g.county_code, api_county_slug=g.county_slug)
 
 
 @app.route("/")
@@ -2407,9 +2422,37 @@ def home():
     any future county) remains a real, useful county-specific landing page
     in its own right; '/' is the county-agnostic entry point Diego's
     ruling (b) actually wants. county_code=None here is what makes the
-    home search box reach any live county, not just Travis."""
+    home search box reach any live county, not just Travis.
+
+    PX-20260828-06b: api_county_slug="" (NOT a real slug, unlike
+    info_landing()/rates_landing()/snapshot_landing()'s own api_county_slug
+    overrides, which always resolve to a concrete filtered-or-Travis slug
+    because those three pages DO filter to one county at a time). This
+    page's typeahead has no such filter -- it's meant to search every live
+    county, the same as its own full-page Enter-to-search flow above
+    already does via county_code=None -- so the base.html-built COUNTY_BASE
+    constant needs to point at the bare '/api/*' path, not any one
+    county's anchored path. base.html builds it as
+    `url_for('index', county_slug=api_county_slug).replace(/\/$/, '')`;
+    with api_county_slug="", url_for('index', county_slug='') builds
+    '/' (Werkzeug substitutes a route's dynamic segment values at
+    url_for()-time without re-validating them against that segment's own
+    matching regex -- this is standard, long-established Flask/Werkzeug
+    behavior, not something this specific empty-string case is exempt
+    from), which .replace(/\/$/, '') then strips to ''. static/parcel-
+    typeahead.js's own fetch() call is `global.COUNTY_BASE +
+    "/api/address_search?q=..."` (plain string concatenation, confirmed by
+    reading that file directly) -- with COUNTY_BASE === '', that resolves
+    to exactly '/api/address_search?q=...', the new bare route
+    (PX-20260828-06) added for exactly this, not '/travis-tx/api/
+    address_search?q=...'. See verify_px_20260828_06b_neutral_county_base.py
+    for the render-harness proof and this docstring's own sandbox-vs-live
+    disclosure (Flask/Werkzeug aren't installed in this sandbox either, so
+    the url_for()-build-time claim above is framework-documented behavior,
+    not something executed here -- Diego's own DevTools check on the real
+    deployed homepage is the closing step, exactly as this brief asked)."""
     q = request.args.get("q", "").strip()
-    return _home_search_response(q, county_code=None)
+    return _home_search_response(q, county_code=None, api_county_slug="")
 
 
 @app.route("/healthz")
