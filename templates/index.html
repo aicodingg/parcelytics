@@ -18,7 +18,8 @@
           directly from the county's own official records, no aggregators, no guesswork. Homeowners get a
           plain-language read on their assessment, the exemptions and savings available to them, and how their
           bill compares to the neighborhood. Every figure traceable to its source, labeled by confidence. Live
-          today in Travis County, TX — and we're expanding coverage county by county as we go.
+          today in {{ live_counties | map(attribute='display_name') | join(' and ') }} — and we're expanding
+          coverage county by county as we go.
         </p>
 
         {# Mode selector — who are you? (unchanged) #}
