@@ -183,6 +183,28 @@ def main():
     check("search.html / has_preliminary_2026=False",
           lambda: tpl.render(has_preliminary_2026=False))
 
+    # PX-20260828-03 Task 1: search.html's "Find a Parcel" box now renders
+    # its own q=/addr_matches/error results in place (previously navigated
+    # away to index.html entirely, so this template never had to handle
+    # these three variables at all -- new coverage, not a re-check).
+    check("search.html / quick-search q= with no addr_matches or error "
+          "(GET with no q at all -- q/addr_matches/error all default None)",
+          lambda: tpl.render(has_preliminary_2026=False, county_selected=True))
+    check("search.html / quick-search addr_matches populated, "
+          "including PX-20260828-03 Task 2's county_name tag",
+          lambda: tpl.render(
+              has_preliminary_2026=False, county_selected=True, q="1201 S Lamar",
+              addr_matches=[
+                  {"geo_id": "0100030105", "situs_address": "1201 S LAMAR BLVD",
+                   "owner_name": "ACME LLC", "county_slug": "travis-tx", "county_name": "Travis County"},
+                  {"geo_id": "DAL0099", "situs_address": "1201 S LAMAR BLVD UNIT B",
+                   "owner_name": None, "county_slug": "dallas-tx", "county_name": "Dallas County"},
+              ]))
+    check("search.html / quick-search error message, no matches "
+          "(the honest no-results branch of the shared macro)",
+          lambda: tpl.render(has_preliminary_2026=False, county_selected=False,
+                              q="zzzznotreal", error='No parcels found matching address "zzzznotreal". '))
+
     # ── snapshot.html ────────────────────────────────────────────────────
     tpl = env.get_template("snapshot.html")
 

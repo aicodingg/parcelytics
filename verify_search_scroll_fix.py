@@ -99,9 +99,18 @@ def test_fresh_page_load_has_no_search_happened_false():
 
 
 def test_successful_search_has_search_happened_true():
+    # PX-20260828-03: county_slug (PX-20260827-03-rev1) and county_name
+    # (this task's own addition) are now unconditionally present on every
+    # row search_parcels_by_address() returns -- this fixture was stale
+    # (missing both), which StrictUndefined caught the moment index.html's
+    # disambiguation-list markup moved into the shared addr_match_results()
+    # macro (templates/_macros.html) and started checking `m.county_name`'s
+    # truthiness directly, rather than a permissive-Undefined harness
+    # silently treating a missing key as falsy.
     html = render_index(
         q="1201 s lamar",
-        addr_matches=[{"geo_id": "0100030105", "situs_address": "1201 S Lamar Blvd", "owner_name": "Test Owner"}],
+        addr_matches=[{"geo_id": "0100030105", "situs_address": "1201 S Lamar Blvd", "owner_name": "Test Owner",
+                        "county_slug": "travis-tx", "county_name": "Travis County"}],
     )
     attr = _search_results_attr(html)
     ok = check("successful search: data-search-happened is 'true'", attr == "true", f"got {attr!r}")

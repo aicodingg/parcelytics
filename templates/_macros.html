@@ -1,0 +1,55 @@
+{# ═══════════════════════════════════════════════════════════════════════════
+   _macros.html — shared Jinja macros used across multiple templates.
+
+   PX-20260828-03 Task 1: addr_match_results() is extracted verbatim from
+   index.html's originally inline "N matching parcel(s) — select one"
+   disambiguation list (USER-FEEDBACK-1's data-search-happened wrapper
+   included, unchanged). Diego's ruling on Task 1's read-first report was
+   (a) unify the quick-search box on /search into its own results instead
+   of navigating away to index()'s -- doing that by hand-copying this ~20
+   line block a second time into search.html would recreate exactly the
+   "three independently-maintained near-duplicates" drift risk that
+   static/parcel-typeahead.js's July 2026 "Search overhaul" brief already
+   had to clean up once for this same address-search feature. One shared
+   macro, imported by both templates, means a future change to how a match
+   row renders (e.g. Task 2's county_name tag, added here) lands on both
+   pages at once instead of needing two synchronized edits.
+
+   Callers: index.html (home()/index()'s hero search) and search.html
+   (search_page()/search_landing()'s "Find a Parcel" quick box, unified
+   here under PX-20260828-03 -- previously navigated away to index()'s own
+   results view instead of rendering in place).
+   ═══════════════════════════════════════════════════════════════════════ #}
+
+{% macro addr_match_results(addr_matches, error, wrapper_id='searchResults') %}
+<div id="{{ wrapper_id }}" data-search-happened="{{ 'true' if (addr_matches or error) else 'false' }}">
+{% if addr_matches %}
+<div class="card mt-3" style="text-align:left;">
+  <div class="card-header">{{ addr_matches|length }} matching parcel{{ 's' if addr_matches|length != 1 }} — select one</div>
+  <ul class="list-group list-group-flush mb-0" style="font-size:13px;">
+    {% for m in addr_matches %}
+    <li class="list-group-item py-2 px-3">
+      {# PX-20260827-03-rev1: explicit county_slug=m.county_slug -- on a
+         neutral page (no g.county_slug of its own) _add_county_slug()'s
+         DEFAULT_COUNTY_SLUG fallback would otherwise silently link every
+         match to Travis regardless of which live county the match actually
+         came from (see search_parcels_by_address()'s own docstring).
+         PX-20260828-03 Task 2: m.county_name (added alongside m.county_slug
+         in search_parcels_by_address(), server-side, not re-derived here)
+         renders as the same subtle tag static/parcel-typeahead.js's
+         dropdown already shows on live-typing suggestions -- consistent
+         styling for the same underlying signal on both surfaces. Omitted
+         entirely (not an empty tag) if a row ever lacks it. #}
+      <a href="{{ url_for('property_detail', geo_id=m.geo_id, county_slug=m.county_slug) }}" class="text-decoration-none d-flex justify-content-between align-items-center">
+        <span>{{ m.situs_address or '(address unknown)' }}{% if m.county_name %}<span style="font-size:10.5px; color:var(--text-3); margin-left:8px; white-space:nowrap;">({{ m.county_name }})</span>{% endif %}</span>
+        <span class="text-muted ms-3" style="font-family:var(--font-mono); font-size:11.5px; white-space:nowrap;">{{ m.geo_id }}</span>
+      </a>
+      {% if m.owner_name %}<div class="text-muted" style="font-size:11px; margin-top:1px;">{{ m.owner_name }}</div>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% if error %}<div class="search-error-block mt-3" style="text-align:left;">{{ error }}</div>{% endif %}
+</div>
+{% endmacro %}

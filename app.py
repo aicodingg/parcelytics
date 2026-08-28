@@ -1779,6 +1779,19 @@ def search_parcels_by_address(q, limit=8, county_code=None):
         return results[:limit]
 
     county_slug = next((slug for slug, code in COUNTY_SLUGS.items() if code == target_county), DEFAULT_COUNTY_SLUG)
+    # PX-20260828-03 Task 2: county_name alongside county_slug, same
+    # per-call derivation, same reason -- a NEUTRAL search (county_code=None
+    # above) loops over every live county and concatenates results, so a
+    # single site-wide county_name (the shape api_address_search() used
+    # before this task, safe there only because that endpoint is always
+    # mono-county) would be wrong here; it has to be stamped per-row, once
+    # per county this function is actually querying. Consumed by the
+    # shared addr_match_results() macro (templates/_macros.html) to render
+    # the same "(Dallas County)"-style tag static/parcel-typeahead.js's
+    # dropdown already shows, and by api_address_search() below (which
+    # calls this same function), replacing that endpoint's own separate
+    # single-value derivation.
+    county_name = COUNTY_PROFILES.get(target_county, COUNTY_PROFILES["TRAVIS"])["county_name"]
     tokens = search_logic.normalize_query_tokens(q)
     if not tokens:
         return []
@@ -1809,6 +1822,7 @@ def search_parcels_by_address(q, limit=8, county_code=None):
             )
             for r in ranked:
                 r["county_slug"] = county_slug
+                r["county_name"] = county_name
             return ranked[:limit]
     return []
 
@@ -2281,53 +2295,80 @@ for _old_path, _endpoint in _LEGACY_REDIRECT_ROUTES:
 # Flask request-context value -- they do NOT receive county_slug as an
 # argument (Flask's url_value_preprocessor pops it before dispatch).
 
+def _resolve_quick_search(q, county_code=None):
+    """PX-20260828-03 Task 1: the one shared three-way quick-search
+    resolution -- exact match -> redirect straight to property_detail();
+    address-like query (contains letters) -> a disambiguation list;
+    anything else with no exact match -> an honest error message.
+
+    Extracted out of _home_search_response() (which used to own this logic
+    exclusively) so search_page()/search_landing()'s own "Find a Parcel"
+    box can reuse the IDENTICAL resolution instead of navigating away to
+    index()/home()'s results view -- Diego's ruling on this brief's Task 1
+    read-first report was "unify on one results UI", and reusing one
+    function rather than hand-copying its body a second time is what
+    keeps that unification real (a second hand-copy could silently drift
+    on what counts as a match, exactly the failure mode
+    static/parcel-typeahead.js's July 2026 consolidation already fixed
+    once for this same address-search feature).
+
+    Returns a dict with exactly one of these shapes:
+      {"redirect": <Response>}       -- caller should return this directly
+      {"addr_matches": [...]}        -- caller renders its own template with this
+      {"error": "..."}               -- caller renders its own template with this
+      {}                             -- q was empty; nothing to render
+
+    county_code=None (the neutral case, used by home() and search_landing())
+    makes resolve_exact_parcel()/search_parcels_by_address() search every
+    live county in turn, per Diego's ruling (b) ("users reach any live
+    county from anywhere") -- county_code=g.county_code (the anchored case,
+    used by index() and search_page()) keeps single-county behavior. The
+    redirect uses the MATCHED parcel's own county_code/county_slug
+    explicitly rather than relying on _add_county_slug()'s
+    DEFAULT_COUNTY_SLUG fallback, which would otherwise silently send a
+    Dallas match to a Travis-prefixed URL when called from a neutral,
+    county-less page."""
+    if not q:
+        return {}
+
+    parcel = resolve_exact_parcel(q, county_code=county_code)
+    if parcel:
+        match_slug = next(
+            (slug for slug, code in COUNTY_SLUGS.items() if code == parcel["county_code"]),
+            DEFAULT_COUNTY_SLUG,
+        )
+        return {"redirect": redirect(url_for("property_detail", geo_id=parcel["geo_id"], county_slug=match_slug))}
+
+    # Address-like query (contains letters) — show disambiguation list
+    if any(c.isalpha() for c in q):
+        addr_matches = search_parcels_by_address(q, limit=20, county_code=county_code)
+        if addr_matches:
+            return {"addr_matches": addr_matches}
+        return {"error": (
+            f"No parcels found matching address \"{q}\". "
+            "Try a shorter street name or use the 10-digit TCAD account number. "
+        )}
+
+    return {"error": (
+        f"We couldn't find a parcel matching \"{q}\". "
+        "Double-check the format — the 10-digit TCAD account number works most reliably. "
+        "The 14-digit Tax Office account and short prop_id integer are also accepted."
+    )}
+
+
 def _home_search_response(q, county_code=None):
     """PX-20260827-03-rev1: shared body for both index() (county-anchored,
-    '/<county_slug>') and home() (neutral, bare '/'). county_code=None
-    (the neutral case) makes resolve_exact_parcel()/search_parcels_by_
-    address() search every live county in turn, per Diego's ruling (b)
-    ("users reach any live county from anywhere") -- county_code=g.
-    county_code (the anchored case) keeps the exact prior single-county
-    behavior. The redirect below uses the MATCHED parcel's own
-    county_code/county_slug explicitly rather than relying on
-    _add_county_slug()'s DEFAULT_COUNTY_SLUG fallback, which would
-    otherwise silently send a Dallas match to a Travis-prefixed URL when
-    called from the neutral, county-less home page."""
-    error = None
-
-    if q:
-        parcel = resolve_exact_parcel(q, county_code=county_code)
-
-        if parcel:
-            match_slug = next(
-                (slug for slug, code in COUNTY_SLUGS.items() if code == parcel["county_code"]),
-                DEFAULT_COUNTY_SLUG,
-            )
-            return redirect(url_for("property_detail", geo_id=parcel["geo_id"], county_slug=match_slug))
-
-        # Address-like query (contains letters) — show disambiguation list
-        elif any(c.isalpha() for c in q):
-            addr_matches = search_parcels_by_address(q, limit=20, county_code=county_code)
-            if addr_matches:
-                return render_template(
-                    "index.html",
-                    q=q,
-                    error=None,
-                    addr_matches=addr_matches,
-                )
-            error = (
-                f"No parcels found matching address \"{q}\". "
-                "Try a shorter street name or use the 10-digit TCAD account number. "
-            )
-
-        else:
-            error = (
-                f"We couldn't find a parcel matching \"{q}\". "
-                "Double-check the format — the 10-digit TCAD account number works most reliably. "
-                "The 14-digit Tax Office account and short prop_id integer are also accepted."
-            )
-
-    return render_template("index.html", q=q, error=error)
+    '/<county_slug>') and home() (neutral, bare '/'). PX-20260828-03: now a
+    thin wrapper over _resolve_quick_search() (see that function's
+    docstring for the full county_code=None/neutral-search reasoning),
+    kept as its own function because index()/home() render index.html
+    unconditionally on every non-redirect outcome, unlike search_page()/
+    search_landing() below, which merge the same result into a page that
+    also has its own, separate Filter Parcels context."""
+    result = _resolve_quick_search(q, county_code=county_code)
+    if "redirect" in result:
+        return result["redirect"]
+    return render_template("index.html", q=q, error=result.get("error"), addr_matches=result.get("addr_matches"))
 
 
 @app.route("/<county_slug>", strict_slashes=False)
@@ -2393,7 +2434,18 @@ def healthz():
 @app.route("/<county_slug>/search")
 def search_page():
     """Task 13 — dedicated search page with a US coverage map (visual only).
-    Not an interactive GIS map; just communicates current coverage (Travis County)."""
+    Not an interactive GIS map; just communicates current coverage (Travis County).
+
+    PX-20260828-03 Task 1: this page's own "Find a Parcel" quick box used
+    to submit to index()'s bare url_for('index') -- county_slug got
+    auto-injected by _add_county_slug() from g.county_slug, so the box
+    silently navigated the user OFF /search entirely and onto the
+    homepage-hero results view, a different template/layout, the moment
+    they searched. The box's form now submits back to this same page
+    (action="{{ request.path }}" in search.html), and q= is resolved here
+    via the same _resolve_quick_search() index()/home() already use --
+    one shared resolver, not a second hand-copied implementation that
+    could drift on what counts as a match."""
     # M4-2026-PRELIM-SNAPSHOT Part 1 fix: the Tax Year filter's "2026"
     # option used to hardcode "(Preliminary)" regardless of actual
     # data_source -- today's certified load means most 2026 rows are now
@@ -2408,7 +2460,14 @@ def search_page():
         "AND data_source = 'preliminary' AND county_code = %s) AS x",
         (g.county_code,), one=True,
     )["x"])
-    return render_template("search.html", has_preliminary_2026=has_preliminary_2026, county_selected=True)
+    q = request.args.get("q", "").strip()
+    result = _resolve_quick_search(q, county_code=g.county_code)
+    if "redirect" in result:
+        return result["redirect"]
+    return render_template(
+        "search.html", has_preliminary_2026=has_preliminary_2026, county_selected=True,
+        q=q, addr_matches=result.get("addr_matches"), error=result.get("error"),
+    )
 
 
 @app.route("/search")
@@ -2427,8 +2486,25 @@ def search_landing():
     existing, fully-working anchored page. Matches Diego's stated
     preference: "clean navigation over clever state-carryover" -- no new
     cross-county fetch/state logic, just a real page load into the
-    county-anchored route that already does this correctly."""
-    return render_template("search.html", has_preliminary_2026=False, county_selected=False)
+    county-anchored route that already does this correctly.
+
+    PX-20260828-03 Task 1: the "Find a Parcel" box's q= is now resolved
+    here too, with county_code=None (the same neutral, every-live-county
+    search home()/index() use for the bare '/' page) -- this closes a
+    SECOND, worse instance of the box's original bug: because this route
+    has no g.county_slug, the old bare url_for('index') fell back to
+    _add_county_slug()'s DEFAULT_COUNTY_SLUG, meaning the box ALWAYS
+    submitted to /travis-tx?q=... from this page regardless of what was
+    typed -- silently Travis-only, found while reading this route for
+    Task 1's read-first report, not part of the originally reported bug."""
+    q = request.args.get("q", "").strip()
+    result = _resolve_quick_search(q, county_code=None)
+    if "redirect" in result:
+        return result["redirect"]
+    return render_template(
+        "search.html", has_preliminary_2026=False, county_selected=False,
+        q=q, addr_matches=result.get("addr_matches"), error=result.get("error"),
+    )
 
 
 @app.route("/<county_slug>/parcel/<geo_id>")
@@ -5544,17 +5620,25 @@ def api_address_search():
       q   str   partial address string, or an account number (min 3 chars)
 
     PX-20260828-02 (Diego's addition): every result also carries county_name
-    -- straight from this SAME request's own g.county_code (the exact
-    county this endpoint's queries actually ran against, not re-derived
-    independently), so parcel-typeahead.js can render a visible "(Travis
-    County)"/"(Dallas County)" tag on every result. This is a visibility
-    aid, not a new scoping mechanism -- every result from a single call to
-    this anchored (/<county_slug>/...) endpoint is already guaranteed to
-    be from one county (resolve_exact_parcel()/search_parcels_by_address()
-    both scope to g.county_code when no explicit county_code is passed,
-    which is the case here); the point is that if COUNTY_BASE or the URL
-    built from it is ever wrong again, a user sees the mismatch directly
-    instead of it being silently wrong.
+    so parcel-typeahead.js can render a visible "(Travis County)"/"(Dallas
+    County)" tag on every result. This is a visibility aid, not a new
+    scoping mechanism -- every result from a single call to this anchored
+    (/<county_slug>/...) endpoint is already guaranteed to be from one
+    county (resolve_exact_parcel()/search_parcels_by_address() both scope
+    to g.county_code when no explicit county_code is passed, which is the
+    case here); the point is that if COUNTY_BASE or the URL built from it
+    is ever wrong again, a user sees the mismatch directly instead of it
+    being silently wrong.
+
+    PX-20260828-03 Task 2: the address-match branch below now reads
+    county_name straight off each row (search_parcels_by_address() stamps
+    it per-row itself, alongside county_slug, as of this same task) rather
+    than this endpoint deriving its own separate copy from g.county_code --
+    one source for the value, not two that could silently drift apart. The
+    exact-match branch still derives its own local `county_name` below,
+    since resolve_exact_parcel()'s single-dict return has no county_slug/
+    county_name of its own to read (it isn't a multi-county-aware result
+    list the way search_parcels_by_address()'s rows are).
     """
     q = request.args.get("q", "").strip()
     if len(q) < 3:
@@ -5589,7 +5673,7 @@ def api_address_search():
             "geo_id":      r["geo_id"],
             "address":     r.get("situs_address") or "",
             "owner":       r.get("owner_name") or "",
-            "county_name": county_name,
+            "county_name": r.get("county_name", county_name),
         }
         for r in rows
     ]

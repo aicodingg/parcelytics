@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
 {% block title %}Search — Parcelytics{% endblock %}
 
 {% block content %}
@@ -65,12 +66,21 @@
     <div class="card">
       <div class="card-header">Find a Parcel</div>
       <div class="card-body">
-        <form method="get" action="{{ url_for('index') }}" id="searchPageForm">
+        {# PX-20260828-03 Task 1: action used to be url_for('index'), which
+           -- via _add_county_slug()'s auto-injection of g.county_slug (or
+           its DEFAULT_COUNTY_SLUG fallback on this neutral landing page) --
+           silently navigated the user OFF /search and onto index()/home()'s
+           own results view on every search. action="{{ request.path }}"
+           submits back to whichever of this page's two real routes
+           (search_page() or search_landing()) is currently rendering,
+           anchored or bare, with no Jinja branching needed -- both routes
+           now resolve q= themselves via the shared _resolve_quick_search(). #}
+        <form method="get" action="{{ request.path }}" id="searchPageForm">
           <label class="form-label small text-muted mb-1" for="spQ">Parcel ID or address</label>
           <div class="ta-wrap" style="position:relative;">
             <input type="text" name="q" id="spQ" class="form-control"
                    placeholder="e.g. 1201 S Lamar  ·  0100030105"
-                   autocomplete="off" spellcheck="false">
+                   value="{{ q or '' }}" autocomplete="off" spellcheck="false">
             <div class="ta-list" id="spTaList" style="display:none;"></div>
           </div>
           <div class="form-text" style="font-size:11.5px;">
@@ -79,6 +89,7 @@
 
           <button type="submit" class="btn btn-dark btn-sm w-100 mt-3 fw-semibold">Search</button>
         </form>
+        {{ m.addr_match_results(addr_matches, error, wrapper_id='spSearchResults') }}
         <div class="text-muted mt-2" style="font-size:11px;">
           Tip: enter a parcel to open its detail page. To browse or narrow by property type, value,
           neighborhood, and more, use the Filter Parcels panel below.
@@ -525,10 +536,28 @@
 
 // ── Address typeahead — shared script (Cowork brief "Search overhaul —
 // Phase 2 go-ahead", July 2026, D1). Replaces this page's own previous
-// independent copy of the debounce/fetch/render logic. This box's Enter
-// behavior (submit to "/") is unchanged — the shared script only intercepts
-// Enter when a dropdown suggestion is highlighted. ──────────────────────────
+// independent copy of the debounce/fetch/render logic. PX-20260828-03:
+// this box's Enter/Search-button submit now stays on THIS page (see
+// searchPageForm's action="{{ request.path }}" above) instead of
+// navigating to index()/home()'s results view — the shared typeahead
+// script only intercepts Enter when a dropdown suggestion is highlighted,
+// same as before. ────────────────────────────────────────────────────────
 ParcelTypeahead.attach({ inputId: "spQ" });
+
+// PX-20260828-03 Task 1: same scrollToResults() pattern as index.html's
+// hero search (USER-FEEDBACK-1) -- a completed quick-search's results (or
+// its honest "no results" message) must never be visually indistinguishable
+// from no search having run, now that this box's results render in place
+// on /search instead of navigating away. Gated on spSearchResults' own
+// data-search-happened attribute (set by the shared addr_match_results()
+// macro from the exact same addr_matches-or-error condition that decides
+// what renders) -- not a separate client-side guess.
+(function () {
+  var results = document.getElementById("spSearchResults");
+  if (results && results.getAttribute("data-search-happened") === "true") {
+    results.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+})();
 
 // ── Filter Parcels panel ───────────────────────────────────────────────────
 // Reuses the Rate Trends page's "type to filter a visible option list"
