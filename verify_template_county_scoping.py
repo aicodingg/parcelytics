@@ -49,6 +49,14 @@ This scanner checks two independent violation classes:
       always `request.endpoint == '<endpoint_name>'`, which is immune to
       any URL prefix by construction.
 
+PX-20260828-02: this scanner now also globs static/*.js (previously
+templates/*.html only) -- the confirmed-live bug that brief fixed
+(static/parcel-typeahead.js hardcoding "/api/address_search" and
+"/parcel/<geo_id>", used by all four search boxes site-wide) is the exact
+Class (A) violation this scanner exists to catch, and it had a real,
+unexamined blind spot for shared JS assets. See scan_file()'s own
+docstring for the full reasoning.
+
 Both violation classes are checked against the literal template TEXT with
 Jinja `{# ... #}` comments and HTML `<!-- ... -->` comments stripped first
 (blanked out character-for-character so line numbers stay accurate) --
@@ -91,6 +99,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 APP_PY = Path(__file__).resolve().parent / "app.py"
 
 # Real route prefixes this app owns (mirrors app.py's _LEGACY_REDIRECT_ROUTES'
@@ -316,6 +325,19 @@ def _strip_comments(text: str) -> str:
 
     text = re.sub(r"\{#.*?#\}", _blank, text, flags=re.DOTALL)
     text = re.sub(r"<!--.*?-->", _blank, text, flags=re.DOTALL)
+    # JS block comments (`/* ... */`) -- added PX-20260828-02 when this
+    # scanner was extended to also cover static/*.js: parcel-typeahead.js's
+    # own file-header comment uses this style (not `//`), and this fix's
+    # own explanatory addition to that header quotes the exact hardcoded
+    # strings being fixed ("/api/address_search", "/parcel/<geo_id>") --
+    # the identical "a comment quoting an example old path" false-positive
+    # class this function already exists to prevent for Jinja/HTML/`//`
+    # comments, just in a comment style this scanner never had to handle
+    # before JS files were in scope. Stripped BEFORE the `//` pass below so
+    # a `//` that happens to appear inside a `/* ... */` block (none do
+    # today, but it's a real possibility) can't corrupt this regex's own
+    # `*/` boundary detection.
+    text = re.sub(r"/\*.*?\*/", _blank, text, flags=re.DOTALL)
     # JS line comments (`// ...` to end of line) -- added PX-20260827-03-rev1
     # after this repo's own Task 1 routing-split comments (documenting the
     # new bare '/search' landing route) quoted the route name in single
@@ -344,10 +366,21 @@ def _line_number(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
-def scan_file(filepath: Path) -> list:
+def scan_file(filepath: Path, rel_dir: str = "templates") -> list:
+    """rel_dir names the directory this file is reported under in findings
+    (e.g. "templates" or "static") -- PX-20260828-02 extends this scanner
+    to also cover static/*.js: the SAME violation class (a hardcoded,
+    county-unaware app-route path bypassing url_for()/COUNTY_BASE) was
+    confirmed live in static/parcel-typeahead.js (fetch("/api/address_
+    search...") and window.location.href = "/parcel/..."), a file this
+    scanner never looked at because it only ever globbed templates/*.html.
+    That JS file is shared by all four search boxes site-wide, so this was
+    a real, live, high-blast-radius gap in this exact scanner's own
+    coverage -- closed here rather than left for the next JS file to slip
+    through the same way."""
     raw = filepath.read_text()
     text = _strip_comments(raw)
-    rel = f"templates/{filepath.name}"
+    rel = f"{rel_dir}/{filepath.name}"
     findings = []
 
     for m in HARDCODED_PATH_RE.finditer(text):
@@ -380,10 +413,17 @@ def scan_file(filepath: Path) -> list:
     return findings
 
 
-def run_audit(templates_dir: Path = TEMPLATES_DIR) -> list:
+def run_audit(templates_dir: Path = TEMPLATES_DIR, static_dir: Path = STATIC_DIR) -> list:
     findings = []
     for filepath in sorted(templates_dir.glob("*.html")):
-        findings.extend(scan_file(filepath))
+        findings.extend(scan_file(filepath, rel_dir="templates"))
+    # PX-20260828-02: static/*.js is now scanned too -- see scan_file()'s
+    # own docstring for why. Class (C) (hardcoded CAD institution strings
+    # inside <a> tags) is still checked against this text (no separate
+    # gating needed): plain .js files have no <a> tags in practice, so it
+    # simply finds nothing there, not a false-positive risk.
+    for filepath in sorted(static_dir.glob("*.js")):
+        findings.extend(scan_file(filepath, rel_dir="static"))
     return findings
 
 

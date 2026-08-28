@@ -5542,10 +5542,25 @@ def api_address_search():
     whether it came from this typeahead or a full-page Enter submit.
     Query params:
       q   str   partial address string, or an account number (min 3 chars)
+
+    PX-20260828-02 (Diego's addition): every result also carries county_name
+    -- straight from this SAME request's own g.county_code (the exact
+    county this endpoint's queries actually ran against, not re-derived
+    independently), so parcel-typeahead.js can render a visible "(Travis
+    County)"/"(Dallas County)" tag on every result. This is a visibility
+    aid, not a new scoping mechanism -- every result from a single call to
+    this anchored (/<county_slug>/...) endpoint is already guaranteed to
+    be from one county (resolve_exact_parcel()/search_parcels_by_address()
+    both scope to g.county_code when no explicit county_code is passed,
+    which is the case here); the point is that if COUNTY_BASE or the URL
+    built from it is ever wrong again, a user sees the mismatch directly
+    instead of it being silently wrong.
     """
     q = request.args.get("q", "").strip()
     if len(q) < 3:
         return jsonify({"ok": True, "results": []})
+
+    county_name = COUNTY_PROFILES.get(g.county_code, COUNTY_PROFILES["TRAVIS"])["county_name"]
 
     # D2 item 5 / D3: a numeric account number resolves here too now (it
     # didn't before — this endpoint never did geo_id/prop_id matching,
@@ -5560,9 +5575,10 @@ def api_address_search():
         exact = resolve_exact_parcel(q)
         if exact:
             return jsonify({"ok": True, "results": [{
-                "geo_id":  exact["geo_id"],
-                "address": exact.get("situs_address") or "",
-                "owner":   exact.get("owner_name") or "",
+                "geo_id":      exact["geo_id"],
+                "address":     exact.get("situs_address") or "",
+                "owner":       exact.get("owner_name") or "",
+                "county_name": county_name,
             }]})
         # Falls through to address-text matching below on a numeric miss —
         # e.g. a 5-digit zip typed alone shouldn't just dead-end here.
@@ -5570,9 +5586,10 @@ def api_address_search():
     rows = search_parcels_by_address(q, limit=8)
     results = [
         {
-            "geo_id":  r["geo_id"],
-            "address": r.get("situs_address") or "",
-            "owner":   r.get("owner_name") or "",
+            "geo_id":      r["geo_id"],
+            "address":     r.get("situs_address") or "",
+            "owner":       r.get("owner_name") or "",
+            "county_name": county_name,
         }
         for r in rows
     ]

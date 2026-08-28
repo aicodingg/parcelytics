@@ -28,6 +28,18 @@
  * same shared server-side matching function (app.py's
  * search_parcels_by_address() / resolve_exact_parcel()) regardless of
  * which of the four boxes is calling it.
+ *
+ * PX-20260828-02: both the fetch() URL and the "navigate" mode's
+ * window.location target are built off the global COUNTY_BASE constant
+ * (base.html, present on every page this script attaches to), NOT a
+ * hardcoded bare path. A bare "/api/address_search"/"/parcel/<geo_id>"
+ * silently hits _LEGACY_REDIRECT_ROUTES' 301-to-Travis stub -- this was a
+ * real, live bug (confirmed 2026-08-28) that made every one of the four
+ * search boxes site-wide always search/link Travis regardless of which
+ * county's page the user was actually on. COUNTY_BASE itself already
+ * resolves to the correct county (including a bare-page-with-?county=
+ * filter, since PX-20260828-01) -- this fix's only job is to actually USE
+ * it here, not to change what it resolves to.
  */
 (function (global) {
   "use strict";
@@ -134,7 +146,14 @@
       if (cfg.mode === "select") {
         cfg.onSelect(result);
       } else {
-        window.location.href = "/parcel/" + encodeURIComponent(result.geo_id);
+        // PX-20260828-02: COUNTY_BASE, not a hardcoded "/parcel/..." --
+        // see this file's own header comment for why. COUNTY_BASE is a
+        // global defined in base.html, in scope on every page this script
+        // attaches to (confirmed for all four: navbar via base.html
+        // itself, homepage/search/Rate Trends via their own {% block
+        // scripts %} content, which Jinja always places AFTER base.html's
+        // COUNTY_BASE <script> tag in the rendered page).
+        window.location.href = global.COUNTY_BASE + "/parcel/" + encodeURIComponent(result.geo_id);
       }
     }
 
@@ -150,9 +169,24 @@
       currentResults = results;
       highlightedIndex = -1;
       list.innerHTML = results.map(function (r, i) {
+        // PX-20260828-02 (Diego's addition): a visible per-result county
+        // tag, e.g. "(Travis County)" / "(Dallas County)" -- county_name
+        // comes straight from the server's api_address_search() response
+        // (the SAME g.county_code that endpoint actually queried against,
+        // not re-derived here), so if COUNTY_BASE or the URL it built ever
+        // silently resolves to the wrong county again, the mismatch
+        // between "which page you're on" and "what this tag says" is
+        // immediately visible to a real user, not just to Network-tab
+        // inspection. Omitted entirely (not rendered as an empty tag) if
+        // the server ever doesn't send it, for backward compatibility
+        // with any other future caller of this same render path.
+        var countyTag = r.county_name
+          ? '<span style="font-size:10.5px; color:var(--text-3); margin-left:8px; flex-shrink:0; white-space:nowrap;">(' +
+              escapeHtml(r.county_name) + ')</span>'
+          : "";
         return (
           '<div class="ta-opt" data-idx="' + i + '">' +
-            '<span>' + escapeHtml(r.address || "(address unknown)") + '</span>' +
+            '<span style="overflow:hidden; text-overflow:ellipsis;">' + escapeHtml(r.address || "(address unknown)") + countyTag + '</span>' +
             '<span style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-3); margin-left:12px; flex-shrink:0;">' +
               escapeHtml(r.geo_id) +
             '</span>' +
@@ -172,7 +206,12 @@
     }
 
     function runQuery(q) {
-      fetch("/api/address_search?q=" + encodeURIComponent(q))
+      // PX-20260828-02: COUNTY_BASE, not a hardcoded bare path -- see this
+      // file's own header comment. This was the confirmed live bug: every
+      // one of the four boxes always searched Travis regardless of the
+      // current page's (or, since PX-20260828-01, current in-page filter's)
+      // real county.
+      fetch(global.COUNTY_BASE + "/api/address_search?q=" + encodeURIComponent(q))
         .then(function (r) { return r.json(); })
         .then(function (d) {
           // Stale-response guard: only render if this is still the most
