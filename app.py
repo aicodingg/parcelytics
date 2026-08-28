@@ -2234,6 +2234,13 @@ def _inject_county_helpers():
 # '/api/rates' also stays -- it's a JSON API endpoint, not a page, and was
 # never asked to become neutral-URL; its own missing county_code scoping
 # was fixed directly in api_rates() instead (see that route's docstring).
+# PX-20260828-06: '/api/address_search' is REMOVED from this list -- unlike
+# '/api/rates' above, this one WAS asked to become a true neutral route
+# (the live-typing typeahead needs a genuinely cross-county bare endpoint,
+# not a single-county default). api_address_search_landing() is the real
+# route at that bare path now, reusing search_parcels_by_address()/
+# resolve_exact_parcel() with county_code=None -- the same cross-county
+# mechanism _home_search_response() already uses -- not a redirect target.
 _LEGACY_REDIRECT_ROUTES = [
     ("/parcel/<geo_id>", "property_detail"),
     ("/parcel/<geo_id>/export.pdf", "export_due_diligence_pdf"),
@@ -2244,7 +2251,6 @@ _LEGACY_REDIRECT_ROUTES = [
     ("/api/benchmark/meta", "api_benchmark_meta"),
     ("/api/search_filter", "api_search_filter"),
     ("/api/estimate_acq/<geo_id>", "api_estimate_acq"),
-    ("/api/address_search", "api_address_search"),
     ("/api/peer_benchmark_local/<geo_id>", "api_peer_benchmark_local"),
     ("/api/peer_benchmark_sf/<geo_id>", "api_peer_benchmark_sf"),
     ("/api/news", "api_news"),
@@ -5679,6 +5685,75 @@ def api_address_search():
     ]
     return jsonify({"ok": True, "results": results})
 
+
+@app.route("/api/address_search")
+@limiter.limit(_LIMIT_TYPEAHEAD)
+def api_address_search_landing():
+    """
+    PX-20260828-06: the neutral, bare-path sibling of api_address_search()
+    above -- matching the index()/home() anchored/neutral pattern already
+    established at line ~2375 (anchored route defined first, bare route
+    right after, both delegating to the same shared underlying function(s)
+    with county_code=None for the neutral case).
+
+    Exists because '/api/address_search' had no real route of its own --
+    it only ever existed as a _LEGACY_REDIRECT_ROUTES 301-to-Travis stub
+    (that entry is removed in this same change; a real route and a
+    redirect rule registered at the same literal path would conflict at
+    Flask registration time regardless). Reuses resolve_exact_parcel()/
+    search_parcels_by_address() with county_code=None -- the exact same
+    cross-county loop _resolve_quick_search()/_home_search_response()
+    already call successfully for the neutral home page's own full-page
+    Enter-to-search flow -- so a bare, county-less typeahead request
+    resolves identically to that already-correct path, not a second,
+    separately-written cross-county mechanism.
+
+    Same q/results contract as the anchored endpoint. One structural
+    difference: this route has no g.county_code at all (it is never
+    reached via a <county_slug> URL segment), so county_name can't be
+    derived from a single request-wide value the way the anchored
+    endpoint's exact-match branch does. Instead:
+      - the address-match branch reads county_name straight off each row
+        (search_parcels_by_address()'s county_code=None loop stamps a
+        real, correct per-row county_name on every result -- see that
+        function's own PX-20260828-03 comment -- since a single neutral
+        call can span multiple counties, there is no single value to
+        fall back to here, unlike the anchored endpoint);
+      - the exact-match branch derives county_name from the resolved
+        parcel's OWN county_code column instead -- resolve_exact_parcel()
+        with county_code=None still runs a real `SELECT * FROM parcel
+        WHERE ...`, so that field is always present on a hit.
+    """
+    q = request.args.get("q", "").strip()
+    if len(q) < 3:
+        return jsonify({"ok": True, "results": []})
+
+    if search_logic.is_account_number_query(q):
+        exact = resolve_exact_parcel(q, county_code=None)
+        if exact:
+            exact_county_name = COUNTY_PROFILES.get(
+                exact.get("county_code"), COUNTY_PROFILES["TRAVIS"]
+            )["county_name"]
+            return jsonify({"ok": True, "results": [{
+                "geo_id":      exact["geo_id"],
+                "address":     exact.get("situs_address") or "",
+                "owner":       exact.get("owner_name") or "",
+                "county_name": exact_county_name,
+            }]})
+        # Falls through to address-text matching below on a numeric miss,
+        # same as the anchored endpoint.
+
+    rows = search_parcels_by_address(q, limit=8, county_code=None)
+    results = [
+        {
+            "geo_id":      r["geo_id"],
+            "address":     r.get("situs_address") or "",
+            "owner":       r.get("owner_name") or "",
+            "county_name": r.get("county_name"),
+        }
+        for r in rows
+    ]
+    return jsonify({"ok": True, "results": results})
 
 
 @app.route("/<county_slug>/api/peer_benchmark_local/<geo_id>")
