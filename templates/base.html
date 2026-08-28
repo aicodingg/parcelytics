@@ -26,7 +26,7 @@
 
 <nav class="navbar navbar-expand-lg">
   <div class="container-fluid px-0">
-    <a class="navbar-brand" href="{{ url_for('index') }}" aria-label="Parcelytics home">
+    <a class="navbar-brand" href="{{ url_for('home') }}" aria-label="Parcelytics home">
       <img src="{{ url_for('static', filename='parcelytics-mark.png') }}" alt="" class="brand-mark-img">
       <img src="{{ url_for('static', filename='parcelytics-wordmark.png') }}" alt="Parcelytics" class="brand-wordmark-img">
     </a>
@@ -45,7 +45,7 @@
          at all (plain GET-and-reload on Enter), which is exactly the box
          implicated in "results render below the fold with no indication
          anything happened" when used from a non-home page. #}
-      <form class="d-flex me-lg-3 my-2 my-lg-0" role="search" action="{{ url_for('index') }}" method="get" id="navSearchForm">
+      <form class="d-flex me-lg-3 my-2 my-lg-0" role="search" action="{{ url_for('home') }}" method="get" id="navSearchForm">
         <input class="form-control form-control-sm" type="search" name="q" id="navSearchInput"
                placeholder="Search parcel ID or address…" autocomplete="off"
                aria-label="Search parcels" style="min-width:210px; font-size:12px;">
@@ -68,28 +68,37 @@
            landed, since every real path now starts with a county slug (e.g.
            '/travis-tx/search'). request.endpoint is immune to any URL prefix
            by construction, so it's the correct comparison going forward
-           regardless of how many counties or slug shapes exist. #}
-        <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">Home</a>
+           regardless of how many counties or slug shapes exist.
+           PX-20260828-01: Home/Search/Info/Rates/Snapshot are all genuinely
+           neutral-URL pages now (own in-page county filter, not a URL
+           segment) -- these five nav links and their active-state checks
+           point at the *_landing endpoints (home/search_landing/
+           info_landing/rates_landing/snapshot_landing), not the
+           county-anchored twins (index/search_page/info/tax_rates/
+           county_snapshot). Anchored twins remain real routes for direct
+           county-specific deep links; the nav just isn't one of those
+           call sites anymore, matching Home/Search's own -03-rev1 fix. #}
+        <a class="nav-link {% if request.endpoint == 'home' %}active{% endif %}" href="{{ url_for('home') }}">Home</a>
         <a class="nav-link {% if request.endpoint == 'about' %}active{% endif %}" href="{{ url_for('about') }}">About</a>
-        <a class="nav-link {% if request.endpoint == 'info' %}active{% endif %}" href="{{ url_for('info') }}">Info</a>
-        <a class="nav-link {% if request.endpoint == 'search_page' %}active{% endif %}" href="{{ url_for('search_page') }}">Search</a>
-        <a class="nav-link {% if request.endpoint == 'tax_rates' %}active{% endif %}" href="{{ url_for('tax_rates') }}">Rate Trends</a>
+        <a class="nav-link {% if request.endpoint == 'info_landing' %}active{% endif %}" href="{{ url_for('info_landing') }}">Info</a>
+        <a class="nav-link {% if request.endpoint == 'search_landing' %}active{% endif %}" href="{{ url_for('search_landing') }}">Search</a>
+        <a class="nav-link {% if request.endpoint == 'rates_landing' %}active{% endif %}" href="{{ url_for('rates_landing') }}">Rate Trends</a>
 
         {# Sector dropdown — links to Market Snapshot with appropriate view #}
         <div class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle {% if request.endpoint == 'county_snapshot' %}active{% endif %}" href="{{ url_for('county_snapshot') }}" role="button"
+          <a class="nav-link dropdown-toggle {% if request.endpoint == 'snapshot_landing' %}active{% endif %}" href="{{ url_for('snapshot_landing') }}" role="button"
              data-bs-toggle="dropdown" aria-expanded="false" id="sectorDropdown">
             Market Snapshot
           </a>
           <ul class="dropdown-menu dropdown-menu-end sector-dropdown" aria-labelledby="sectorDropdown">
             <li class="dropdown-header">Sector</li>
-            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='overall') }}">All Property Types</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('snapshot_landing', view='overall') }}">All Property Types</a></li>
             <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='residential') }}">Residential (SFR)</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='multifamily') }}">Multi-Family</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='commercial') }}">Commercial</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='land') }}">Land / Vacant</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('county_snapshot', view='agricultural') }}">Agricultural</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('snapshot_landing', view='residential') }}">Residential (SFR)</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('snapshot_landing', view='multifamily') }}">Multi-Family</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('snapshot_landing', view='commercial') }}">Commercial</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('snapshot_landing', view='land') }}">Land / Vacant</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('snapshot_landing', view='agricultural') }}">Agricultural</a></li>
           </ul>
         </div>
 
@@ -189,9 +198,9 @@
     </div>
     <div class="footer-col">
       <div class="footer-col-title">Product</div>
-      <a href="{{ url_for('index') }}">Parcel search</a>
-      <a href="{{ url_for('county_snapshot') }}">Market snapshot</a>
-      <a href="{{ url_for('tax_rates') }}">Rate trends</a>
+      <a href="{{ url_for('home') }}">Parcel search</a>
+      <a href="{{ url_for('snapshot_landing') }}">Market snapshot</a>
+      <a href="{{ url_for('rates_landing') }}">Rate trends</a>
       <a href="{{ url_for('about') }}">About</a>
       <a href="{{ url_for('terms') }}">Terms of Service</a>
       <a href="{{ url_for('privacy') }}">Privacy Policy</a>
@@ -305,7 +314,21 @@
   // in app.py -- this is the one mechanism, not a second '/' + county_slug
   // convention living in JS. Trailing slash stripped so callers can safely
   // do `${COUNTY_BASE}/api/...` without a double slash.
-  const COUNTY_BASE = {{ url_for('index') | tojson }}.replace(/\/$/, '');
+  // PX-20260828-01: county_slug=api_county_slug (NOT a bare url_for('index'))
+  // -- api_county_slug is a new context-processor value that defaults to
+  // exactly what _add_county_slug() would already inject (getattr(g,
+  // "county_slug", DEFAULT_COUNTY_SLUG)), so every existing county-anchored
+  // or neutral page is byte-for-byte unaffected. The three new neutral,
+  // in-page-filtered pages (bare /info, /rates, /snapshot) override it via
+  // an explicit render_template(..., api_county_slug=...) kwarg -- Jinja
+  // lets that take precedence over the context-processor default -- so
+  // THEIR page-script fetch() calls correctly target the FILTERED county's
+  // /api/* endpoints instead of silently defaulting to Travis. Deliberately
+  // NOT done by setting g.county_slug/g.county_code on those routes: that
+  // would flip is_county_anchored (hasattr(g, "county_slug")) to True on a
+  // page whose whole point is staying URL-neutral, incorrectly triggering
+  // the nav-level county-switcher's "anchored page" treatment.
+  const COUNTY_BASE = {{ url_for('index', county_slug=api_county_slug) | tojson }}.replace(/\/$/, '');
 </script>
 {% block scripts %}{% endblock %}
 </body>

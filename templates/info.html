@@ -12,6 +12,26 @@
   </p>
 </div>
 
+{# ── County filter — real, wired filter (PX-20260828-01), added when this
+   page became genuinely neutral-URL (bare '/info'). NOT the same control
+   as each topic panel's own .topic-county-select below (that one filters
+   WHICH RESEARCHED CONTENT to show within a topic that already has
+   multiple counties written up -- inert today since only Travis has
+   content; this one decides WHICH COUNTY'S PAGE you're looking at at
+   all, same combobox pattern as Rate Trends/Market Snapshot). Selecting
+   a different county navigates to this same bare '/info' path with an
+   updated ?county= query param, NOT to '/<slug>/info' -- Diego's
+   2026-08-28 ruling supersedes -03-rev1's Info-stays-anchored decision. #}
+<div class="mb-3" style="max-width:260px;">
+  <label class="form-label small text-muted mb-1" for="fltCountyInput">County</label>
+  <div class="ta-select" data-field="county" style="position:relative;">
+    <input type="text" id="fltCountyInput" class="form-control form-control-sm ta-select-input"
+           autocomplete="off" spellcheck="false" style="font-size:12px;">
+    <input type="hidden" id="fltCountyValue" value="travis">
+    <div class="ta-list" id="fltCountyList" style="display:none;"></div>
+  </div>
+</div>
+
 {% if not info_content_available %}
 {# PX-20260827-03-rev1: honest "not populated for this county yet" state --
    same pattern as any other unset COUNTY_PROFILES field, not a silent
@@ -24,7 +44,7 @@
       county — that research hasn't been done for {{ county_profile.county_name }} yet. It's
       live today for Travis County, TX.
     </p>
-    <a href="{{ url_for('info', county_slug='travis-tx') }}" class="btn btn-outline-primary btn-sm">
+    <a href="{{ url_for('info_landing', county='travis-tx') }}" class="btn btn-outline-primary btn-sm">
       View Travis County, TX Info →
     </a>
   </div>
@@ -874,6 +894,83 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+// ── Page-level County filter (PX-20260828-01) — copied verbatim from
+// templates/rates.html's/search.html's initTypeaheadSelect() (same
+// fieldKey/idSuffix convention), not reinvented. Distinct from the
+// per-topic .topic-county-select switching logic below this block --
+// that one is scoped inside a single .info-topic panel and never
+// navigates; this one is page-level and always navigates on a real
+// selection. ─────────────────────────────────────────────────────────
+(function () {
+  function initTypeaheadSelect(fieldKey, idSuffix) {
+    const wrap  = document.querySelector(`.ta-select[data-field="${fieldKey}"]`);
+    const input = document.getElementById(`flt${idSuffix}Input`);
+    const hidden = document.getElementById(`flt${idSuffix}Value`);
+    const list  = document.getElementById(`flt${idSuffix}List`);
+    if (!wrap || !input || !hidden || !list) return null;
+
+    let options = [];   // [{value, label}]
+
+    function render(filterText) {
+      const q = (filterText || "").toLowerCase();
+      const matches = q ? options.filter(o => o.label.toLowerCase().includes(q)) : options;
+      if (!matches.length) { list.style.display = "none"; return; }
+      list.innerHTML = matches.slice(0, 300).map(o =>
+        `<a href="#" class="ta-opt" data-value="${o.value.replace(/"/g, '&quot;')}">${o.label}</a>`
+      ).join("");
+      list.style.display = "block";
+    }
+
+    function selectOption(val) {
+      const opt = options.find(o => o.value === val);
+      input.value = opt ? opt.label : "";
+      hidden.value = val;
+      list.style.display = "none";
+      input.dispatchEvent(new CustomEvent("ta:select", { detail: val }));
+    }
+
+    input.addEventListener("input", () => { hidden.value = ""; render(input.value); });
+    input.addEventListener("focus", () => render(""));
+    input.addEventListener("click", () => render(""));
+    input.addEventListener("blur", () => setTimeout(() => { list.style.display = "none"; }, 150));
+    list.addEventListener("mousedown", (e) => {
+      const item = e.target.closest(".ta-opt");
+      if (!item) return;
+      e.preventDefault();
+      selectOption(item.getAttribute("data-value"));
+    });
+
+    return {
+      setOptions(newOptions) { options = newOptions || []; },
+      clear() { input.value = ""; hidden.value = ""; },
+      getValue() { return hidden.value; },
+      selectByValue(val) {
+        if (!options.some(o => o.value === val)) return false;
+        selectOption(val);
+        return true;
+      },
+    };
+  }
+
+  const countyTA = initTypeaheadSelect("county", "County");
+  if (!countyTA) return;
+  const LIVE_COUNTIES = {{ live_counties | tojson }};
+  countyTA.setOptions(LIVE_COUNTIES.map(c => ({ value: c.value, label: c.display_name })));
+  document.getElementById("fltCountyInput").value = {{ county_profile.display_name | tojson }};
+  document.getElementById("fltCountyValue").value = {{ county_slug.split('-')[0] | tojson }};
+
+  // Selecting a DIFFERENT county navigates to this same bare '/info' path
+  // with an updated ?county= query string -- NOT to '/<slug>/info'.
+  document.getElementById("fltCountyInput").addEventListener("ta:select", (e) => {
+    const picked = LIVE_COUNTIES.find(c => c.value === e.detail);
+    if (!picked || picked.slug === {{ county_slug | tojson }}) return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("county", picked.slug);
+    window.location.href = `{{ url_for('info_landing') }}?${params.toString()}`;
+  });
+})();
+</script>
 <script>
 // Topic / state / county switching. Each topic panel has its own state/county
 // selectors (scoped by class + closest .info-topic, not by a shared id) so

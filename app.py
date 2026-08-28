@@ -2173,6 +2173,16 @@ def _inject_county_helpers():
         # switcher on county-anchored pages specifically, not the neutral
         # ones, where county_slug being "truthy" can't tell them apart.
         "is_county_anchored": hasattr(g, "county_slug"),
+        # PX-20260828-01: the county COUNTY_BASE (base.html) should target
+        # for this page's own /api/* fetch() calls. Defaults to exactly
+        # what _add_county_slug() already injects for a bare url_for('index')
+        # call today -- so every existing page is unaffected. The three new
+        # neutral, in-page-filtered bare routes (info_landing/rates_landing/
+        # snapshot_landing) override this per-render via an explicit
+        # render_template(..., api_county_slug=<filtered slug>) kwarg,
+        # WITHOUT touching g.county_slug/g.county_code -- see those routes'
+        # own docstrings for why is_county_anchored must stay False there.
+        "api_county_slug": getattr(g, "county_slug", DEFAULT_COUNTY_SLUG),
     }
 
 
@@ -2195,15 +2205,25 @@ def _inject_county_helpers():
 # a real, directly-served neutral bare-path route in its own right (home(),
 # search_landing(), about(), terms(), privacy(), disclaimer(), styleguide()
 # below), not a redirect target. Leaving their old entries here would
-# register two different view functions at the same literal path. '/info'
-# stays -- info() stays county-anchored (Diego's ruling (b)), so a bare
-# '/info' request still needs the 301-to-Travis this list already provides.
+# register two different view functions at the same literal path.
+# PX-20260828-01: '/info', '/rates', and '/snapshot' are ALSO now removed,
+# for the identical reason -- Diego's 2026-08-28 ruling supersedes
+# -03-rev1's "Info stays anchored" decision immediately above, and gives
+# Rate Trends/Market Snapshot the same neutral-URL treatment. info_landing()/
+# rates_landing()/snapshot_landing() are the real routes at those bare
+# paths now, each with its own in-page county filter (?county=<slug>), not
+# a redirect target. '/snapshot/neighborhood/<code>' is UNCHANGED and
+# stays here -- this brief named Home/Search/Info/Rates/Snapshot only; the
+# neighborhood drill-down (reached solely via Market Snapshot's own links,
+# never a nav destination) was explicitly left out of scope, so a bare
+# request there still needs the 301-to-Travis this list already provides.
+# '/api/rates' also stays -- it's a JSON API endpoint, not a page, and was
+# never asked to become neutral-URL; its own missing county_code scoping
+# was fixed directly in api_rates() instead (see that route's docstring).
 _LEGACY_REDIRECT_ROUTES = [
     ("/parcel/<geo_id>", "property_detail"),
     ("/parcel/<geo_id>/export.pdf", "export_due_diligence_pdf"),
-    ("/rates", "tax_rates"),
     ("/api/parcel_entities", "api_parcel_entities"),
-    ("/snapshot", "county_snapshot"),
     ("/snapshot/neighborhood/<code>", "snapshot_neighborhood"),
     ("/api/rates", "api_rates"),
     ("/api/benchmark", "api_benchmark"),
@@ -2219,7 +2239,6 @@ _LEGACY_REDIRECT_ROUTES = [
     ("/api/billing/<geo_id>", "api_billing"),
     ("/parcels", "parcel_list"),
     ("/compare", "compare_parcels"),
-    ("/info", "info"),
 ]
 
 
@@ -3615,16 +3634,20 @@ def categorize_entity(code, name, county_code=None):
                       # that doesn't match a bucket above.
 
 
-@app.route("/<county_slug>/rates")
-def tax_rates():
-    """Tax rate trend page — county-level, no parcel required."""
+def _rates_response(county_code, county_slug_val):
+    """Shared body for tax_rates() (county-anchored, '/<county_slug>/rates')
+    and rates_landing() (neutral, bare '/rates') -- PX-20260828-01, same
+    refactor pattern as _home_search_response()/_info_response(). county_
+    profile/county_slug/api_county_slug are passed explicitly so
+    rates_landing() can render the FILTERED county's rate data without
+    ever setting g.county_slug/g.county_code (see rates_landing()'s own
+    docstring for why)."""
     # DALLAS-GATE-2 Part 1: county_tax_rate is a county_code-leading
     # composite-PK table per migrate_county_partitioning.py's TABLE_SPECS
     # (old_pk ["entity_code", "tax_year"] -> new_pk ["county_code",
     # "entity_code", "tax_year"]). This route is explicitly named in
     # DALLAS-GATE-2's brief ("/rates"). county_code added as an ADDITIONAL
     # predicate only -- ORDER BY/shape unchanged.
-    county_code = g.county_code
 
     # Key entities to highlight in the main chart
     KEY_ENTITIES = ["TCO", "IAU", "CAT", "THD", "ACT"]
@@ -3682,6 +3705,7 @@ def tax_rates():
     )
     entity_category = {e["code"]: e["category"] for e in all_entities}
 
+    profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
     return render_template(
         "rates.html",
         by_entity_json=json.dumps(by_entity),
@@ -3693,7 +3717,41 @@ def tax_rates():
         year_min=year_min,
         year_max=year_max,
         default_year_from=default_year_from,
+        county_profile=profile,
+        county_slug=county_slug_val,
+        api_county_slug=county_slug_val,
     )
+
+
+@app.route("/<county_slug>/rates")
+def tax_rates():
+    """Tax rate trend page — county-level, no parcel required.
+
+    PX-20260828-01: Diego's 2026-08-28 ruling supersedes any assumption
+    this page is Travis-only -- its own core query has been county_code-
+    scoped since DALLAS-GATE-2. rates_landing() (bare '/rates') is now the
+    real, nav-linked page, with its own in-page county filter; this
+    county-anchored route is KEPT, unchanged, as a real direct deep link,
+    the same relationship home()/search_landing()/info_landing() now have
+    to their own anchored twins."""
+    return _rates_response(g.county_code, g.county_slug)
+
+
+@app.route("/rates")
+def rates_landing():
+    """PX-20260828-01: the real, neutral bare '/rates' page -- Diego's
+    2026-08-28 ruling. Carries the filtered county via ?county=<slug>
+    (e.g. '/rates?county=dallas-tx'), same mechanism and same fallback
+    tolerance as info_landing() (absent/unrecognized value -> Travis, not
+    a 404 -- see that route's docstring for the full reasoning). Also
+    deliberately does NOT set g.county_slug/g.county_code, for the same
+    is_county_anchored reason documented on info_landing()."""
+    slug = request.args.get("county", "")
+    county_code = COUNTY_SLUGS.get(slug)
+    if county_code is None:
+        slug = DEFAULT_COUNTY_SLUG
+        county_code = COUNTY_SLUGS[slug]
+    return _rates_response(county_code, slug)
 
 
 @app.route("/<county_slug>/api/parcel_entities")
@@ -3832,15 +3890,21 @@ _SNAPSHOT_CACHE = {}
 _SNAPSHOT_CACHE_TTL_SECONDS = 600
 
 
-@app.route("/<county_slug>/snapshot")
-@limiter.limit(_LIMIT_HEAVY)
-def county_snapshot():
-    """County Market Snapshot — 2026 preliminary vs 2025 certified.
+def _snapshot_response(view_arg, county_code, county_slug_val):
+    """Shared body for county_snapshot() (county-anchored,
+    '/<county_slug>/snapshot') and snapshot_landing() (neutral, bare
+    '/snapshot') -- PX-20260828-01, same refactor pattern as
+    _home_search_response()/_info_response()/_rates_response(). county_
+    profile/county_slug/api_county_slug are passed explicitly so
+    snapshot_landing() can render the FILTERED county's data without ever
+    setting g.county_slug/g.county_code (see snapshot_landing()'s own
+    docstring for why).
+
     Supports ?view=overall|residential|multifamily|retail|industrial|office|
     hotel|land|agricultural|other (the 10 tabs), plus the legacy
     ?view=commercial (default: overall) -- see _SNAPSHOT_VALID_VIEWS.
     """
-    view = request.args.get("view", "overall")
+    view = view_arg
     if view not in _SNAPSHOT_VALID_VIEWS:
         view = "overall"
     # Homeowner mode only sees residential home values.
@@ -3856,15 +3920,59 @@ def county_snapshot():
     # itself flagged (see its docstring/comment, PARTITION-2-IMPLEMENT Part
     # 3). Keying by view alone would have let Travis and Dallas requests for
     # the same view collide on one cache entry once both have real data.
-    cache_key = (g.county_code, view)
+    cache_key = (county_code, view)
     cached = _SNAPSHOT_CACHE.get(cache_key)
     if cached and (time.time() - cached["ts"]) < _SNAPSHOT_CACHE_TTL_SECONDS:
         payload = cached["payload"]
     else:
-        payload = _compute_snapshot_data(view, g.county_code)
+        payload = _compute_snapshot_data(view, county_code)
         _SNAPSHOT_CACHE[cache_key] = {"payload": payload, "ts": time.time()}
 
-    return render_template("snapshot.html", view=view, **payload)
+    profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
+    return render_template(
+        "snapshot.html",
+        view=view,
+        county_profile=profile,
+        county_slug=county_slug_val,
+        api_county_slug=county_slug_val,
+        **payload,
+    )
+
+
+@app.route("/<county_slug>/snapshot")
+@limiter.limit(_LIMIT_HEAVY)
+def county_snapshot():
+    """County Market Snapshot — 2026 preliminary vs 2025 certified.
+
+    PX-20260828-01: Diego's 2026-08-28 ruling supersedes any assumption
+    this page is Travis-only -- its own core query has been county_code-
+    scoped since DALLAS-GATE-1/2. snapshot_landing() (bare '/snapshot') is
+    now the real, nav-linked page, with its own in-page county filter;
+    this county-anchored route is KEPT, unchanged, as a real direct deep
+    link, the same relationship home()/search_landing()/info_landing()/
+    tax_rates() now have to their own bare '_landing' twins."""
+    view = request.args.get("view", "overall")
+    return _snapshot_response(view, g.county_code, g.county_slug)
+
+
+@app.route("/snapshot")
+@limiter.limit(_LIMIT_HEAVY)
+def snapshot_landing():
+    """PX-20260828-01: the real, neutral bare '/snapshot' page -- Diego's
+    2026-08-28 ruling. Carries the filtered county via ?county=<slug>
+    (e.g. '/snapshot?county=dallas-tx'), same mechanism and fallback
+    tolerance as info_landing()/rates_landing() (absent/unrecognized value
+    -> Travis, not a 404). ?view= keeps working identically alongside
+    ?county= -- e.g. '/snapshot?county=dallas-tx&view=residential'.
+    Deliberately does NOT set g.county_slug/g.county_code, for the same
+    is_county_anchored reason documented on info_landing()."""
+    slug = request.args.get("county", "")
+    county_code = COUNTY_SLUGS.get(slug)
+    if county_code is None:
+        slug = DEFAULT_COUNTY_SLUG
+        county_code = COUNTY_SLUGS[slug]
+    view = request.args.get("view", "overall")
+    return _snapshot_response(view, county_code, slug)
 
 
 def _snapshot_summary_freshness(county_code="TRAVIS"):
@@ -4305,13 +4413,25 @@ def snapshot_neighborhood(code):
 
 @app.route("/<county_slug>/api/rates")
 def api_rates():
-    """JSON endpoint for rate data (for dynamic chart filtering)."""
+    """JSON endpoint for rate data (for dynamic chart filtering).
+
+    PX-20260828-01 investigation found this endpoint had NO county_code
+    predicate at all -- despite being registered at a county-anchored
+    path (g.county_code was set and simply never used), it returned
+    EVERY county's rows unioned together. Confirmed dead code today (no
+    template or JS calls it -- rates.html's own dynamic filtering reads
+    the by_entity_json/entity_names_json already embedded server-side by
+    tax_rates()/rates_landing(), not this endpoint), but it's a live,
+    callable route regardless, and this is the same class of bug
+    DALLAS-GATE-2 fixed on tax_rates()'s own main query -- fixed
+    alongside this brief's other work rather than left live and unscoped."""
     rates = query("""
         SELECT entity_code, entity_name, tax_year, rate
         FROM   county_tax_rate
-        WHERE  tax_year >= 2006
+        WHERE  county_code = %(county_code)s
+          AND  tax_year >= 2006
         ORDER  BY entity_code, tax_year
-    """)
+    """, {"county_code": g.county_code})
     return jsonify([dict(r) for r in rates])
 
 
@@ -6992,6 +7112,25 @@ def compare_parcels():
     return render_template("compare.html", parcels=parcels, error=None)
 
 
+def _info_response(county_code, county_slug_val):
+    """Shared body for info() (county-anchored, '/<county_slug>/info') and
+    info_landing() (neutral, bare '/info') -- PX-20260828-01, same
+    refactor pattern as _home_search_response()/search.html's landing pair.
+    county_profile/county_slug are passed explicitly (Jinja lets an
+    explicit render_template() kwarg override a same-named context-
+    processor value) so info_landing() can render the FILTERED county's
+    content without ever setting g.county_slug/g.county_code -- see
+    info_landing()'s own docstring for why that matters."""
+    profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
+    return render_template(
+        "info.html",
+        info_content_available=profile.get("info_content_available", False),
+        county_profile=profile,
+        county_slug=county_slug_val,
+        api_county_slug=county_slug_val,
+    )
+
+
 @app.route("/<county_slug>/info")
 def info():
     """Informational reference page -- topic sections (starting with Homestead
@@ -6999,21 +7138,59 @@ def info():
     Travis County only), no parcel or DB data involved -- structured so more
     topics/states/counties can be added later without a route change.
 
-    PX-20260827-03-rev1: Info stays county-anchored (kept its existing
-    <county_slug> prefix -- Diego's ruling (b): its body content is real,
-    researched legal/exemption material, not a name-and-logo template, so
-    treating it as neutral would either silently show Travis content under
-    a Dallas URL or require inventing Dallas content neither of us has
-    researched. info_content_available comes straight from COUNTY_PROFILES
-    (default False if the field is missing entirely, e.g. a future county
-    profile that hasn't set it yet) -- an honest "not populated for this
-    county" render, the same pattern as any other unset profile field,
-    not a silent Travis fallback."""
-    profile = COUNTY_PROFILES.get(g.county_code, COUNTY_PROFILES["TRAVIS"])
-    return render_template(
-        "info.html",
-        info_content_available=profile.get("info_content_available", False),
-    )
+    PX-20260828-01: Diego's 2026-08-28 ruling supersedes -03-rev1's
+    "Info stays anchored" decision below -- info_landing() (bare '/info')
+    is now the real, nav-linked page, with its own in-page county filter.
+    This county-anchored route is KEPT, unchanged, as a real direct deep
+    link (e.g. from external/marketing links built before this brief) --
+    same relationship index()/tax_rates()/county_snapshot() now have to
+    their own bare '_landing' twins.
+
+    [-03-rev1, superseded reasoning, kept for history: Info stays
+    county-anchored (kept its existing <county_slug> prefix -- Diego's
+    ruling (b): its body content is real, researched legal/exemption
+    material, not a name-and-logo template, so treating it as neutral
+    would either silently show Travis content under a Dallas URL or
+    require inventing Dallas content neither of us has researched.]
+
+    info_content_available comes straight from COUNTY_PROFILES (default
+    False if the field is missing entirely, e.g. a future county profile
+    that hasn't set it yet) -- an honest "not populated for this county"
+    render, the same pattern as any other unset profile field, not a
+    silent Travis fallback. Both this route and info_landing() render
+    that same honest state -- neutral-URL doesn't change what content
+    exists, only how you get there."""
+    return _info_response(g.county_code, g.county_slug)
+
+
+@app.route("/info")
+def info_landing():
+    """PX-20260828-01: the real, neutral bare '/info' page -- Diego's
+    2026-08-28 ruling. Carries the filtered county via ?county=<slug>
+    (e.g. '/info?county=dallas-tx'), NOT a URL segment and NOT a redirect
+    -- bookmarkable/shareable, matches the slug format COUNTY_SLUGS
+    already uses everywhere, no session-state complexity. An absent or
+    unrecognized ?county= value falls back to DEFAULT_COUNTY_SLUG
+    (Travis) rather than 404ing -- a query-string filter is inherently
+    soft (unlike a URL path segment, which IS the page's identity), so a
+    typo or first bare-page visit should still render a real, useful
+    page, not an error. Same tolerance search_landing()'s own
+    ?neighborhood=/?prop_type= pre-fill already uses.
+
+    Deliberately does NOT set g.county_slug/g.county_code -- doing so
+    would flip is_county_anchored (hasattr(g, "county_slug")) to True on
+    a page whose whole point is staying URL-neutral, which would
+    incorrectly trigger the nav-level county-switcher's "real anchored
+    page" treatment (see _inject_county_helpers()'s own comment).
+    Instead, the resolved county is passed straight into the shared
+    response body as explicit render_template() kwargs, which Jinja lets
+    override the context-processor's own same-named defaults."""
+    slug = request.args.get("county", "")
+    county_code = COUNTY_SLUGS.get(slug)
+    if county_code is None:
+        slug = DEFAULT_COUNTY_SLUG
+        county_code = COUNTY_SLUGS[slug]
+    return _info_response(county_code, slug)
 
 
 # PX-20260827-03-rev1 Task 1: about/terms/privacy/disclaimer/styleguide are

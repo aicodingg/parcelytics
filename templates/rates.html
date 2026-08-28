@@ -17,11 +17,16 @@
   <div class="card-body">
     <div class="row g-3 align-items-end">
 
-      {# County — typeahead-select; 1 option today. Same reusable combobox
+      {# County — real, wired filter (PX-20260828-01). Same reusable combobox
          component as the Search page's County/Neighborhood/PropType/UseCode
          filters (initTypeaheadSelect(), copied verbatim below) — not a new
-         pattern. One real option today; a second county is just another
-         entry in setOptions(), no restructuring. #}
+         pattern. Populated from live_counties (the same registered-AND-
+         has-data list every other county picker on the site reads from).
+         Selecting a different county navigates to THIS SAME bare path with
+         an updated ?county= query param (e.g. '/rates?county=dallas-tx') --
+         NOT to '/<slug>/rates' -- Diego's 2026-08-28 ruling is explicit
+         that Rate Trends stays neutral-URL with an in-page filter, not a
+         URL segment, even when reached via the county-anchored deep link. #}
       <div class="col-md-2">
         <label class="form-label small text-muted mb-1" for="fltCountyInput">County</label>
         <div class="ta-select" data-field="county" style="position:relative;">
@@ -536,9 +541,22 @@ document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
 
   const countyTA = initTypeaheadSelect("county", "County");
   if (!countyTA) return;
-  countyTA.setOptions([{ value: {{ county_slug.split('-')[0] | tojson }}, label: {{ county_profile.display_name | tojson }} }]);
+  const LIVE_COUNTIES = {{ live_counties | tojson }};
+  countyTA.setOptions(LIVE_COUNTIES.map(c => ({ value: c.value, label: c.display_name })));
   document.getElementById("fltCountyInput").value = {{ county_profile.display_name | tojson }};
   document.getElementById("fltCountyValue").value = {{ county_slug.split('-')[0] | tojson }};
+
+  // Selecting a DIFFERENT county navigates to this same bare '/rates' path
+  // with an updated ?county= query string -- NOT to '/<slug>/rates' (see
+  // this filter's own comment above for why). Any OTHER query params
+  // already on the URL (e.g. a future ?view=-equivalent) are preserved.
+  document.getElementById("fltCountyInput").addEventListener("ta:select", (e) => {
+    const picked = LIVE_COUNTIES.find(c => c.value === e.detail);
+    if (!picked || picked.slug === {{ county_slug | tojson }}) return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("county", picked.slug);
+    window.location.href = `{{ url_for('rates_landing') }}?${params.toString()}`;
+  });
 })();
 
 // ── Part 5: "Which entities apply to my property?" ─────────────────────────

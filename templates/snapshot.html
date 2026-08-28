@@ -46,15 +46,16 @@
   </p>
 </div>
 {% else %}
-{# ── County filter — same combobox pattern as Search/Rate Trends/Info;
-   one real option today ("Travis County, TX"), structured so a second
-   county is just another entry in setOptions(), not a restructure. Not
-   wired to any query param yet since there's only one county's data to
-   show either way — same as Rate Trends' County filter, which is purely
-   structural for now too. Diego's broader zoomable-map idea for county
-   selection is intentionally on hold (overlaps with not-yet-started
-   Phase 3 GIS work) — this is the same lightweight dropdown used
-   elsewhere, not a new pattern. #}
+{# ── County filter — real, wired filter (PX-20260828-01). Same combobox
+   pattern as Search/Rate Trends/Info, populated from live_counties.
+   Selecting a different county navigates to THIS SAME bare '/snapshot'
+   path with an updated ?county= query param (preserving ?view= if set),
+   NOT to '/<slug>/snapshot' -- Diego's 2026-08-28 ruling is explicit that
+   Market Snapshot stays neutral-URL with an in-page filter, not a URL
+   segment, even when reached via the county-anchored deep link. Diego's
+   broader zoomable-map idea for county selection is intentionally still
+   on hold (overlaps with not-yet-started Phase 3 GIS work) — this is the
+   same lightweight dropdown used elsewhere, not a new pattern. #}
 <div class="mb-3">
   <label class="form-label small text-muted mb-1" for="fltCountyInput">County</label>
   <div class="ta-select" data-field="county" style="position:relative; max-width:260px;">
@@ -849,9 +850,22 @@
 
   const countyTA = initTypeaheadSelect("county", "County");
   if (!countyTA) return;
-  countyTA.setOptions([{ value: {{ county_slug.split('-')[0] | tojson }}, label: {{ county_profile.display_name | tojson }} }]);
+  const LIVE_COUNTIES = {{ live_counties | tojson }};
+  countyTA.setOptions(LIVE_COUNTIES.map(c => ({ value: c.value, label: c.display_name })));
   document.getElementById("fltCountyInput").value = {{ county_profile.display_name | tojson }};
   document.getElementById("fltCountyValue").value = {{ county_slug.split('-')[0] | tojson }};
+
+  // Selecting a DIFFERENT county navigates to this same bare '/snapshot'
+  // path with an updated ?county= query string (preserving ?view= and any
+  // other existing query params) -- NOT to '/<slug>/snapshot' (see this
+  // filter's own comment above for why).
+  document.getElementById("fltCountyInput").addEventListener("ta:select", (e) => {
+    const picked = LIVE_COUNTIES.find(c => c.value === e.detail);
+    if (!picked || picked.slug === {{ county_slug | tojson }}) return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("county", picked.slug);
+    window.location.href = `{{ url_for('snapshot_landing') }}?${params.toString()}`;
+  });
 })();
 </script>
 {% if rows %}
