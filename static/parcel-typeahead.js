@@ -29,17 +29,31 @@
  * search_parcels_by_address() / resolve_exact_parcel()) regardless of
  * which of the four boxes is calling it.
  *
- * PX-20260828-02: both the fetch() URL and the "navigate" mode's
- * window.location target are built off the global COUNTY_BASE constant
- * (base.html, present on every page this script attaches to), NOT a
- * hardcoded bare path. A bare "/api/address_search"/"/parcel/<geo_id>"
- * silently hits _LEGACY_REDIRECT_ROUTES' 301-to-Travis stub -- this was a
- * real, live bug (confirmed 2026-08-28) that made every one of the four
- * search boxes site-wide always search/link Travis regardless of which
- * county's page the user was actually on. COUNTY_BASE itself already
- * resolves to the correct county (including a bare-page-with-?county=
- * filter, since PX-20260828-01) -- this fix's only job is to actually USE
- * it here, not to change what it resolves to.
+ * PX-20260828-02: the fetch() URL is built off the global COUNTY_BASE
+ * constant (base.html, present on every page this script attaches to),
+ * NOT a hardcoded bare path. A bare "/api/address_search" silently hits
+ * _LEGACY_REDIRECT_ROUTES' 301-to-Travis stub -- this was a real, live bug
+ * (confirmed 2026-08-28) that made every one of the four search boxes
+ * site-wide always search Travis regardless of which county's page the
+ * user was actually on. COUNTY_BASE itself already resolves to the
+ * correct county (including a bare-page-with-?county= filter, since
+ * PX-20260828-01) -- this fix's only job is to actually USE it here, not
+ * to change what it resolves to.
+ *
+ * PX-20260829-01: the "navigate" mode's window.location target below is
+ * built off each RESULT's own county_slug (server-stamped, see
+ * api_address_search()/api_address_search_landing()), NOT COUNTY_BASE.
+ * This originally also used COUNTY_BASE (PX-20260828-02's own fix, right
+ * above) -- correct on every anchored page, where page county and result
+ * county are the same county by construction, but wrong on a NEUTRAL page
+ * (COUNTY_BASE === ""): once PX-20260828-06's cross-county typeahead let a
+ * neutral page's search find a result from ANY live county, a bare
+ * "/parcel/<id>" (COUNTY_BASE + "/parcel/...") still routed every click to
+ * Travis regardless of which county the found parcel actually lived in --
+ * confirmed live (2026-08-29): /about -> "2626 cartwright" -> correct
+ * Dallas result shown, tagged "(Dallas County)" -- click navigated to
+ * /travis-tx/parcel/<id> anyway. See select()'s own comment below for the
+ * fix and its explicit no-silent-Travis-fallback behavior.
  *
  * PX-20260828-04: runQuery()/select() below already read global.COUNTY_BASE
  * fresh, at call time, only when a user actually types/clicks -- they never
@@ -161,14 +175,35 @@
       if (cfg.mode === "select") {
         cfg.onSelect(result);
       } else {
-        // PX-20260828-02: COUNTY_BASE, not a hardcoded "/parcel/..." --
-        // see this file's own header comment for why. COUNTY_BASE is a
-        // global defined in base.html, in scope on every page this script
-        // attaches to (confirmed for all four: navbar via base.html
-        // itself, homepage/search/Rate Trends via their own {% block
-        // scripts %} content, which Jinja always places AFTER base.html's
-        // COUNTY_BASE <script> tag in the rendered page).
-        window.location.href = global.COUNTY_BASE + "/parcel/" + encodeURIComponent(result.geo_id);
+        // PX-20260829-01: navigate using the RESULT's own county
+        // (result.county_slug), not the PAGE's county (global.COUNTY_BASE)
+        // -- these are the same thing on an anchored page where every
+        // result necessarily shares the page's county, but NOT on a
+        // neutral page (COUNTY_BASE === ""), where api_address_search_
+        // landing()'s cross-county loop can return a match from a
+        // DIFFERENT county than whatever the page happens to be near. The
+        // confirmed live bug this fixes: /about -> "2626 cartwright" ->
+        // correctly finds and tags the Dallas result, then navigated to
+        // bare "/parcel/<id>" (COUNTY_BASE === "" on /about), which
+        // _LEGACY_REDIRECT_ROUTES sends to Travis -- wrong county prefix,
+        // parcel not found, Travis-flavored error message.
+        // api_address_search()/api_address_search_landing() both now stamp
+        // county_slug on every result (PX-20260829-01) precisely so this
+        // file never has to fall back to guessing the page's own county.
+        // Deliberately NOT falling back to COUNTY_BASE (or any other
+        // county) if county_slug is somehow absent -- that fallback IS the
+        // bug class being fixed here (a silent, wrong-looking-right
+        // default to whatever county happens to be nearby). Fail visibly
+        // instead: leave the user on the current page with an explanation,
+        // rather than sending them to a parcel page under the wrong county.
+        if (!result.county_slug) {
+          console.error("ParcelTypeahead: result has no county_slug -- refusing to " +
+            "guess a county to navigate to (see PX-20260829-01).", result);
+          window.alert("Sorry, something went wrong identifying this result's county. " +
+            "Please try your search again.");
+          return;
+        }
+        window.location.href = "/" + result.county_slug + "/parcel/" + encodeURIComponent(result.geo_id);
       }
     }
 

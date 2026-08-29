@@ -21,6 +21,16 @@ on the sanctioned patterns this repo actually uses after Tasks 1-3:
              scanning.
 Fixture 8: a real-repo cross-check -- the actual templates/*.html tree
            (post-Tasks-1-3) scans clean, end to end.
+
+PX-20260829-01 adds Fixture 12: `result.county_slug`-prefixed JS navigation
+(the second sanctioned county-aware JS prefix, alongside COUNTY_BASE --
+static/parcel-typeahead.js's select() builds its target from a search
+RESULT's own county, not the page's, since a neutral page's cross-county
+search can return a match from a different county than the page). Without
+this scanner-side fix, that brief's own real, correct code would have
+tripped this gate as a false-positive regression -- confirmed live when
+this scanner was re-run after that fix landed and it flagged
+static/parcel-typeahead.js:206.
 """
 
 import sys
@@ -229,6 +239,43 @@ def main():
         "filename 'info.html' produces zero Class-C findings",
         not any(f.kind == "hardcoded-cad-institution" for f in findings11),
         findings11,
+    )
+
+    # ── Fixture 12 (PX-20260829-01): result.county_slug-prefixed JS
+    #    navigation is clean -- the SECOND sanctioned county-aware JS prefix,
+    #    alongside COUNTY_BASE (Fixture 4). This is the real shape
+    #    static/parcel-typeahead.js's select() uses: a search RESULT's own
+    #    county (server-stamped per row), not the page's, since a neutral
+    #    page's cross-county search can return a match from a different
+    #    county than whatever page happens to be showing it. ──
+    fixture12 = """
+    <script>
+      window.location.href = "/" + result.county_slug + "/parcel/" + encodeURIComponent(result.geo_id);
+    </script>
+    """
+    findings12 = _scan_text(fixture12)
+    all_ok &= check(
+        "Fixture 12: result.county_slug-prefixed JS navigation produces zero findings",
+        len(findings12) == 0,
+        findings12,
+    )
+
+    # Fixture 12b (negative control): a genuinely hardcoded, county-unaware
+    # "/parcel/" path with NEITHER COUNTY_BASE NOR county_slug anywhere
+    # nearby must still fire -- proves Fixture 12's fix is a real,
+    # narrowly-scoped whitelist token, not an accidental blanket exemption
+    # for the word "parcel".
+    fixture12b = """
+    <script>
+      window.location.href = "/parcel/" + encodeURIComponent(geo_id);
+    </script>
+    """
+    findings12b = _scan_text(fixture12b)
+    all_ok &= check(
+        "Fixture 12b: a bare, unprefixed \"/parcel/\" path (no COUNTY_BASE or "
+        "county_slug nearby) still produces a hardcoded-path FAIL",
+        len(findings12b) == 1 and findings12b[0].kind == "hardcoded-path",
+        findings12b,
     )
 
     print()

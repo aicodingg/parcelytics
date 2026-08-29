@@ -145,12 +145,33 @@ async function main() {
       addEventListener() {},
     };
     const fakeLocation = {};
+    // PX-20260829-01: this scenario used to reassign `fakeGlobal.fetch`
+    // AFTER already calling factory(...) below, expecting runQuery()'s
+    // in-module `fetch(...)` calls to pick up the new stub on a second
+    // dispatch. They never did: `fetch` is a parameter of the `new
+    // Function(...)` factory, bound ONCE to whatever value was passed at
+    // the factory CALL below -- reassigning `fakeGlobal.fetch` afterwards
+    // has no effect on that already-bound parameter (this is real JS
+    // closure/parameter-binding semantics, not a quirk of this harness).
+    // The practical effect: currentResults stayed `[]` on BOTH dispatches,
+    // the mousedown handler's `if (currentResults[idx])` guard was always
+    // false, and select() was consequently NEVER actually invoked in this
+    // scenario at all -- at any point, even before PX-20260829-01. That
+    // combined with the check's own old vacuous-pass ternary (`typeof
+    // fakeLocation.href === "string" ? ... : true`) to report a PASS while
+    // testing nothing. Fixed by providing the real, final fetch stub
+    // BEFORE the factory call (matching Scenario A's own working pattern
+    // above) and driving the flow with a single input dispatch.
     const fakeGlobal = {
       COUNTY_BASE: "/dallas-tx",
       document: fakeDoc,
       console: console,
       location: fakeLocation,
-      fetch() { return Promise.resolve({ json: () => Promise.resolve({ ok: true, results: [] }) }); },
+      fetch() {
+        return Promise.resolve({ json: () => Promise.resolve({ ok: true, results: [{
+          geo_id: "R555", address: "999 Elm St", county_name: "Dallas County", county_slug: "dallas-tx",
+        }] }) });
+      },
     };
     fakeGlobal.window = fakeGlobal;
 
@@ -167,17 +188,7 @@ async function main() {
 
     // Drive select() the same way a real click/Enter would: populate
     // currentResults via a real query, then fire the mousedown handler on
-    // the rendered option. Simpler and just as real: call runQuery's
-    // consumer path by simulating input, then invoke the list's mousedown
-    // listener with a synthetic event targeting data-idx="0".
-    fakeInput.value = "999 elm";
-    fakeInput.dispatch("input");
-    await new Promise((r) => setTimeout(r, 30));
-
-    // Re-run with a real result this time so select() has something to act on.
-    fakeGlobal.fetch = () => Promise.resolve({
-      json: () => Promise.resolve({ ok: true, results: [{ geo_id: "R555", address: "999 Elm St", county_name: "Dallas County" }] }),
-    });
+    // the rendered option.
     fakeInput.value = "999 elm st";
     fakeInput.dispatch("input");
     await new Promise((r) => setTimeout(r, 30));
@@ -194,9 +205,17 @@ async function main() {
     // passing a synthetic event whose target.closest(".ta-opt") resolves.
     list.dispatch("mousedown", fakeEvent);
 
+    // PX-20260829-01: was "COUNTY_BASE-prefixed" -- select() no longer
+    // reads COUNTY_BASE for navigation at all (that was the live bug this
+    // brief fixed: page county != result county on a neutral page). Now a
+    // real, non-vacuous equality check against the result's own
+    // county_slug, not a startsWith() that a missing-href would have
+    // silently satisfied via this check's own old ternary fallback.
     check(
-      "Scenario B: select()'s navigate-mode target is COUNTY_BASE-prefixed (not a bare /parcel/<geo_id>)",
-      typeof fakeLocation.href === "string" ? fakeLocation.href.startsWith("/dallas-tx/parcel/") : true
+      "Scenario B: select()'s navigate-mode target is built from the RESULT's own " +
+      "county_slug ('/dallas-tx/parcel/R555'), not COUNTY_BASE (fakeGlobal.COUNTY_BASE " +
+      "above is deliberately left set to prove it's genuinely unused for this)",
+      fakeLocation.href === "/dallas-tx/parcel/R555"
     );
   }
 

@@ -151,6 +151,22 @@ REQUEST_PATH_CMP_RE = re.compile(
 # with room to spare.
 _COUNTY_BASE_LOOKBACK = 40
 
+# PX-20260829-01: a second sanctioned county-aware JS prefix, alongside
+# COUNTY_BASE. static/parcel-typeahead.js's select() builds its navigate
+# target from `result.county_slug` (server-stamped per search RESULT by
+# api_address_search()/api_address_search_landing()), not from COUNTY_BASE
+# (the PAGE's own county) -- deliberately, because on a neutral page a
+# cross-county search result's own county can differ from the page's
+# county, and prefixing with COUNTY_BASE there is the exact live bug this
+# brief fixed (see that file's own header comment). `result.county_slug` is
+# MORE correct than COUNTY_BASE for this call site, not a bypass of it --
+# it is per-result-correct rather than merely per-page-correct. Without
+# this token in the lookback whitelist, this scanner would flag the FIXED
+# code as a violation (confirmed: it did, until this line was added),
+# which would be a real regression in this gate's own signal quality, not
+# a real app bug.
+_COUNTY_SLUG_TOKEN = "county_slug"
+
 # ── Class (C), PX-20260827-01 Task 3: hardcoded county-institution references ──
 # The self-enforcing part of this brief: a denylist of every real CAD/tax-office
 # abbreviation, name, and domain currently registered in app.py's
@@ -388,6 +404,8 @@ def scan_file(filepath: Path, rel_dir: str = "templates") -> list:
         lookback = text[max(0, start - _COUNTY_BASE_LOOKBACK):start]
         if "COUNTY_BASE" in lookback:
             continue  # sanctioned JS county-aware base, not a bypass
+        if _COUNTY_SLUG_TOKEN in lookback:
+            continue  # PX-20260829-01: sanctioned per-RESULT county-aware prefix, not a bypass
         path = m.group("path")
         findings.append(Finding(
             rel, _line_number(text, start), "hardcoded-path", "FAIL",

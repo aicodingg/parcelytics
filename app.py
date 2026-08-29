@@ -2430,13 +2430,36 @@ def _resolve_quick_search(q, county_code=None):
             return {"addr_matches": addr_matches}
         return {"error": (
             f"No parcels found matching address \"{q}\". "
-            "Try a shorter street name or use the 10-digit TCAD account number. "
+            # PX-20260829-01: was "...or use the 10-digit TCAD account
+            # number" -- Travis-specific copy in an error path, same class
+            # as -15 Task 2/-11 Task 4 (both already generalized similar
+            # hardcoded-format copy elsewhere; this one survived because
+            # error paths weren't part of either audit's sweep). Dallas's
+            # own real DCAD ACCOUNT_NUM is 17 characters, not 10 -- this
+            # now uses the same generic "parcel ID (from your county's
+            # appraisal district or tax office)" phrasing already
+            # established for index.html/search.html's own search hints
+            # (PX-20260828-09 Task 4), rather than naming a county-specific
+            # digit count that's only ever true for one of the live
+            # counties.
+            "Try a shorter street name, or search by your parcel ID (from your county's "
+            "appraisal district or tax office) instead."
         )}
 
     return {"error": (
         f"We couldn't find a parcel matching \"{q}\". "
-        "Double-check the format — the 10-digit TCAD account number works most reliably. "
-        "The 14-digit Tax Office account and short prop_id integer are also accepted."
+        # PX-20260829-01: same generalization as above -- was "the 10-digit
+        # TCAD account number works most reliably. The 14-digit Tax Office
+        # account and short prop_id integer are also accepted," which
+        # named three Travis-specific digit counts as if they applied
+        # site-wide. Not naming Dallas's own real formats explicitly either
+        # (its 17-char DCAD account, its own tax-office account
+        # convention) since this message has no county context to know
+        # which one to cite -- same "accepts a parcel ID..." generic
+        # phrasing used elsewhere, honest without being wrong for either
+        # county.
+        "Double-check the format — this accepts a parcel ID from your county's appraisal "
+        "district or tax office, not just a street address."
     )}
 
 
@@ -2697,12 +2720,26 @@ def property_detail(geo_id):
         "SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s",
         (geo_id, county_code), one=True)
     if not parcel:
+        # PX-20260829-01: same Travis-specific-copy generalization as
+        # _resolve_quick_search()'s two error branches above (see that
+        # function's own comment for the full reasoning) -- this route's
+        # own 404 path is a THIRD, previously-unaudited occurrence of the
+        # identical hardcoded "10-digit TCAD account number" phrase, found
+        # while fixing the other two. Same generic "parcel ID (from your
+        # county's appraisal district or tax office)" phrasing.
+        #
+        # Whether this 404 path should ALSO try other live counties and
+        # redirect (the way _resolve_quick_search()'s search-box path
+        # already does for a typed query) is investigated, not fixed, in
+        # this brief's own final report -- see the report's dedicated
+        # section on /travis-tx/parcel/<dallas-geo-id> behavior.
         return render_template(
             "index.html",
             q=geo_id,
             error=(
                 f"We couldn't find parcel \"{geo_id}\". "
-                "Double-check the format — the 10-digit TCAD account number works most reliably."
+                "Double-check the format — this accepts a parcel ID from your county's "
+                "appraisal district or tax office."
             )
         ), 404
 
@@ -6203,6 +6240,26 @@ def api_address_search():
     since resolve_exact_parcel()'s single-dict return has no county_slug/
     county_name of its own to read (it isn't a multi-county-aware result
     list the way search_parcels_by_address()'s rows are).
+
+    PX-20260829-01: every result also now carries county_slug -- the live
+    bug this brief fixes is that parcel-typeahead.js's click handler
+    navigated using the PAGE's county (global.COUNTY_BASE) rather than the
+    RESULT's county. On an anchored page those are normally the same
+    county, but this endpoint's exact-match branch (is_account_number_query
+    hit) can resolve to a DIFFERENT county than g.county_code entirely --
+    resolve_exact_parcel(q) with no explicit county_code falls back to
+    g.county_code first, but on a miss there it is NOT re-tried against
+    other counties from this anchored call (only the neutral landing
+    endpoint's own county_code=None path loops all live counties) -- so in
+    practice, on THIS endpoint, a hit's county really is always
+    g.county_code. Stamped explicitly anyway (both branches, not just
+    derived implicitly by the caller) so the JS never has to guess: county
+    on this endpoint's exact-match branch is unconditionally g.county_slug
+    (the one county this anchored route ever queries); the address-match
+    branch reads whatever search_parcels_by_address() already put on the
+    row (same value, since that function scopes to g.county_code too when
+    called from here), falling back to g.county_slug only for defense
+    against a row that somehow lacks it.
     """
     q = request.args.get("q", "").strip()
     if len(q) < 3:
@@ -6227,6 +6284,7 @@ def api_address_search():
                 "address":     exact.get("situs_address") or "",
                 "owner":       exact.get("owner_name") or "",
                 "county_name": county_name,
+                "county_slug": g.county_slug,
             }]})
         # Falls through to address-text matching below on a numeric miss —
         # e.g. a 5-digit zip typed alone shouldn't just dead-end here.
@@ -6238,6 +6296,7 @@ def api_address_search():
             "address":     r.get("situs_address") or "",
             "owner":       r.get("owner_name") or "",
             "county_name": r.get("county_name", county_name),
+            "county_slug": r.get("county_slug", g.county_slug),
         }
         for r in rows
     ]
@@ -6281,6 +6340,23 @@ def api_address_search_landing():
         parcel's OWN county_code column instead -- resolve_exact_parcel()
         with county_code=None still runs a real `SELECT * FROM parcel
         WHERE ...`, so that field is always present on a hit.
+
+    PX-20260829-01: county_slug is stamped the same way, on both branches,
+    for the same reason as the anchored endpoint's own PX-20260829-01
+    comment above -- this is in fact the MORE important of the two
+    endpoints to fix, since it's the one where "page county" and "result
+    county" are guaranteed to differ whenever this neutral endpoint's own
+    cross-county loop finds a match outside whatever county the visiting
+    page happens to be near (the live bug report's own repro: /about ->
+    "2626 cartwright" -> a Dallas result). The address-match branch reads
+    county_slug straight off each row, same as county_name (search_
+    parcels_by_address()'s county_code=None loop already stamps both). The
+    exact-match branch has no such row to read from -- resolve_exact_parcel()
+    returns a bare `parcel` table dict, which has county_code but no
+    county_slug column of its own -- so county_slug is derived here via the
+    same COUNTY_SLUGS reverse-lookup search_parcels_by_address() itself
+    uses internally, rather than inventing a second lookup helper for one
+    call site.
     """
     q = request.args.get("q", "").strip()
     if len(q) < 3:
@@ -6289,14 +6365,27 @@ def api_address_search_landing():
     if search_logic.is_account_number_query(q):
         exact = resolve_exact_parcel(q, county_code=None)
         if exact:
+            exact_county_code = exact.get("county_code")
             exact_county_name = COUNTY_PROFILES.get(
-                exact.get("county_code"), COUNTY_PROFILES["TRAVIS"]
+                exact_county_code, COUNTY_PROFILES["TRAVIS"]
             )["county_name"]
+            # PX-20260829-01: same reverse-lookup search_parcels_by_address()
+            # already does internally -- DEFAULT_COUNTY_SLUG here is only
+            # ever a defensive fallback for a county_code with no registered
+            # slug at all (shouldn't happen for a row that came out of the
+            # `parcel` table, since every row there has a real, registered
+            # county_code by construction), not a "we don't know" case that
+            # would silently point this specific result at Travis.
+            exact_county_slug = next(
+                (slug for slug, code in COUNTY_SLUGS.items() if code == exact_county_code),
+                DEFAULT_COUNTY_SLUG,
+            )
             return jsonify({"ok": True, "results": [{
                 "geo_id":      exact["geo_id"],
                 "address":     exact.get("situs_address") or "",
                 "owner":       exact.get("owner_name") or "",
                 "county_name": exact_county_name,
+                "county_slug": exact_county_slug,
             }]})
         # Falls through to address-text matching below on a numeric miss,
         # same as the anchored endpoint.
@@ -6308,6 +6397,7 @@ def api_address_search_landing():
             "address":     r.get("situs_address") or "",
             "owner":       r.get("owner_name") or "",
             "county_name": r.get("county_name"),
+            "county_slug": r.get("county_slug"),
         }
         for r in rows
     ]
