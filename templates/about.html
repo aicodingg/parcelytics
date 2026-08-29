@@ -79,8 +79,21 @@
        describe what the product does without claiming every live county
        has identical coverage -- same "generalize rather than parametrize
        every number" approach as PX-20260828-11 Task 4. #}
+    {# PX-20260828-15 Task 2: "Property tax intelligence" body text below
+       was "Full certified appraisal history for every parcel in every live
+       county ... Sourced directly from each county's own certified
+       appraisal rolls." -- a second uniform-certification claim this
+       block's own PX-20260828-07/-11 generalization pass didn't catch
+       (it generalized away year ranges/city names/the certification date,
+       but left "certified" as a blanket adjective on the whole feature).
+       Wrong for the same reason as the homepage hero stat/Directly-sourced
+       card: current-year coverage includes counties still on a preliminary
+       roll (Travis's 2026), so "full certified ... history" overclaims.
+       Fixed by dropping "certified" as a blanket descriptor and disclosing
+       the per-county Certified/Preliminary labeling instead -- same
+       generalize-not-parametrize approach as the rest of this block. #}
     {% set features = [
-      ('Property tax intelligence','Full certified appraisal history for every parcel in every live county — market, assessed, and taxable value, land/improvement breakdown, exemptions, and ownership. Sourced directly from each county\'s own certified appraisal rolls.'),
+      ('Property tax intelligence','Full appraisal history for every parcel in every live county — market, assessed, and taxable value, land/improvement breakdown, exemptions, and ownership, each figure labeled Certified or Preliminary per that county\'s own appraisal-district timeline. Sourced directly from each county\'s own appraisal district.'),
       ('Tax rate history','Entity-level tax rates across each live county\'s taxing jurisdictions — county, school districts, cities, MUDs and more, where that county\'s rate history has been loaded. Track how each entity has moved over time.'),
       ('Investor insight reports','Per-parcel analysis: year-over-year growth, assessment-ratio trends, homestead-cap risk, large-jump detection, and illustrative multi-year tax projections — built for underwriting.'),
       ('County market snapshot','County-wide intelligence each appraisal cycle: median value change by property type, aggregate trends, and sector breakdowns across residential, multi-family, commercial, land and ag.'),

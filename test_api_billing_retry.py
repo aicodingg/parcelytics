@@ -59,14 +59,51 @@ the response SELECT (step 3) both filtered too narrowly on
 `data_source = 'portal_scrape'`, so (a) a parcel with better existing data
 was treated as never-fetched, causing a wasteful, benefit-free portal
 re-fetch on every page view, and (b) that better data never displayed
-through this endpoint at all. Fix: step 1 widened to
-`data_source = 'portal_scrape' OR tax_year BETWEEN 2021 AND 2024` (the
-`data_source = 'portal_scrape'` clause is UNCHANGED and still alone covers
-the sentinel row, tax_year=9999, exactly as before); step 3's
-`data_source = 'portal_scrape'` filter is simply REMOVED (the year-range +
-county_code filters already do all the real scoping, and already naturally
-exclude the sentinel). `_UPSERT_SQL`'s own ON CONFLICT ... WHERE protection
-in loaders/scrape_billing_history.py is NOT part of this fix.
+through this endpoint at all. Fix (AS ORIGINALLY SHIPPED, since superseded
+-- see TAX-BILLING-REKEY-3 paragraph below): step 1 widened to
+`data_source = 'portal_scrape' OR tax_year BETWEEN 2021 AND 2024` within a
+single `tax_billing` table (the `data_source = 'portal_scrape'` clause was
+unchanged and still alone covered the sentinel row, tax_year=9999); step
+3's `data_source = 'portal_scrape'` filter was simply removed.
+`_UPSERT_SQL`'s own ON CONFLICT ... WHERE protection in
+loaders/scrape_billing_history.py is NOT part of this fix.
+
+TAX-BILLING-REKEY-3 (real schema change, post-dates BILLING-DIAG-8, applies
+NOW): portal-scrape rows (both this route's own sentinel and its real
+successful-fetch writes) moved out of `tax_billing` entirely into a
+dedicated `tax_billing_portal_scrape` table (§7.3 design (a) -- portal
+scrapes and authoritative county-billing-export rows are different
+provenance classes and no longer share a table). This reshaped both of
+BILLING-DIAG-8's queries again:
+  - Step 1 (`already_fetched`) is now `(EXISTS ... FROM
+    tax_billing_portal_scrape WHERE geo_id/county_code) OR (EXISTS ...
+    FROM tax_billing WHERE geo_id/county_code AND tax_year BETWEEN 2021
+    AND 2024)` -- two real EXISTS checks against two real tables, not one
+    OR'd WHERE clause against one table. `tax_billing_portal_scrape`'s
+    EXISTS has no year filter (that table only ever holds the sentinel,
+    tax_year=9999, or real portal-fetched years 2021-2024, so "any row
+    exists" is equivalent to BILLING-DIAG-8's original "sentinel or a real
+    portal row" intent).
+  - Step 3 (the response) is now a `WITH tb AS (... FROM tax_billing ...),
+    ps AS (... FROM tax_billing_portal_scrape ...) SELECT * FROM tb UNION
+    ALL SELECT * FROM ps WHERE ps.tax_year NOT IN (SELECT tax_year FROM
+    tb) ORDER BY tax_year` -- tax_billing_rollup.py's merge step is what
+    normally promotes a portal_scrape row into tax_billing; this UNION
+    exists so a real fetch THIS SAME REQUEST just wrote still shows up in
+    the response immediately, before that separate loader-orchestration
+    step next runs (see app.py's own comment at this SELECT for the full
+    reasoning). tax_billing's own row always wins when both tables have a
+    row for the same tax_year, mirroring tax_billing_rollup.py's own
+    account-grain-always-wins policy.
+  - The sentinel INSERT (no target-year receipts found) now targets
+    `tax_billing_portal_scrape` (county_code, geo_id, tax_year,
+    data_source, confidence_level), not `tax_billing`.
+This test file's sanity asserts and its SmartFakeCursor/SmartFakeConn mocks
+(Tests 8-10) are written against THIS current shape -- PX-20260828-15 Task
+5 found and fixed this file after it had gone stale against the older
+BILLING-DIAG-8-only shape following the TAX-BILLING-REKEY-3 schema change
+(the whole point of a stale fixture: it silently stops meaning anything,
+in either direction, until it's re-synced against real, current source).
 
 Sandbox has no Flask/psycopg2 (confirmed unavailable, same constraint as
 every other slice-and-exec test in this codebase). Uses the same technique
@@ -155,21 +192,51 @@ assert FUNC_SRC.count('"api_billing write:') == 2, \
     "sanity: exactly 2 permanent write-path log lines expected (real-write branch + sentinel branch)"
 assert "written = upsert_billing_rows(conn, records)" in FUNC_SRC, \
     "sanity: must use upsert_billing_rows()'s real return value, not discard it"
-# BILLING-DIAG-8: already_fetched (step 1) widened to also count real data
-# from any OTHER source for the target years; the data_source='portal_scrape'
-# clause is UNCHANGED (still alone covers the sentinel row, tax_year=9999).
-assert "AND (data_source = 'portal_scrape' OR tax_year BETWEEN 2021 AND 2024)" in FUNC_SRC, \
-    "sanity: already_fetched check must be widened to any data_source for the target years (BILLING-DIAG-8)"
-# The final response SELECT (step 3) must no longer filter on data_source at
-# all -- checked by confirming the OLD filter line's exact text (used only
-# there, never in step 1's parenthesized OR-clause) is gone.
+# PX-20260828-15 Task 5: TAX-BILLING-REKEY-3 split portal-scrape rows (this
+# route's own sentinel + real portal-fetch writes) out of tax_billing into a
+# dedicated tax_billing_portal_scrape table. That reshaped both queries this
+# file was previously asserting on in their older, single-table
+# BILLING-DIAG-8 shape (a plain OR'd WHERE clause against tax_billing alone,
+# and a SELECT with no UNION) -- both assertions below were rewritten against
+# the CURRENT real SQL text so a future regression is caught against what
+# actually ships, not against a shape app.py no longer contains.
+#
+# Step 1 (already_fetched) is now two real EXISTS checks OR'd together: any
+# row at all in tax_billing_portal_scrape (covers both the sentinel,
+# tax_year=9999, and a real prior portal fetch), OR a target-year row in
+# tax_billing from any other source (BILLING-DIAG-8's original widening,
+# now scoped to the tax_billing side only).
+assert "(EXISTS (SELECT 1 FROM tax_billing_portal_scrape " in FUNC_SRC, \
+    "sanity: already_fetched must check tax_billing_portal_scrape for a prior sentinel/portal row (TAX-BILLING-REKEY-3)"
+assert "AS already_fetched" in FUNC_SRC, \
+    "sanity: already_fetched must be read via a real column alias, not the old SELECT COUNT(*) AS cnt shape"
+assert 'already_fetched = cur.fetchone()["already_fetched"]' in FUNC_SRC, \
+    "sanity: must read the already_fetched key, not the pre-rekey cnt key"
+assert "AND tax_year BETWEEN 2021 AND 2024)) " in FUNC_SRC, \
+    "sanity: the tax_billing side of the already_fetched OR must still scope to the 4 target years (BILLING-DIAG-8)"
+# The final response SELECT (step 3) is now a two-table CTE (tb from
+# tax_billing, ps from tax_billing_portal_scrape) unioned together, with tb
+# winning on any tax_year both tables have a row for -- checked by
+# confirming the real CTE structure, not a single-table SELECT.
+assert "WITH tb AS (" in FUNC_SRC and "FROM tax_billing " in FUNC_SRC, \
+    "sanity: final SELECT's tb CTE must read from tax_billing (TAX-BILLING-REKEY-3)"
+assert "), ps AS (" in FUNC_SRC and "FROM tax_billing_portal_scrape " in FUNC_SRC, \
+    "sanity: final SELECT's ps CTE must read from tax_billing_portal_scrape (TAX-BILLING-REKEY-3)"
+assert "UNION ALL " in FUNC_SRC and "WHERE ps.tax_year NOT IN (SELECT tax_year FROM tb) " in FUNC_SRC, \
+    "sanity: tb must win over ps on any shared tax_year (TAX-BILLING-REKEY-3 merge precedence)"
 assert "\"  AND data_source = 'portal_scrape' \"" not in FUNC_SRC, \
-    "sanity: the final response SELECT's data_source='portal_scrape' filter must be REMOVED (BILLING-DIAG-8)"
+    "sanity: no lingering single-table data_source='portal_scrape' filter from the pre-rekey shape (BILLING-DIAG-8)"
 assert "SELECT tax_year, total_tax, total_paid, data_source, confidence_level " in FUNC_SRC, \
-    "sanity: final SELECT must still select all 5 real columns, including data_source (so callers can " \
+    "sanity: tb CTE must still select all 5 real columns, including data_source (so callers can " \
     "tell a portal_scrape row from a better-sourced one)"
-assert "AND tax_year BETWEEN 2021 AND 2024 " in FUNC_SRC and "AND county_code = %s " in FUNC_SRC, \
-    "sanity: final SELECT must keep its real year-range + county_code scoping"
+assert "SELECT tax_year, total_paid AS total_tax, total_paid, data_source, confidence_level " in FUNC_SRC, \
+    "sanity: ps CTE must alias total_paid AS total_tax (tax_billing_portal_scrape has no separate billed-amount column)"
+assert FUNC_SRC.count("AND tax_year BETWEEN 2021 AND 2024") >= 3 and FUNC_SRC.count("AND county_code = %s") >= 1, \
+    "sanity: both CTEs must keep the real year-range + county_code scoping"
+# TAX-BILLING-REKEY-3's sentinel write (no target-year receipts found) now
+# targets tax_billing_portal_scrape, not tax_billing directly.
+assert "INSERT INTO tax_billing_portal_scrape " in FUNC_SRC, \
+    "sanity: the no-receipts-found sentinel write must target tax_billing_portal_scrape (TAX-BILLING-REKEY-3)"
 # _UPSERT_SQL's own ON CONFLICT ... WHERE protection lives in a different
 # file (loaders/scrape_billing_history.py) and is NOT part of this slice --
 # nothing to assert on it here; see that file's own test coverage.
@@ -208,8 +275,14 @@ class FakeCursor:
     """Records every execute() call; supports the `with conn.cursor() as cur`
     and `with conn.cursor(cursor_factory=...) as cur` patterns used in
     api_billing(). fetchone() returns a scripted row for the "already
-    fetched?" check (always {"cnt": 0} here -- these tests are about the
-    fetch/retry/write path, not the cache-hit path)."""
+    fetched?" check (always {"already_fetched": False} here -- these tests
+    are about the fetch/retry/write path, not the cache-hit path).
+
+    PX-20260828-15 Task 5: this used to return {"cnt": 0}, matching the
+    pre-TAX-BILLING-REKEY-3 `SELECT COUNT(*) AS cnt` shape. The real query
+    now reads `cur.fetchone()["already_fetched"]` (a boolean column alias,
+    not a count) -- the old key would KeyError the instant a test using
+    this plain (non-SQL-aware) cursor got past the sanity-assert block."""
     def __init__(self, log):
         self.log = log
 
@@ -223,7 +296,7 @@ class FakeCursor:
         self.log.append((sql, params))
 
     def fetchone(self):
-        return {"cnt": 0}
+        return {"already_fetched": False}
 
     def fetchall(self):
         return []
@@ -246,12 +319,26 @@ class FakeConn:
 
 
 class SmartFakeCursor:
-    """BILLING-DIAG-8: SQL-aware fake cursor for the already_fetched/response
-    SELECT widening tests (8-10 below). Reacts to the REAL, real SQL text
+    """BILLING-DIAG-8, updated by PX-20260828-15 Task 5 for
+    TAX-BILLING-REKEY-3: SQL-aware fake cursor for the already_fetched/
+    response SELECT widening tests (8-10 below). Reacts to the REAL SQL text
     api_billing() actually executes (not a reimplementation of its logic)
     against a scripted set of `existing_rows` standing in for real DB state --
-    so if the widened SQL shape in app.py regresses, these tests fail on the
-    real query text, not on a mirrored copy of the query's intent."""
+    so if the real SQL shape in app.py regresses, these tests fail on the
+    real query text, not on a mirrored copy of the query's intent.
+
+    TAX-BILLING-REKEY-3 split portal-scrape rows into their own table
+    (tax_billing_portal_scrape), leaving tax_billing with only other-source
+    rows. `existing_rows` is a flat list standing in for BOTH tables at
+    once -- this fixture's existing test data already tags each row with
+    `data_source`, so the split is done here by that same field: a row with
+    data_source == "portal_scrape" simulates a tax_billing_portal_scrape
+    row (this route's own sentinel/portal writes always use that value --
+    see the real INSERT above); anything else simulates a tax_billing row.
+    This matches the real table split exactly, since a portal_scrape-tagged
+    row could never have legitimately landed in tax_billing pre-rekey
+    either (BILLING-DIAG-8's widening only ever mattered for OTHER
+    sources)."""
     def __init__(self, log, existing_rows):
         self.log = log
         self.existing_rows = existing_rows
@@ -267,21 +354,38 @@ class SmartFakeCursor:
         self.log.append((sql, params))
         self._last_sql = sql
 
+    def _ps_rows(self):
+        return [r for r in self.existing_rows if r["data_source"] == "portal_scrape"]
+
+    def _tb_rows(self):
+        return [r for r in self.existing_rows if r["data_source"] != "portal_scrape"]
+
     def fetchone(self):
-        # Step 1: the already_fetched COUNT check.
-        if self._last_sql and "SELECT COUNT(*) AS cnt" in self._last_sql:
-            cnt = sum(
-                1 for row in self.existing_rows
-                if row["data_source"] == "portal_scrape" or 2021 <= row["tax_year"] <= 2024
-            )
-            return {"cnt": cnt}
-        return {"cnt": 0}
+        # Step 1: already_fetched -- real query is two EXISTS checks OR'd
+        # together (any tax_billing_portal_scrape row at all, OR a
+        # target-year tax_billing row from another source).
+        if self._last_sql and "AS already_fetched" in self._last_sql:
+            ps_any = len(self._ps_rows()) > 0
+            tb_target_year = any(2021 <= r["tax_year"] <= 2024 for r in self._tb_rows())
+            return {"already_fetched": ps_any or tb_target_year}
+        return {"already_fetched": False}
 
     def fetchall(self):
-        # Step 3: the final response SELECT.
-        if self._last_sql and "data_source, confidence_level" in self._last_sql:
-            rows = [dict(r) for r in self.existing_rows if 2021 <= r["tax_year"] <= 2024]
-            return sorted(rows, key=lambda r: r["tax_year"])
+        # Step 3: the final response SELECT -- tb (tax_billing) UNION ALL ps
+        # (tax_billing_portal_scrape), both scoped to the 4 target years,
+        # with tb winning on any tax_year both sides have a row for.
+        if self._last_sql and "WITH tb AS (" in self._last_sql:
+            tb_rows = [dict(r) for r in self._tb_rows() if 2021 <= r["tax_year"] <= 2024]
+            tb_years = {r["tax_year"] for r in tb_rows}
+            ps_rows = [dict(r) for r in self._ps_rows()
+                       if 2021 <= r["tax_year"] <= 2024 and r["tax_year"] not in tb_years]
+            # ps CTE aliases total_paid AS total_tax (no separate billed
+            # amount in tax_billing_portal_scrape) -- mirror that here so a
+            # test asserting on a ps-sourced row's total_tax sees the same
+            # value the real UNION would actually return.
+            for r in ps_rows:
+                r["total_tax"] = r["total_paid"]
+            return sorted(tb_rows + ps_rows, key=lambda r: r["tax_year"])
         return []
 
 

@@ -135,9 +135,40 @@
             <span class="qf-title">New Construction</span>
             <span class="qf-desc">Built in the last year</span>
           </button>
-          <button type="button" class="quick-filter-btn" data-preset="delinquent" disabled>
+          {# ── PX-20260828-15 Task 3 (filter honesty for unavailable data,
+               Diego's sign-off) — tax_delinquent is sourced solely from
+               Travis's own TaxDelqOpenData.csv (no Dallas-equivalent loader
+               exists yet); a delinquent-scoped search against a county with
+               zero tax_delinquent rows used to come back "No parcels
+               matched these filters," indistinguishable from a real empty
+               result. filter_data_availability (computed server-side in
+               search_page(), per FILTER_DATA_REQUIREMENTS in app.py) is
+               real per-county, per-table truth, not a hardcoded county
+               check -- so this stays correct the moment a Dallas
+               delinquent source is actually loaded, with no template edit
+               needed. data-unavailable="1" is a second, JS-readable signal
+               (see the metaReady handler below) so this button's disabled
+               state survives that handler's blanket re-enable once
+               /api/benchmark/meta loads -- a real data gap, not a loading
+               state, must stay disabled after that point. `(filter_data_
+               availability or {})` guards every read here rather than a
+               bare `filter_data_availability.get(...)`, since Jinja's
+               default Undefined raises on attribute/method access the
+               moment the variable is missing at all -- and this codebase's
+               own render-fixture harnesses (e.g.
+               verify_m4_part1_other_pages_render.py) call
+               tpl.render(has_preliminary_2026=True) without it, a real,
+               pre-existing calling pattern this fix must not break. #}
+          <button type="button" class="quick-filter-btn" data-preset="delinquent" disabled
+                  {% if not (filter_data_availability or {}).get('delinquent', True) %}data-unavailable="1"{% endif %}>
             <span class="qf-title">Delinquent Parcels</span>
-            <span class="qf-desc">Parcels with a real, outstanding delinquent tax balance</span>
+            <span class="qf-desc">
+              {% if not (filter_data_availability or {}).get('delinquent', True) %}
+                Not yet available for {{ county_profile.county_name }} — delinquent tax data hasn't been loaded for this county yet.
+              {% else %}
+                Parcels with a real, outstanding delinquent tax balance
+              {% endif %}
+            </span>
           </button>
         </div>
       </div>
@@ -148,9 +179,15 @@
 {# ══════════════════════════════════════════════════════════════════════════
    Filter Parcels — additive filter system, entirely separate from the
    parcel-ID/address search above (untouched). County-agnostic by design:
-   County is the first filter (one real option today — Travis County, TX —
-   built so a second county is an added <option>, not a restructure), same
-   pattern as the /info page's state/county selectors.
+   County is the first filter -- built so each newly-live county is an
+   added <option>, not a restructure, same pattern as the /info page's
+   state/county selectors.
+   PX-20260828-15 Task 4: comment was "(one real option today — Travis
+   County, TX)" -- stale since Dallas went live (PX-20260826-05); this is
+   the "search.html:151's stale comment" item from -12's own "listed, not
+   fixed" list, now fixed. Comment-only change -- the filter's actual
+   County option list is a separate, already-tracked item (PX-20260828-12
+   Category 2/3), not touched here.
    ══════════════════════════════════════════════════════════════════════════ #}
 <div class="row g-4 mt-1">
   <div class="col-12">
@@ -218,19 +255,40 @@
             </div>
           </div>
 
-          {# ── Effective Tax Rate range + Not Available inclusion ─────────── #}
+          {# ── Effective Tax Rate range + Not Available inclusion ───────────
+               PX-20260828-15 Task 3 (registered per Diego's 2026-08-29 live
+               confirmation -- tax_billing/tax_billing_account both 0 rows
+               for Dallas; see FILTER_DATA_REQUIREMENTS's comment in app.py):
+               same disabled + named-county-caption pattern as Delinquent
+               Only, but applied to all THREE controls in this shape (min,
+               max, AND the Include NA checkbox), not just one. Diego's own
+               question (b) resolved: fltEtrIncludeNa alone is a modifier,
+               not a filter -- api_search_filter()'s etr_include_na block
+               only ever runs when etr_min or etr_max is also set (see that
+               function's own "etr_include_na is deliberately NOT in this
+               list" comment), so leaving the checkbox enabled while its two
+               sibling inputs are disabled would offer an interaction that
+               can never do anything -- checking it alone satisfies no WHERE
+               condition either way. Disabling all three together, rather
+               than min/max only, is the correct reading of that shape. #}
           <div class="col-md-3">
             <label class="form-label small text-muted mb-1">Effective Tax Rate (%)</label>
             <div class="d-flex gap-1">
-              <input type="number" step="0.01" id="fltEtrMin" class="form-control form-control-sm" placeholder="Min %" style="font-size:12px;">
-              <input type="number" step="0.01" id="fltEtrMax" class="form-control form-control-sm" placeholder="Max %" style="font-size:12px;">
+              <input type="number" step="0.01" id="fltEtrMin" class="form-control form-control-sm" placeholder="Min %" style="font-size:12px;"
+                     {% if not (filter_data_availability or {}).get('effective_tax_rate', True) %}disabled{% endif %}>
+              <input type="number" step="0.01" id="fltEtrMax" class="form-control form-control-sm" placeholder="Max %" style="font-size:12px;"
+                     {% if not (filter_data_availability or {}).get('effective_tax_rate', True) %}disabled{% endif %}>
             </div>
             <div class="form-check mt-1">
-              <input class="form-check-input" type="checkbox" id="fltEtrIncludeNa">
+              <input class="form-check-input" type="checkbox" id="fltEtrIncludeNa"
+                     {% if not (filter_data_availability or {}).get('effective_tax_rate', True) %}disabled{% endif %}>
               <label class="form-check-label text-muted" for="fltEtrIncludeNa" style="font-size:11px;">
                 Include parcels with Not Available effective tax rate
               </label>
             </div>
+            {% if not (filter_data_availability or {}).get('effective_tax_rate', True) %}
+            <div class="text-muted mt-1" style="font-size:11px;">Not yet available for {{ county_profile.county_name }} — billing data hasn't been loaded for this county yet.</div>
+            {% endif %}
           </div>
 
           {# ── Building size range ─────────────────────────────────────────── #}
@@ -316,15 +374,23 @@
                tax_delinquent.total_due > 0 in api_search_filter(), same
                checkbox pattern as fltLargeValueJump above. Combinable with
                every other filter here (asset type included — Nick's actual
-               request was to narrow delinquent parcels down by type). #}
+               request was to narrow delinquent parcels down by type).
+               PX-20260828-15 Task 3: disabled + named-county caption when
+               filter_data_availability says tax_delinquent has zero rows
+               for this county (see the Quick Filter button's own comment
+               above for the full reasoning -- same flag, same mechanism). #}
           <div class="col-md-3">
             <label class="form-label small text-muted mb-1 d-block">Delinquency</label>
             <div class="form-check mt-1">
-              <input class="form-check-input" type="checkbox" id="fltDelinquentOnly">
+              <input class="form-check-input" type="checkbox" id="fltDelinquentOnly"
+                     {% if not (filter_data_availability or {}).get('delinquent', True) %}disabled{% endif %}>
               <label class="form-check-label" for="fltDelinquentOnly" style="font-size:12.5px;">
                 Delinquent Only
               </label>
             </div>
+            {% if not (filter_data_availability or {}).get('delinquent', True) %}
+            <div class="text-muted mt-1" style="font-size:11px;">Not yet available for {{ county_profile.county_name }}</div>
+            {% endif %}
           </div>
 
         </div>
@@ -712,8 +778,15 @@ ParcelTypeahead.attach({ inputId: "spQ" });
 
     // Quick Filters need prop_types loaded (Residential/Commercial values)
     // before a preset can select them — enable the buttons once ready.
+    // PX-20260828-15 Task 3: skip any button flagged data-unavailable="1"
+    // (real per-county data gap, computed server-side in search_page() --
+    // see FILTER_DATA_REQUIREMENTS in app.py) -- this is a permanent state,
+    // not the loading state metaReady tracks, so it must survive this
+    // blanket re-enable rather than get silently cleared by it.
     metaReady = true;
-    document.querySelectorAll(".quick-filter-btn").forEach(b => b.disabled = false);
+    document.querySelectorAll(".quick-filter-btn").forEach(b => {
+      if (b.getAttribute("data-unavailable") !== "1") b.disabled = false;
+    });
 
     // ── URL-param pre-fill — entry point from Market Snapshot's Top/Bottom
     // Moving Neighborhoods table (/search?neighborhood=<code>[&prop_type=<label>]).

@@ -471,7 +471,17 @@ function exportCsv() {
   const checked = [...document.querySelectorAll('.entity-cb:checked')].map(cb => cb.value);
   if (!checked.length) return;
   const { from, to } = getYearRange();
-  const countyLabel = document.getElementById('fltCountyInput').value || 'Travis County, TX';
+  // PX-20260828-15 Task 4: fallback was the hardcoded literal 'Travis
+  // County, TX' -- the "rates.html's JS fallback string" item from -12's
+  // own "listed, not fixed" list. #fltCountyInput's value is already
+  // Jinja-set to this exact render's real county_profile.display_name
+  // (see the assignment a few hundred lines below, same mechanism), so in
+  // practice this `||` branch is dead on a normal render -- but a
+  // hardcoded Travis fallback is still wrong if it ever DOES fire on a
+  // Dallas render. Fixed by making the fallback itself Jinja-injected, so
+  // it resolves to whichever county this page actually is, not always
+  // Travis.
+  const countyLabel = document.getElementById('fltCountyInput').value || {{ county_profile.display_name | tojson }};
 
   // Parcel ID + Address columns only when a parcel lookup is active (the
   // "Showing entities for…" banner is visible) — both omitted from the CSV

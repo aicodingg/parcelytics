@@ -227,10 +227,23 @@
     </div>
   </div>
   {# Task 12: data freshness — answers "how do I know when info is outdated?" #}
+  {# PX-20260828-15 Task 2: "Appraisal — 2021-2026 Certified (2026 certified
+     Jul 25, 2026)" asserted a single, site-wide 2026-certified status --
+     true for Dallas (DCAD certified its 2026 roll July 23, 2026) but false
+     for Travis (still preliminary as of this fix). This line predates
+     Dallas going live and was never revisited under multi-county framing --
+     the two lines Diego said to keep verbatim in the July 2026 footer
+     rewrite (see comment above) were THIS block and "Not legal or tax
+     advice", but that ruling predates the Dallas certification-state
+     finding this brief exists to fix; a factually wrong site-wide claim
+     isn't "the line to keep verbatim," it's the bug. Generalized the same
+     way as the homepage hero stat/about.html feature card above -- states
+     the mechanism (certification happens per county, on that county's own
+     timeline) instead of asserting one blended status for every county. #}
   <div class="footer-bottom" style="flex-wrap:wrap; gap:6px;">
     <span style="font-size:11px; color:var(--text-3);">
       <strong>Data as of:</strong>
-      Appraisal — 2021–2026 Certified (2026 certified Jul 25, 2026)
+      Appraisal — 2021–2025 Certified across all counties; 2026 Certified or Preliminary by county, per that county's own certification date
       &nbsp;|&nbsp; Tax rates — 2025 (latest certified)
       &nbsp;|&nbsp; Billing — 2025 current (Verified/Partial by parcel) · 2021–2024 Verified (county billing export)
     </span>

@@ -431,16 +431,33 @@ check("real audit: zero remaining FAIL findings (every 3d/3b/3c gap is either fi
 # Fixture 11: PX-20260824-06 Task 4 -- the new hardcoded-county-literal-
 # comparison scan. Tested-alarm proof against the REAL, historical broken
 # shape: app.py's api_search_filter() before this brief's own fix, read
-# straight out of git (the working tree at the start of this brief, before
-# any edit made this session) -- not typed out by hand.
+# straight out of git -- not typed out by hand.
+#
+# PX-20260828-15 Task 5: this used to read from "HEAD", which was correct
+# only when this fixture was first written (right after PX-20260824-06
+# landed its fix, with the pre-fix literal still one commit back). The 65
+# commits to app.py made since then moved HEAD's own `if county !=
+# "travis":` line out of existence entirely except as a comment quoting it
+# (see app.py's own "PX-20260824-06: was `if county != "travis"`..."
+# comment) -- so `.index()` against HEAD started raising ValueError:
+# substring not found, a stale-fixture crash, not a real regression. Fixed
+# by pinning to the actual historical commit pair where the literal
+# genuinely lived: f16a5ef is PX-20260824-06's own fix commit (confirmed
+# via `git log -G` -- the only two commits in this repo's history that
+# ever changed this literal's occurrence count are df74a58, which
+# introduced it, and f16a5ef, which removed it); f16a5ef^ is its parent,
+# the last commit where api_search_filter() still had the real bug. A
+# fixture proving a scanner catches a historical bug should pin to the
+# commit that bug actually shipped in, not float on HEAD and silently stop
+# meaning anything once later commits move the literal out of frame.
 # ─────────────────────────────────────────────────────────────────────────
 section("Fixture 11: hardcoded county-literal comparison scan fires on the REAL pre-fix api_search_filter()")
 
-_pre_fix_app_py = git_show("HEAD", "app.py")
+_pre_fix_app_py = git_show("f16a5ef^", "app.py")
 _start = _pre_fix_app_py.index('    if county != "travis":')
 _pre_fix_snippet = _pre_fix_app_py[_start:_start + 200]
-check("sanity: the real pre-fix HEAD snapshot actually contains the hardcoded literal check "
-      "(proves this fixture models the real bug, not a synthetic stand-in)",
+check("sanity: the real pre-fix commit (f16a5ef^) actually contains the hardcoded literal "
+      "check (proves this fixture models the real bug, not a synthetic stand-in)",
       'if county != "travis"' in _pre_fix_snippet)
 
 import tempfile

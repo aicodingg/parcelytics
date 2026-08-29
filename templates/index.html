@@ -136,7 +136,16 @@
          replacing the exact comma-formatted sum this used to compute inline. #}
       <div class="trust-stat"><div class="num">{{ total_live_parcel_count_display }}+</div><div class="lbl">Parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }}</div></div>
       <div class="trust-stat"><div class="num">1990</div><div class="lbl">Tax rates tracked since</div></div>
-      <div class="trust-stat"><div class="num">2021–26</div><div class="lbl">Certified + preliminary appraisals</div></div>
+      {# PX-20260828-15 Task 2: was "Certified + preliminary appraisals" --
+         a single blended label implying every county sits at the same
+         certified/preliminary split for this year range. Wrong under
+         multi-county framing: Dallas's 2022-2026 rolls are ALL certified
+         (DCAD certified 2026 on July 23, 2026), while Travis's 2026 is
+         still preliminary. Generalized to describe the mechanism
+         (certification happens per county) rather than asserting a
+         specific blended status -- same "generalize rather than derive a
+         blended range" approach as the -11 Task 4 ruling. #}
+      <div class="trust-stat"><div class="num">2021–26</div><div class="lbl">Appraisal rolls, certified per county</div></div>
       <div class="trust-stat"><div class="num">2</div><div class="lbl">Government sources, zero aggregators</div></div>
     </div>
   </div>
@@ -152,7 +161,18 @@
       <div class="fd-card">
         <div class="fd-card-num">1</div>
         <h3>Directly sourced</h3>
-        <p>Certified appraisal-district and tax-office billing data, loaded straight from official government exports — direct from the source, no third-party aggregators in between. So your underwriting isn't built on someone else's guess, and your own tax question isn't answered by one either. We're expanding the same way, county by county, verifying each new market before it goes live.</p>
+        {# PX-20260828-15 Task 2: added the certification-timing sentence.
+           Previously this card described the data as "Certified appraisal-
+           district ... data" with no qualifier -- read on its own, that
+           implies every county's current-year figures are certified right
+           now, which is Travis-specific (Travis's 2026 is preliminary;
+           Dallas's isn't) and wrong under multi-county framing. "Certified
+           appraisal-district data" still describes what the underlying
+           source is (a certified appraisal roll, eventually), so that part
+           stays -- the fix is disclosing that certification timing varies
+           by county, same Verified/Preliminary badge language card 2
+           already uses. #}
+        <p>Certified appraisal-district and tax-office billing data, loaded straight from official government exports — direct from the source, no third-party aggregators in between. Certification timing is set by each county's own appraisal district, so a given year's figures may show as Certified or Preliminary depending on where that county's roll stands. So your underwriting isn't built on someone else's guess, and your own tax question isn't answered by one either. We're expanding the same way, county by county, verifying each new market before it goes live.</p>
       </div>
     </div>
     <div class="col-md-4">

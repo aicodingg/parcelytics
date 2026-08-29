@@ -2248,16 +2248,33 @@ def _inject_county_helpers():
         # switcher on county-anchored pages specifically, not the neutral
         # ones, where county_slug being "truthy" can't tell them apart.
         "is_county_anchored": hasattr(g, "county_slug"),
-        # PX-20260828-01: the county COUNTY_BASE (base.html) should target
-        # for this page's own /api/* fetch() calls. Defaults to exactly
-        # what _add_county_slug() already injects for a bare url_for('index')
-        # call today -- so every existing page is unaffected. The three new
-        # neutral, in-page-filtered bare routes (info_landing/rates_landing/
-        # snapshot_landing) override this per-render via an explicit
-        # render_template(..., api_county_slug=<filtered slug>) kwarg,
-        # WITHOUT touching g.county_slug/g.county_code -- see those routes'
-        # own docstrings for why is_county_anchored must stay False there.
-        "api_county_slug": getattr(g, "county_slug", DEFAULT_COUNTY_SLUG),
+        # PX-20260828-01/PX-20260828-15 Task 1: the county COUNTY_BASE
+        # (base.html) should target for this page's own /api/* fetch()
+        # calls. On an anchored route (g.county_slug set by
+        # _pull_county_slug()) this is just that real slug, same as
+        # always. On a NEUTRAL route (no <county_slug> URL segment) the
+        # fallback below is "" (bare COUNTY_BASE, cross-county-capable
+        # /api/address_search), NOT DEFAULT_COUNTY_SLUG -- corrected by
+        # PX-20260828-15 Task 1, which found that the old
+        # DEFAULT_COUNTY_SLUG fallback silently pinned every neutral
+        # page's search box to Travis (confirmed live for /about: typing
+        # a Dallas address returned "No results found") whenever that
+        # page didn't happen to override this value itself. Making the
+        # SHARED DEFAULT itself neutral -- not just patching the known
+        # offending routes -- is the fix PM's brief explicitly asked for
+        # ("set the neutral value once in a shared place... so a
+        # newly-added neutral page can't miss it"): about/terms/privacy/
+        # disclaimer/styleguide/search_landing() render with zero
+        # api_county_slug override and now correctly inherit "" instead
+        # of quietly inheriting Travis. info_landing()/rates_landing()/
+        # snapshot_landing() still override this explicitly (see
+        # _resolve_landing_county_slug() and those routes' own
+        # docstrings) because their override logic is more nuanced than
+        # a flat default -- an explicit ?county=<slug> should still
+        # scope their embedded search box to that slug, only the
+        # no-?county-given fallback state needed to change from
+        # Travis-slug to "".
+        "api_county_slug": getattr(g, "county_slug", ""),
     }
 
 
@@ -2423,6 +2440,34 @@ def _resolve_quick_search(q, county_code=None):
     )}
 
 
+def _resolve_landing_county_slug(param_name="county"):
+    """PX-20260828-15 Task 1: shared resolver for the three '?county=<slug>'
+    neutral landing routes (info_landing/rates_landing/snapshot_landing) --
+    replaces three copies of the identical
+        slug = request.args.get("county", "")
+        county_code = COUNTY_SLUGS.get(slug)
+        if county_code is None:
+            slug = DEFAULT_COUNTY_SLUG
+            county_code = COUNTY_SLUGS[slug]
+    block. Extracted now specifically so a future 4th neutral landing page
+    reuses this function instead of hand-copying the pattern a 4th time --
+    per PM's explicit structural requirement ("don't fix five routes
+    individually and recreate the failure mode for route six").
+
+    Returns (county_code, slug, explicit): `explicit` is True only when the
+    caller's own ?county=<slug> was present AND recognized -- callers need
+    this third value to know whether to scope their page's embedded search
+    box to that real slug (explicit ask) or leave it neutral (silent
+    Travis-fallback case -- see api_county_slug usage at each call site)."""
+    slug = request.args.get(param_name, "")
+    county_code = COUNTY_SLUGS.get(slug)
+    explicit = county_code is not None
+    if not explicit:
+        slug = DEFAULT_COUNTY_SLUG
+        county_code = COUNTY_SLUGS[slug]
+    return county_code, slug, explicit
+
+
 def _home_search_response(q, county_code=None, api_county_slug=None):
     """PX-20260827-03-rev1: shared body for both index() (county-anchored,
     '/<county_slug>') and home() (neutral, bare '/'). PX-20260828-03: now a
@@ -2574,9 +2619,20 @@ def search_page():
     result = _resolve_quick_search(q, county_code=g.county_code)
     if "redirect" in result:
         return result["redirect"]
+    # PX-20260828-15 Task 3 (filter honesty for unavailable data, Diego's
+    # sign-off: disable the affected control inline, generic per-table
+    # mechanism): this page has a real county (g.county_code), so check
+    # each registered filter's backing table now rather than deferring to
+    # api_search_filter() -- the whole point is telling the user BEFORE
+    # they run a search that would silently come back empty, not after.
+    filter_data_availability = {
+        key: _table_has_county_data(table, g.county_code)
+        for key, table in FILTER_DATA_REQUIREMENTS.items()
+    }
     return render_template(
         "search.html", has_preliminary_2026=has_preliminary_2026, county_selected=True,
         q=q, addr_matches=result.get("addr_matches"), error=result.get("error"),
+        filter_data_availability=filter_data_availability,
     )
 
 
@@ -2611,9 +2667,16 @@ def search_landing():
     result = _resolve_quick_search(q, county_code=None)
     if "redirect" in result:
         return result["redirect"]
+    # PX-20260828-15 Task 3: no real county chosen yet on this neutral landing
+    # (no g.county_code at all -- see this route's own docstring) -- explicit
+    # empty dict rather than omitting the kwarg, so search.html's
+    # filter_data_availability.get(key, True) reads as "no gap known yet"
+    # (available) instead of relying on Jinja's Undefined semantics for a
+    # missing template variable.
     return render_template(
         "search.html", has_preliminary_2026=False, county_selected=False,
         q=q, addr_matches=result.get("addr_matches"), error=result.get("error"),
+        filter_data_availability={},
     )
 
 
@@ -3823,14 +3886,20 @@ def categorize_entity(code, name, county_code=None):
                       # that doesn't match a bucket above.
 
 
-def _rates_response(county_code, county_slug_val):
+def _rates_response(county_code, county_slug_val, api_county_slug=None):
     """Shared body for tax_rates() (county-anchored, '/<county_slug>/rates')
     and rates_landing() (neutral, bare '/rates') -- PX-20260828-01, same
     refactor pattern as _home_search_response()/_info_response(). county_
     profile/county_slug/api_county_slug are passed explicitly so
     rates_landing() can render the FILTERED county's rate data without
     ever setting g.county_slug/g.county_code (see rates_landing()'s own
-    docstring for why)."""
+    docstring for why).
+
+    PX-20260828-15 Task 1: api_county_slug is a separate parameter from
+    county_slug_val (defaults to it, so tax_rates()'s anchored call is
+    unaffected) -- see _info_response()'s identical PX-20260828-15
+    comment for why the two values need to diverge for the neutral
+    landing route specifically."""
     # DALLAS-GATE-2 Part 1: county_tax_rate is a county_code-leading
     # composite-PK table per migrate_county_partitioning.py's TABLE_SPECS
     # (old_pk ["entity_code", "tax_year"] -> new_pk ["county_code",
@@ -3935,7 +4004,7 @@ def _rates_response(county_code, county_slug_val):
         default_year_from=default_year_from,
         county_profile=profile,
         county_slug=county_slug_val,
-        api_county_slug=county_slug_val,
+        api_county_slug=api_county_slug if api_county_slug is not None else county_slug_val,
     )
 
 
@@ -3961,13 +4030,16 @@ def rates_landing():
     tolerance as info_landing() (absent/unrecognized value -> Travis, not
     a 404 -- see that route's docstring for the full reasoning). Also
     deliberately does NOT set g.county_slug/g.county_code, for the same
-    is_county_anchored reason documented on info_landing()."""
-    slug = request.args.get("county", "")
-    county_code = COUNTY_SLUGS.get(slug)
-    if county_code is None:
-        slug = DEFAULT_COUNTY_SLUG
-        county_code = COUNTY_SLUGS[slug]
-    return _rates_response(county_code, slug)
+    is_county_anchored reason documented on info_landing().
+
+    PX-20260828-15 Task 1: api_county_slug is resolved separately from
+    the displayed county_slug via _resolve_landing_county_slug()'s
+    `explicit` flag -- see info_landing()'s identical PX-20260828-15
+    comment for the full reasoning (explicit ?county= still scopes the
+    embedded search box; the no-?county-given fallback now gets the
+    neutral, cross-county "" instead of silently inheriting Travis)."""
+    county_code, slug, explicit = _resolve_landing_county_slug()
+    return _rates_response(county_code, slug, api_county_slug=(slug if explicit else ""))
 
 
 @app.route("/<county_slug>/api/parcel_entities")
@@ -4112,7 +4184,7 @@ _SNAPSHOT_CACHE = {}
 _SNAPSHOT_CACHE_TTL_SECONDS = 600
 
 
-def _snapshot_response(view_arg, county_code, county_slug_val):
+def _snapshot_response(view_arg, county_code, county_slug_val, api_county_slug=None):
     """Shared body for county_snapshot() (county-anchored,
     '/<county_slug>/snapshot') and snapshot_landing() (neutral, bare
     '/snapshot') -- PX-20260828-01, same refactor pattern as
@@ -4121,6 +4193,12 @@ def _snapshot_response(view_arg, county_code, county_slug_val):
     snapshot_landing() can render the FILTERED county's data without ever
     setting g.county_slug/g.county_code (see snapshot_landing()'s own
     docstring for why).
+
+    PX-20260828-15 Task 1: api_county_slug is a separate parameter from
+    county_slug_val (defaults to it, so county_snapshot()'s anchored call
+    is unaffected) -- see _info_response()'s identical PX-20260828-15
+    comment for why the two values need to diverge for the neutral
+    landing route specifically.
 
     Supports ?view=overall|residential|multifamily|retail|industrial|office|
     hotel|land|agricultural|other (the 10 tabs), plus the legacy
@@ -4156,7 +4234,7 @@ def _snapshot_response(view_arg, county_code, county_slug_val):
         view=view,
         county_profile=profile,
         county_slug=county_slug_val,
-        api_county_slug=county_slug_val,
+        api_county_slug=api_county_slug if api_county_slug is not None else county_slug_val,
         **payload,
     )
 
@@ -4187,14 +4265,15 @@ def snapshot_landing():
     -> Travis, not a 404). ?view= keeps working identically alongside
     ?county= -- e.g. '/snapshot?county=dallas-tx&view=residential'.
     Deliberately does NOT set g.county_slug/g.county_code, for the same
-    is_county_anchored reason documented on info_landing()."""
-    slug = request.args.get("county", "")
-    county_code = COUNTY_SLUGS.get(slug)
-    if county_code is None:
-        slug = DEFAULT_COUNTY_SLUG
-        county_code = COUNTY_SLUGS[slug]
+    is_county_anchored reason documented on info_landing().
+
+    PX-20260828-15 Task 1: api_county_slug is resolved separately from
+    the displayed county_slug via _resolve_landing_county_slug()'s
+    `explicit` flag -- see info_landing()'s identical PX-20260828-15
+    comment for the full reasoning."""
+    county_code, slug, explicit = _resolve_landing_county_slug()
     view = request.args.get("view", "overall")
-    return _snapshot_response(view, county_code, slug)
+    return _snapshot_response(view, county_code, slug, api_county_slug=(slug if explicit else ""))
 
 
 def _snapshot_summary_freshness(county_code="TRAVIS"):
@@ -5210,6 +5289,85 @@ def _county_has_data(county_code):
         "SELECT EXISTS(SELECT 1 FROM parcel WHERE county_code = %(county_code)s) AS has_data",
         {"county_code": county_code}, one=True,
     )["has_data"]
+
+
+# ── PX-20260828-15 Task 3 (filter honesty for unavailable data) ────────────
+# Diego's sign-off (per this brief's own gate -- Task 3's UX needed approval
+# before building): disable the affected Filter Parcels control inline,
+# named-county caption, via a GENERIC per-table availability check rather
+# than a one-off boolean -- so the next data-dependent filter (see comment
+# on FILTER_DATA_REQUIREMENTS below) reuses this instead of a copy-pasted
+# has_x_data flag, the same "fix it once, structurally" ruling this brief's
+# own Task 1 already applied to the neutral-route bug.
+#
+# Distinct from _county_has_data() above: that function gates the whole
+# route on "has this county been loaded AT ALL" (the parcel table, the one
+# prerequisite every query here shares). This function is for the narrower,
+# additional case Diego approved: a county that DOES have real data can
+# still be missing one specific FILTER's backing table entirely -- checked
+# per-table, per-county, so it can never silently drift out of sync with
+# what a real search for that filter would actually find (same reasoning
+# _county_has_data() itself already uses).
+def _table_has_county_data(table, county_code):
+    """Cheap EXISTS check for whether `table` has any row at all for
+    `county_code` -- `table` is always a literal from FILTER_DATA_REQUIREMENTS
+    below, never user input, so an f-string here carries the same trust
+    boundary as _county_has_data()'s own literal "parcel" table name."""
+    return query(
+        f"SELECT EXISTS(SELECT 1 FROM {table} WHERE county_code = %(county_code)s) AS has_data",
+        {"county_code": county_code}, one=True,
+    )["has_data"]
+
+
+# Registry of Filter Parcels controls whose backing table isn't guaranteed
+# populated for every registered, has-data county -- i.e. narrower gaps than
+# _county_has_data() catches. Each entry name is the search.html Jinja/JS key
+# ({{ filter_data_availability[...] }} / data-unavailable attribute); each
+# value is the one real table that filter's WHERE/JOIN condition in
+# api_search_filter() actually reads.
+#
+# 'delinquent': tax_delinquent is sourced solely from Travis's own
+# TaxDelqOpenData.csv (see loaders/load_tax_current.py's load_delinquent()
+# docstring) -- confirmed via a full-repo grep that no Dallas-equivalent
+# loader exists anywhere (load_tax_current.py's --county flag can WRITE any
+# county's rows once given a source file, but no such source file has been
+# acquired for Dallas yet), and via the table's own resting row count
+# (~10,087, all Travis, per SPEC_COUNTY_PARTITIONING.md's pre-partition
+# snapshot) -- the confirmed, in-scope case for this brief.
+#
+# 'effective_tax_rate': the etr_min/etr_max filter's real source is
+# parcel_metrics.effective_tax_rate, itself computed by compute_metrics.py
+# from SUM(tax_billing_entity.amount_due) at tax_year=2025 (never from
+# parcel_metrics directly, and never from tax_billing.total_tax -- see that
+# file's own comment on why: TOTAL_TAX is blank for ~93% of 2025 rows).
+# tax_billing_entity is itself a derived rollup (tax_billing_rollup.py),
+# rebuilt from tax_billing_account_entity -- the real per-account source
+# table -- so it's the correct proxy for "was ETR's underlying billing data
+# ever loaded for this county," same relationship tax_delinquent has to its
+# own loader above.
+# Diego confirmed live (2026-08-29): tax_billing DALLAS = 0 rows,
+# tax_billing_account DALLAS = 0 rows. Same root cause as 'delinquent':
+# confirmed via repo-wide grep, there is no Dallas billing loader at all --
+# not a job that hasn't run yet, but one that was never built. (Dallas's
+# own load_dallas_certified.py loader writes parcel/parcel_tax_year/prop_unit
+# from DCAD's certified-roll export; DCAD billing/tax-collection data is a
+# separate source that hasn't been acquired.) tax_billing_entity will read
+# empty for DALLAS until that acquisition work happens, so this entry is
+# correct today, not provisional.
+#
+# _table_has_county_data() assumes `table` has a live `county_code` column --
+# true for tax_billing_entity despite schema.sql's own CREATE TABLE IF NOT
+# EXISTS for it still showing the pre-PARTITION-2 DDL (no county_code): that
+# DDL is bootstrap-only and never re-runs against an already-existing table,
+# while migrate_county_partitioning.py's TABLE_SPECS (which already includes
+# tax_billing_entity in the same batch as tax_delinquent) is what actually
+# added the column in production. Confirmed via tax_billing_rollup.py's own
+# real INSERT INTO tax_billing_entity (county_code, geo_id, tax_year, ...) --
+# the live write shape a stale schema.sql alone would not have shown.
+FILTER_DATA_REQUIREMENTS = {
+    "delinquent": "tax_delinquent",
+    "effective_tax_rate": "tax_billing_entity",
+}
 
 
 def _live_counties():
@@ -7705,7 +7863,7 @@ def compare_parcels():
     return render_template("compare.html", parcels=parcels, error=None)
 
 
-def _info_response(county_code, county_slug_val):
+def _info_response(county_code, county_slug_val, api_county_slug=None):
     """Shared body for info() (county-anchored, '/<county_slug>/info') and
     info_landing() (neutral, bare '/info') -- PX-20260828-01, same
     refactor pattern as _home_search_response()/search.html's landing pair.
@@ -7713,14 +7871,23 @@ def _info_response(county_code, county_slug_val):
     explicit render_template() kwarg override a same-named context-
     processor value) so info_landing() can render the FILTERED county's
     content without ever setting g.county_slug/g.county_code -- see
-    info_landing()'s own docstring for why that matters."""
+    info_landing()'s own docstring for why that matters.
+
+    PX-20260828-15 Task 1: api_county_slug is now a SEPARATE parameter
+    from county_slug_val, not always the same value. county_slug_val
+    drives the page's own displayed content (which county's info sections
+    show) and defaults api_county_slug to itself, so info() (the anchored
+    route, which always passes a real, explicitly-chosen g.county_slug)
+    is unaffected. info_landing() passes api_county_slug explicitly and
+    separately -- see that route's own docstring for why the two values
+    diverge specifically in its no-?county-given fallback case."""
     profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
     return render_template(
         "info.html",
         info_content_available=profile.get("info_content_available", False),
         county_profile=profile,
         county_slug=county_slug_val,
-        api_county_slug=county_slug_val,
+        api_county_slug=api_county_slug if api_county_slug is not None else county_slug_val,
     )
 
 
@@ -7777,13 +7944,23 @@ def info_landing():
     page" treatment (see _inject_county_helpers()'s own comment).
     Instead, the resolved county is passed straight into the shared
     response body as explicit render_template() kwargs, which Jinja lets
-    override the context-processor's own same-named defaults."""
-    slug = request.args.get("county", "")
-    county_code = COUNTY_SLUGS.get(slug)
-    if county_code is None:
-        slug = DEFAULT_COUNTY_SLUG
-        county_code = COUNTY_SLUGS[slug]
-    return _info_response(county_code, slug)
+    override the context-processor's own same-named defaults.
+
+    PX-20260828-15 Task 1: api_county_slug is now resolved SEPARATELY
+    from the page's own displayed county_slug (via
+    _resolve_landing_county_slug()'s `explicit` flag). An explicit
+    ?county=<slug> still scopes the embedded search box to that real
+    county -- unchanged. But when no ?county= is given at all, this page
+    still displays Travis's info content (a legitimate, disclosed content
+    fallback -- info_content_available is real per-county data, not this
+    bug), while its search box now gets the bare, cross-county-capable
+    COUNTY_BASE ("") instead of silently inheriting the same Travis
+    fallback the displayed content uses. Those are two independent
+    questions -- "what content shows by default" and "what should this
+    page's search box search" -- and conflating them was the root of the
+    live /about bug this brief exists to close out."""
+    county_code, slug, explicit = _resolve_landing_county_slug()
+    return _info_response(county_code, slug, api_county_slug=(slug if explicit else ""))
 
 
 # PX-20260827-03-rev1 Task 1: about/terms/privacy/disclaimer/styleguide are
