@@ -102,6 +102,14 @@ def make_env():
     env.globals["url_for"] = _url_for
     env.globals["request"] = _FakeRequest()
     env.globals["config"] = _real_config
+    # appraisal_badge_kind (Aug 2026, URGENT dcad_certified fix): real
+    # app.py @app.context_processor now injects this into every template
+    # render (see inject_mode()) -- property.html's confidence-badge block
+    # calls it directly instead of maintaining its own duplicated Jinja
+    # list. StrictUndefined below means this MUST be mocked or every
+    # scenario that reaches that block raises, not just the ones this fix
+    # specifically targets.
+    env.globals["appraisal_badge_kind"] = _appraisal_badge_kind
     env.filters["tojson"] = _tojson
     # PX-20260827-01 incidental fix: county_profile/county_url/county_cad_link
     # (from app.py's @app.context_processor, PX-20260824-01 and this brief)
@@ -199,9 +207,13 @@ def make_env():
 # CERTIFIED_TIER_DATA_SOURCES -- kept as an independent copy here for the
 # same reason property.html's now-removed Jinja copy was (this harness has
 # no live app.py import), must change together if the real set ever does.
+# "dcad_certified" added Aug 2026 alongside the real app.py fix (URGENT
+# live-correctness bug: Dallas's real data_source string was missing from
+# this set, mislabeling genuinely certified Dallas rows as "partial").
 _CERTIFIED_TIER_DATA_SOURCES = frozenset({
     "certified", "cert_2021", "cert_2022", "cert_2023", "cert_2024", "cert_2026",
     "ajr_2021", "ajr_2022", "ajr_2023", "ajr_2024",
+    "dcad_certified",
 })
 
 
@@ -363,12 +375,21 @@ def _load_real_app_functions():
         start = src.index(start_marker)
         end = src.index(next_marker, start)
         exec(src[start:end], ns)
+    # _appraisal_badge_kind (added Aug 2026, URGENT dcad_certified fix) is
+    # defined immediately after _row_confidence in app.py, inside the same
+    # "\ndef _row_confidence" -> search_filter-route slice above -- so it's
+    # already in `ns` from that exec, just not previously surfaced in this
+    # return tuple. Surfaced now so the harness can unit-test the REAL
+    # function property.html actually calls (via context_processor), not
+    # just _row_confidence() (a different function it no longer uses for
+    # this purpose).
     return (ns["build_tax_calendar"], ns["_row_confidence"],
-            ns["TAX_DELQ_EXPORT_DATE"], ns["build_projections"], ns["build_insights"])
+            ns["TAX_DELQ_EXPORT_DATE"], ns["build_projections"], ns["build_insights"],
+            ns["_appraisal_badge_kind"])
 
 
 (_build_tax_calendar, _row_confidence, _TAX_DELQ_EXPORT_DATE,
- _build_projections, _build_insights) = _load_real_app_functions()
+ _build_projections, _build_insights, _appraisal_badge_kind) = _load_real_app_functions()
 
 
 def base_context(mode="homeowner", with_waterfall=True, residential=True, waterfall_reset=False,
@@ -665,6 +686,29 @@ def confidence_tier_context(mode, source_prefix, anomaly_year=None):
     return ctx
 
 
+def dallas_confidence_context(mode, anomaly=False):
+    """Aug 2026 URGENT fix regression fixture: a Dallas parcel whose 2025
+    `current` row carries the REAL live data_source string
+    ("dcad_certified", loaders/load_dallas_certified.py's DATA_SOURCE
+    constant) rather than Travis's "certified". Before this fix, this exact
+    shape rendered "Appraisal: Unknown" with a false "isn't tracked"
+    tooltip on a genuinely certified row -- this scenario is what would have
+    caught that live bug had it existed when the confidence-tiering harness
+    was first built.
+
+    anomaly=True pushes the 2025 row's assessed_value $5,000 above its
+    market_value, to prove the real per-record AV>MV check still applies to
+    Dallas rows exactly like it does to Travis ones (not a blanket
+    certified-source pass), same as confidence_tier_context()'s
+    anomaly_year mechanism for the 2021-2024 rows.
+    """
+    ctx = base_context(mode, with_waterfall=True, residential=True)
+    ctx["current"]["data_source"] = "dcad_certified"
+    if anomaly:
+        ctx["current"]["assessed_value"] = ctx["current"]["market_value"] + 5000
+    return ctx
+
+
 # ── Regression guards ───────────────────────────────────────────────────────
 RAW_DELIMITERS = ["{%", "#}", "{#"]
 
@@ -725,6 +769,25 @@ def check_top_appraisal_badge(html, label, expect_text):
     others_present = [t for t in all_labels if t != expect_text and t in html]
     if others_present:
         print(f"FAIL [{label}] unexpected additional top appraisal badge text also present: {others_present}")
+        return False
+    return True
+
+
+def check_current_values_mini_badge(html, label, expect_present):
+    """Aug 2026 URGENT fix regression guard: property.html's "Current
+    Values" card header mini-badge (line ~2287, `<span class="badge-
+    verified" style="font-size:9px;">2025 Certified</span>`). Before this
+    fix this used an exact-literal `data_source == 'certified'` check, so it
+    was silently absent for every Dallas ("dcad_certified") row -- narrower
+    even than the top badge's old bug, which at least matched Travis's
+    2021-2024 cert_202x/ajr_202x strings via the old duplicated list. Only
+    checks investor mode (this card, like the top badge block, is inside
+    the mode=='homeowner' If's ELSE branch -- see confidence_scenarios'
+    own comment for the citation)."""
+    needle = '<span class="badge-verified" style="font-size:9px;">2025 Certified</span>'
+    present = needle in html
+    if present != expect_present:
+        print(f"FAIL [{label}] Current Values mini-badge present={present}, expected {expect_present}")
         return False
     return True
 
@@ -1798,6 +1861,12 @@ def run():
         ("'preliminary' unaffected by anomaly -> preliminary", ("preliminary", 999999, 1), "preliminary"),
         ("unrecognized data_source -> partial (fallback NOT loosened)", ("some_future_string", 100, 200), "partial"),
         ("legacy NULL data_source -> partial (fallback NOT loosened)", (None, 100, 200), "partial"),
+        # Aug 2026 URGENT fix: dcad_certified (Dallas's real, live data_source
+        # string -- loaders/load_dallas_certified.py's DATA_SOURCE constant)
+        # must now resolve exactly like any other certified-tier source, not
+        # fall through to the unrecognized "partial" branch.
+        ("dcad_certified, assessed <= market -> verified (Aug 2026 fix)", ("dcad_certified", 370000, 410000), "verified"),
+        ("dcad_certified, assessed > market -> partial (real per-record anomaly, Aug 2026 fix)", ("dcad_certified", 450000, 440000), "partial"),
     ]
     for case_label, args, expect in unit_cases:
         got = _row_confidence(*args)
@@ -1805,6 +1874,32 @@ def run():
             print(f"PASS [{case_label}] _row_confidence{args} == {expect!r}")
         else:
             print(f"FAIL [{case_label}] _row_confidence{args} == {got!r}, expected {expect!r}")
+            all_ok = False
+
+    # Direct unit assertions against _appraisal_badge_kind() -- the function
+    # property.html ACTUALLY calls (via context_processor) for its top badge
+    # and the Current Values mini-badge, added by this same Aug 2026 fix to
+    # eliminate the old duplicated-Jinja-list failure mode. Covers the same
+    # ground as the _row_confidence() cases above, but proves the function
+    # property.html now calls returns the right KIND string, not just that
+    # the older, still-used-elsewhere _row_confidence() tier is right.
+    print()
+    print("── _appraisal_badge_kind() direct unit assertions (Aug 2026 fix) ──")
+    badge_kind_cases = [
+        ("dcad_certified, no anomaly -> certified", ("dcad_certified", 370000, 410000), "certified"),
+        ("dcad_certified, AV>MV -> anomaly", ("dcad_certified", 450000, 440000), "anomaly"),
+        ("certified (Travis), no anomaly -> certified", ("certified", 430000, 480000), "certified"),
+        ("cert_2022, no anomaly -> certified", ("cert_2022", 370000, 410000), "certified"),
+        ("preliminary -> preliminary", ("preliminary", 999999, 1), "preliminary"),
+        ("unrecognized string -> unknown (NOT a bug in this function -- a bug in CERTIFIED_TIER_DATA_SOURCES if it's a real cert source)", ("some_future_string", 100, 200), "unknown"),
+        ("legacy NULL -> unknown", (None, 100, 200), "unknown"),
+    ]
+    for case_label, args, expect in badge_kind_cases:
+        got = _appraisal_badge_kind(*args)
+        if got == expect:
+            print(f"PASS [{case_label}] _appraisal_badge_kind{args} == {expect!r}")
+        else:
+            print(f"FAIL [{case_label}] _appraisal_badge_kind{args} == {got!r}, expected {expect!r}")
             all_ok = False
 
     # Full-render regression scenarios -- the 3 Diego named explicitly:
@@ -1842,15 +1937,29 @@ def run():
     confidence_scenarios = [
         ("confidence: cert_202x, no anomaly (investor)",
          confidence_tier_context("investor", "cert", anomaly_year=None),
-         "Appraisal: 2025 Certified", set()),
+         "Appraisal: 2025 Certified", set(), None),
         ("confidence: ajr_202x, no anomaly (homeowner)",
          confidence_tier_context("homeowner", "ajr", anomaly_year=None),
-         None, None),
+         None, None, None),
         ("confidence: cert_202x, 2023 trips AV>MV (investor)",
          confidence_tier_context("investor", "cert", anomaly_year=2023),
-         "Appraisal: 2025 Certified", {2023}),
+         "Appraisal: 2025 Certified", {2023}, None),
+        # Aug 2026 URGENT fix regression scenarios: a real Dallas
+        # ("dcad_certified") 2025 row must render IDENTICALLY to a Travis
+        # ("certified") one -- "Appraisal: 2025 Certified" up top, plus the
+        # Current Values card's "2025 Certified" mini-badge -- not
+        # "Appraisal: Unknown" with a false "isn't tracked" tooltip (the
+        # live bug this fix corrects). Investor mode only, same reasoning as
+        # the scenarios above (this card and the top badge block are both
+        # investor-only surfaces).
+        ("confidence: dcad_certified (Dallas), no anomaly (investor) -- Aug 2026 fix",
+         dallas_confidence_context("investor", anomaly=False),
+         "Appraisal: 2025 Certified", set(), True),
+        ("confidence: dcad_certified (Dallas), AV>MV anomaly (investor) -- Aug 2026 fix",
+         dallas_confidence_context("investor", anomaly=True),
+         "Appraisal: Partial", {2025}, False),
     ]
-    for label, ctx, expect_top, expect_anomaly_years in confidence_scenarios:
+    for label, ctx, expect_top, expect_anomaly_years, expect_mini_badge in confidence_scenarios:
         try:
             html = tmpl.render(**ctx)
         except Exception as e:
@@ -1863,6 +1972,8 @@ def run():
             ok = check_top_appraisal_badge(html, label, expect_top) and ok
         if expect_anomaly_years is not None:
             ok = check_value_history_anomaly_icons(html, label, expect_anomaly_years) and ok
+        if expect_mini_badge is not None:
+            ok = check_current_values_mini_badge(html, label, expect_mini_badge) and ok
 
         if ok:
             print(f"PASS [{label}]")

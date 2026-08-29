@@ -1524,7 +1524,16 @@ def inject_mode():
     # also inject `config` here so templates can read config.VERSION (and
     # any other config constant) without each route having to pass it
     # through render_template() individually.
-    return {"mode": _resolve_mode(), "config": config}
+    #
+    # appraisal_badge_kind added Aug 2026 (URGENT dcad_certified fix): lets
+    # property.html call _appraisal_badge_kind() directly instead of
+    # maintaining its own duplicate CERTIFIED_TIER_DATA_SOURCES list --  see
+    # that function's docstring for why the duplication existed and why it
+    # caused a live bug. NOTE this function is defined further down in this
+    # file (near CERTIFIED_TIER_DATA_SOURCES); Python resolves the name at
+    # call time, not at inject_mode()'s definition time, so the forward
+    # reference here is safe.
+    return {"mode": _resolve_mode(), "config": config, "appraisal_badge_kind": _appraisal_badge_kind}
 
 
 @app.after_request
@@ -1842,17 +1851,29 @@ def search_parcels_by_address(q, limit=8, county_code=None):
 # states (a real, correct concern -- e.g. "Dallas County" also exists in AL,
 # AR, IA, MO, TX).
 #
-# COUNTY_SLUGS is intentionally seeded with dallas-tx/harris-tx now, even
-# though only travis-tx is live -- costs nothing today (an unrecognized
+# COUNTY_SLUGS was originally seeded with dallas-tx/harris-tx while only
+# travis-tx was live -- costs nothing to register early (an unrecognized
 # slug 404s either way) and means the URL scheme itself never needs a
-# second decision when real Dallas/Harris data eventually loads. Loading
-# that data remains explicitly gated behind DATA_LIFECYCLE.md's own
-# still-unstarted prerequisites (Source Registry, County Profile,
-# Classification Map) -- registering a slug string here is not the same as
-# onboarding a county, and does not shortcut that gate.
+# second decision when real county data eventually loads. Loading that
+# data was gated behind DATA_LIFECYCLE.md's own onboarding prerequisites
+# (Source Registry, County Profile, Classification Map) -- registering a
+# slug string here was never the same as onboarding a county, and doesn't
+# shortcut that gate.
+#
+# UPDATE (Aug 2026, URGENT dcad_certified live-correctness fix): Dallas is
+# NO LONGER "reserved" -- Diego confirmed it went live that night, all 5
+# years (2022-2026) loaded and verified via live psql row counts. This
+# comment (and the loader's own docstring, and this file's dcad-loaded-yet
+# framing generally) had gone stale the moment that load happened, since a
+# DB write leaves no commit here -- that staleness directly contributed to
+# CERTIFIED_TIER_DATA_SOURCES shipping without "dcad_certified" in it and
+# nobody noticing until Diego caught the live badge himself. Harris is
+# still genuinely unloaded as of this fix (no live Harris evidence found
+# anywhere in this repo) -- don't assume the same silently-went-live
+# pattern applies there without confirming with Diego first.
 COUNTY_SLUGS = {
     "travis-tx": "TRAVIS",
-    "dallas-tx": "DALLAS",   # reserved -- no real data loaded yet, see above
+    "dallas-tx": "DALLAS",   # LIVE (Aug 2026) -- 2022-2026 all loaded, see update above
     "harris-tx": "HARRIS",   # reserved -- no real data loaded yet, see above
 }
 DEFAULT_COUNTY_SLUG = "travis-tx"
@@ -5019,6 +5040,22 @@ CERTIFIED_TIER_DATA_SOURCES = frozenset({
     "certified",
     "cert_2021", "cert_2022", "cert_2023", "cert_2024", "cert_2026",
     "ajr_2021", "ajr_2022", "ajr_2023", "ajr_2024",
+    # "dcad_certified" added Aug 2026 (URGENT live-correctness fix, filed
+    # alongside PX-20260828-11): this set was built for Travis-shaped
+    # data_source strings only and was never extended when Dallas came
+    # online. Dallas's loader (loaders/load_dallas_certified.py, DATA_SOURCE
+    # constant) writes the literal string "dcad_certified" for every row --
+    # a genuine DCAD certified-roll export, entitled to the exact same
+    # certified-tier treatment as TCAD's own "certified"/cert_202x/ajr_202x
+    # strings above (same underlying legal status: a county chief
+    # appraiser's certified roll under Tax Code Sec.26.01(b), just filed by
+    # a different county's CAD). Confirmed live in production: Dallas is
+    # loaded for all 5 years 2022-2026 (703,446 units for 2025 alone), so
+    # this was misclassifying real, currently-live Dallas rows as "partial"
+    # -- not a future/theoretical gap. See templates/property.html's
+    # "Property-level confidence badge" block for the independent Jinja
+    # mirror of this same set, which needed the identical fix.
+    "dcad_certified",
 })
 
 
@@ -5074,13 +5111,56 @@ def _row_confidence(data_source, assessed_value=None, market_value=None):
     return "partial"
 
 
+def _appraisal_badge_kind(data_source, assessed_value=None, market_value=None):
+    """Single source of truth for property.html's "Property-level confidence
+    badge" block (and its smaller "2025 Certified" mini-badge on the Current
+    Values card) -- which of the four possible "Appraisal: ..." badges to
+    show for a given row.
+
+    Added Aug 2026 as part of the same fix that added "dcad_certified" to
+    CERTIFIED_TIER_DATA_SOURCES above. Before this function existed,
+    property.html kept its OWN hand-copied duplicate of
+    CERTIFIED_TIER_DATA_SOURCES plus its own inline reimplementation of the
+    assessed>market anomaly check, on the stated rationale that "Jinja can't
+    call a Python module function" -- which was never actually true. Flask
+    injects context-processor globals (this app already does exactly that
+    for `config`, see inject_mode() above) into every template render, so a
+    plain Python function is just as callable from Jinja as from Python.
+    That duplicate copy silently missed "dcad_certified" when Dallas went
+    live, mislabeling real certified Dallas rows as "Appraisal: Unknown" --
+    the live bug this function's introduction is meant to make structurally
+    impossible going forward (one classification function, not two
+    hand-synced copies). See its registration via context_processor below.
+
+    Returns one of:
+      "certified"   -- certified-tier data_source, no AV>MV anomaly this year
+      "anomaly"     -- certified-tier data_source, but assessed_value >
+                       market_value for this specific record
+      "preliminary" -- data_source == "preliminary" (2026 roll, pre-cert)
+      "unknown"     -- anything else (legacy NULL, or a genuinely
+                       unrecognized data_source string -- NOT "not yet added
+                       to CERTIFIED_TIER_DATA_SOURCES," which is a bug to
+                       fix in that set, not a legitimate "unknown" case)
+    """
+    if data_source in CERTIFIED_TIER_DATA_SOURCES:
+        if assessed_value is not None and market_value is not None and assessed_value > market_value:
+            return "anomaly"
+        return "certified"
+    if data_source == "preliminary":
+        return "preliminary"
+    return "unknown"
+
+
 def _county_has_data(county_code):
     """PX-20260824-06: real, ground-truth "has this county actually been
     loaded" check -- distinct from "is this county registered" (COUNTY_SLUGS
     membership, already enforced by _pull_county_slug() before any view
-    function runs) and distinct from COUNTY_PROFILES membership (Dallas has
-    a profile entry today with zero loaded rows -- see COUNTY_PROFILES'
-    own comments). Queries parcel directly rather than a separate
+    function runs) and distinct from COUNTY_PROFILES membership (at the time
+    this function was written, Dallas had a profile entry with zero loaded
+    rows -- since gone live, Aug 2026, see COUNTY_SLUGS' own updated comment
+    -- Harris is still in that zero-loaded-rows state as of this writing).
+    This function's whole POINT is that it never needs updating when that
+    changes: it queries parcel directly rather than a separate
     "counties with data" registry constant: any manually-maintained flag
     is exactly the kind of thing that goes stale the moment a real load
     lands (the failure class this whole brief exists to close off), while

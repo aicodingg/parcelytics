@@ -1753,27 +1753,32 @@
     {%- set _hist_verified = _hist_prior | selectattr('is_billing_verified') | list | length -%}
     {%- set _hist_total    = _hist_prior | length -%}
     {# Confidence-tier fix (July 2026, per Diego's "Fix AJR/Historical-Year
-       Confidence Tiering" brief) -- Jinja mirror of app.py's
-       CERTIFIED_TIER_DATA_SOURCES / _row_confidence(). Deliberately kept as
-       a second, independent copy here rather than consolidated into one
-       (Jinja can't call a Python module function) -- see _row_confidence()'s
-       own docstring for the same note in reverse. Both must change together;
-       if this list or the AV>MV check below ever drifts from app.py's copy,
-       that's a bug to fix, not an acceptable divergence.
+       Confidence Tiering" brief). UPDATED Aug 2026 (URGENT dcad_certified
+       fix): this used to keep its own hand-copied duplicate of app.py's
+       CERTIFIED_TIER_DATA_SOURCES plus its own inline AV>MV anomaly check,
+       on the premise that "Jinja can't call a Python module function" --
+       that premise was wrong (Flask context-processor globals, like `config`
+       just below in this same template's rendering, are callable from
+       Jinja same as from Python), and the duplicate drifted the moment
+       Dallas's "dcad_certified" data_source went live, mislabeling real
+       certified Dallas rows as "Appraisal: Unknown" with a false "isn't
+       tracked" tooltip. Now calls appraisal_badge_kind() (registered via
+       context_processor in app.py, right next to CERTIFIED_TIER_DATA_SOURCES
+       itself) so there is exactly one classification, not two hand-synced
+       copies -- this can't drift again the same way.
        `current` is always the 2025 row at this point in the template, so in
        practice current.data_source should only ever legitimately be
-       'certified' -- but the same certified-tier-eligible set and AV>MV
-       demotion are applied here anyway for consistency with the shared
-       rule, not as a special 2025-only case. #}
-    {%- set _certified_tier_sources = ["certified", "cert_2021", "cert_2022", "cert_2023", "cert_2024", "cert_2026",
-                                        "ajr_2021", "ajr_2022", "ajr_2023", "ajr_2024"] -%}
+       'certified' (or, since Aug 2026, 'dcad_certified' for Dallas
+       parcels) -- but the shared function is called unconditionally for
+       consistency with every other confidence-tier surface, not as a
+       special 2025-only case. #}
     {% if current %}
-      {% set _cur_av_anomaly = current.assessed_value and current.market_value and current.assessed_value > current.market_value %}
-      {% if current.data_source in _certified_tier_sources and not _cur_av_anomaly %}
+      {% set _badge_kind = appraisal_badge_kind(current.data_source, current.assessed_value, current.market_value) %}
+      {% if _badge_kind == "certified" %}
         <span class="badge-verified ms-2" title="{{ county_profile.cad_abbr }}'s 2025 appraisal roll is certified — final, not subject to change.">Appraisal: 2025 Certified</span>
-      {% elif current.data_source in _certified_tier_sources and _cur_av_anomaly %}
+      {% elif _badge_kind == "anomaly" %}
         <span class="badge-partial ms-2" title="Assessed value exceeds market value in this year's source data — see the data-anomaly icon in the Value History table below for detail.">Appraisal: Partial</span>
-      {% elif current.data_source == "preliminary" %}
+      {% elif _badge_kind == "preliminary" %}
         <span class="badge-preliminary ms-2" title="This reflects the 2026 preliminary appraisal roll, subject to change until certification.">Appraisal: 2026 Preliminary</span>
       {% else %}
         <span class="badge-partial ms-2" title="Appraisal certification status isn't tracked for this record.">Appraisal: Unknown</span>
@@ -2284,7 +2289,14 @@
   <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
       <span>Current Values</span>
-      {% if current.data_source == 'certified' %}<span class="badge-verified" style="font-size:9px;">2025 Certified</span>{% endif %}
+      {# Aug 2026 fix (URGENT dcad_certified fix): was an exact-literal
+         `current.data_source == 'certified'` check -- narrower even than the
+         old duplicated list above, and never true for Dallas
+         ('dcad_certified') or for any 2021-2024-style cert_202x/ajr_202x
+         value either, silently dropping this mini-badge for every one of
+         those genuinely-certified rows. Now uses the same single
+         appraisal_badge_kind() source of truth as the main badge above. #}
+      {% if appraisal_badge_kind(current.data_source, current.assessed_value, current.market_value) == 'certified' %}<span class="badge-verified" style="font-size:9px;">2025 Certified</span>{% endif %}
     </div>
     <div class="card-body p-3">
 

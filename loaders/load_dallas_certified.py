@@ -13,18 +13,32 @@ existing precedent: a --county-flagged, --dry-run-capable, single-source
 historical-year loader) and load_ajr.py's own upsert-and-gate pattern.
 
 ══════════════════════════════════════════════════════════════════════════
-PX-20260826-04 SCOPE NOTE (real, load-bearing): this file is fully
+UPDATE (Aug 2026, URGENT dcad_certified live-correctness fix): the SCOPE
+NOTE below describing this file as never executed against production is
+STALE. Diego confirmed Dallas went live that night -- all 5 years
+(2022-2026) loaded and verified via live psql row counts (703,446 units
+for 2025 alone). A database load leaves no commit in this repo, which is
+why every static signal available at the time (this docstring, git log,
+the runbook's own prospective framing, app.py's county-registry comment)
+still read as "not yet loaded" after the fact -- that gap is exactly what
+let CERTIFIED_TIER_DATA_SOURCES ship without "dcad_certified" in it and
+stay unnoticed until Diego caught it live. Do not infer production load
+status from this repo's static state alone going forward -- confirm with
+Diego or a live query.
+
+PX-20260826-04 SCOPE NOTE (historical, describes this file's state as of
+that brief -- superseded by the update above): this file is fully
 implemented -- real CSV parsing, real prop_id/geo_id/value derivation,
 real prop_unit/prop_unit_tax_year writes, real parcel_rollup call, real
-ingestion gate -- but has NEVER been executed against any database in any
-session to date. --dry-run mode (full parse + counts + gate scan, zero DB
-connection) IS exercised and green (see test_dcad_format.py and this
-brief's own report). A live, --dry-run-free run against production is
-explicitly OUT of this brief's scope ("the deliverable ends at a working
---dry-run and green fixtures; the runbook is the next brief") -- that
-runbook (pre-flight checks, rollback plan, canary-slice-first sequencing,
-same shape as PX-20260824-05's Travis-side precedent) is the next brief,
-not this one.
+ingestion gate -- but had NOT been executed against any database in any
+session as of that brief. --dry-run mode (full parse + counts + gate scan,
+zero DB connection) IS exercised and green (see test_dcad_format.py and
+that brief's own report). A live, --dry-run-free run against production
+was explicitly OUT of that brief's scope ("the deliverable ends at a
+working --dry-run and green fixtures; the runbook is the next brief") --
+that runbook (pre-flight checks, rollback plan, canary-slice-first
+sequencing, same shape as PX-20260824-05's Travis-side precedent) was the
+next brief at the time, not that one.
 
 REV1 mapping this file implements (see PX-20260826-04 FINDING #2 note
 below for the prop_id rule's real, corrected shape):
