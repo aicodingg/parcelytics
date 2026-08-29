@@ -401,6 +401,267 @@ def test_general_purpose_entity_code_leading_risk_county_tax_rate():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Stage 4 — MISSING_TENANT_SCOPE (added after PX-20260828-16's follow-up
+# investigation surfaced the need; see verify_index_coverage.py's own
+# module docstring "Stage 4" section for the full design rationale).
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _tenant_extracted(sql, filepath="app.py", call_name="query", lineno=1):
+    """One-item extracted list, matching ExtractedSQL's real shape, for
+    feeding directly into vic.audit_tenant_scope()."""
+    return [vic.ExtractedSQL(filepath, lineno, call_name, sql, "literal")]
+
+
+def test_stage4_reproduces_px_20260828_12_category_7_shape():
+    """The real incident shape (PX-20260828-12 Category 7): a query joins
+    parcel_metrics by geo_id alone, no county_code anywhere -- exactly the
+    bug class idx_parcel_geo_id_only made performance-invisible (see this
+    stage's own module docstring). Must be flagged MISSING_TENANT_SCOPE
+    for parcel_metrics, regardless of whether `parcel` itself is scoped."""
+    sql = (
+        "SELECT p.geo_id, pm.risk_large_value_jump "
+        "FROM parcel p "
+        "JOIN parcel_metrics pm ON pm.geo_id = p.geo_id AND pm.tax_year = %s "
+        "WHERE p.county_code = %s"
+    )
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql), required_tables={"parcel", "parcel_metrics"}, shared_exemptions={},
+    )
+    gaps = {f.table: f for f in findings if f.status == "MISSING_TENANT_SCOPE"}
+    assert "parcel_metrics" in gaps, "the exact incident shape must be caught"
+    assert "parcel" not in gaps, "parcel IS scoped here (p.county_code = %s) and must not be flagged"
+    assert gaps["parcel_metrics"].filter_columns == ["geo_id", "tax_year"]
+
+
+def test_stage4_direct_where_scoping_is_not_flagged():
+    """The straightforward, correctly-scoped case: a single table filtered
+    directly by county_code. No finding at all."""
+    sql = "SELECT * FROM parcel_metrics WHERE geo_id = %s AND tax_year = %s AND county_code = %s"
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql), required_tables={"parcel_metrics"}, shared_exemptions={},
+    )
+    assert findings == []
+
+
+def test_stage4_transitive_join_scoping_needs_no_special_logic():
+    """Per this stage's own design note: a JOIN...ON condition that itself
+    carries an alias.county_code = alias.county_code equality predicate
+    already lands county_code directly in BOTH tables' filter_columns,
+    via parse_sql_shape's existing _extract_predicate_refs (Stage 2,
+    UNCHANGED) -- no separate transitive-join detection was written for
+    Stage 4, and this test proves that claim rather than assuming it."""
+    sql = (
+        "SELECT p.geo_id, pm.risk_large_value_jump "
+        "FROM parcel p "
+        "JOIN parcel_metrics pm ON pm.geo_id = p.geo_id AND pm.tax_year = %s "
+        "                       AND pm.county_code = p.county_code "
+        "WHERE p.county_code = %s"
+    )
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql), required_tables={"parcel", "parcel_metrics"}, shared_exemptions={},
+    )
+    assert findings == [], f"both tables are scoped (directly or via the JOIN condition); got {findings}"
+
+
+def test_stage4_ignores_writes_updates_deletes_inserts():
+    """Scope is reads only (see module docstring's 'Scope: reads only'
+    note) -- verify_county_scoping.py's rule 3(d) already owns UPDATE/
+    DELETE WHERE-clause scoping via its own, broader extraction. An
+    unscoped UPDATE/DELETE/INSERT against a composite_pk-migrated table
+    must NOT produce a Stage 4 finding, even though it would be a real
+    rule-3(d)/3(b) finding in the sibling tool."""
+    for sql in [
+        "UPDATE parcel_metrics SET risk_large_value_jump = TRUE WHERE geo_id = %s",
+        "DELETE FROM parcel_metrics WHERE geo_id = %s",
+        "INSERT INTO parcel_metrics (geo_id, tax_year) VALUES (%s, %s)",
+    ]:
+        findings = vic.audit_tenant_scope(
+            _tenant_extracted(sql), required_tables={"parcel_metrics"}, shared_exemptions={},
+        )
+        assert findings == [], f"write statement must be excluded from Stage 4: {sql!r} -> {findings}"
+
+
+def test_stage4_excludes_test_fixture_files():
+    """Confirmed via a real run against this repo while building this
+    stage: without this filter, Stage 4 flagged loaders/test_pir_loaders.py's
+    own fixture SQL (Stage 1's extraction walks test files too -- an
+    existing, untouched Stage 1 characteristic). A file whose basename
+    starts with test_/validate_/verify_ is not a real production call
+    site and must never produce a Stage 4 finding."""
+    sql = "SELECT * FROM parcel_metrics WHERE geo_id = %s"
+    for fp in ["loaders/test_pir_loaders.py", "test_something.py", "verify_other_thing.py"]:
+        findings = vic.audit_tenant_scope(
+            _tenant_extracted(sql, filepath=fp), required_tables={"parcel_metrics"}, shared_exemptions={},
+        )
+        assert findings == [], f"test/verify file must be excluded: {fp} -> {findings}"
+    # Sanity: the SAME sql from a real production file IS flagged.
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="app.py"), required_tables={"parcel_metrics"}, shared_exemptions={},
+    )
+    assert len(findings) == 1 and findings[0].status == "MISSING_TENANT_SCOPE"
+
+
+def test_stage4_write_only_exemption_does_not_suppress_a_read_finding():
+    """The core collision-safety claim from this stage's exemption-sharing
+    design: an exemption entry registered for a WRITE finding (stmt_kind
+    DELETE, applies_to={'write'} only -- exactly the real shape of all 7
+    entries currently in verify_county_scoping.EXEMPTIONS, confirmed via
+    the 'one check first' audit) must NOT suppress a Stage 4 SELECT
+    finding on the same (file, table) pair. Proves the {'read'} tag gate
+    actually gates, rather than any matching key silently passing."""
+    write_only_exemptions = {
+        ("loaders/compute_metrics.py", "parcel_metrics", "DELETE"): {
+            "reason": "whole-table rebuild, write-side only",
+            "approved_by": "PX-20260823-02",
+            "applies_to": {"write"},
+        },
+    }
+    sql = "SELECT * FROM parcel_metrics WHERE geo_id = %s"
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="loaders/compute_metrics.py"),
+        required_tables={"parcel_metrics"},
+        shared_exemptions=write_only_exemptions,
+    )
+    assert len(findings) == 1
+    assert findings[0].status == "MISSING_TENANT_SCOPE", (
+        "a write-only-tagged exemption must not silently suppress a read-path finding"
+    )
+
+
+def test_stage4_read_tagged_exemption_does_suppress():
+    """The other half of the same claim: an exemption explicitly keyed
+    (file, table, 'SELECT') AND tagged {'read'} in applies_to DOES
+    suppress the finding, reported as EXEMPT rather than dropped
+    silently (Law-3-style transparency, matching verify_county_scoping.py's
+    own EXEMPT reporting convention)."""
+    read_exemptions = {
+        ("app.py", "parcel_metrics", "SELECT"): {
+            "reason": "hypothetical, reviewed read-path exemption for this test only",
+            "approved_by": "TEST-FIXTURE",
+            "applies_to": {"read"},
+        },
+    }
+    sql = "SELECT * FROM parcel_metrics WHERE geo_id = %s"
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="app.py"),
+        required_tables={"parcel_metrics"},
+        shared_exemptions=read_exemptions,
+    )
+    assert len(findings) == 1
+    assert findings[0].status == "EXEMPT"
+    assert "TEST-FIXTURE" in findings[0].detail
+
+
+def test_stage4_non_equality_county_code_is_still_flagged_with_note():
+    """county_code appearing only via a non-equality operator (e.g. !=)
+    lands in informational_columns, not filter_columns (Stage 2's own
+    is_point_lookup distinction, unchanged) -- this does NOT count as
+    real tenant scoping (a '!=' predicate is the wrong direction for a
+    security boundary) and must still be flagged, with an explanatory
+    note attached rather than silently passing."""
+    sql = "SELECT * FROM parcel_metrics WHERE geo_id = %s AND county_code != %s"
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql), required_tables={"parcel_metrics"}, shared_exemptions={},
+    )
+    assert len(findings) == 1
+    assert findings[0].status == "MISSING_TENANT_SCOPE"
+    assert "non-equality operator" in findings[0].detail
+
+
+def test_stage4_ignores_tables_not_in_required_set():
+    """A table not in the composite_pk-migrated required set (e.g. a
+    plain, never-migrated table) produces no finding even with zero
+    filter columns at all -- Stage 4 only ever looks at the tables
+    _load_composite_pk_migrated_tables() names, per Diego's explicit
+    instruction to source the required-tables list from that function."""
+    sql = "SELECT * FROM some_unrelated_table WHERE id = %s"
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql), required_tables={"parcel_metrics"}, shared_exemptions={},
+    )
+    assert findings == []
+
+
+def test_stage4_is_write_statement_classification():
+    """Direct unit coverage of the write/read classifier itself, since
+    every other Stage 4 test exercises it only indirectly."""
+    assert vic._is_write_statement("UPDATE parcel SET x = 1 WHERE geo_id = %s")
+    assert vic._is_write_statement("DELETE FROM parcel WHERE geo_id = %s")
+    assert vic._is_write_statement("INSERT INTO parcel (geo_id) VALUES (%s)")
+    assert not vic._is_write_statement("SELECT * FROM parcel WHERE geo_id = %s")
+
+
+def test_stage4_never_merged_with_stage3_findings():
+    """Diego's explicit instruction: Stage 4's findings must be a
+    SEPARATE list, never merged into Stage 1-3's NO_COVERAGE/UNCONFIRMED/
+    COVERED verdicts. run_audit() must expose them under their own key."""
+    result = vic.run_audit(
+        source_paths=[],  # no real files scanned; just checking the result shape
+        index_source="schema-sql",
+    )
+    assert "tenant_scope_findings" in result
+    assert isinstance(result["tenant_scope_findings"], list)
+    # And no Stage 3 Finding should ever end up with a MISSING_TENANT_SCOPE
+    # status -- the two Finding types are entirely distinct dataclasses.
+    for f in result["findings"]:
+        assert not hasattr(f, "status") or f.status != "MISSING_TENANT_SCOPE"
+
+
+def test_stage4_stale_read_exemption_flagged_when_no_finding_matches():
+    """Law-3 mirror: a {'read'}-tagged EXEMPTIONS entry that matches ZERO
+    Stage 4 findings on this run must itself surface as a loud
+    STALE_EXEMPTION finding, not silently persist forever. This is the
+    read-side mirror of verify_county_scoping.py's own write-side Law-3
+    check -- each tool owns staleness only for the direction it can
+    structurally ever match (see both files' applies_to gating)."""
+    stale_read_exemptions = {
+        ("app.py", "parcel_metrics", "SELECT"): {
+            "reason": "hypothetical exemption that no longer matches anything",
+            "approved_by": "TEST-FIXTURE",
+            "applies_to": {"read"},
+        },
+    }
+    # A query that does NOT touch parcel_metrics at all, and is properly
+    # scoped where it does touch a required table -- so this run produces
+    # zero MISSING_TENANT_SCOPE findings AND zero EXEMPT findings for the
+    # registered key above. The exemption should surface as stale.
+    sql = "SELECT * FROM parcel WHERE county_code = %s"
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="app.py"),
+        required_tables={"parcel"},
+        shared_exemptions=stale_read_exemptions,
+    )
+    stale = [f for f in findings if f.status == "STALE_EXEMPTION"]
+    assert len(stale) == 1, f"expected exactly 1 STALE_EXEMPTION finding, got: {findings}"
+    assert stale[0].filepath == "app.py"
+    assert stale[0].table == "parcel_metrics"
+    assert "TEST-FIXTURE" in stale[0].detail
+
+
+def test_stage4_write_tagged_only_exemption_is_never_stale_checked_here():
+    """A registry entry tagged {'write'} only (no 'read') must NEVER be
+    flagged STALE_EXEMPTION by Stage 4, even if it matches nothing here --
+    that entry belongs to verify_county_scoping.py's own write-side Law 3
+    check, not this one (the applies_to gate must exclude it, not just
+    happen to not find it)."""
+    write_only_exemptions = {
+        ("loaders/quarantine_contamination.py", "tax_billing", "DELETE"): {
+            "reason": "write-only exemption, irrelevant to Stage 4",
+            "approved_by": "TEST-FIXTURE",
+            "applies_to": {"write"},
+        },
+    }
+    sql = "SELECT * FROM parcel WHERE county_code = %s"
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="app.py"),
+        required_tables={"parcel"},
+        shared_exemptions=write_only_exemptions,
+    )
+    assert all(f.status != "STALE_EXEMPTION" for f in findings), (
+        f"a write-only exemption must never be Stage-4-stale-checked, got: {findings}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Manual runner (no confirmed pytest/pip access in this sandbox)
 # ═══════════════════════════════════════════════════════════════════════════
 

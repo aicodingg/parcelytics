@@ -31,10 +31,25 @@ from loaders.scrape_billing_history import DEFAULT_COUNTY  # PX-20260823-02
 import psycopg2.extras
 
 
-def load_prop_id_lookup(conn):
-    """Return {prop_id: geo_id} from parcels already in the DB."""
+def load_prop_id_lookup(conn, county_code):
+    """Return {prop_id: geo_id} from parcels already in the DB, SCOPED TO
+    ONE COUNTY (Stage 4 MISSING_TENANT_SCOPE finding, fixed here). Before
+    this fix, this built a single GLOBAL prop_id -> geo_id map across every
+    county in the table. prop_id is a county-assigned account number, not
+    guaranteed globally unique -- if the same prop_id exists in two
+    counties (a real, plausible collision, not a hypothetical), the dict
+    comprehension silently drops one county's entry, and apply_classi_cd()
+    below would then write that OTHER county's classi_cd onto the wrong
+    geo_id. This script was written Travis-only, before Dallas onboarding
+    existed; it is not scheduled to run today, but rerunning it as-is
+    against the current multi-county schema would silently corrupt data
+    the moment a real prop_id collision occurs -- fixed now rather than
+    left as a loaded gun for the next person who reruns it."""
     with conn.cursor() as cur:
-        cur.execute("SELECT prop_id, geo_id FROM parcel WHERE prop_id IS NOT NULL")
+        cur.execute(
+            "SELECT prop_id, geo_id FROM parcel WHERE prop_id IS NOT NULL AND county_code = %s",
+            (county_code,),
+        )
         return {row[0]: row[1] for row in cur.fetchall()}
 
 
@@ -132,7 +147,7 @@ def main():
     print("  Backfilling classi_cd from IMP_INFO.TXT")
     print("=" * 64)
 
-    pid_lookup = load_prop_id_lookup(conn)
+    pid_lookup = load_prop_id_lookup(conn, county_code)
     print(f"  Parcel prop_id lookup: {len(pid_lookup):,} entries\n")
 
     total = 0
@@ -152,9 +167,15 @@ def main():
     prelim_imp = os.path.join(config.PRELIM_2026_DIR, "IMP_INFO.TXT")
     if os.path.exists(prelim_imp):
         m = build_classi_map(prelim_imp, "2026 Preliminary")
-        # Only update parcels that don't yet have a classi_cd (don't overwrite 2025)
+        # Only update parcels that don't yet have a classi_cd (don't overwrite 2025).
+        # Same county_code scoping fix as load_prop_id_lookup() above -- this dict
+        # comprehension has the identical prop_id-collision-across-counties risk.
         with conn.cursor() as cur:
-            cur.execute("SELECT geo_id, prop_id FROM parcel WHERE classi_cd IS NULL AND prop_id IS NOT NULL")
+            cur.execute(
+                "SELECT geo_id, prop_id FROM parcel WHERE classi_cd IS NULL AND prop_id IS NOT NULL "
+                "AND county_code = %s",
+                (county_code,),
+            )
             null_pids = {row[1]: row[0] for row in cur.fetchall()}
         filtered = {pid: cc for pid, cc in m.items() if pid in null_pids}
         print(f"  2026 fill-in: {len(filtered):,} parcels without 2025 classi_cd")
@@ -174,29 +195,41 @@ def main():
     print(f"  Total parcels updated: {total:,}")
 
     # ── Verification ──────────────────────────────────────────────────
+    # Scoped to county_code = %s: this reports the distribution for the
+    # county this run just processed, not a cross-county blend (which
+    # would misrepresent "did my backfill work" for the county actually
+    # touched here).
     with conn.cursor() as cur:
         cur.execute("""
             SELECT classi_cd, COUNT(*) AS n
             FROM parcel
-            WHERE classi_cd IS NOT NULL
+            WHERE classi_cd IS NOT NULL AND county_code = %s
             GROUP BY classi_cd
             ORDER BY n DESC
             LIMIT 15
-        """)
+        """, (county_code,))
         rows = cur.fetchall()
     print(f"\n  Top classi_cd values:")
     print(f"  {'code':<8} {'count':>9}")
     for r in rows:
         print(f"  {r[0]:<8} {r[1]:>9,}")
 
-    # Spot-check 3 known parcels
+    # Spot-check 3 known parcels. NOTE (disclosed, not fixed by this ticket):
+    # these 3 geo_ids are hardcoded Travis parcels from this script's original
+    # Travis-only build -- scoping this query to county_code = %s is the
+    # tenant-isolation fix this ticket asks for, but it does NOT make this
+    # spot-check meaningful for a non-Travis --county run (it will correctly
+    # return zero rows rather than silently matching the wrong county's data,
+    # which is the honest behavior, but the 3 IDs themselves would need to be
+    # parameterized per county to be a REAL spot-check outside Travis).
     with conn.cursor() as cur:
         cur.execute("""
             SELECT geo_id, state_cd1, classi_cd
             FROM parcel
             WHERE geo_id IN ('0100030105','0100030109','0284460113')
+            AND county_code = %s
             ORDER BY geo_id
-        """)
+        """, (county_code,))
         spot = cur.fetchall()
     print(f"\n  Spot-check parcels:")
     print(f"  {'geo_id':<14} {'state_cd1':<12} {'classi_cd':<10}")

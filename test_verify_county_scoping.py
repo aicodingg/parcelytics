@@ -400,11 +400,21 @@ section("Cross-check: real EXEMPTIONS registry has zero stale entries against th
 real_result = vcs.run_audit()
 real_stale = [f for f in real_result["findings"] if f.rule == "exempt-stale"]
 real_exempt = [f for f in real_result["findings"] if f.severity == "EXEMPT"]
+# Only "write"-tagged entries can EVER be matched by this file's own scan
+# (its findings are always INSERT/UPDATE/DELETE -- see _apply_exemptions()'s
+# applies_to gate). A {"read"}-only entry (e.g. the app.py tax_billing_entity
+# one, shared with verify_index_coverage.py's Stage 4) is structurally
+# unmatchable here by design; Stage 4 owns that entry's own staleness proof
+# (see test_verify_index_coverage.py's mirrored cross-check).
+write_tagged_count = sum(
+    1 for entry in vcs.EXEMPTIONS.values() if "write" in entry.get("applies_to", {"write"})
+)
 check(f"real audit: zero stale-exemption findings ({len(real_stale)} found)",
       len(real_stale) == 0)
-check(f"real audit: every registered EXEMPTIONS key produced at least one EXEMPT finding "
-      f"({len(real_exempt)} EXEMPT findings from {len(vcs.EXEMPTIONS)} registry entries)",
-      len(real_exempt) >= len(vcs.EXEMPTIONS))
+check(f"real audit: every write-tagged registered EXEMPTIONS key produced at least one "
+      f"EXEMPT finding ({len(real_exempt)} EXEMPT findings from {write_tagged_count} "
+      f"write-tagged registry entries out of {len(vcs.EXEMPTIONS)} total)",
+      len(real_exempt) >= write_tagged_count)
 check("real audit: zero remaining FAIL findings (every 3d/3b/3c gap is either fixed or registered)",
       not any(f.severity == "FAIL" for f in real_result["findings"]))
 

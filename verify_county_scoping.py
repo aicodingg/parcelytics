@@ -895,6 +895,46 @@ def audit_extracted(extracted):
 # Law 3, enforced by _apply_exemptions() below: an exemption that matches
 # ZERO findings on a given run is itself a loud FAILURE ("stale exemption"),
 # not a silent pass. Exemptions can't outlive the code they excuse.
+#
+# ── "applies_to" field — added for verify_index_coverage.py's Stage 4
+#    (MISSING_TENANT_SCOPE) sharing, per Diego's explicit instruction ──────
+# verify_index_coverage.py's new Stage 4 check asks a DIFFERENT question
+# than this file's own rule 3(a)-(d): rule 3(a)-(d) is about WRITES (does an
+# INSERT/UPDATE/DELETE correctly scope county_code so it doesn't corrupt or
+# collide with another county's rows); Stage 4 is about READS (does a SELECT
+# serving one county's UI request correctly filter to that county, so it
+# never returns another county's rows to a user). Sharing this ONE registry
+# between both checks (rather than two independently-maintained lists) is
+# the right call -- two lists is how tonight's bugs happened -- but an
+# entry written to justify a write-side gap does not automatically justify
+# a read-side one; the two questions are related but not the same.
+#
+# Every entry below carries an explicit "applies_to" set, {"write"} and/or
+# {"read"}. Per Diego's own required "one check first": each of the 7 real
+# entries currently in this registry was re-read and re-justified against
+# the read-path question, not assumed. The result -- ALL 7 are write-only:
+#   - The two "whole-table rebuild" entries (parcel_2026_preliminary_
+#     snapshot INSERT; parcel_metrics DELETE+INSERT) justify skipping
+#     ON CONFLICT / a scoped DELETE because the write is transactionally
+#     coupled to a full rebuild -- that says nothing about whether a
+#     SELECT against the live table, mid-transaction or after, needs
+#     county_code filtering. It still does.
+#   - The two "Group 4 downgrade / one-time incident-remediation script"
+#     entries (delete_confirmed_absent_taxcur_rows.py x2) are scoped
+#     write-side by the brief that approved them ("excluded from further
+#     loader-side county_code changes") -- an explicit write-only carve-out,
+#     not a statement about reads.
+#   - quarantine_contamination.py's tax_billing DELETE exemption is the
+#     same Group 4 downgrade.
+#   - tax_billing_quarantine's INSERT exemption relies on a NOT NULL
+#     constraint failing loud AT WRITE TIME -- a write-time safety net,
+#     with no bearing on whether a later SELECT filters correctly.
+# None of these 7 are tagged "read". A future maintainer adding a genuine
+# read-path exemption (e.g. a documented, reviewed case where a SELECT
+# against a composite_pk-migrated table is correct without county_code)
+# should add "read" to that entry's applies_to explicitly -- never assume
+# it by omission, and never retrofit "read" onto one of the 7 above without
+# re-justifying it against the read-path question from scratch.
 # ═══════════════════════════════════════════════════════════════════════════
 
 EXEMPTIONS = {
@@ -923,6 +963,7 @@ EXEMPTIONS = {
             "before the INSERT. Verified under PX-20260822-06-rev1."
         ),
         "approved_by": "PX-20260823-02",
+        "applies_to": {"write"},
     },
     ("loaders/compute_metrics.py", "parcel_metrics", "DELETE"): {
         "reason": (
@@ -937,6 +978,7 @@ EXEMPTIONS = {
             "where the DELETE is deliberately whole-table.'"
         ),
         "approved_by": "PX-20260823-02",
+        "applies_to": {"write"},
     },
     ("loaders/compute_metrics.py", "parcel_metrics", "INSERT"): {
         "reason": (
@@ -946,6 +988,7 @@ EXEMPTIONS = {
             "precedent (also registered above)."
         ),
         "approved_by": "PX-20260823-02",
+        "applies_to": {"write"},
     },
     ("loaders/delete_confirmed_absent_taxcur_rows.py", "tax_billing", "DELETE"): {
         "reason": (
@@ -956,6 +999,7 @@ EXEMPTIONS = {
             "from further loader-side county_code changes by the brief itself."
         ),
         "approved_by": "PX-20260823-02",
+        "applies_to": {"write"},
     },
     ("loaders/delete_confirmed_absent_taxcur_rows.py", "tax_billing_entity", "DELETE"): {
         "reason": (
@@ -963,6 +1007,7 @@ EXEMPTIONS = {
             "DELETE exemption above -- see that entry for the full reason."
         ),
         "approved_by": "PX-20260823-02",
+        "applies_to": {"write"},
     },
     ("loaders/quarantine_contamination.py", "tax_billing", "DELETE"): {
         "reason": (
@@ -973,6 +1018,7 @@ EXEMPTIONS = {
             "remaining unscoped side, deliberately left as-is per the brief."
         ),
         "approved_by": "PX-20260823-02",
+        "applies_to": {"write"},
     },
     ("loaders/quarantine_contamination.py", "tax_billing_quarantine", "INSERT"): {
         "reason": (
@@ -984,6 +1030,44 @@ EXEMPTIONS = {
             "in PX-20260822-06-rev1's test suite."
         ),
         "approved_by": "PX-20260823-02",
+        "applies_to": {"write"},
+    },
+    # PX-20260828-16-followup / Stage 4 triage: the first real {"read"}-tagged
+    # entry in this registry. verify_index_coverage.py's Stage 4 (MISSING_
+    # TENANT_SCOPE) flagged 4 real call sites in app.py (:2785, :2845, :6249,
+    # :6290) referencing tax_billing_entity with an apparently empty filter
+    # set. Hand-verified against the real, current source at all 4 sites,
+    # not assumed: every one of them references tax_billing_entity ONLY
+    # inside a parenthesized subquery / derived table (an `IN (SELECT
+    # entity_code FROM tax_billing_entity WHERE ... AND county_code = %s)`
+    # at :2785/:2845, and a `LEFT JOIN (SELECT geo_id, SUM(amount_due) ...
+    # FROM tax_billing_entity WHERE ... AND county_code = %(county_code)s
+    # ...) tbe` derived table at :6249/:6290) -- and in all 4 cases, that
+    # inner, subquery-local WHERE clause DOES filter by county_code. This is
+    # a real, disclosed Stage 2 parsing limitation (parse_sql_shape walks
+    # only the outer statement's top-level WHERE/JOIN...ON clauses; a table
+    # referenced solely inside a subquery gets registered into tables_touched
+    # by the table-name regex without its own inner predicates ever being
+    # walked -- see verify_index_coverage.py's own module docstring, "Known
+    # false-positive source: subquery predicates"), not a real tenant-scoping
+    # gap. Exempted here, applies_to={"read"} only (this says nothing about
+    # any WRITE finding against tax_billing_entity, which would need its own,
+    # separately-verified justification) so Stage 4 stops re-flagging this
+    # exact, already-verified shape as noise on every future run.
+    ("app.py", "tax_billing_entity", "SELECT"): {
+        "reason": (
+            "All 4 real call sites (app.py:2785, :2845, :6249, :6290) "
+            "reference tax_billing_entity only inside a parenthesized "
+            "subquery/derived table whose OWN inner WHERE clause does "
+            "filter by county_code -- verified by reading the real, "
+            "current source, not assumed. The apparent empty filter set "
+            "is a Stage 2 parsing limitation (subquery predicates aren't "
+            "walked), not a real gap. See verify_index_coverage.py's "
+            "module docstring for the general limitation this instance "
+            "of."
+        ),
+        "approved_by": "PX-20260828-16-followup",
+        "applies_to": {"read"},
     },
 }
 
@@ -1014,6 +1098,18 @@ def _apply_exemptions(findings):
             result.append(f)
 
     for key, entry in EXEMPTIONS.items():
+        # "write" in applies_to gate: this file's own audit_extracted() only
+        # ever produces INSERT/UPDATE/DELETE findings (rules 3a-3d), so an
+        # entry tagged {"read"}-only (e.g. the tax_billing_entity subquery
+        # exemption above, keyed with stmt_kind "SELECT") can STRUCTURALLY
+        # never be matched by this file's own run -- that is not staleness,
+        # it's a different tool's (verify_index_coverage.py Stage 4)
+        # exemption living in this shared registry. Only entries that claim
+        # applicability to writes are eligible for THIS file's Law 3 check;
+        # a read-only entry's own staleness is Stage 4's responsibility (see
+        # verify_index_coverage.py's own equivalent check).
+        if "write" not in entry.get("applies_to", {"write"}):
+            continue
         if key not in matched_keys:
             filepath, table, stmt_kind = key
             result.append(Finding(

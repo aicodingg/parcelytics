@@ -136,6 +136,79 @@ Usage:
 
     # Narrow to one file while iterating:
     python3 verify_index_coverage.py --index-source schema-sql --only app.py
+
+── Stage 4 — MISSING_TENANT_SCOPE (added after the real PX-20260828-16 ────
+   follow-up incident; a SEPARATE, additive check -- Stages 1-3 above are
+   UNCHANGED) ─────────────────────────────────────────────────────────────
+Stages 1-3 above answer one question, and answer it correctly: "can
+Postgres serve this query efficiently?" Stage 4 answers a completely
+different question that Stages 1-3 were never designed to ask: "does this
+query's own filter set actually restrict results to one county's data at
+all?" A query can be a real, honest COVERED verdict under Stage 3 and
+STILL be a live, real tenant-isolation bug -- those are not in tension,
+they are answers to two different questions.
+
+The real reason this needed its own stage, not a tweak to Stage 3: six
+real production bugs (PX-20260828-12 Category 7) sat invisible to this
+very tool for a real, concrete reason -- NOT "the scanner didn't scan
+app.py" (it did), but because schema.sql's own Aug 8 2026 hotfix had
+already added idx_parcel_geo_id_only ON parcel (geo_id) as a legitimate,
+deliberate transitional secondary index (see that CREATE INDEX's own
+schema.sql comment). That index is real and correct for what it was built
+for. But its mere existence meant Stage 3's leading-prefix match against
+it returned k=1 -- a real, honest "this query CAN use an index" -- for
+queries that filtered on geo_id alone, with no county_code anywhere,
+direct or via JOIN. A well-intentioned, correctly-built PERFORMANCE index
+made a CORRECTNESS bug performance-invisible: the query got fast AND
+wrong at the same time, and Stage 3 only ever had the vocabulary to notice
+"fast." Stage 4 exists because "COVERED" and "correctly tenant-scoped" are
+two different claims, and this codebase already had one real incident
+where treating them as the same claim cost six live bugs a place to hide.
+
+Scope: reads only. verify_county_scoping.py's own rule 3(d) already
+audits every real UPDATE/DELETE writer's WHERE-clause county scoping,
+via its own broader (not call-site-scoped) AST extraction across the
+whole repo. Stage 4 deliberately excludes UPDATE/DELETE/INSERT statements
+(see _is_write_statement) so it doesn't silently re-derive a narrower
+duplicate of that already-existing, more thorough check -- and so its
+"reads vs writes" framing (see the exemption-sharing note below) stays
+honest rather than becoming two overlapping half-answers to the same
+question.
+
+Exemptions are SHARED with verify_county_scoping.EXEMPTIONS (one registry,
+not two that can drift -- see that module's own comment on the
+"applies_to" field). An entry is only ever honored by Stage 4 if it is
+explicitly tagged {"read"} in applies_to. As of this build, a full,
+explicit audit of all 7 real entries in that registry (done before this
+stage was written, not assumed) found every one of them write-only --
+each justifies skipping an INSERT's ON CONFLICT target or an UPDATE/
+DELETE's WHERE-clause scoping for reasons specific to that write's own
+transactional mechanics (a same-transaction whole-table rebuild, a NOT
+NULL constraint failing loud at write time, a one-time incident-remediation
+script) -- none of which establishes that a SELECT reading the same table
+is safe to leave unscoped. So Stage 4 currently treats the shared registry
+as contributing zero exemptions in practice; this is confirmed, not a gap
+this stage papers over.
+
+── Known false-positive source: subquery predicates (inherited from Stage 2, ──
+   NOT something Stage 4 introduces) ─────────────────────────────────────────
+Confirmed via a real run against this repo while building this stage:
+parse_sql_shape() (Stage 2, UNCHANGED) walks the outer statement's top-level
+WHERE/JOIN...ON clauses, but a table referenced only inside a parenthesized
+subquery (e.g. `... AND ctr.entity_code IN (SELECT entity_code FROM
+tax_billing_entity WHERE geo_id = %s AND county_code = %s)`) gets
+REGISTERED into tables_touched (Stage 1/2's table-name regex scans the
+whole raw text) without its own subquery-local WHERE predicates ever being
+walked -- so that table can show up here with an empty filter_columns set
+even when its real, inner WHERE clause genuinely does filter by
+county_code. This is a real, disclosed accuracy limit, not a Stage-4-only
+bug: Stage 3 above has carried the exact same blind spot the whole time
+(a subquery-scoped table can equally show up as NO_INDEX_DATA/NO_COVERAGE
+there for the same structural reason). A MISSING_TENANT_SCOPE finding on a
+table that's ONLY ever referenced inside a subquery in that call site
+should be hand-verified against the real SQL text before treating it as a
+confirmed gap -- same "flag for human review, not full SQL grammar"
+posture this whole file already discloses for Stage 2/3.
 """
 import argparse
 import ast
@@ -684,6 +757,181 @@ def best_index_match(filter_cols, indexes):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Stage 4 — MISSING_TENANT_SCOPE (separate correctness check; see module
+# docstring's "Stage 4" section for why this exists and why it is kept
+# independent of Stages 1-3's COVERED/NO_COVERAGE performance verdicts).
+# ═══════════════════════════════════════════════════════════════════════════
+
+_TENANT_SCOPE_COLUMN = "county_code"
+
+# Test/fixture files are walked by Stage 1's extraction (verify_index_
+# coverage.py's own extract_calls_from_tree does NOT exclude them -- that's
+# an existing Stage 1 characteristic this ticket does not touch), so a
+# fixture's own synthetic cur.execute("SELECT ... FROM parcel ...") calls
+# show up in `extracted` alongside real production call sites. Confirmed
+# live during this stage's build: without this filter, Stage 4 flagged
+# loaders/test_pir_loaders.py's own fixture SQL as MISSING_TENANT_SCOPE --
+# real code that never runs against a real database. Matches verify_
+# county_scoping.py's own EXCLUDED_NAME_PREFIXES convention for
+# distinguishing production writers from test fixtures.
+_TEST_FILE_PREFIXES = ("test_", "validate_", "verify_")
+
+
+def _is_test_file(filepath):
+    return os.path.basename(filepath).startswith(_TEST_FILE_PREFIXES)
+
+# A statement is excluded from Stage 4 if it's a real write (INSERT/UPDATE/
+# DELETE) -- see module docstring's "Scope: reads only" note. Reuses the
+# SAME _UPDATE_RE/_DELETE_RE Stage 2 already defines (one definition, not a
+# second copy that could drift from Stage 2's own UPDATE/DELETE handling).
+_INSERT_INTO_RE = re.compile(r'\bINSERT\s+INTO\b', re.IGNORECASE)
+
+
+def _is_write_statement(sql_text):
+    """True for a real INSERT/UPDATE/DELETE. Deliberately a plain keyword
+    search here (not tied to parse_sql_shape's own table-registration
+    logic) -- Stage 4 needs to make this call BEFORE deciding whether it's
+    even worth calling parse_sql_shape on a given item, and a statement
+    that's ambiguous or doesn't match any of the three write keywords is
+    treated as a read by default (see the docstring on audit_tenant_scope
+    for why: this check exists for tenant-isolation safety, and silently
+    excluding an unrecognized statement shape from Stage 4 entirely would
+    be the wrong direction to err in)."""
+    return bool(_UPDATE_RE.search(sql_text) or _DELETE_RE.search(sql_text) or _INSERT_INTO_RE.search(sql_text))
+
+
+def _load_shared_tenant_exemptions():
+    """The exemptions registry lives in ONE place -- verify_county_scoping.
+    EXEMPTIONS -- not duplicated here (see module docstring's "Exemptions
+    are SHARED" note). Loaded fresh on each call, not cached at import
+    time, matching this file's own existing _load_composite_pk_migrated_
+    tables() convention -- so a test that monkeypatches verify_county_
+    scoping.EXEMPTIONS doesn't also have to know about a second, cached
+    copy living here. Defensive: returns {} (zero exemptions honored, the
+    SAFE default for a tenant-isolation check) if verify_county_scoping.py
+    can't be imported for any reason, rather than letting an import error
+    here silently take down Stage 4 entirely."""
+    try:
+        sys.path.insert(0, REPO_ROOT)
+        import verify_county_scoping as vcs
+        return vcs.EXEMPTIONS
+    except Exception:
+        return {}
+
+
+@dataclass
+class TenantScopeFinding:
+    filepath: str
+    lineno: int
+    call_name: str
+    table: str
+    status: str          # "MISSING_TENANT_SCOPE" | "EXEMPT"
+    filter_columns: list
+    detail: str = ""
+
+
+def audit_tenant_scope(extracted, required_tables=None, shared_exemptions=None):
+    """Stage 4. For every real, non-write statement that touches a table
+    migrate_county_partitioning.py's TABLE_SPECS says is composite_pk-
+    migrated (county_code-leading), checks whether county_code appears in
+    that table's own point-equality/IN filter set -- directly (a WHERE
+    predicate) or transitively (a JOIN...ON alias.county_code =
+    other_alias.county_code predicate). No separate transitive-join logic
+    is needed here: parse_sql_shape's own _extract_predicate_refs already
+    records BOTH sides of an `alias.col = alias.col` JOIN...ON predicate
+    into their respective tables' filter_columns (see Stage 2) -- so a
+    join that DOES carry a county_code equality condition already leaves
+    county_code sitting directly in filter_columns for both tables
+    involved, with nothing extra for this stage to compute. A join that's
+    MISSING that condition (tonight's real incident shape) simply never
+    puts county_code in the joined table's filter_columns at all, which
+    is exactly the gap this check looks for.
+
+    Returns a list[TenantScopeFinding], entirely separate from Stage 3's
+    findings -- callers must not merge the two lists (see print_report).
+    """
+    if required_tables is None:
+        required_tables = set(_load_composite_pk_migrated_tables())
+    if shared_exemptions is None:
+        shared_exemptions = _load_shared_tenant_exemptions()
+
+    findings = []
+    matched_exemption_keys = set()
+    for item in extracted:
+        if _is_test_file(item.filepath):
+            continue
+        if _is_write_statement(item.sql_text):
+            continue
+        try:
+            shape = parse_sql_shape(item.sql_text)
+        except Exception:
+            continue  # a real parse failure here was already reported by Stage 2/3's own pass; not duplicated
+
+        for table in sorted(shape.tables_touched):
+            if table not in required_tables:
+                continue
+            cols = shape.filter_columns.get(table, set())
+            if _TENANT_SCOPE_COLUMN in cols:
+                continue  # directly or transitively scoped -- see docstring above
+
+            info_cols = shape.informational_columns.get(table, set())
+            note = ""
+            if _TENANT_SCOPE_COLUMN in info_cols:
+                note = (" (county_code DOES appear against this table, but only via a "
+                        "non-equality operator -- verify by hand whether it actually "
+                        "restricts to one tenant; this check only counts a bare "
+                        "equality/IN predicate as real scoping)")
+
+            key = (item.filepath, table, "SELECT")
+            entry = shared_exemptions.get(key)
+            if entry and "read" in entry.get("applies_to", {"write"}):
+                matched_exemption_keys.add(key)
+                findings.append(TenantScopeFinding(
+                    item.filepath, item.lineno, item.call_name, table, "EXEMPT",
+                    sorted(cols),
+                    f"EXEMPT ({entry['reason']}) -- approved by {entry['approved_by']}.",
+                ))
+            else:
+                findings.append(TenantScopeFinding(
+                    item.filepath, item.lineno, item.call_name, table, "MISSING_TENANT_SCOPE",
+                    sorted(cols),
+                    f"{table} is a composite_pk-migrated, county_code-leading table (per "
+                    f"migrate_county_partitioning.py's real TABLE_SPECS), but this query's "
+                    f"filter/JOIN set for {table} is {sorted(cols)!r} -- no county_code, "
+                    f"direct or via JOIN.{note} A real, live index may still make this query "
+                    f"FAST (see this same call site's own Stage 3 verdict, if any, above) -- "
+                    f"that is a completely separate question from whether it is CORRECT. Add "
+                    f"a county_code predicate, or register a documented, read-path-tagged "
+                    f"({{'read'}} in applies_to) exemption in verify_county_scoping.EXEMPTIONS.",
+                ))
+
+    # Law 3 mirror (see verify_county_scoping.py's own _apply_exemptions()):
+    # an exemption entry tagged {"read"} that matches ZERO Stage 4 findings
+    # on this run is itself a loud failure, not a silent pass -- ONLY this
+    # stage can ever match a {"read"}-tagged entry (verify_county_scoping.py's
+    # own run structurally can't, since its findings are always INSERT/
+    # UPDATE/DELETE -- see that file's matching "write" in applies_to gate),
+    # so this stage owns the staleness duty for the read side of the shared
+    # registry.
+    for key, entry in shared_exemptions.items():
+        if "read" not in entry.get("applies_to", {"write"}):
+            continue
+        if key in matched_exemption_keys:
+            continue
+        filepath, table, stmt_kind = key
+        findings.append(TenantScopeFinding(
+            filepath, 0, "exempt-stale", table, "STALE_EXEMPTION", [],
+            f"STALE EXEMPTION: this registered, read-tagged EXEMPTIONS entry for "
+            f"(file={filepath!r}, table={table!r}, stmt_kind={stmt_kind!r}) matched "
+            f"NO Stage 4 finding in this run (reason on file: {entry['reason']!r}, "
+            f"approved by {entry['approved_by']}). Either the finding it excused is "
+            f"genuinely gone (remove this registry entry) or something else changed "
+            f"(investigate before removing).",
+        ))
+    return findings
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Orchestration
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -773,12 +1021,18 @@ def run_audit(source_paths=None, index_source="schema-sql", conn=None, only_file
         table_indexes = load_table_indexes_from_schema_sql(os.path.join(REPO_ROOT, "schema.sql"))
 
     findings, dynamic_notes = audit_extracted(extracted, table_indexes)
+    # Stage 4 -- independent of index_source/conn entirely (it's a
+    # correctness check, not a performance one); computed from the same
+    # `extracted` list (respects --only) but never merged into `findings`
+    # above (see module docstring's Stage 4 section).
+    tenant_scope_findings = audit_tenant_scope(extracted)
     return {
         "extracted_count": len(extracted),
         "parse_errors": parse_errors,
         "findings": findings,
         "dynamic_notes": dynamic_notes,
         "table_indexes": table_indexes,
+        "tenant_scope_findings": tenant_scope_findings,
     }
 
 
@@ -860,6 +1114,43 @@ def print_report(result, index_source="schema-sql"):
 
     print(f"\n{len(covered)} query/table pair(s) confirmed covered by a real leading-prefix index match.")
 
+    # Stage 4 -- printed in its OWN section, never merged with the
+    # NO_COVERAGE/UNCONFIRMED/COVERED verdicts above. A query can appear in
+    # BOTH the "confirmed covered" count above AND the MISSING_TENANT_SCOPE
+    # list below at the same time -- that is not a contradiction, it's the
+    # entire reason this stage exists (see module docstring).
+    tenant_findings = result.get("tenant_scope_findings", [])
+    tenant_gaps = [f for f in tenant_findings if f.status == "MISSING_TENANT_SCOPE"]
+    tenant_exempt = [f for f in tenant_findings if f.status == "EXEMPT"]
+    print(f"\n{'='*78}\nMISSING_TENANT_SCOPE — Stage 4, a SEPARATE correctness check (a query "
+          f"CAN be COVERED above and MISSING_TENANT_SCOPE here at the same time -- see module "
+          f"docstring for why idx_parcel_geo_id_only made this real bug class performance-"
+          f"invisible): {len(tenant_gaps)}\n{'='*78}")
+    for f in tenant_gaps:
+        print(f"  {f.filepath}:{f.lineno}  [{f.call_name}]  table={f.table}  filter_columns={f.filter_columns}")
+        print(f"      {f.detail}")
+    if not tenant_gaps:
+        print("  No missing-tenant-scope findings.")
+    if tenant_exempt:
+        print(f"\n{len(tenant_exempt)} MISSING_TENANT_SCOPE finding(s) covered by a registered, "
+              f"read-path-tagged ({{'read'}} in applies_to) exemption in verify_county_scoping."
+              f"EXEMPTIONS:")
+        for f in tenant_exempt:
+            print(f"  {f.filepath}:{f.lineno}  table={f.table}  -- {f.detail}")
+    tenant_stale = [f for f in tenant_findings if f.status == "STALE_EXEMPTION"]
+    if tenant_stale:
+        print(f"\n{'='*78}\nSTALE READ-SIDE EXEMPTION(S) — Law 3 mirror check: {len(tenant_stale)}\n"
+              f"{'='*78}")
+        print("  These {'read'}-tagged verify_county_scoping.EXEMPTIONS entries matched "
+              "ZERO Stage 4 findings on this run. Per Law 3 (same discipline "
+              "verify_county_scoping.py applies to its own write-side entries), an "
+              "exemption that no longer matches anything is itself a finding -- either "
+              "the underlying code changed (subquery got rewritten, filter added/removed) "
+              "and the exemption is now dead weight, or it never should have matched this "
+              "file/table in the first place. Investigate and remove or correct the entry.")
+        for f in tenant_stale:
+            print(f"  {f.filepath}  table={f.table}  -- {f.detail}")
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -888,9 +1179,20 @@ def main():
     gaps = [f for f in result["findings"] if f.status == "NO_COVERAGE"]
     covered_all = [f for f in result["findings"] if f.status == "COVERED"]
     _, unconfirmed_pk = _split_covered_by_pk_staleness(covered_all, args.index_source)
-    # Exit nonzero on either a confirmed gap OR an unconfirmed stale-PK
-    # reliance -- both mean "cannot currently say this query is safe."
-    sys.exit(1 if (gaps or unconfirmed_pk) else 0)
+    tenant_gaps = [f for f in result.get("tenant_scope_findings", []) if f.status == "MISSING_TENANT_SCOPE"]
+    tenant_stale = [f for f in result.get("tenant_scope_findings", []) if f.status == "STALE_EXEMPTION"]
+    # Exit nonzero on a confirmed gap, an unconfirmed stale-PK reliance, a
+    # MISSING_TENANT_SCOPE finding, OR a stale read-side exemption. Unlike
+    # unconfirmed_pk (only meaningful in schema-sql mode -- --index-source
+    # live has no such ambiguity), tenant_gaps and tenant_stale hard-fail
+    # UNCONDITIONALLY, in both modes: they're correctness/hygiene questions
+    # that have nothing to do with which index source was used to answer
+    # the performance question. tenant_stale is included per Law 3: a
+    # dangling exemption that no longer matches anything is exactly the
+    # kind of silently-rotting suppression that turned into a real
+    # incident once already (see module docstring) -- it must fail loud,
+    # not sit unnoticed.
+    sys.exit(1 if (gaps or unconfirmed_pk or tenant_gaps or tenant_stale) else 0)
 
 
 if __name__ == "__main__":
