@@ -5681,12 +5681,32 @@ def api_search_filter():
     # Diego cited from tonight's audit (PX-20260828-12 Category 7): two
     # predicate sets that must agree forever, drifting apart the moment one
     # is edited and the other isn't.
+    # PX-20260828-16: parcel_metrics is joined via LEFT JOIN and NEITHER
+    # query's SELECT list ever reads a pm.* column (confirmed by reading both
+    # SELECT lists below) -- the only reason to join it at all is that
+    # etr_min/etr_max/large_value_jump filter on pm.effective_tax_rate /
+    # pm.risk_large_value_jump inside where_sql. Whenever none of those three
+    # filters is active, this join does real, unindexed-by-county work (its
+    # real PK is (geo_id, tax_year) per schema.sql -- no county_code in the
+    # index at all) for zero effect on the answer, on every single request
+    # regardless of filter shape. It's LEFT JOIN + at-most-one-match-per-row
+    # (guaranteed by that (geo_id, tax_year) PK) + zero columns read, so
+    # dropping it changes nothing about which rows exist or how many --
+    # only removes wasted work. This is one shared decision (needs_metrics),
+    # derived from the SAME where_sql string already built once above, used
+    # identically to build the ONE from_joins_sql both queries interpolate --
+    # not two independently-tracked flags that could drift.
+    needs_metrics = "pm." in where_sql
+    parcel_metrics_join = (
+        "LEFT JOIN parcel_metrics pm ON pm.geo_id = p.geo_id AND pm.tax_year = %(tax_year)s\n"
+        "                                    AND pm.county_code = p.county_code"
+        if needs_metrics else ""
+    )
     from_joins_sql = f"""
         FROM parcel p
         JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = %(tax_year)s
                                  AND pty.county_code = p.county_code
-        LEFT JOIN parcel_metrics pm ON pm.geo_id = p.geo_id AND pm.tax_year = %(tax_year)s
-                                    AND pm.county_code = p.county_code
+        {parcel_metrics_join}
         {delinquent_join}
     """
 
@@ -5741,7 +5761,42 @@ def api_search_filter():
         count_rows = query(count_sql, params, timeout_ms=5000)
         total = int(count_rows[0]["total_count"]) if count_rows else 0
         total_pages = (total + SEARCH_FILTER_PAGE_SIZE - 1) // SEARCH_FILTER_PAGE_SIZE if total else 0
-    except psycopg2.errors.QueryCanceled:
+    except psycopg2.errors.QueryCanceled as exc:
+        # PX-20260828-16: this except clause -- narrowly typed to
+        # psycopg2.errors.QueryCanceled, confirmed NOT catching anything
+        # broader (any other exception here still propagates and 500s,
+        # visible to Sentry's FlaskIntegration auto-capture like any other
+        # uncaught error; that's correct and unchanged) -- was firing
+        # silently: no log line, no Sentry event, nothing distinguished a
+        # real timeout from a request that just happened to degrade.
+        # Confirmed via a real incident (Dallas mv_min=9999999, tax_year
+        # 2025): the count degraded in the UI while Render logs showed a
+        # plain 200 with zero trace of why. Whatever the true cause turns
+        # out to be for a given occurrence -- a genuinely slow plan, a
+        # planner misestimate, contention under concurrent load, or
+        # something not yet considered -- this must be diagnosable from
+        # Render logs alone from now on, not require a hand-run EXPLAIN to
+        # even notice something happened. Logs the exception type/message
+        # AND enough request context (county, tax_year, and which filters
+        # were active -- not the full SQL/params, to keep log volume sane)
+        # to reproduce. Uses the same sentry_sdk.capture_exception() +
+        # flush(timeout=2) pattern already established for exactly this
+        # "caught exception has zero Sentry visibility" gap (BILLING-DIAG-3/
+        # BILLING-DIAG-4), plus a print() alongside it (BILLING-DIAG-5's
+        # same reasoning: redundant visibility straight in Render's log
+        # stream, independent of Sentry being reachable/configured).
+        active_filters = sorted(k for k, v in {
+            "neighborhood": neighborhood, "prop_type": prop_type, "use_code": use_code,
+            "mv_min": mv_min, "mv_max": mv_max, "etr_min": etr_min, "etr_max": etr_max,
+            "bldg_min": bldg_min, "bldg_max": bldg_max, "land_min": land_min, "land_max": land_max,
+            "yr_min": yr_min, "yr_max": yr_max, "large_value_jump": large_value_jump,
+            "homestead": homestead, "verified_only": verified_only, "delinquent_only": delinquent_only,
+        }.items() if v)
+        print(f"PX-20260828-16 count query degraded: county={county_code} tax_year={tax_year} "
+              f"active_filters={active_filters} needs_metrics_join={needs_metrics} "
+              f"exc_type={type(exc).__name__} exc_msg={exc}", flush=True)
+        sentry_sdk.capture_exception(exc)
+        sentry_sdk.flush(timeout=2)
         # Degrade, don't fail: the data query above already succeeded and
         # `rows` holds real, correct results for this page. total/total_pages
         # become None -- search.html (both the results-count text and the

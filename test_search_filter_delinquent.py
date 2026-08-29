@@ -100,6 +100,30 @@ class FakeErrorsModule:
 class FakePsycopg2:
     errors = FakeErrorsModule
 
+
+class FakeSentrySdk:
+    """PX-20260828-16: stand-in for the real sentry_sdk module -- the
+    degrade path now calls sentry_sdk.capture_exception()/flush() (the same
+    established pattern as the BILLING-DIAG-3/4 fix elsewhere in app.py) so
+    a real timeout is never silently invisible again. Records calls so Test
+    11 can assert logging actually happened, without needing a real Sentry
+    DSN/network access in this sandbox."""
+    captured_exceptions = []
+    flushed = []
+
+    @classmethod
+    def capture_exception(cls, exc):
+        cls.captured_exceptions.append(exc)
+
+    @classmethod
+    def flush(cls, timeout=None):
+        cls.flushed.append(timeout)
+
+    @classmethod
+    def reset(cls):
+        cls.captured_exceptions = []
+        cls.flushed = []
+
 APP_PY = open("app.py").read()
 
 START_MARKER = "\ndef api_search_filter():"
@@ -230,6 +254,7 @@ def run_api_search_filter(query_args, fake_rows=None, fake_total_count=0,
         "CANONICAL_PARCEL_EXCL_BARE": CANONICAL_PARCEL_EXCL_BARE,
         "exclude_non_real_property_gap_sql": exclude_non_real_property_gap_sql,
         "psycopg2": FakePsycopg2,
+        "sentry_sdk": FakeSentrySdk,
     }
     exec(compile(FUNC_SRC, "app.py (sliced api_search_filter)", "exec"), namespace)
     result = namespace["api_search_filter"]()
@@ -454,6 +479,7 @@ degrade_rows = [
      "data_source": "certified", "tax_year": 2025}
     for i in range(51)
 ]
+FakeSentrySdk.reset()
 captured, payload = run_api_search_filter(
     {"mv_min": "1000000", "tax_year": "2025", "page": "1"},
     fake_rows=degrade_rows,
@@ -467,6 +493,14 @@ all_ok &= check("total_pages is None", payload.get("total_pages") is None)
 all_ok &= check("count_unavailable flag is True", payload.get("count_unavailable") is True)
 all_ok &= check("has_more is True (51 fetched > 50 page size, independent of count failure)",
                 payload.get("has_more") is True)
+# PX-20260828-16: the whole point of this ticket -- a degraded count must no
+# longer be silent. Confirms the exception was actually reported, not just
+# swallowed into count_unavailable=True with zero trace anywhere.
+all_ok &= check("sentry_sdk.capture_exception() was called with the real exception",
+                len(FakeSentrySdk.captured_exceptions) == 1 and
+                isinstance(FakeSentrySdk.captured_exceptions[0], FakeQueryCanceled))
+all_ok &= check("sentry_sdk.flush() was called (matches the established BILLING-DIAG-4 pattern)",
+                len(FakeSentrySdk.flushed) == 1)
 
 # ── 12. PX-20260828-14: LIMIT+1 fetch_limit is a real bind param, and
 #      results are correctly trimmed back to page_size when count DOES
@@ -490,6 +524,41 @@ all_ok &= check("has_more True even on the normal (non-degraded) path when a 51s
                 payload.get("has_more") is True)
 all_ok &= check("total/total_pages come from the real count query on the normal path",
                 payload.get("total") == 237 and payload.get("count_unavailable") is False)
+
+# ── 13. PX-20260828-16 Task 1: parcel_metrics LEFT JOIN is dropped from
+#      BOTH queries when no pm.*-referencing filter is active (mv_min alone,
+#      the real incident's exact repro) -- confirmed real, safe (LEFT JOIN,
+#      no pm.* column ever read, parcel_metrics' real PK per schema.sql is
+#      (geo_id, tax_year), which the join's own ON clause already matches
+#      exactly -- at most one row, so dropping it changes nothing about
+#      which rows exist or how many). Also confirms the join IS still
+#      present the moment a pm.*-touching filter (etr_min here) IS active --
+#      this isn't "always drop parcel_metrics", it's "drop it only when
+#      genuinely unused", derived from the one shared where_sql string. ────
+print("Test 13: parcel_metrics LEFT JOIN dropped only when genuinely unreferenced")
+captured, payload = run_api_search_filter(
+    {"mv_min": "9999999", "tax_year": "2025", "page": "1"},
+    fake_rows=[{"geo_id": "0007", "situs_address": "7 Main St", "neighborhood_cd": "N1",
+                "prop_type_label": "Commercial", "market_value": 12000000, "assessed_value": 11500000,
+                "data_source": "certified", "tax_year": 2025}],
+    fake_total_count=2484,
+)
+all_ok &= check("parcel_metrics LEFT JOIN absent from data query when mv_min is the only filter",
+                "parcel_metrics" not in captured["data_sql"])
+all_ok &= check("parcel_metrics LEFT JOIN absent from count query too (same shared decision)",
+                "parcel_metrics" not in captured["count_sql"])
+all_ok &= check("request succeeds with a real count, not degraded",
+                payload.get("total") == 2484 and payload.get("count_unavailable") is False)
+
+captured, payload = run_api_search_filter(
+    {"etr_min": "1.5", "tax_year": "2025", "page": "1"},
+    fake_rows=[{"geo_id": "0008", "situs_address": "8 Main St", "neighborhood_cd": "N1",
+                "prop_type_label": "Residential", "market_value": 300000, "assessed_value": 290000,
+                "data_source": "certified", "tax_year": 2025}],
+    fake_total_count=1,
+)
+all_ok &= check("parcel_metrics LEFT JOIN present in BOTH queries when etr_min filter is active",
+                "parcel_metrics" in captured["data_sql"] and "parcel_metrics" in captured["count_sql"])
 
 print()
 if all_ok:
