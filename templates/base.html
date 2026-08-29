@@ -170,7 +170,17 @@
      largest post-Travis market by population); bottom line restated to
      name the live market explicitly. The two lines Diego said to keep
      verbatim ("Data as of" block and "Not legal or tax advice") are
-     untouched byte-for-byte. #}
+     untouched byte-for-byte.
+     PX-20260828-09 Task 2 (Diego's ruling): the "Data sources — {county}"
+     and "Coverage" columns below are REMOVED entirely -- both are
+     county-specific in ways that don't scale (a hardcoded single-county
+     title, "Rates back to 1990"/"Certified 2021-2026" claims that are
+     false for Dallas per PX-20260828-07 Task 1) and duplicate what the
+     homepage's own provenance panel now does correctly for every live
+     county (PX-20260828-09 Task 3). Contact & feedback (the one link from
+     the removed Coverage column Diego said to KEEP) moved into the Product
+     column below. Grid rebalanced from 4 columns (1.5fr 1fr 1fr 1fr) to 2
+     (2fr 1fr) -- see .footer-grid in static/style.css. #}
   <div class="footer-grid">
     <div>
       <div class="footer-brand-word">Parcel<b>ytics</b></div>
@@ -191,8 +201,14 @@
            sourced from the same live_counties list (sum, not invented).
            Per-county names stay on the coverage map's own legend/cards
            below (index.html's market cards, search.html's map legend),
-           which is where they're actually useful. #}
-        {{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+ parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} —
+           which is where they're actually useful.
+           PX-20260828-09 Task 1: was the exact, comma-formatted sum
+           ("{:,}".format(...)) -- Diego's ruling replaces every exact
+           site-coverage figure with a rounded, human-scale one via the
+           shared total_live_parcel_count_display global (app.py context
+           processor), not a re-summed/re-formatted Jinja filter chain
+           duplicated at each of these call sites. #}
+        {{ total_live_parcel_count_display }}+ parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} —
         expanding market by market, each one verified before it goes live.
       </p>
     </div>
@@ -205,28 +221,8 @@
       <a href="{{ url_for('terms') }}">Terms of Service</a>
       <a href="{{ url_for('privacy') }}">Privacy Policy</a>
       <a href="{{ url_for('disclaimer') }}">Disclaimer</a>
-    </div>
-    <div class="footer-col">
-      <div class="footer-col-title">Data sources — {{ county_profile.display_name }}</div>
-      <span>{{ county_profile.cad_name }}</span>
-      <span>{{ county_profile.tax_office_name }}</span>
-      <a href="{{ url_for('about') }}">Methodology &amp; coverage</a>
-    </div>
-    <div class="footer-col">
-      <div class="footer-col-title">Coverage</div>
-      {# PX-20260827-03-rev1 Task 3: was a hardcoded "Travis ... · Dallas —
-         next" string that would never have flipped to "live" on its own
-         when Dallas's data actually landed. Made registry-driven off
-         live_counties (registered AND has real data) with real per-county
-         COUNT(*) figures (_live_counties_with_counts(), TTL-cached).
-         PX-20260827-04 Task 3: that per-county enumeration was correct but
-         doesn't scale as more counties go live (Diego's ruling) -- summed
-         into one total-parcels-across-live-counties figure instead, same
-         underlying data (sum, not invented). Per-county names/counts stay
-         on the coverage map's own legend/cards, not here. #}
-      <span>{{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }} parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }}</span>
-      <span>Rates back to 1990</span>
-      <span>Certified 2021–2026</span>
+      {# PX-20260828-09 Task 2: moved here from the now-removed "Coverage"
+         column -- the one link from that column Diego said to keep. #}
       <a href="mailto:parcelytics@gmail.com">Contact &amp; feedback</a>
     </div>
   </div>
@@ -239,17 +235,32 @@
       &nbsp;|&nbsp; Billing — 2025 current (Verified/Partial by parcel) · 2021–2024 Verified (county billing export)
     </span>
   </div>
-  <div class="footer-bottom">
-    <span>Data: {{ county_profile.cad_name }} &amp; {{ county_profile.tax_office_name }} · Live market: {{ county_profile.display_name }}</span>
+  <div class="footer-bottom" style="justify-content:flex-end;">
     {# Cowork brief "Terms of Service, Privacy Policy, Disclaimer Page, Beta
        Popup, Footer Notice", July 2026, item 5: non-affiliation line added
        to the right side of the footer. Grouped with the existing two spans
-       in their own right-aligned wrapper (rather than added as a 4th
-       top-level child of this flex row) so .footer-bottom's own
-       justify-content:space-between doesn't redistribute and shift the two
-       existing, untouched lines' positions -- they stay exactly where they
-       were, just now grouped together on the right along with the new
-       line. #}
+       in their own wrapper (rather than added as a 4th top-level child of
+       this flex row) so the group's three lines move as one unit.
+       PX-20260828-09 Task 2 (Diego's ruling): the "Data: {cad_name} &
+       {tax_office_name} · Live market: {display_name}" span that used to
+       sit to the left of this group is REMOVED, not generalized --
+       request-scoped (always showed Travis's sources on a neutral page),
+       can't generalize cleanly once 2+ counties are simultaneously live
+       without just restating the brand column's own summed-total line, and
+       Task 3's homepage provenance panel already states every live
+       county's real sources correctly. This group was previously the
+       SECOND child of .footer-bottom's flex row (the shared class's
+       justify-content:space-between pushed it right against the removed
+       span); with the first span gone it's now the ONLY child, and
+       space-between renders a lone flex child at the row's START, not its
+       end -- a visible reflow. PX-20260828-09-rev1 (Diego's ruling): fixed
+       via an inline justify-content:flex-end override on THIS div only
+       (not on the shared .footer-bottom class in style.css, which the
+       OTHER .footer-bottom div above -- "Data as of:" -- also uses and
+       must keep its own space-between/flex-start left alignment; a shared-
+       class edit would have shifted that unrelated row too). This restores
+       the group to the row's end, exactly where it rendered before the
+       column removal. #}
     <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center;">
       <span>Not legal or tax advice</span>
       <span>Parcelytics is not affiliated with any government entity.</span>

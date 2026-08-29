@@ -63,7 +63,19 @@
             <div class="ta-list" id="addrTaList"></div>
           </div>
         </form>
-        <div class="hero-search-hint">Accepts 10-digit {{ county_profile.cad_abbr }} account, 14-digit Tax Office account, prop_id, or street address — Travis County, TX today.</div>
+        {# PX-20260828-09 Task 4: was "Accepts 10-digit TCAD account, 14-digit
+           Tax Office account, prop_id, or street address — Travis County,
+           TX today" -- Travis-specific account-number digit-lengths, wrong
+           the moment a second county's format differs (Dallas's DCAD
+           account numbers are a different, 17-character format). This
+           search box is neutral/cross-county (the whole point of tonight's
+           earlier PX-20260828-02/03/04/06/06b work), so a per-county hint
+           would need to enumerate every live county's own ID format and
+           go stale/incomplete the moment a new one is added -- generalized
+           instead, same "describe the capability, not a per-county
+           coverage claim" call as PX-20260828-07 Task 3's Developers-card
+           fix. #}
+        <div class="hero-search-hint">Accepts a parcel ID (from your county's appraisal district or tax office) or a street address.</div>
 
         {# Cowork brief item D: a completed search's results (or its honest
            "no results" message) must never be visually indistinguishable
@@ -119,7 +131,10 @@
        (live_counties, TTL-cached COUNT(*)), so this stops silently
        excluding Dallas the moment Dallas has real data. #}
     <div class="trust-strip">
-      <div class="trust-stat"><div class="num">{{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+</div><div class="lbl">Parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }}</div></div>
+      {# PX-20260828-09 Task 1: rounded, human-scale total ("1.19M+") via the
+         shared total_live_parcel_count_display context-processor global,
+         replacing the exact comma-formatted sum this used to compute inline. #}
+      <div class="trust-stat"><div class="num">{{ total_live_parcel_count_display }}+</div><div class="lbl">Parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }}</div></div>
       <div class="trust-stat"><div class="num">1990</div><div class="lbl">Tax rates tracked since</div></div>
       <div class="trust-stat"><div class="num">2021–26</div><div class="lbl">Certified + preliminary appraisals</div></div>
       <div class="trust-stat"><div class="num">2</div><div class="lbl">Government sources, zero aggregators</div></div>
@@ -167,19 +182,38 @@
            enumerating counties in running prose as the list grows) --
            total-parcels-across-live-counties framing instead, same
            live_counties source, summed not invented. #}
-        <div class="fd-kicker">Provenance · {{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+ parcels, {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} — live today</div>
+        <div class="fd-kicker">Provenance · {{ total_live_parcel_count_display }}+ parcels, {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} — live today</div>
         <h2 class="fd-h2" style="color:#fff;">Certified data, shown proudly.</h2>
         <p class="fd-lead" style="color:var(--text-on-dark-2);">Two official sources per county, named on every figure — live across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} today, with coverage and as-of dates stated plainly.</p>
       </div>
       <div class="col-lg-6">
+        {# PX-20260828-09 Task 3: was county_profile.cad_name/cad_abbr/
+           tax_office_name -- the CURRENT REQUEST's county only, which on
+           any neutral page (this homepage included) falls back to Travis's
+           profile regardless of which counties are actually live. Now
+           loops live_counties (same registered-AND-has-data list every
+           other "what's live" surface reads from), so Dallas's real DCAD/
+           Dallas County Tax Office sources render alongside Travis's, and
+           a future county appears automatically with no template edit.
+           Description text intentionally kept generic (institution/role
+           only, no specific year-coverage claim) rather than reusing
+           Travis's old "2021-2025 verified, 2026 preliminary" / "1990-2025"
+           wording verbatim for every county -- PX-20260828-07 Task 1 found
+           Dallas has ZERO rate-history rows loaded today, so repeating
+           Travis's "1990-2025" claim here for Dallas's own tax office row
+           would be the same overclaim that brief just fixed on the Rates
+           page itself, in the one section of the homepage most about
+           accurate sourcing. #}
+        {% for c in live_counties %}
         <div class="provenance-row">
           <span class="provenance-check">✓</span>
-          <div><div class="src">{{ county_profile.cad_name }} ({{ county_profile.cad_abbr }})</div><div class="desc">Certified appraisal rolls — values, exemptions, ownership · 2021–2025 verified, 2026 preliminary</div></div>
+          <div><div class="src">{{ c.cad_name }} ({{ c.cad_abbr }})</div><div class="desc">Certified appraisal rolls — values, exemptions, ownership</div></div>
         </div>
         <div class="provenance-row">
           <span class="provenance-check">✓</span>
-          <div><div class="src">{{ county_profile.tax_office_name }}</div><div class="desc">Tax rates by entity (1990–2025) and 2025 billing &amp; delinquency open data</div></div>
+          <div><div class="src">{{ c.tax_office_name }}</div><div class="desc">Tax rates by entity, current-year billing &amp; delinquency open data</div></div>
         </div>
+        {% endfor %}
         <div class="mt-4">
           <div class="label-caps mb-2" style="color:var(--text-on-dark-3);">The confidence system, previewed</div>
           <div class="confidence-legend">
@@ -216,7 +250,7 @@
      matches the map card's own "Live in N markets today" line just below,
      rather than telling a names-enumerated story here and a count-based
      one two lines down. #}
-  <h2 class="fd-h2">Live today across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} — {{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+ parcels. Expanding to the country's largest markets next.</h2>
+  <h2 class="fd-h2">Live today across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} — {{ total_live_parcel_count_display }}+ parcels. Expanding to the country's largest markets next.</h2>
   <p class="fd-lead mb-4">
     Parcelytics started in Travis County because that's where the data pipeline was built and verified
     end-to-end, then expanded county by county from there. The roadmap below — not current coverage —

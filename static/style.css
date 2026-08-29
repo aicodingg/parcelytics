@@ -1659,7 +1659,12 @@ footer.site-footer a { color: var(--text-on-dark-2); transition: color var(--t-f
 footer.site-footer a:hover { color: #fff; }
 .footer-grid {
   display: grid;
-  grid-template-columns: 1.5fr 1fr 1fr 1fr;
+  /* PX-20260828-09 Task 2: was 1.5fr 1fr 1fr 1fr (4 columns: Brand, Product,
+     Data sources, Coverage). The latter two county-specific columns were
+     removed (Diego's ruling) -- rebalanced to 2 columns, Brand given more
+     relative width than before since it's now next to a single, narrower
+     Product column instead of three. */
+  grid-template-columns: 2fr 1fr;
   gap: var(--s-5);
   max-width: var(--maxw-app);
   margin: 0 auto;

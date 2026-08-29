@@ -2165,19 +2165,32 @@ def _inject_county_helpers():
     safety net, not a silent assumption that every county IS Travis.
     PX-20260827-01 adds county_cad_link alongside these, same mechanism."""
     county_code = getattr(g, "county_code", COUNTY_SLUGS[DEFAULT_COUNTY_SLUG])
+    # PX-20260827-03-rev1: the one registry-driven "what's live" list,
+    # available on every template render (not just search/info/home) so the
+    # nav-level county switcher (Task 2) and the footer's coverage block
+    # (Task 3) both read from the same source. Includes a real (TTL-cached,
+    # see _live_counties_with_counts()'s own docstring) parcel_count on each
+    # entry -- pickers/switchers simply don't reference that key, so one
+    # list serves both uses. Computed once here (not once per dict value
+    # below) so the new total_live_parcel_count_display global reuses this
+    # exact same list/TTL-cache lookups instead of triggering a second
+    # _live_counties_with_counts() call.
+    _live = _live_counties_with_counts()
     return {
         "county_slug": getattr(g, "county_slug", DEFAULT_COUNTY_SLUG),
         "county_url": county_url,
         "county_profile": COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"]),
         "county_cad_link": county_cad_link,
-        # PX-20260827-03-rev1: the one registry-driven "what's live" list,
-        # available on every template render (not just search/info/home)
-        # so the nav-level county switcher (Task 2) and the footer's
-        # coverage block (Task 3) both read from the same source. Includes
-        # a real (TTL-cached, see _live_counties_with_counts()'s own
-        # docstring) parcel_count on each entry -- pickers/switchers simply
-        # don't reference that key, so one list serves both uses.
-        "live_counties": _live_counties_with_counts(),
+        "live_counties": _live,
+        # PX-20260828-09 Task 1: single shared source for every "N+ parcels
+        # across M counties" summed-total display (base.html's brand
+        # tagline, index.html's trust strip/provenance kicker/provenance
+        # H2, search.html's coverage lines) -- was six-plus separate
+        # {{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}
+        # Jinja filter chains, each re-summing live_counties itself.
+        # Applies the same _human_count() floor-rounding each entry's own
+        # parcel_count_display already uses.
+        "total_live_parcel_count_display": _human_count(sum(c["parcel_count"] for c in _live)),
         # Distinct from county_slug's own DEFAULT_COUNTY_SLUG fallback
         # above -- hasattr checks whether _pull_county_slug() actually ran
         # and set a REAL g.county_slug for this request (a county-anchored
@@ -5107,6 +5120,19 @@ def _live_counties():
                 "value": slug.split("-")[0],
                 "display_name": profile.get("display_name", county_code.title()),
                 "county_name": profile.get("county_name", county_code.title()),
+                # PX-20260828-09 Task 3: the homepage provenance panel used
+                # to read county_profile.cad_name/cad_abbr/tax_office_name
+                # directly -- the CURRENT REQUEST's county only (Travis's
+                # profile on every neutral page, since county_profile falls
+                # back to TRAVIS outside an anchored route), so it never
+                # showed Dallas's real sources even once Dallas went live.
+                # Added here (not a separate lookup) so every live county's
+                # own two real sources travel with the same live_counties
+                # list every other "what's live" surface already reads from
+                # -- single source of truth, not a second registry read.
+                "cad_name": profile.get("cad_name", ""),
+                "cad_abbr": profile.get("cad_abbr", ""),
+                "tax_office_name": profile.get("tax_office_name", ""),
             })
     return live
 
@@ -5147,6 +5173,46 @@ def _cached_county_parcel_count(county_code):
     return count
 
 
+def _human_count(n):
+    """PX-20260828-09 Task 1, Diego's 2026-08-28 ruling: rounded, human-scale
+    parcel-count formatting ("1.19M+"), replacing the exact comma-formatted
+    figures ("1,199,683+") this function's own docstring used to argue FOR
+    (see git history) -- that earlier call is explicitly SUPERSEDED by this
+    ruling, not an oversight. Exact counts require ongoing upkeep and read
+    oddly as counties are added; a rounded figure removes that churn without
+    giving up honesty, because of the specific rounding direction below.
+
+    FLOOR, not round-to-nearest -- this is the part that preserves the "+"
+    suffix's existing honesty guarantee (every call site already appends
+    "+" itself; this function never does). Round-to-nearest would let a
+    real count of 1,199,683 display as "1.20M+", which is FALSE -- 1,199,683
+    is less than 1,200,000, so "at least 1.20M" overstates the real number.
+    Flooring to "1.19M+" is always true: the real count is guaranteed to be
+    >= the displayed figure, exactly the guarantee "+" is supposed to carry.
+
+    Rule (approved as proposed, PX-20260828-09):
+      - n >= 1,000,000: floor to 2 decimals, "M" suffix (1,199,683 -> "1.19M")
+      - 1,000 <= n < 1,000,000: floor to whole thousands, "K" suffix
+        (705,536 -> "705K")
+      - n < 1,000: exact integer, no suffix -- too small for K/M to read as
+        anything but silly (a future tiny county's edge case, not reachable
+        by today's real data).
+
+    Deliberately NOT used for analytical sample-size figures (e.g. Market
+    Snapshot's "n=47 comparable parcels", property.html's peer-set counts)
+    -- those are a different category of number where an exact count is the
+    point (rounding a sample size down would misrepresent the statistical
+    basis, not just the marketing framing), and PX-20260828-09's own brief
+    scoped this rule to site-coverage displays only.
+    """
+    n = int(n)
+    if n >= 1_000_000:
+        return f"{(n // 10_000) / 100:.2f}M"
+    if n >= 1_000:
+        return f"{n // 1_000}K"
+    return str(n)
+
+
 def _live_counties_with_counts():
     """Same list as _live_counties(), with a real (TTL-cached) parcel_count
     added to each entry. Used specifically by surfaces that display a
@@ -5157,11 +5223,13 @@ def _live_counties_with_counts():
     for entry in live:
         count = _cached_county_parcel_count(entry["county_code"])
         entry["parcel_count"] = count
-        # Real, exact, comma-formatted -- deliberately NOT rounded to a
-        # "508K+"-style marketing shorthand the way the old hardcoded
-        # footer text was; Task 3's own rule is "no invented numbers," and
-        # an exact real count is more honest than a rounded one, not less.
-        entry["parcel_count_display"] = f"{count:,}"
+        # PX-20260828-09 Task 1: was f"{count:,}" (exact, comma-formatted) --
+        # Diego's ruling supersedes that earlier "exact is more honest"
+        # decision (see _human_count()'s own docstring for the full
+        # reasoning: floor-based rounding preserves the same honesty
+        # guarantee the "+" suffix already relies on, while removing the
+        # upkeep churn of exact counts as more counties go live).
+        entry["parcel_count_display"] = _human_count(count)
     return live
 
 

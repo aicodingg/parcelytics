@@ -8,7 +8,7 @@
   <p class="text-muted mb-0" style="max-width:680px;">
     Look up a parcel by account number or street address, or filter by neighborhood, property type,
     value, and more. Live today across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} —
-    {{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+ parcels — with more counties coming
+    {{ total_live_parcel_count_display }}+ parcels — with more counties coming
     as Parcelytics expands.
   </p>
 </div>
@@ -54,7 +54,7 @@
            The legend chips directly above (per-county swatches) are the
            map's own legend and keep their names, per Diego's carve-out. #}
         <p class="text-muted mt-2 mb-0" style="font-size:12px;">
-          Currently covering <strong>{{ "{:,}".format(live_counties | sum(attribute='parcel_count')) }}+ parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }}</strong> — expanding next to the largest U.S. commercial
+          Currently covering <strong>{{ total_live_parcel_count_display }}+ parcels across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }}</strong> — expanding next to the largest U.S. commercial
           real estate markets.
         </p>
       </div>
@@ -83,8 +83,14 @@
                    value="{{ q or '' }}" autocomplete="off" spellcheck="false">
             <div class="ta-list" id="spTaList" style="display:none;"></div>
           </div>
+          {# PX-20260828-09 Task 4: same fix as index.html's hero search hint
+             -- was "Accepts 10-digit TCAD account, 14-digit Tax Office
+             account, prop_id, or street address", Travis-specific digit
+             lengths that are wrong for Dallas's own (17-character) DCAD
+             account format. This page's search box is also reachable
+             neutrally (search_landing(), bare '/search'), same reasoning. #}
           <div class="form-text" style="font-size:11.5px;">
-            Accepts 10-digit {{ county_profile.cad_abbr }} account, 14-digit Tax Office account, prop_id, or street address.
+            Accepts a parcel ID (from your county's appraisal district or tax office) or a street address.
           </div>
 
           <button type="submit" class="btn btn-dark btn-sm w-100 mt-3 fw-semibold">Search</button>

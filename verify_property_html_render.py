@@ -176,8 +176,22 @@ def make_env():
         "county_name": _MOCK_TRAVIS_PROFILE["county_name"],
         "parcel_count": 508231,
         "parcel_count_display": "508,231",
+        # PX-20260828-09 Task 3: _live_counties() (app.py) now also carries
+        # cad_name/cad_abbr/tax_office_name on every entry (the homepage
+        # provenance panel loops these) -- mocked here too so this shared
+        # StrictUndefined harness (reused by verify_search_scroll_fix.py)
+        # doesn't raise on the new fields the moment ANY template reads them.
+        "cad_name": _MOCK_TRAVIS_PROFILE["cad_name"],
+        "cad_abbr": _MOCK_TRAVIS_PROFILE["cad_abbr"],
+        "tax_office_name": _MOCK_TRAVIS_PROFILE["tax_office_name"],
     }]
     env.globals["is_county_anchored"] = True
+    # PX-20260828-09 Task 1: base.html's brand tagline (site-wide, every
+    # page) now reads total_live_parcel_count_display from the shared
+    # context-processor global instead of computing an inline Jinja sum --
+    # this StrictUndefined harness needs it mocked too or ANY page render
+    # (including property.html, via base.html) raises UndefinedError.
+    env.globals["total_live_parcel_count_display"] = "1.13M"
     return env
 
 
