@@ -895,8 +895,20 @@ ParcelTypeahead.attach({ inputId: "spQ" });
           return;
         }
         resultsWrap.style.display = "";
-        resultsCount.textContent = body.total.toLocaleString() + " matching parcel" + (body.total === 1 ? "" : "s");
-        exportCsvBtn.disabled = !body.total;
+        // PX-20260828-14: body.total/body.total_pages can be null when the
+        // separate count query (see api_search_filter()'s comment on the
+        // COUNT(*) OVER() timeout fix) degrades rather than failing the
+        // whole request -- body.count_unavailable flags that case. The page
+        // of real results (body.results) is unaffected either way; only the
+        // exact total is missing. Falls back to body.has_more (always
+        // present, computed cheaply as a LIMIT+1 byproduct of the data
+        // query) for count-agnostic messaging/navigation in that case.
+        if (body.count_unavailable) {
+          resultsCount.textContent = "Matching parcels (exact count temporarily unavailable)";
+        } else {
+          resultsCount.textContent = body.total.toLocaleString() + " matching parcel" + (body.total === 1 ? "" : "s");
+        }
+        exportCsvBtn.disabled = body.count_unavailable ? (body.results || []).length === 0 : !body.total;
 
         // Show/hide the two delinquency-only columns based on whether THIS
         // response's request actually had delinquent_only set (read from the
@@ -921,9 +933,19 @@ ParcelTypeahead.attach({ inputId: "spQ" });
             <td class="flt-delinquent-col" style="${delinquentActive ? "" : "display:none;"}">${r.first_delinquent_yr ? r.first_delinquent_yr : "—"}</td>
           </tr>
         `).join("") || `<tr><td colspan="${delinquentActive ? 8 : 6}" class="na-cell text-center py-3">No parcels matched these filters.</td></tr>`;
-        pageInfo.textContent = body.total_pages ? `Page ${body.page} of ${body.total_pages}` : "";
+        // PX-20260828-14: same count_unavailable fallback as resultsCount
+        // above -- body.total_pages is null in that case, so "currentPage
+        // >= body.total_pages" would be true (undefined/NaN comparison) and
+        // wrongly disable Next even when body.has_more says there IS
+        // another page.
+        if (body.count_unavailable) {
+          pageInfo.textContent = `Page ${body.page}`;
+          nextBtn.disabled = !body.has_more;
+        } else {
+          pageInfo.textContent = body.total_pages ? `Page ${body.page} of ${body.total_pages}` : "";
+          nextBtn.disabled = currentPage >= body.total_pages;
+        }
         prevBtn.disabled = currentPage <= 1;
-        nextBtn.disabled = currentPage >= body.total_pages;
       })
       .catch(() => {
         clearLoading();
@@ -982,8 +1004,19 @@ ParcelTypeahead.attach({ inputId: "spQ" });
               r.confidence || "",
             ]);
           });
-          const hasMore = body.total_pages && page < body.total_pages
-                          && rows.length - 1 < FLT_CSV_EXPORT_MAX_ROWS;
+          // PX-20260828-14: body.total_pages can be null when the count
+          // query degrades (see runSearch()'s count_unavailable handling
+          // above) -- this loop's correctness depends on total_pages being
+          // real (it's what decides whether to keep walking pages), which is
+          // exactly why the count-query timeout fix was built to degrade
+          // rather than crash the whole request: falls back to body.has_more
+          // (always present, computed off the data query's own LIMIT+1,
+          // independent of whether the count succeeded) so export still
+          // terminates correctly instead of stopping short or hanging.
+          const hasMore = body.count_unavailable
+            ? body.has_more && rows.length - 1 < FLT_CSV_EXPORT_MAX_ROWS
+            : body.total_pages && page < body.total_pages
+              && rows.length - 1 < FLT_CSV_EXPORT_MAX_ROWS;
           return hasMore ? fetchPage(page + 1) : null;
         });
     }

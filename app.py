@@ -12,6 +12,7 @@ from datetime import datetime, date
 from flask import Flask, render_template, request, redirect, url_for, jsonify, Response, g, abort
 import psycopg2
 import psycopg2.extras
+import psycopg2.errors
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from flask_limiter import Limiter
@@ -1592,10 +1593,36 @@ def get_db():
     )
 
 
-def query(sql, params=None, one=False):
+def query(sql, params=None, one=False, timeout_ms=None):
+    """
+    PX-20260828-14: added timeout_ms, additive-only (default None => identical
+    behavior to before this change -- the connection still runs under
+    get_db()'s own 8000ms statement_timeout, set once at connect time).
+
+    When timeout_ms is given, this session's statement_timeout is tightened
+    (or loosened) to that value for the query that follows, on this
+    connection only (each query() call opens and closes its own connection,
+    per get_db()/finally: conn.close() above, so there's no bleed into any
+    other call). This exists so a caller can give ONE specific query its own,
+    independent timeout budget distinct from the connection-wide default --
+    e.g. a secondary query that's allowed to fail fast and be degraded around,
+    rather than either inheriting the full 8s budget or taking down the whole
+    request if it regresses.
+
+    Deliberately NOT using a %s bind parameter for the timeout value (`SET
+    statement_timeout = %s`) -- PostgreSQL's SET is a utility statement and
+    does not accept a parameterized value the way a normal DML/SELECT does;
+    psycopg2 sends it through the extended query protocol like any other
+    execute() and it fails with a syntax error. timeout_ms is never
+    user-supplied (every call site in this codebase passes a hardcoded
+    literal), so formatting it into the SQL text after an int() cast is safe
+    -- int() itself is the guard against anything unexpected reaching here.
+    """
     conn = get_db()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if timeout_ms is not None:
+                cur.execute(f"SET statement_timeout = {int(timeout_ms)}")
             cur.execute(sql, params or ())
             return cur.fetchone() if one else cur.fetchall()
     finally:
@@ -5627,25 +5654,102 @@ def api_search_filter():
         delinquent_join = "JOIN tax_delinquent d ON d.geo_id = p.geo_id AND d.total_due > 0 AND d.county_code = p.county_code"
         delinquent_select = ", d.total_due, d.first_delinquent_yr"
 
-    sql = f"""
-        SELECT
-            p.geo_id, p.situs_address, p.neighborhood_cd,
-            ({_ptype_sql}) AS prop_type_label,
-            pty.market_value, pty.assessed_value, pty.data_source, pty.tax_year,
-            COUNT(*) OVER() AS total_count{delinquent_select}
+    # PX-20260828-14: live 500 (psycopg2.errors.QueryCanceled, 8s
+    # statement_timeout) on County=Dallas + Market Value >= 1,000,000,
+    # tax_year 2025 -- confirmed root cause via reconstructed-query EXPLAIN
+    # reasoning (no live DB in this sandbox; Diego re-verified live post-fix):
+    # `COUNT(*) OVER() AS total_count` is a blocking window function with no
+    # PARTITION BY -- Postgres must fully materialize and join EVERY matching
+    # row before it can emit the first page's 50, regardless of the
+    # (also unindexed-until-this-fix, see idx_parcel_county_situs in
+    # schema.sql) situs_address sort. Dallas's five-year load
+    # (~3.5M parcel_tax_year rows) pushed a previously-tolerable pattern past
+    # the timeout. Fix approved by Diego: (a) drop the window function, run
+    # a separate COUNT query instead; (c) add a supporting index for the
+    # county-scoped situs_address sort. (b) -- "has next page" via LIMIT+1 --
+    # held as fallback, not the primary mechanism, per Diego's own read of
+    # search.html: body.total/body.total_pages are load-bearing for more than
+    # display text (see comment below at total_pages/has_more computation).
+    #
+    # Hard requirement (Diego, verbatim): "the separate count query must
+    # share the exact WHERE/JOIN construction with the data query -- build
+    # the predicates once, use them in both. Do not hand-copy a parallel
+    # set." from_joins_sql below is that shared construction -- both queries
+    # below interpolate this SAME Python variable (and the SAME where_sql
+    # variable, already built once above), not two independently maintained
+    # copies of the same FROM/JOIN text. This is the identical failure shape
+    # Diego cited from tonight's audit (PX-20260828-12 Category 7): two
+    # predicate sets that must agree forever, drifting apart the moment one
+    # is edited and the other isn't.
+    from_joins_sql = f"""
         FROM parcel p
         JOIN parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = %(tax_year)s
                                  AND pty.county_code = p.county_code
         LEFT JOIN parcel_metrics pm ON pm.geo_id = p.geo_id AND pm.tax_year = %(tax_year)s
                                     AND pm.county_code = p.county_code
         {delinquent_join}
-        WHERE {where_sql}
-        ORDER BY p.situs_address NULLS LAST, p.geo_id
-        LIMIT {SEARCH_FILTER_PAGE_SIZE} OFFSET %(offset)s
     """
 
-    rows = query(sql, params)
-    total = int(rows[0]["total_count"]) if rows else 0
+    # LIMIT+1: always fetch one extra row beyond the page size. This is
+    # option (b) ("has next page" semantics) held as Diego's approved
+    # fallback -- not used for normal pagination (total/total_pages from the
+    # real COUNT query below remain the primary, exact source search.html's
+    # display text and CSV-exporter page-walking loop rely on), but computed
+    # for free as a byproduct of the data query so it's available as a
+    # cheap, always-correct has_more signal on the rare path where the count
+    # query itself times out (see below) -- degrading the endpoint to
+    # approximate pagination info instead of failing the whole request.
+    params["fetch_limit"] = SEARCH_FILTER_PAGE_SIZE + 1
+
+    data_sql = f"""
+        SELECT
+            p.geo_id, p.situs_address, p.neighborhood_cd,
+            ({_ptype_sql}) AS prop_type_label,
+            pty.market_value, pty.assessed_value, pty.data_source, pty.tax_year
+            {delinquent_select}
+        {from_joins_sql}
+        WHERE {where_sql}
+        ORDER BY p.situs_address NULLS LAST, p.geo_id
+        LIMIT %(fetch_limit)s OFFSET %(offset)s
+    """
+    fetched = query(data_sql, params)
+    has_more = len(fetched) > SEARCH_FILTER_PAGE_SIZE
+    rows = fetched[:SEARCH_FILTER_PAGE_SIZE]
+
+    # Separate COUNT query, no window function, no wide SELECT list, no
+    # ORDER BY/LIMIT/OFFSET -- reuses from_joins_sql and where_sql verbatim
+    # (same params dict too; COUNT(*) never references fetch_limit/offset,
+    # psycopg2 silently ignores unused dict keys in a named-parameter query,
+    # so no separate params object is needed either).
+    #
+    # Own, independent timeout (Diego, verbatim): "give the count query its
+    # own timeout handling so if it's ever the slower half, it degrades
+    # rather than taking the whole endpoint down." 5000ms -- deliberately
+    # SHORTER than get_db()'s connection-wide 8000ms default -- so a
+    # regressed count fails fast and leaves headroom for the data query
+    # (already fetched above, successfully, by the time this runs) to still
+    # reach the client. If a filter combination ever makes the count the
+    # slower half, the user gets real, correct results with an honestly
+    # degraded total instead of a 500 on the whole request.
+    count_sql = f"""
+        SELECT COUNT(*) AS total_count
+        {from_joins_sql}
+        WHERE {where_sql}
+    """
+    count_unavailable = False
+    try:
+        count_rows = query(count_sql, params, timeout_ms=5000)
+        total = int(count_rows[0]["total_count"]) if count_rows else 0
+        total_pages = (total + SEARCH_FILTER_PAGE_SIZE - 1) // SEARCH_FILTER_PAGE_SIZE if total else 0
+    except psycopg2.errors.QueryCanceled:
+        # Degrade, don't fail: the data query above already succeeded and
+        # `rows` holds real, correct results for this page. total/total_pages
+        # become None -- search.html (both the results-count text and the
+        # CSV exporter's page-walking loop) must check count_unavailable and
+        # fall back to has_more rather than treating None as a number.
+        count_unavailable = True
+        total = None
+        total_pages = None
 
     results = []
     for r in rows:
@@ -5669,7 +5773,6 @@ def api_search_filter():
             result["first_delinquent_yr"] = r.get("first_delinquent_yr")
         results.append(result)
 
-    total_pages = (total + SEARCH_FILTER_PAGE_SIZE - 1) // SEARCH_FILTER_PAGE_SIZE if total else 0
     return jsonify({
         "ok": True,
         "results": results,
@@ -5677,6 +5780,8 @@ def api_search_filter():
         "page": page,
         "page_size": SEARCH_FILTER_PAGE_SIZE,
         "total_pages": total_pages,
+        "has_more": has_more,
+        "count_unavailable": count_unavailable,
     })
 
 

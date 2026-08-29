@@ -413,6 +413,27 @@ CREATE INDEX IF NOT EXISTS idx_parcel_classi_cd       ON parcel(classi_cd);
 CREATE INDEX IF NOT EXISTS idx_parcel_year_built      ON parcel(year_built);
 CREATE INDEX IF NOT EXISTS idx_pty_year_market_value  ON parcel_tax_year(tax_year, market_value);
 
+-- PX-20260828-14 (Aug 2026): /api/search_filter's default sort is
+-- `ORDER BY p.situs_address NULLS LAST, p.geo_id` scoped by
+-- `p.county_code = %(county_code)s` -- county_code is the real, live
+-- leading column of parcel's composite PK (per
+-- migrate_county_partitioning.py's TABLE_SPECS) but situs_address itself
+-- had ZERO indexes anywhere in this file before this fix (confirmed via
+-- grep -- it only ever appeared as a column definition). Combined with
+-- Dallas's 5-year load (~3.5M parcel_tax_year rows), a broad filter now
+-- forces an in-memory sort over tens of thousands of rows per request.
+-- This composite index lets Postgres drive the county_code-scoped scan
+-- directly off the index in situs_address order, with geo_id as the tie-
+-- break matching the query's own ORDER BY exactly, instead of sorting.
+-- Caveat, disclosed not hidden: this optimizes THIS query's one fixed sort
+-- order -- it does not (and structurally cannot) simultaneously optimize
+-- for every other ad hoc filter combination on this page; those still rely
+-- on idx_parcel_neighborhood_cd / idx_parcel_classi_cd / idx_pty_year_market_value
+-- / idx_metrics_year_etr above plus the planner's own row-estimate-driven
+-- choice between an index scan here vs. one of those.
+CREATE INDEX IF NOT EXISTS idx_parcel_county_situs
+    ON parcel (county_code, situs_address, geo_id);
+
 -- api_peer_set() expression indexes (Task PEER-SET-PERF-2, Aug 2026).
 -- api_peer_set() filters on UPPER(TRIM(classi_cd)) and, in Tiers 2/3, also
 -- LEFT(UPPER(COALESCE(state_cd1,'')),1) -- a plain btree index on the raw
