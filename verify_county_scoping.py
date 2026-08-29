@@ -294,7 +294,22 @@ COUNTY_SCOPED_TABLES = {
         },
     },
     "parcel_metrics": {
-        "write_mode": "upsert", "shadow_of": None,
+        # PX-20260828-13 (Stage 4 MISSING_TENANT_SCOPE follow-up): write_mode
+        # corrected from "upsert" to "insert_only". This was a real
+        # registry mismatch, not cosmetic: compute_parcel_metrics()'s real
+        # write architecture is a county-scoped DELETE followed by a plain
+        # INSERT...SELECT with NO ON CONFLICT clause at all (a "whole-table
+        # rebuild" per county, same category this registry already uses for
+        # prop_unit/prop_unit_tax_year below) -- it never upserts. While
+        # registered as "upsert", rule 3c fired a FALSE FAIL demanding an
+        # ON CONFLICT target that this table's real design correctly never
+        # has. This was previously masked by a blanket EXEMPTIONS entry
+        # (PX-20260823-02) that got removed as part of this task's DELETE/
+        # INSERT county-scoping fix -- removing that entry surfaced this
+        # separate, pre-existing write_mode misclassification, which is
+        # fixed here at its actual source instead of re-adding a per-file
+        # exemption for a rule this table was never really failing.
+        "write_mode": "insert_only", "shadow_of": None,
         "source": "migrate_county_partitioning.py TABLE_SPECS (Mode 1, with a composite FK to parcel)",
         "allowed_writers": {
             "loaders/load_pir_billing.py": "confirmed via grep -- not further disambiguated by this tool",
@@ -965,31 +980,18 @@ EXEMPTIONS = {
         "approved_by": "PX-20260823-02",
         "applies_to": {"write"},
     },
-    ("loaders/compute_metrics.py", "parcel_metrics", "DELETE"): {
-        "reason": (
-            "Deliberate same-transaction DELETE+INSERT whole-table rebuild in "
-            "compute_parcel_metrics(). Scoping only the DELETE to one county "
-            "would BREAK the rebuild, not just leave it unscoped: the paired "
-            "INSERT ... SELECT (next registry entry) has no ON CONFLICT and "
-            "reads parcel_tax_year with no county filter, so un-deleted "
-            "other-county rows would collide on duplicate keys the moment "
-            ">1 county's data coexists. This is the brief's own named "
-            "exemption pattern: 'a same-transaction DELETE+INSERT rebuild "
-            "where the DELETE is deliberately whole-table.'"
-        ),
-        "approved_by": "PX-20260823-02",
-        "applies_to": {"write"},
-    },
-    ("loaders/compute_metrics.py", "parcel_metrics", "INSERT"): {
-        "reason": (
-            "Paired with the parcel_metrics DELETE exemption above, same "
-            "compute_parcel_metrics() whole-table rebuild -- correct-by-design "
-            "absence of ON CONFLICT, matching the snapshot_2026_preliminary.py "
-            "precedent (also registered above)."
-        ),
-        "approved_by": "PX-20260823-02",
-        "applies_to": {"write"},
-    },
+    # PX-20260828-16-followup: the two entries formerly registered here
+    # (loaders/compute_metrics.py, parcel_metrics, DELETE/INSERT,
+    # PX-20260823-02) are REMOVED, not just edited -- Diego's ruling on the
+    # Stage 4 MISSING_TENANT_SCOPE grouping report was to actually fix this
+    # rather than leave it exempt: compute_parcel_metrics()'s DELETE and its
+    # paired INSERT...SELECT are now BOTH scoped by county_code (added
+    # together, in the same change, exactly as the removed exemption's own
+    # reasoning said a correct fix would require). Leaving the entries here
+    # would have gone stale on the next verify_county_scoping.py run (zero
+    # matching FAIL findings left to convert to EXEMPT) and fired a loud
+    # Law-3 stale-exemption alarm -- removed proactively instead of waiting
+    # for that alarm to fire.
     ("loaders/delete_confirmed_absent_taxcur_rows.py", "tax_billing", "DELETE"): {
         "reason": (
             "Group 4 downgrade per this brief's own explicit Not-in-scope "

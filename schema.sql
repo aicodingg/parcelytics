@@ -964,7 +964,41 @@ ALTER TABLE load_batch ALTER COLUMN county_code SET NOT NULL;
 -- snapshot_totals/snapshot_neighborhood_movers's median_pct/p25_pct/
 -- p75_pct overflow risk. Genuinely out of scope for Fix 1, verified by
 -- reading every column below, not inferred from "it's a different table."
+-- PX-20260828-13 (Stage 4 MISSING_TENANT_SCOPE follow-up): county_code added
+-- as the LEADING primary-key column, matching this codebase's established
+-- "county_code leads" convention (finding 9.2(a), already anticipated by
+-- loaders/test_refresh_group_stats.py's own
+-- test_build_insert_sql_contains_county_code_in_columns_and_select comment).
+-- This is a REAL fix, not cosmetic: refresh_group_stats.py's aggregation
+-- query previously joined parcel/parcel_tax_year/tax_billing/
+-- tax_billing_entity across ALL counties with no county_code filter at all,
+-- then stamped ONE externally-passed county_code literal onto every
+-- resulting row -- meaning the instant a second county's data existed, this
+-- table's rows would silently BLEND two counties' parcels into the same
+-- percentile bands while mislabeling the whole mixed group as one county.
+-- Diego's ruling on the Stage 4 grouping report: fix this and
+-- compute_county_benchmarks() as one problem, before Dallas metrics are
+-- ever computed. Fixed by making county_code a REAL GROUPING KEY, derived
+-- from parcel.county_code in the aggregation itself (see
+-- loaders/refresh_group_stats.py's REFRESH_GROUP_STATS_SQL) -- one refresh
+-- run now computes every county's stats correctly in the same pass, rather
+-- than requiring (and trusting) a single external parameter per run.
+--
+-- DEPLOYMENT STATE (corrected by Diego, verified live -- not assumed):
+-- the live group_stats table ALREADY has county_code leading its PK
+-- (constraint name group_stats_shadow_pkey1 -- the "_shadow_" in that name
+-- is the tell: it was carried over from a prior shadow-swap that already
+-- built group_stats_shadow with this exact shape, then renamed it in).
+-- CREATE TABLE IF NOT EXISTS below is therefore a correct no-op against the
+-- live table, not a gap -- this patch brings schema.sql's TEXT back in
+-- sync with what production already is, the same direction as every other
+-- schema.sql staleness fix in this codebase (ingest_audit, load_batch),
+-- not a migration that still needs to run. No DROP or rebuild of
+-- group_stats/group_stats_shadow is needed before or after this patch --
+-- the code in loaders/refresh_group_stats.py writes the exact shape the
+-- live table already has.
 CREATE TABLE IF NOT EXISTS group_stats (
+    county_code              VARCHAR(20)  NOT NULL DEFAULT 'TRAVIS',
     neighborhood_cd_key      VARCHAR(20)  NOT NULL DEFAULT '',
     state_cd1_class          VARCHAR(1)   NOT NULL DEFAULT '',
     classi_cd_key            VARCHAR(10)  NOT NULL DEFAULT '',
@@ -997,7 +1031,7 @@ CREATE TABLE IF NOT EXISTS group_stats (
                                                                  -- refresh for no real safety benefit here).
     refreshed_at             TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
 
-    PRIMARY KEY (neighborhood_cd_key, state_cd1_class, classi_cd_key, tax_year)
+    PRIMARY KEY (county_code, neighborhood_cd_key, state_cd1_class, classi_cd_key, tax_year)
 );
 
 -- group_stats_shadow: identical shape, built fresh by every refresh run and

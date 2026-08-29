@@ -380,12 +380,20 @@ real_gs_source = open("loaders/refresh_group_stats.py").read()
 real_gs_extracted = vcs.extract_statements_from_source(real_gs_source, "loaders/refresh_group_stats.py")
 real_gs_extracted = [e for e in real_gs_extracted if e.table == "group_stats" and e.stmt_kind == "INSERT"]
 check(f"Fixture 10 real-file cross-check: loaders/refresh_group_stats.py extracts exactly one "
-      f"group_stats INSERT statement ({len(real_gs_extracted)} found) -- the docstring at :257 "
-      f"is correctly excluded",
+      f"group_stats INSERT statement ({len(real_gs_extracted)} found) -- the docstring is "
+      f"correctly excluded",
       len(real_gs_extracted) == 1)
-check("Fixture 10 real-file cross-check: that one statement is at line 302 (the real f-string), "
-      "not line 257 (the docstring)",
-      len(real_gs_extracted) == 1 and real_gs_extracted[0].lineno == 302)
+# PX-20260828-13: the exact line number of _build_insert_sql()'s f-string
+# INSERT shifted (315, not 302) after this task's edits added explanatory
+# comments/docstring content above it -- a real, expected consequence of
+# adding disclosure, not a functional regression. Asserting only that the
+# extracted statement is the real f-string INSERT (checked via its actual
+# SQL text containing "group_stats_shadow", not a hardcoded line number)
+# keeps this check meaningful without re-breaking on every future comment
+# added above the same function.
+check("Fixture 10 real-file cross-check: that one statement really is the f-string INSERT "
+      "(SQL text references group_stats_shadow), not the docstring",
+      len(real_gs_extracted) == 1 and "group_stats_shadow" in real_gs_extracted[0].sql_text)
 
 
 # ─────────────────────────────────────────────────────────────────────────

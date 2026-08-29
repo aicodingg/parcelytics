@@ -309,30 +309,28 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
     # never empty. (Previously the DELETE committed immediately, so a crash
     # between that commit and the rebuild's commit left the table empty.)
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM parcel_metrics")
+        # PX-20260828-16-followup: scoped by county_code (diagnostic
+        # prev_count is now per-county, matching the DELETE/rebuild below --
+        # this used to silently report the GLOBAL row count, which would
+        # have understated "before" once a second county's rows also lived
+        # in this table).
+        cur.execute("SELECT COUNT(*) FROM parcel_metrics WHERE county_code = %s", (county_code,))
         prev_count = cur.fetchone()[0]
 
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM parcel_metrics")
-        # EXEMPT (PX-20260823-02, registered in verify_county_scoping.py's
-        # EXEMPTIONS -- not comment-only): a documented, named 3d-class (blast-radius) concern,
-        # not silently left unexplained. This DELETE has no county_code
-        # WHERE clause -- a full-table rebuild across every county on every
-        # run. Real reason scoping it here is NOT cheap (the brief's own
-        # bar for when an exemption is legitimate): the INSERT ... SELECT
-        # immediately below carries NO ON CONFLICT clause at all (it's a
-        # genuine insert-only rebuild, not an upsert -- see that INSERT's
-        # own EXEMPT registration). Scoping ONLY this DELETE to one county
-        # while leaving that INSERT's SELECT unscoped would make the
-        # rebuild actively WRONG the moment a second county's data exists:
-        # the INSERT would still try to re-insert every OTHER county's rows
-        # too (its SELECT has no county filter), colliding with the
-        # untouched, non-deleted rows already there for those counties --
-        # a real duplicate-key failure this exemption exists to prevent
-        # introducing. A correct per-county rebuild needs this DELETE AND
-        # the INSERT's SELECT WHERE scoped TOGETHER as one behavior change
-        # (a real write-shape change, not a WHERE-clause-only fix) --
-        # flagged as a follow-up, not built here.
+        # PX-20260828-16-followup: this DELETE and the INSERT...SELECT below
+        # are now BOTH scoped to county_code, together, in the same fix --
+        # exactly the "DELETE AND the INSERT's SELECT WHERE scoped TOGETHER
+        # as one behavior change" the prior EXEMPT note (PX-20260823-02)
+        # said this needed. Previously this ran a full-table rebuild across
+        # every county on every invocation; the INSERT has no ON CONFLICT
+        # (a genuine insert-only rebuild), so scoping only one side would
+        # have made per-county reruns actively wrong (re-inserting every
+        # OTHER county's rows on top of their own untouched data, a
+        # duplicate-key failure). Diego's ruling: fix this now, as part of
+        # unblocking Dallas metrics, rather than leave it as a disclosed
+        # follow-up.
+        cur.execute("DELETE FROM parcel_metrics WHERE county_code = %s", (county_code,))
 
     # Main insert: YoY metrics via SQL window functions
     # yoy_tax_amount_pct is NULL for all years — no historical billing exists yet
@@ -346,17 +344,17 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
     # 2026-08-23 -- NOT reflected in this repo's schema.sql (a pre-existing
     # staleness gap, not something introduced by this fix; see PM's own
     # note that schema.sql's DEFAULT 'TRAVIS' at line 217 is likewise dead).
-    # EXEMPT (PX-20260823-02, registered in verify_county_scoping.py's
-    # EXEMPTIONS): this INSERT has no ON CONFLICT clause at all -- genuinely
-    # correct by design, not a gap. It's a full DELETE+INSERT...SELECT
-    # rebuild sharing one transaction with the DELETE above (same pattern
-    # as loaders/snapshot_2026_preliminary.py's own already-verified-correct
+    # This INSERT has no ON CONFLICT clause at all -- genuinely correct by
+    # design, not a gap. It's a full DELETE+INSERT...SELECT rebuild sharing
+    # one transaction with the DELETE above (same pattern as
+    # loaders/snapshot_2026_preliminary.py's own already-verified-correct
     # INSERT_SQL): the DELETE always runs first in the same transaction, so
     # no pre-existing row this INSERT could conflict against survives --
-    # there is no unique-constraint target to have. See the DELETE's own
-    # EXEMPT comment above for why this INSERT's SELECT is ALSO not
-    # county-scoped today (a real, disclosed, coupled follow-up, not an
-    # oversight).
+    # there is no unique-constraint target to have.
+    # PX-20260828-16-followup: pty.county_code = %s added to the WHERE,
+    # scoped TOGETHER with the DELETE above (see its comment) -- was
+    # previously EXEMPT (PX-20260823-02) as a disclosed, coupled follow-up;
+    # fixed now per Diego's ruling, as part of unblocking Dallas metrics.
     with conn.cursor() as cur:
         cur.execute(f"""
             INSERT INTO parcel_metrics (
@@ -511,8 +509,9 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
               ON tb.geo_id = pty.geo_id AND tb.tax_year = pty.tax_year
             LEFT JOIN tax_delinquent td
               ON td.geo_id = pty.geo_id
+            WHERE pty.county_code = %s
             WINDOW w AS (PARTITION BY pty.geo_id ORDER BY pty.tax_year)
-        """)
+        """, (county_code,))
         n = cur.rowcount
     print(f"    Inserted {n:,} rows  ({time.time()-t0:.1f}s)")
 
@@ -790,10 +789,20 @@ def compute_county_benchmarks(conn, county_code=DEFAULT_COUNTY):
                 JOIN parcel p ON p.geo_id = pty.geo_id
                 LEFT JOIN parcel_metrics pm
                   ON pm.geo_id = pty.geo_id AND pm.tax_year = pty.tax_year
+                  AND pm.county_code = pty.county_code
                 WHERE ({label_expr}) = %s
                   {excl}
                   AND pty.market_value > 0
                   AND (pty.data_source IS NULL OR pty.data_source != 'preliminary')
+                  -- PX-20260828-16-followup: this INSERT...SELECT previously
+                  -- aggregated across EVERY county's parcel_tax_year/parcel
+                  -- rows before stamping the single %s county_code value
+                  -- (first SELECT-list column above) onto every resulting
+                  -- row -- confirmed the exact bug load_dallas_certified.py's
+                  -- own comment already flagged. Scoped now, together with
+                  -- the already-correct DELETE above, so a per-county run
+                  -- only ever aggregates that county's own rows.
+                  AND pty.county_code = %s
                 GROUP BY pty.tax_year
                 ON CONFLICT (county_code, tax_year, property_type_label) DO UPDATE
                     SET parcel_count                = EXCLUDED.parcel_count,
@@ -804,7 +813,7 @@ def compute_county_benchmarks(conn, county_code=DEFAULT_COUNTY):
                         median_assessment_ratio     = EXCLUDED.median_assessment_ratio,
                         median_yoy_value_change_pct = EXCLUDED.median_yoy_value_change_pct,
                         computed_at                 = NOW()
-            """, (county_code, label, prefix_key, label))
+            """, (county_code, label, prefix_key, label, county_code))
             n = cur.rowcount
             print(f"    {label}: {n} year rows")
             # Each of the five TYPE_GROUPS is known to have real parcels in
@@ -923,13 +932,14 @@ def main():
                              "recompute). Use after a classification-only change.")
     parser.add_argument(
         "--county", default=DEFAULT_COUNTY,
-        help=f"county_code used to scope every UPDATE this script issues, and "
-             f"written to every county_benchmark row (default: {DEFAULT_COUNTY}). "
-             f"PX-20260823-02. Does NOT (yet) scope compute_parcel_metrics()'s or "
-             f"compute_county_benchmarks()'s own source SELECTs -- both still "
-             f"aggregate across every county's parcel_tax_year/parcel_metrics rows "
-             f"regardless of this flag; see the in-code EXEMPT notes for why that's "
-             f"a separate, disclosed follow-up, not an oversight.",
+        help=f"county_code used to scope EVERY write and source SELECT this script "
+             f"issues, including compute_parcel_metrics()'s and "
+             f"compute_county_benchmarks()'s own aggregation queries (default: "
+             f"{DEFAULT_COUNTY}). PX-20260823-02 scoped the UPDATE passes and "
+             f"county_benchmark's DELETE; PX-20260828-16-followup closed the "
+             f"remaining gap -- both functions' main DELETE+INSERT...SELECT rebuild "
+             f"is now scoped to this one county per run, not a global rebuild across "
+             f"every county's rows.",
     )
     args = parser.parse_args()
 

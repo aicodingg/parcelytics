@@ -203,6 +203,7 @@ REFRESH_GROUP_STATS_SQL = f"""
     ),
     effective AS (
         SELECT
+            p.county_code               AS county_code,
             {NEIGHBORHOOD_CD_KEY_EXPR}  AS neighborhood_cd_key,
             {STATE_CD1_CLASS_EXPR}      AS state_cd1_class,
             {CLASSI_CD_KEY_EXPR}        AS classi_cd_key,
@@ -211,13 +212,14 @@ REFRESH_GROUP_STATS_SQL = f"""
             pty.assessed_value          AS assessed_value,
             COALESCE(NULLIF(tb.total_tax, 0), tbe.entity_tax_sum) AS effective_tax
         FROM   parcel p
-        JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id
-        LEFT JOIN tax_billing tb  ON tb.geo_id  = p.geo_id AND tb.tax_year  = pty.tax_year
-        LEFT JOIN tbe_sum     tbe ON tbe.geo_id = p.geo_id AND tbe.tax_year = pty.tax_year
+        JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.county_code = p.county_code
+        LEFT JOIN tax_billing tb  ON tb.geo_id  = p.geo_id AND tb.tax_year  = pty.tax_year AND tb.county_code  = p.county_code
+        LEFT JOIN tbe_sum     tbe ON tbe.geo_id = p.geo_id AND tbe.tax_year = pty.tax_year AND tbe.county_code = p.county_code
         WHERE  pty.market_value > 0
           AND  {REAL_PROPERTY_ONLY_WHERE}
     )
     SELECT
+        county_code,
         neighborhood_cd_key,
         state_cd1_class,
         classi_cd_key,
@@ -243,7 +245,7 @@ REFRESH_GROUP_STATS_SQL = f"""
         ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY effective_tax)::NUMERIC, 2)  AS p75_total_tax,
         MAX(effective_tax)                                                              AS max_total_tax
     FROM   effective
-    GROUP  BY neighborhood_cd_key, state_cd1_class, classi_cd_key, tax_year
+    GROUP  BY county_code, neighborhood_cd_key, state_cd1_class, classi_cd_key, tax_year
 """
 
 # batch_id and refreshed_at are appended as literal SELECT-list columns at
@@ -255,26 +257,38 @@ REFRESH_GROUP_STATS_SQL = f"""
 
 def _build_insert_sql():
     """
-    INSERT INTO group_stats_shadow (...) SELECT ..., %(county_code)s,
-    %(batch_id)s, NOW() FROM effective GROUP BY ... -- built by inserting
-    the three extra columns into REFRESH_GROUP_STATS_SQL's SELECT list and
-    GROUP BY-less tail, rather than hand-duplicating the whole query a
-    second time.
+    INSERT INTO group_stats_shadow (...) SELECT ..., %(batch_id)s, NOW()
+    FROM effective GROUP BY ... -- built by inserting two extra SELECT-list
+    columns into REFRESH_GROUP_STATS_SQL's tail, rather than hand-
+    duplicating the whole query a second time.
 
-    county_code (PARTITION-2-FIX-1): required, not cosmetic --
-    migrate_county_partitioning.py's real, already-run migration made
-    county_code a NOT NULL column with no default on group_stats (finding
-    9.4 -- same gap PARTITION-2-FIX-1 found and fixed in
-    refresh_snapshot_summary.py; group_stats was migrated via the same
-    composite_pk mode, confirmed against migrate_county_partitioning.py's
-    real TABLE_SPECS, so it has the exact same gap even though this brief
-    didn't originally name this file). Every row this script writes stamps
-    'TRAVIS' -- same single hardcoded seam as every other PARTITION-2
-    call site, and the same explicit scope boundary: this is NOT an
-    attempt to make this script multi-county-aware.
+    county_code (PX-20260828-13, Stage 4 MISSING_TENANT_SCOPE follow-up,
+    supersedes PARTITION-2-FIX-1's approach on this file): NO LONGER an
+    externally-injected %(county_code)s literal stamped onto every row.
+    That approach was itself the real, undisclosed bug Diego's Stage 4
+    grouping report caught: REFRESH_GROUP_STATS_SQL's own FROM/JOIN chain
+    had ZERO county_code filter, so it silently aggregated every county's
+    parcels into the SAME percentile groups, then mislabeled the whole
+    blended result with whatever single county_code the caller happened to
+    pass -- a real, silent cross-county contamination risk the instant a
+    second county's data exists, not just a cosmetic default-value gap.
+
+    Fixed at the SOURCE: REFRESH_GROUP_STATS_SQL's `effective` CTE now
+    selects `p.county_code` as a genuine column, carried through the GROUP
+    BY, so each output row's county_code is DERIVED from that row's own
+    parcels, not asserted from outside. One refresh run now correctly
+    computes every county's group_stats simultaneously, in the same shadow-
+    table build -- required by this table's full-table shadow-swap
+    architecture (see module docstring): a naive `WHERE county_code = %s`
+    added to a per-county-parameterized version of this script would have
+    WIPED OUT every other county's rows on the next swap, since the swap
+    replaces the whole table, not just one county's slice.
+
+    county_code is therefore no longer a parameter build_shadow() threads
+    in -- see build_shadow()'s own docstring for what changed on that side.
     """
     select_sql = REFRESH_GROUP_STATS_SQL.rstrip()
-    # Insert the three extra SELECT-list expressions right before the
+    # Insert the two extra SELECT-list expressions right before the
     # closing "FROM effective" of the final SELECT.
     marker = "    FROM   effective"
     assert marker in select_sql, "REFRESH_GROUP_STATS_SQL shape changed -- update _build_insert_sql()"
@@ -287,30 +301,41 @@ def _build_insert_sql():
         "REFRESH_GROUP_STATS_SQL's SELECT list changed shape -- update _build_insert_sql()"
     select_with_batch = (
         head + ",\n"
-        "        %(county_code)s                                                        AS county_code,\n"
         "        %(batch_id)s::BIGINT                                                  AS source_import_batch_id,\n"
         "        NOW()                                                                  AS refreshed_at\n"
         + marker + tail
     )
     columns = """
-        neighborhood_cd_key, state_cd1_class, classi_cd_key, tax_year,
+        county_code, neighborhood_cd_key, state_cd1_class, classi_cd_key, tax_year,
         count, min_market_value, p25_market_value, median_market_value, p75_market_value, max_market_value,
         min_assessed_value, p25_assessed_value, median_assessed_value, p75_assessed_value, max_assessed_value,
         count_total_tax, min_total_tax, p25_total_tax, median_total_tax, p75_total_tax, max_total_tax,
-        county_code, source_import_batch_id, refreshed_at
+        source_import_batch_id, refreshed_at
     """
     return f"INSERT INTO group_stats_shadow ({columns}) {select_with_batch}"
 
 
-def _mint_batch(conn, note, county_code="TRAVIS"):
-    # county_code (real, urgent fix -- found running the actual refresh live
-    # against production): load_batch also gained a NOT NULL, no-default
-    # county_code column during migrate_county_partitioning.py's real,
-    # already-run migration (add_column mode) -- same PARTITION-2-FIX-1 gap
-    # class, just in this helper function rather than build_shadow(), so it
-    # wasn't caught by that fix's fixture tests. Confirmed safe: the first
-    # real attempt failed cleanly on a NotNullViolation with zero residue
-    # (verified directly against production -- no orphaned load_batch row).
+# PX-20260828-13: load_batch.county_code is NOT NULL with no default, but a
+# refresh_group_stats.py run now covers EVERY county in one batch (see
+# build_shadow()'s docstring) -- there is no longer one real county_code to
+# stamp on this batch row. 'ALL' is a deliberate, documented sentinel, not a
+# real county_code value -- it will never collide with a real registered
+# county code (all of which are real county names/short-codes, e.g.
+# 'TRAVIS', 'DALLAS'). Confirmed safe to introduce: grepped every live
+# reader of load_batch.county_code before choosing this -- the only ones
+# are this same file's _mint_batch() (writer) and assert_group_stats_fresh()
+# (which reads group_stats.county_code, a real per-row value derived from
+# parcel data, NOT load_batch.county_code -- the two columns serve
+# different purposes and were never the same value in the first place).
+# app.py's own only load_batch read (`SELECT MAX(batch_id) FROM load_batch`,
+# ~line 4268) never touches county_code at all. Nothing live depends on
+# load_batch.county_code meaning a real, single county.
+GROUP_STATS_BATCH_COUNTY_SENTINEL = "ALL"
+
+
+def _mint_batch(conn, note, county_code=GROUP_STATS_BATCH_COUNTY_SENTINEL):
+    # county_code: see GROUP_STATS_BATCH_COUNTY_SENTINEL comment above for
+    # why this is 'ALL', not a real county, as of PX-20260828-13.
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO load_batch (note, county_code) VALUES (%s, %s) RETURNING batch_id",
@@ -321,15 +346,23 @@ def _mint_batch(conn, note, county_code="TRAVIS"):
     return batch_id
 
 
-def build_shadow(conn, batch_id, county_code="TRAVIS", verbose=True):
+def build_shadow(conn, batch_id, verbose=True):
     """
     Phase 1: build group_stats_shadow fresh. Does NOT touch the live
     group_stats table at all -- safe to run while group_stats is being
     read by live traffic, however long it takes.
 
-    county_code (PARTITION-2-FIX-1): see _build_insert_sql()'s docstring.
-    Defaults to 'TRAVIS', matching today's real, single-county production
-    data.
+    county_code (PX-20260828-13): no longer a parameter here -- see
+    _build_insert_sql()'s docstring for why. Every county's rows are built
+    in this ONE pass, each stamped with ITS OWN real county_code (derived
+    from parcel.county_code inside REFRESH_GROUP_STATS_SQL), not a single
+    external value applied uniformly. This is required, not just simpler:
+    group_stats_shadow is swapped in as a full-table replace (see module
+    docstring's shadow-swap section) -- a per-county-scoped build would
+    have to either wipe out every OTHER county's rows on swap, or abandon
+    the shadow-swap pattern entirely for a slower in-place per-county
+    delete+insert. Building every county at once, in one shadow table,
+    keeps the atomic full-table swap intact and correct.
     """
     def _log(msg):
         if verbose:
@@ -339,10 +372,10 @@ def build_shadow(conn, batch_id, county_code="TRAVIS", verbose=True):
     with conn.cursor() as cur:
         cur.execute("DROP TABLE IF EXISTS group_stats_shadow")
         cur.execute("CREATE TABLE group_stats_shadow (LIKE group_stats INCLUDING ALL)")
-        cur.execute(_build_insert_sql(), {"batch_id": batch_id, "county_code": county_code})
+        cur.execute(_build_insert_sql(), {"batch_id": batch_id})
         row_count = cur.rowcount
     conn.commit()
-    _log(f"    group_stats_shadow built: {row_count:,} rows  [{time.time()-t0:.1f}s]")
+    _log(f"    group_stats_shadow built: {row_count:,} rows (all counties)  [{time.time()-t0:.1f}s]")
     return row_count
 
 
@@ -366,7 +399,7 @@ def swap_shadow_in(conn, verbose=True):
     _log(f"    swap committed  [{time.time()-t0:.3f}s]")
 
 
-def refresh_group_stats(conn, batch_id=None, dry_run=False, county_code="TRAVIS", verbose=True):
+def refresh_group_stats(conn, batch_id=None, dry_run=False, verbose=True):
     """
     Full refresh entry point.
 
@@ -374,19 +407,22 @@ def refresh_group_stats(conn, batch_id=None, dry_run=False, county_code="TRAVIS"
         it -- the call shape a future pipeline caller (parcel_rollup.py /
         run_all.py, once it mints its own batch at real load time) will
         use. If None (this brief's standalone CLI usage), this function
-        mints its own fresh load_batch row via _mint_batch() and uses that.
+        mints its own fresh load_batch row via _mint_batch() and uses that
+        (tagged with GROUP_STATS_BATCH_COUNTY_SENTINEL -- see that
+        constant's comment).
 
     dry_run: if True, runs the read-only aggregation SELECT (no
         %(batch_id)s / no shadow table / no load_batch row minted) and
         returns row count + a few sample groups, without writing anything
         -- same "--dry-run: parse/compute only, no writes" contract as
-        every other loader touched this week. Not applicable to
-        county_code below -- dry-run never writes, so there's no
-        county_code column to populate.
+        every other loader touched this week.
 
-    county_code (PARTITION-2-FIX-1): threaded through to build_shadow() --
-    see _build_insert_sql()'s docstring for why this is required, not
-    optional, against the real, already-migrated production schema.
+    county_code (PX-20260828-13): REMOVED as a parameter here -- see
+    build_shadow()'s docstring. This function now always refreshes every
+    county's group_stats rows in one pass; there is no single county_code
+    left to parameterize a "real refresh" run with (only
+    assert_group_stats_fresh(), a genuinely different, still per-county
+    check, keeps its own county_code parameter below).
 
     Returns a dict summary.
     """
@@ -406,16 +442,17 @@ def refresh_group_stats(conn, batch_id=None, dry_run=False, county_code="TRAVIS"
 
     used_batch_id = batch_id
     if used_batch_id is None:
-        used_batch_id = _mint_batch(conn, note="refresh_group_stats.py standalone run", county_code=county_code)
+        used_batch_id = _mint_batch(conn, note="refresh_group_stats.py standalone run")
         _log(f"  Minted new load_batch row: batch_id={used_batch_id} "
-             f"(standalone mode -- no pipeline caller passed one in)")
+             f"(standalone mode -- no pipeline caller passed one in; "
+             f"county_code='{GROUP_STATS_BATCH_COUNTY_SENTINEL}' -- this batch covers every county)")
     else:
         _log(f"  Using caller-supplied batch_id={used_batch_id}")
 
-    row_count = build_shadow(conn, used_batch_id, county_code=county_code, verbose=verbose)
+    row_count = build_shadow(conn, used_batch_id, verbose=verbose)
     swap_shadow_in(conn, verbose=verbose)
 
-    return {"dry_run": False, "row_count": row_count, "batch_id": used_batch_id, "county_code": county_code}
+    return {"dry_run": False, "row_count": row_count, "batch_id": used_batch_id}
 
 
 def assert_group_stats_fresh(conn, county_code="TRAVIS"):
@@ -512,12 +549,13 @@ def main():
                     help="Tag this refresh with an existing load_batch.batch_id "
                          "(future pipeline use; standalone runs normally omit this)")
     ap.add_argument("--county", default="TRAVIS",
-                    help="county_code to scope this run to. Drives TWO real, distinct things "
-                         "(PARTITION-2-IMPLEMENT Part 3 + PARTITION-2-FIX-1, default: TRAVIS): "
-                         "(1) --check-staleness's freshness check; (2) a real refresh (no flag / "
-                         "--dry-run) -- the county_code value stamped on every row build_shadow() "
-                         "writes. Required as of PARTITION-2-FIX-1: group_stats' county_code "
-                         "column is NOT NULL with no default post-migration.")
+                    help="county_code to check with --check-staleness ONLY (default: TRAVIS). "
+                         "As of PX-20260828-13, a real refresh (no flag / --dry-run) always "
+                         "computes EVERY county's group_stats rows in one pass -- county_code "
+                         "is now derived per-row from parcel.county_code inside the aggregation "
+                         "itself, not an external value you choose per run. This flag has no "
+                         "effect on a real refresh or --dry-run; it only selects which county's "
+                         "freshness --check-staleness reports on.")
     args = ap.parse_args()
 
     from loaders.db import get_conn
@@ -536,7 +574,7 @@ def main():
         conn.close()
         sys.exit(0 if is_fresh else 1)
 
-    result = refresh_group_stats(conn, batch_id=args.batch_id, dry_run=args.dry_run, county_code=args.county)
+    result = refresh_group_stats(conn, batch_id=args.batch_id, dry_run=args.dry_run)
     conn.close()
 
     print(f"\n{'='*65}")

@@ -483,15 +483,19 @@ def test_build_shadow_issues_drop_create_insert_with_batch_id_and_commits_once()
     check("build_shadow: INSERT references group_stats_shadow, not the live table",
           "group_stats_shadow" in insert_sql and "GROUP BY" in insert_sql.upper() or "GROUP  BY" in insert_sql,
           insert_sql)
-    # PARTITION-2-FIX-1: build_shadow()'s INSERT now ALSO binds county_code --
-    # a real, required fix (group_stats' county_code column is NOT NULL with
-    # no default since migrate_county_partitioning.py's real migration ran).
-    # Checked as its own assertion (not folded into the batch_id check above)
-    # so this test keeps proving batch_id specifically regardless of what
-    # other params get added later.
-    check("build_shadow: INSERT defaults county_code to 'TRAVIS' when not overridden",
-          insert_params["county_code"] == "TRAVIS", insert_params)
-    check("build_shadow: INSERT's column list includes county_code",
+    # PX-20260828-13 (Stage 4 MISSING_TENANT_SCOPE follow-up, supersedes
+    # PARTITION-2-FIX-1's approach on this file): build_shadow() no longer
+    # takes OR binds a county_code parameter at all -- county_code is now a
+    # real per-row SELECT-list column (p.county_code), not an externally
+    # injected literal. Proven two ways: (a) the bound params dict has
+    # EXACTLY the batch_id key, nothing else -- no leftover 'county_code'
+    # param sneaking back in; (b) the INSERT's column list still contains
+    # the bare word "county_code" (as a real column now, not a %(...)s
+    # placeholder -- see test_build_insert_sql_contains_county_code_...
+    # below for the placeholder-vs-column distinction, checked precisely).
+    check("build_shadow: INSERT params contain ONLY batch_id -- no county_code param anymore",
+          set(insert_params.keys()) == {"batch_id"}, insert_params)
+    check("build_shadow: INSERT's column list still includes county_code (now a real column)",
           "county_code" in insert_sql, insert_sql)
 
 
@@ -562,8 +566,9 @@ def test_refresh_group_stats_reuses_caller_supplied_batch_id():
     insert_sql, insert_params = conn.executed[2]
     check("caller-supplied batch_id: shadow INSERT bound with batch_id=555",
           insert_params["batch_id"] == 555, insert_params)
-    check("caller-supplied batch_id: shadow INSERT still defaults county_code to 'TRAVIS'",
-          insert_params["county_code"] == "TRAVIS", insert_params)
+    check("caller-supplied batch_id: shadow INSERT params contain ONLY batch_id "
+          "(PX-20260828-13: no county_code param anymore)",
+          set(insert_params.keys()) == {"batch_id"}, insert_params)
 
 
 def test_assert_group_stats_fresh_true_when_batch_matches():
@@ -617,76 +622,129 @@ def test_assert_group_stats_fresh_false_when_multiple_batch_ids_present():
           "more than one batch_id" in detail["reason"], detail)
 
 
-# ── Part 3: PARTITION-2-FIX-1 — county_code on the real INSERT ──────────────
+# ── Part 3: PX-20260828-13 (Stage 4 MISSING_TENANT_SCOPE follow-up) ─────────
+# county_code as a REAL GROUPING KEY, not an injected literal ───────────────
 #
-# Real, urgent gap: migrate_county_partitioning.py's already-run migration
-# made county_code a NOT NULL column with no default on group_stats (finding
-# 9.4). This script's INSERT never supplied one -- confirmed the exact same
-# gap as refresh_snapshot_summary.py's build_shadow(), even though this file
-# wasn't literally named in that brief. Proven here two ways: (a) the SQL
-# TEXT _build_insert_sql() produces really contains county_code in both the
-# column list and the SELECT-list value, and (b) build_shadow() really binds
-# the caller's county_code (not just the default) into the executed params.
+# Supersedes PARTITION-2-FIX-1's approach on this file. Diego's ruling on
+# the Stage 4 grouping report: PARTITION-2-FIX-1's fix (stamp ONE externally
+# -passed county_code literal onto every row) was itself the real bug --
+# REFRESH_GROUP_STATS_SQL's own FROM/JOIN chain had ZERO county_code filter,
+# so it silently aggregated every county's parcels into the SAME percentile
+# groups, then mislabeled the blended result with whatever single
+# county_code the caller happened to pass. Fixed at the source: county_code
+# is now a genuine SELECT-list column (p.county_code), carried through every
+# JOIN and the GROUP BY, so each output row's county_code is DERIVED from
+# that row's own parcels -- one refresh computes every county correctly in
+# the same pass, and build_shadow()/refresh_group_stats() no longer take a
+# county_code parameter at all (see their own docstrings for why: a full-
+# table shadow-swap can't be scoped to one county without wiping out every
+# other county's rows on swap).
 
 def test_build_insert_sql_contains_county_code_in_columns_and_select():
     sql = rgs._build_insert_sql()
     norm = " ".join(sql.split())
     check("_build_insert_sql(): county_code present in the INSERT's column list",
           "county_code" in norm.split("SELECT")[0], norm[:400])
-    check("_build_insert_sql(): %(county_code)s bound as a SELECT-list value",
-          "%(county_code)s" in norm, norm)
+    check("_build_insert_sql(): county_code is a REAL column in the SELECT list, "
+          "NOT an injected %(county_code)s literal (that pattern is gone as of "
+          "PX-20260828-13 -- it was the root cause, not the fix)",
+          "%(county_code)s" not in norm, norm)
+    check("_build_insert_sql(): the ONLY %(...)s placeholders left are batch_id-related",
+          set(part.split(")")[0] for part in norm.split("%(")[1:]) == {"batch_id"}, norm)
     check("_build_insert_sql(): county_code appears before source_import_batch_id "
           "in the column list (matches finding 9.2(a) -- county_code leads)",
           norm.index("county_code") < norm.index("source_import_batch_id"), norm[:400])
 
 
-def test_build_shadow_threads_a_non_default_county_code_into_the_insert():
-    """The real, future-facing proof: build_shadow() must not just default to
-    'TRAVIS' -- it must genuinely thread through WHATEVER county_code the
-    caller passes, since reload_county_scope.py's future callers (a separate,
-    already-built script, out of this brief's scope) will eventually need
-    that same real seam on a per-county basis."""
-    conn = FakeConn(insert_rowcount=3)
-    rgs.build_shadow(conn, batch_id=42, county_code="DALLAS", verbose=False)
+def test_refresh_group_stats_sql_derives_county_code_from_parcel_not_a_parameter():
+    """
+    Checks the ACTUAL production SQL constant -- proves county_code is
+    joined/derived from parcel.county_code and carried through the GROUP BY,
+    not asserted from outside. This is the real, checkable invariant this
+    task exists to establish: if REFRESH_GROUP_STATS_SQL's WHERE/JOIN chain
+    ever lost its county_code equality joins, or the GROUP BY ever dropped
+    county_code, this test fails -- unlike PARTITION-2-FIX-1's tests, which
+    could pass even while the underlying cross-county blending bug was live
+    (they only checked that SOME county_code value was stamped somewhere,
+    never that it was the RIGHT one for each row).
+    """
+    sql = rgs.REFRESH_GROUP_STATS_SQL
+    norm = " ".join(sql.split())
+    check("REFRESH_GROUP_STATS_SQL: selects p.county_code as a real column",
+          "p.county_code AS county_code" in norm, norm)
+    check("REFRESH_GROUP_STATS_SQL: parcel_tax_year join is county_code-scoped "
+          "(pty.county_code = p.county_code), not just geo_id",
+          "pty.county_code = p.county_code" in norm, norm)
+    check("REFRESH_GROUP_STATS_SQL: tax_billing join is county_code-scoped",
+          "tb.county_code = p.county_code" in norm, norm)
+    check("REFRESH_GROUP_STATS_SQL: tax_billing_entity join is county_code-scoped",
+          "tbe.county_code = p.county_code" in norm, norm)
+    check("REFRESH_GROUP_STATS_SQL: final SELECT list leads with county_code",
+          norm.split("SELECT")[-1].strip().startswith("county_code"), norm)
+    check("REFRESH_GROUP_STATS_SQL: GROUP BY includes county_code",
+          "GROUP BY county_code" in norm, norm)
 
-    insert_sql, insert_params = conn.executed[2]
-    check("build_shadow(county_code='DALLAS'): INSERT is bound with the real, "
-          "caller-supplied county_code, not silently defaulted to TRAVIS",
-          insert_params["county_code"] == "DALLAS", insert_params)
-    check("build_shadow(county_code='DALLAS'): batch_id is unaffected by the county_code change",
-          insert_params["batch_id"] == 42, insert_params)
+
+def test_build_shadow_and_refresh_group_stats_no_longer_accept_county_code_kwarg():
+    """
+    Direct negative proof that the OLD, buggy interface is gone, not just
+    unused: passing county_code to either function must raise TypeError,
+    so nothing (a stale caller, a copy-pasted script) can silently resurrect
+    the injected-literal pattern this task removed.
+    """
+    conn = FakeConn(insert_rowcount=1)
+    raised = False
+    try:
+        rgs.build_shadow(conn, batch_id=1, county_code="DALLAS", verbose=False)
+    except TypeError:
+        raised = True
+    check("build_shadow(county_code=...) raises TypeError -- parameter genuinely removed", raised)
+
+    conn2 = FakeConn(insert_rowcount=1)
+    raised2 = False
+    try:
+        rgs.refresh_group_stats(conn2, batch_id=1, dry_run=False, county_code="DALLAS", verbose=False)
+    except TypeError:
+        raised2 = True
+    check("refresh_group_stats(county_code=...) raises TypeError -- parameter genuinely removed", raised2)
 
 
-def test_refresh_group_stats_threads_county_code_through_to_build_shadow():
-    conn = FakeConn(insert_rowcount=9)
-    result = rgs.refresh_group_stats(conn, batch_id=555, dry_run=False, county_code="DALLAS", verbose=False)
-
-    insert_sql, insert_params = conn.executed[2]
-    check("refresh_group_stats(county_code='DALLAS'): the real INSERT carries county_code='DALLAS', "
-          "not the 'TRAVIS' default", insert_params["county_code"] == "DALLAS", insert_params)
-    check("refresh_group_stats(county_code='DALLAS'): result dict reports the county_code used",
-          result["county_code"] == "DALLAS", result)
-
-
-def test_refresh_group_stats_dry_run_does_not_require_county_code():
-    """dry_run never reaches build_shadow()/the INSERT at all -- proves the
-    parameter's presence doesn't change dry-run's existing 'no writes'
-    contract, and that dry-run still works with zero mention of county_code
-    (there's genuinely nothing for it to do there)."""
-    fake_rows = [("NB1", "A", "01", 2025, 4, 100000, 137500, 175000, 212500, 250000,
-                  90000, 127500, 160000, 192500, 230000,
-                  3, 2000, 2300, 2600, 2900, 3200)]
-    fake_cols = ["neighborhood_cd_key", "state_cd1_class", "classi_cd_key", "tax_year",
+def test_refresh_group_stats_dry_run_reports_rows_from_multiple_counties_in_one_pass():
+    """
+    The real, positive proof of the new architecture: a single dry-run
+    aggregation result set containing rows from TWO different counties
+    (TRAVIS and DALLAS) is reported as-is, in one pass, with no county_code
+    argument needed to select which county gets computed -- exactly the
+    "every county at once" contract build_shadow()'s docstring describes.
+    """
+    fake_rows = [
+        ("TRAVIS", "NB1", "A", "01", 2025, 4, 100000, 137500, 175000, 212500, 250000,
+         90000, 127500, 160000, 192500, 230000,
+         3, 2000, 2300, 2600, 2900, 3200),
+        ("DALLAS", "NB9", "B", "02", 2025, 2, 50000, 62500, 75000, 87500, 100000,
+         45000, 56250, 67500, 78750, 90000,
+         2, 1000, 1250, 1500, 1750, 2000),
+    ]
+    fake_cols = ["county_code", "neighborhood_cd_key", "state_cd1_class", "classi_cd_key", "tax_year",
                  "count", "min_market_value", "p25_market_value", "median_market_value",
                  "p75_market_value", "max_market_value", "min_assessed_value",
                  "p25_assessed_value", "median_assessed_value", "p75_assessed_value",
                  "max_assessed_value", "count_total_tax", "min_total_tax", "p25_total_tax",
                  "median_total_tax", "p75_total_tax", "max_total_tax"]
     conn = FakeConn(results_queue=[(fake_rows, fake_cols)])
-    result = rgs.refresh_group_stats(conn, dry_run=True, county_code="DALLAS", verbose=False)
-    check("dry-run: still issues zero INSERTs even with a non-default county_code passed",
-          all(not sql.upper().startswith("INSERT") for sql, _ in conn.executed), conn.executed)
-    check("dry-run: result still marked dry_run=True", result["dry_run"] is True)
+
+    result = rgs.refresh_group_stats(conn, dry_run=True, verbose=False)
+
+    kinds = _sql_kinds(conn.executed)
+    check("dry-run: exactly one statement issued (the read-only aggregation SELECT), "
+          "no county_code argument needed",
+          kinds == ["DRY_RUN_SELECT"], kinds)
+    check("dry-run: never commits (no writes at all)", conn.committed_count == 0, conn.committed_count)
+    check("dry-run: row_count reflects BOTH counties' rows in the same pass",
+          result["row_count"] == 2, result)
+    counties_in_sample = {row["county_code"] for row in result["sample"]}
+    check("dry-run: sample includes rows from both TRAVIS and DALLAS -- one pass, every county",
+          counties_in_sample == {"TRAVIS", "DALLAS"}, result["sample"])
 
 
 def main():
