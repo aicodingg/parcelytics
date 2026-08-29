@@ -399,39 +399,102 @@
   </p>
 </section>
 
-{# ══ AUDIENCES ═════════════════════════════════════════════════════════════ #}
+{# ══ AUDIENCES (PX-20260828-10: icon-grid redesign, PM-approved) ═══════════
+   Was a 3-card row g-4/col-md-4 text block (".audience-card"). Replaced in
+   place with the same row/col-lg-6 split the Trust Panel section above
+   already uses (kicker+h2+lead on one side, a grid of rows on the other)
+   for structural consistency within this page, per Diego's direction
+   (CoStar's /who-we-serve used as a structural reference only -- no CoStar
+   copy or assets appear anywhere below; every word and every icon here is
+   ours).
+
+   Segments: the three real, already-shipped use cases (investors,
+   developers, homeowners) carry forward with their existing, previously-
+   reviewed copy verbatim -- no change to what we claim for them. Added a
+   fourth: tax consultants / protest representatives, backed by real,
+   already-shipped features (not aspirational) -- the tax calendar's actual
+   "Protest Deadline" milestone, every county profile's real
+   cad_protest_url/cad_protest_url_template link-out to the CAD's own
+   filing tool, the Assessment Ratio anomaly callout (flags AV>MV
+   over-assessment -- exactly the evidence a protest case is built on), and
+   the real Filter Parcels CSV export on search.html (P1-14) for building a
+   working set across many parcels.
+
+   Brokers and appraisers were considered and explicitly excluded (PM-
+   approved) -- recorded here so this isn't "helpfully" re-added later:
+     - Brokers: heavy overlap with the investors' underwriting use case
+       (same comps/benchmarks/tax-burden-estimate features) and no
+       broker-specific capability exists (no MLS tie-in, no client-facing
+       pricing collateral) that would make a distinct card earned rather
+       than padded restatement of the investors' card.
+     - Appraisers: this site's whole positioning is "certified records and
+       our own transparent estimates, not our own valuations" -- a
+       professional appraiser's core job IS producing valuations, so a
+       dedicated appraiser segment sits awkwardly against that posture,
+       and there is no appraiser-specific tooling here (no cost/income-
+       approach modeling, no USPAP-shaped export). The only "appraiser"
+       references anywhere in this codebase are to the COUNTY's own chief
+       appraiser (a data-source role under Tax Code Sec. 26.01(b)), not a
+       customer segment -- there is no evidence appraisers use this
+       product the way this section would imply. Omit unless a future
+       brief brings real evidence of appraiser usage/demand. #}
 <section class="fd-section">
-  <div class="fd-kicker">Who it's for</div>
-  <h2 class="fd-h2">One dataset. Three ways to use it.</h2>
-  <div class="row g-4 mt-2">
-    <div class="col-md-4">
-      <div class="audience-card">
-        <h3>Real estate investors</h3>
-        <p>Underwrite acquisitions on certified value, multi-year tax history, and peer benchmarks. Estimate the post-purchase tax burden and flag homestead-cap and delinquency risk before you close.</p>
-      </div>
+  <div class="row g-5 align-items-start">
+    <div class="col-lg-5">
+      <div class="fd-kicker">Who it's for</div>
+      <h2 class="fd-h2">One dataset. Four ways to use it.</h2>
+      <p class="fd-lead">Certified appraisal and tax data, structured for the specific question each of these roles is actually trying to answer.</p>
     </div>
-    <div class="col-md-4">
-      <div class="audience-card">
-        <h3>Developers</h3>
-        {# PX-20260828-07: was "...— live in Travis County today, with 2026
-           preliminary values ahead of certification." Dropped per Diego's
-           ruling -- Rate Trends has zero Dallas data today (Task 1 finding,
-           now honestly surfaced on that page itself rather than claimed
-           here), and Market Snapshot's certified-value-trend numbers depend
-           on a per-county precompute refresh that also hasn't run for
-           Dallas yet. Naming Travis specifically here would either go stale
-           the moment a second county's data lands, or (worse) read as a
-           claim that Dallas already has the same rate-history depth Travis
-           does, which isn't true. Left generic — describes the capability,
-           not a per-county coverage claim; live_counties-driven coverage
-           copy already lives in the section above this one. #}
-        <p>Evaluate submarkets on value trends and tax-rate history by entity, and see how a site's tax burden compares across the market.</p>
-      </div>
-    </div>
-    <div class="col-md-4">
-      <div class="audience-card">
-        <h3>Homeowners</h3>
-        <p>Understand exactly what's driving your tax bill, see every exemption you're already receiving, and find out what you could be saving — including a real, itemized estimate if you haven't filed for homestead yet. Verify every number against your own bill and the county's record.</p>
+    <div class="col-lg-7">
+      <div class="who-serve-grid">
+        <div class="who-serve-card">
+          <span class="who-serve-badge" aria-hidden="true">
+            {# "Trending up" -- underwriting / growth. #}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
+          </span>
+          <div>
+            <h3>Real estate investors</h3>
+            <p>Underwrite acquisitions on certified value, multi-year tax history, and peer benchmarks. Estimate the post-purchase tax burden and flag homestead-cap and delinquency risk before you close.</p>
+          </div>
+        </div>
+        <div class="who-serve-card">
+          <span class="who-serve-badge" aria-hidden="true">
+            {# "Layers" -- site plans / submarkets. #}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </span>
+          <div>
+            <h3>Developers</h3>
+            {# PX-20260828-07: was "...— live in Travis County today, with
+               2026 preliminary values ahead of certification." Dropped per
+               Diego's ruling -- Rate Trends has zero Dallas data today
+               (Task 1 finding), and Market Snapshot's certified-value-trend
+               numbers depend on a per-county precompute refresh that also
+               hasn't run for Dallas yet. Left generic — describes the
+               capability, not a per-county coverage claim. Copy unchanged
+               by this redesign. #}
+            <p>Evaluate submarkets on value trends and tax-rate history by entity, and see how a site's tax burden compares across the market.</p>
+          </div>
+        </div>
+        <div class="who-serve-card">
+          <span class="who-serve-badge" aria-hidden="true">
+            {# House -- homeowners. #}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>
+          </span>
+          <div>
+            <h3>Homeowners</h3>
+            <p>Understand exactly what's driving your tax bill, see every exemption you're already receiving, and find out what you could be saving — including a real, itemized estimate if you haven't filed for homestead yet. Verify every number against your own bill and the county's record.</p>
+          </div>
+        </div>
+        <div class="who-serve-card">
+          <span class="who-serve-badge" aria-hidden="true">
+            {# Scale -- dispute / protest evidence. #}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 21h14"/><path d="M12 3 6 6M12 3l6 3"/><path d="M3 12l3-6 3 6M15 12l3-6 3 6"/><path d="M3 12a3 3 0 0 0 6 0M15 12a3 3 0 0 0 6 0"/></svg>
+          </span>
+          <div>
+            <h3>Tax consultants</h3>
+            <p>Filter and export a working set of parcels, then build each case on certified values, peer comps, and assessment-ratio anomaly flags. Link straight through to the county's own protest-filing tool when you're ready to file.</p>
+          </div>
+        </div>
       </div>
     </div>
   </div>

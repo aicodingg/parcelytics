@@ -1834,6 +1834,38 @@ footer:not(.site-footer) {
 .audience-card h3 { font-size: var(--fs-md); font-weight: var(--fw-bold); color: var(--ink); margin-bottom: 8px; }
 .audience-card p { font-size: var(--fs-sm); line-height: 1.6; color: var(--text-2); margin: 0; }
 
+/* "Who we serve" icon-grid (PX-20260828-10). Deliberately a NEW class, not
+   a restyle of .audience-card above -- that class is also applied to the
+   six county market cards higher up this page (see .market-card-grid's
+   own comment: ".audience-card ... is also used by the unrelated 'Who
+   it's for' section"), so editing it here would leak into those cards.
+   .who-serve-badge is the light-background counterpart to the dark Trust
+   Panel's .provenance-check: same circular-badge shape and sizing
+   approach, but --accent on a light accent-tint background instead of
+   --success-on-dark, since this section sits on the page's normal
+   (light) background, not the dark .fd-trust-panel immediately above it. */
+.who-serve-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--s-5) var(--s-4);
+}
+.who-serve-card { display: flex; gap: var(--s-4); align-items: flex-start; }
+.who-serve-badge {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: rgba(var(--accent-rgb), 0.10);
+  color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.who-serve-badge svg { width: 20px; height: 20px; }
+.who-serve-card h3 { font-size: var(--fs-md); font-weight: var(--fw-bold); color: var(--ink); margin: 0 0 4px; }
+.who-serve-card p { font-size: var(--fs-sm); line-height: 1.6; color: var(--text-2); margin: 0; }
+@media (max-width: 768px) {
+  /* Same collapse point already used by .market-card-grid/.footer-grid on
+     this page -- consistent breakpoint, not a new one. */
+  .who-serve-grid { grid-template-columns: 1fr; }
+}
+
 /* Trust / provenance panel (dark) — same dark-surface token set as .hero
    (Home + About only; see the --accent-rgb/--accent-on-dark/--success-on-dark
    comment in :root). */
