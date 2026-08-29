@@ -3221,7 +3221,10 @@ def export_due_diligence_pdf(geo_id):
     shared-state refactor is possible later, with Diego's live verification,
     if he'd rather eliminate this duplication than keep two call sites.
     """
-    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    # PX-20260828-12 fix: this fetch lacked county_code (same audit-wide gap
+    # as the three queries the DALLAS-GATE-2 Part 2 comment below already
+    # documents/fixes for this route -- this one predates that pass too).
+    parcel = query("SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s", (geo_id, g.county_code), one=True)
     if not parcel:
         return jsonify({"ok": False, "error": f"Parcel \"{geo_id}\" not found"}), 404
 
@@ -3964,8 +3967,14 @@ def api_parcel_entities():
         return jsonify({"ok": False, "error": "No parcel ID or geo_id provided."})
 
     geo_id = normalize_parcel_id(q)
+    # PX-20260828-12 fix: both parcel-resolution fetches below lacked
+    # county_code (composite-PK table, geo_id alone not globally unique --
+    # same audit-wide gap as compare_parcels()/api_estimate_acq()/
+    # api_peer_benchmark_sf()/api_peer_benchmark_local()). Previously
+    # tracked as "out of scope" by the DALLAS-GATE-2 Part 2 comment below;
+    # folded into this fix since it's the same bug class.
     parcel = query(
-        "SELECT geo_id, situs_address FROM parcel WHERE geo_id = %s", (geo_id,), one=True
+        "SELECT geo_id, situs_address FROM parcel WHERE geo_id = %s AND county_code = %s", (geo_id, g.county_code), one=True
     )
     if not parcel and q.isdigit():
         # Shared prop_id fallback (Migration M2) — see resolve_prop_id_to_geo_id()'s
@@ -3973,7 +3982,7 @@ def api_parcel_entities():
         fallback_geo_id = resolve_prop_id_to_geo_id(int(q))
         if fallback_geo_id:
             parcel = query(
-                "SELECT geo_id, situs_address FROM parcel WHERE geo_id = %s", (fallback_geo_id,), one=True
+                "SELECT geo_id, situs_address FROM parcel WHERE geo_id = %s AND county_code = %s", (fallback_geo_id, g.county_code), one=True
             )
     if not parcel:
         return jsonify({"ok": False, "error": f"No parcel found matching \"{q}\"."})
@@ -5526,11 +5535,21 @@ def api_search_filter():
             # excludes any parcel whose 2026 preliminary row shows HS,
             # regardless of which tax_year the rest of the search is
             # otherwise scoped to.
+            # PX-20260828-12 fix: this correlated subquery matched pty26 to
+            # the outer pty row by geo_id alone. The outer query is already
+            # county-scoped (p.county_code = %(county_code)s above), but
+            # geo_id is only unique WITHIN a county (composite PK per
+            # migrate_county_partitioning.py), so an unscoped subquery like
+            # this one could in principle match a different county's row
+            # sharing the same geo_id string. Added pty26.county_code to
+            # close that gap explicitly rather than relying on it being
+            # low-probability given Dallas's differently-shaped account IDs.
             where.append("""(
                 (pty.exemption_codes IS NULL OR pty.exemption_codes !~ %(hs_re)s)
                 AND NOT EXISTS (
                     SELECT 1 FROM parcel_tax_year pty26
                     WHERE pty26.geo_id = pty.geo_id AND pty26.tax_year = 2026
+                      AND pty26.county_code = pty.county_code
                       AND pty26.exemption_codes IS NOT NULL
                       AND pty26.exemption_codes ~ %(hs_re)s
                 )
@@ -5698,15 +5717,18 @@ def api_estimate_acq(geo_id):
     if purchase_price <= 0:
         return jsonify({"ok": False, "error": "price must be positive"})
 
-    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+    # PX-20260828-12 fix: parcel/parcel_tax_year fetches here lacked
+    # county_code (composite-PK tables, geo_id alone not globally unique --
+    # see compare_parcels()'s identical fix for the full audit-wide pattern).
+    parcel = query("SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s", (geo_id, g.county_code), one=True)
     if not parcel:
         return jsonify({"ok": False, "error": "Parcel not found"})
 
     current_yr_row = query("""
         SELECT market_value, assessed_value, taxable_value, hs_cap_loss, exemption_codes
         FROM   parcel_tax_year
-        WHERE  geo_id = %s AND tax_year = 2025
-    """, (geo_id,), one=True)
+        WHERE  geo_id = %s AND tax_year = 2025 AND county_code = %s
+    """, (geo_id, g.county_code), one=True)
 
     if not current_yr_row or not current_yr_row.get("market_value"):
         return jsonify({"ok": False, "error": "No 2025 certified market value for this parcel"})
@@ -5749,9 +5771,9 @@ def api_estimate_acq(geo_id):
     # main projection uses. Clamped to a sane band.
     mkt_hist = query("""
         SELECT tax_year, market_value FROM parcel_tax_year
-        WHERE geo_id = %s AND market_value IS NOT NULL AND tax_year <= 2026
+        WHERE geo_id = %s AND county_code = %s AND market_value IS NOT NULL AND tax_year <= 2026
         ORDER BY tax_year
-    """, (geo_id,))
+    """, (geo_id, g.county_code))
     market_growth = None
     pts = [(r["tax_year"], float(r["market_value"])) for r in mkt_hist if r["market_value"]]
     if len(pts) >= 2 and pts[0][1] > 0:
@@ -5982,19 +6004,24 @@ def api_peer_benchmark_local(geo_id):
     Peer set: same neighborhood_cd, same state_cd1 prefix, 2025 MV within ±50%.
     Returns peer count, median MV, p25/p75 MV, median total_tax, this parcel's rank.
     """
-    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
-    if not parcel:
-        return jsonify({"ok": False, "error": "Parcel not found"})
-
     # DALLAS-GATE-2 Part 2 (peer-match-related dynamic WHERE construction --
     # same risk shape as the original incident): threaded through the
     # candidates CTE and both LEFT JOINs below. g.county_code, same
     # per-request value every other DALLAS-GATE fix in this file reads.
     county_code = g.county_code
 
+    # PX-20260828-12 fix: this subject-parcel fetch and its market-value
+    # lookup lacked county_code, even though the candidates CTE below (the
+    # DALLAS-GATE-2 Part 2 fix) already threads it through correctly -- same
+    # audit-wide gap as compare_parcels()/api_estimate_acq()/
+    # api_peer_benchmark_sf()/api_parcel_entities()/export_due_diligence_pdf().
+    parcel = query("SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s", (geo_id, county_code), one=True)
+    if not parcel:
+        return jsonify({"ok": False, "error": "Parcel not found"})
+
     mv_row = query("""
-        SELECT market_value FROM parcel_tax_year WHERE geo_id = %s AND tax_year = 2025
-    """, (geo_id,), one=True)
+        SELECT market_value FROM parcel_tax_year WHERE geo_id = %s AND tax_year = 2025 AND county_code = %s
+    """, (geo_id, county_code), one=True)
 
     neighborhood = (parcel.get("neighborhood_cd") or "").strip()
     state_cd1    = (parcel.get("state_cd1") or "").strip()[:1]
@@ -6212,16 +6239,19 @@ def api_peer_benchmark_sf(geo_id):
     Returns assessed $/SF and market $/SF percentiles for this parcel vs peers.
     Parcels with null/zero living_area_sqft return ok=False with error='no_sf_basis'.
     """
-    parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
-    if not parcel:
-        return jsonify({"ok": False, "error": "Parcel not found"})
-
     # DALLAS-GATE-2 Part 2 (peer-match-related dynamic WHERE construction --
     # same risk shape as the original incident, same function family as
     # api_peer_benchmark_local() above): threaded through the peer query's
     # WHERE clause below. g.county_code, same per-request value every other
     # DALLAS-GATE fix in this file reads.
     county_code = g.county_code
+
+    # PX-20260828-12 fix: this subject-parcel fetch (and the parcel_data
+    # JOIN's ON clause) lacked county_code -- same audit-wide gap as
+    # api_peer_benchmark_local()/compare_parcels()/api_estimate_acq().
+    parcel = query("SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s", (geo_id, county_code), one=True)
+    if not parcel:
+        return jsonify({"ok": False, "error": "Parcel not found"})
 
     parcel_data = query("""
         SELECT p.living_area_sqft,
@@ -6230,8 +6260,9 @@ def api_peer_benchmark_sf(geo_id):
                pty.assessed_value
         FROM   parcel p
         JOIN   parcel_tax_year pty ON pty.geo_id = p.geo_id AND pty.tax_year = 2025
-        WHERE  p.geo_id = %s
-    """, (geo_id,), one=True)
+                                   AND pty.county_code = p.county_code
+        WHERE  p.geo_id = %s AND p.county_code = %s
+    """, (geo_id, county_code), one=True)
 
     if not parcel_data:
         return jsonify({"ok": False, "error": "No 2025 data for this parcel"})
@@ -7440,19 +7471,27 @@ def compare_parcels():
 
     parcels = []
     for geo_id in geo_ids:
-        parcel = query("SELECT * FROM parcel WHERE geo_id = %s", (geo_id,), one=True)
+        # PX-20260828-12 fix: this route's initial parcel/parcel_tax_year
+        # fetches lacked county_code (parcel/parcel_tax_year are county_code-
+        # leading composite-PK tables per migrate_county_partitioning.py --
+        # geo_id alone is only unique WITHIN a county), even though the
+        # billing query two lines below already had it (DALLAS-GATE-2 Part 2
+        # fixed that one but missed these -- same gap found audit-wide, see
+        # api_estimate_acq/api_peer_benchmark_sf/api_peer_benchmark_local/
+        # api_parcel_entities/export_due_diligence_pdf).
+        parcel = query("SELECT * FROM parcel WHERE geo_id = %s AND county_code = %s", (geo_id, county_code), one=True)
         if not parcel:
             continue
 
         current = query("""
             SELECT market_value, assessed_value, taxable_value, hs_cap_loss, data_source, exemption_codes
-            FROM   parcel_tax_year WHERE geo_id = %s AND tax_year = 2025
-        """, (geo_id,), one=True)
+            FROM   parcel_tax_year WHERE geo_id = %s AND tax_year = 2025 AND county_code = %s
+        """, (geo_id, county_code), one=True)
 
         current_2026 = query("""
             SELECT market_value, assessed_value, data_source
-            FROM   parcel_tax_year WHERE geo_id = %s AND tax_year = 2026
-        """, (geo_id,), one=True)
+            FROM   parcel_tax_year WHERE geo_id = %s AND tax_year = 2026 AND county_code = %s
+        """, (geo_id, county_code), one=True)
 
         billing = query("""
             SELECT total_tax, total_paid, total_due, is_delinquent

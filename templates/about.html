@@ -62,16 +62,30 @@
   <div class="fd-kicker">What Parcelytics covers</div>
   <h2 class="fd-h2">The tax side of underwriting, end to end.</h2>
   <div class="row g-4 mt-2">
-    {# NOTE (PX-20260824-01): "City of Austin" in the Tax rate history entry is
-       NOT converted -- no COUNTY_PROFILES field carries a colloquial city
-       name distinct from county_name; flagged in the PX-20260824-01 report. #}
+    {# PX-20260828-12 fix: this list previously used county_profile (the
+       CURRENT request's county only, which on this neutral /about page
+       always falls back to Travis regardless of which counties are
+       actually live -- same root cause PX-20260828-09 Task 3 already fixed
+       on the homepage's provenance panel). It also hardcoded Travis-only
+       facts as if universal: "City of Austin" as a named jurisdiction
+       (NOT converted here -- no COUNTY_PROFILES field carries a colloquial
+       city name distinct from county_name, so this item is generalized
+       instead of parametrized, same approach as the homepage's provenance
+       panel per PX-20260828-09 Task 3's own comment), "1990-2025" rate
+       history and "2021-2026" appraisal-roll year ranges (Dallas has
+       neither loaded -- PX-20260828-07 Task 1 found zero Dallas rate-
+       history rows), and a fixed "(July 25, 2026)" certification date
+       (Travis's own date, not a general platform fact). Generalized to
+       describe what the product does without claiming every live county
+       has identical coverage -- same "generalize rather than parametrize
+       every number" approach as PX-20260828-11 Task 4. #}
     {% set features = [
-      ('Property tax intelligence','Full certified appraisal history for every ' ~ county_profile.county_name ~ ' parcel — market, assessed, and taxable value, land/improvement breakdown, exemptions, and ownership. Sourced from ' ~ county_profile.cad_abbr ~ ' certified rolls, 2021–2026.'),
-      ('Tax rate history','35 years of entity-level rates (1990–2025) across every ' ~ county_profile.county_name ~ ' jurisdiction — county, school districts, City of Austin, MUDs and more. Track how each entity has moved.'),
+      ('Property tax intelligence','Full certified appraisal history for every parcel in every live county — market, assessed, and taxable value, land/improvement breakdown, exemptions, and ownership. Sourced directly from each county\'s own certified appraisal rolls.'),
+      ('Tax rate history','Entity-level tax rates across each live county\'s taxing jurisdictions — county, school districts, cities, MUDs and more, where that county\'s rate history has been loaded. Track how each entity has moved over time.'),
       ('Investor insight reports','Per-parcel analysis: year-over-year growth, assessment-ratio trends, homestead-cap risk, large-jump detection, and illustrative multi-year tax projections — built for underwriting.'),
       ('County market snapshot','County-wide intelligence each appraisal cycle: median value change by property type, aggregate trends, and sector breakdowns across residential, multi-family, commercial, land and ag.'),
       ('Submarket benchmarking','Compare any parcel against county medians and percentiles for its type, use code, and neighborhood. Filter by sector, use code, year, and geography.'),
-      ('2026 preliminary values','First-look at 2026 ' ~ county_profile.cad_abbr ~ ' preliminary appraisals for every parcel — clearly labeled preliminary, subject to change at certification (July 25, 2026).')
+      ('Preliminary values','First-look at each county\'s newest preliminary appraisals as soon as they\'re published — clearly labeled preliminary, subject to change at certification.')
     ] %}
     {% for title, body in features %}
     <div class="col-md-6 col-lg-4">
@@ -85,37 +99,42 @@
 </section>
 
 {# ══ DATA SOURCES ══════════════════════════════════════════════════════════ #}
+{# PX-20260828-12 fix: this table used county_profile (the current request's
+   county only -- Travis, always, on this neutral page) for BOTH the source
+   names AND fixed year-coverage claims ("2021-2025", "1990-2025",
+   "2021-2024"), presented under a general "Two government sources" framing
+   that implies every live county has identical coverage. Dallas has none
+   of that: no rate-history rows loaded and no billing rows loaded
+   (PX-20260828-07 Task 1), and its own certified-roll years differ from
+   Travis's. Rewritten to loop live_counties (same source the homepage's
+   provenance panel already reads, PX-20260828-09 Task 3) with one row per
+   county per source, and dropped the fixed year-coverage column in favor
+   of each county's own rates page / market snapshot for that county's
+   actual as-of coverage -- rather than repeat a specific year range here
+   that's only true for one county. #}
 <section class="fd-section-tight">
   <div class="fd-kicker">Data sources</div>
-  <h2 class="fd-h2">Two government sources. Zero aggregators.</h2>
+  <h2 class="fd-h2">Government sources. Zero aggregators.</h2>
   <div class="card mt-3">
     <div class="card-body p-0">
       <div class="table-responsive">
         <table class="table mb-0">
           <thead>
-            <tr><th style="width:32%">Source</th><th style="width:42%">What it provides</th><th style="width:26%">Coverage</th></tr>
+            <tr><th style="width:20%">County</th><th style="width:38%">Appraisal source</th><th style="width:42%">Tax office</th></tr>
           </thead>
           <tbody>
+            {% for c in live_counties %}
             <tr>
-              <td class="fw-semibold">{{ county_profile.cad_name }} ({{ county_profile.cad_abbr }})</td>
-              <td>Certified appraisal rolls — values, exemptions, ownership, land/improvement detail</td>
-              <td><span class="badge-verified">Verified</span> 2021–2025<br><span class="badge-preliminary mt-1 d-inline-block">Preliminary</span> 2026</td>
+              <td class="fw-semibold">{{ c.county_name }}</td>
+              <td>{{ c.cad_name }} ({{ c.cad_abbr }}) — certified appraisal rolls: values, exemptions, ownership, land/improvement detail</td>
+              <td>{{ c.tax_office_name }} — rates and billing, where loaded for this county</td>
             </tr>
-            <tr>
-              <td class="fw-semibold">{{ county_profile.tax_office_name }}</td>
-              <td>Tax rates by entity across all {{ county_profile.county_name }} taxing jurisdictions</td>
-              <td>1990–2025</td>
-            </tr>
-            <tr>
-              <td class="fw-semibold">{{ county_profile.tax_office_name }}</td>
-              <td>Billing &amp; delinquency — total tax billed, paid, and outstanding</td>
-              <td>2025 current (Verified or Partial by parcel)<br><span class="badge-verified mt-1 d-inline-block">Verified</span> 2021–2024 ({{ county_profile.tax_office_name }} billing export)</td>
-            </tr>
+            {% endfor %}
           </tbody>
         </table>
       </div>
     </div>
-    <div class="card-footer">All data sourced directly from official government records. No third-party aggregators. Values verified against {{ county_profile.cad_abbr }}'s certified appraisal rolls.</div>
+    <div class="card-footer">All data sourced directly from official government records. No third-party aggregators. Every figure on a property page names its own source and as-of date — see that county's Rates and Market Snapshot pages for its exact year coverage.</div>
   </div>
 </section>
 

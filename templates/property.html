@@ -2928,7 +2928,7 @@
         At ${{ "{:,.0f}".format(_mv) }}, this parcel sits in the <strong>{{ _band }}</strong>
         of {{ bench_label }} property in {{ county_profile.county_name }} — county median ${{ "{:,.0f}".format(_med) }}
         (P25 ${{ "{:,.0f}".format(_p25) }} / P75 ${{ "{:,.0f}".format(_p75) }}{% if _b25.parcel_count %}, n={{ "{:,}".format(_b25.parcel_count) }}{% endif %}).
-        <span class="text-muted" style="font-size:12.5px;">{{ bench_label }} here is the broad TCAD category — every {{ bench_label|lower }} property countywide, any size or use — not a use-code-specific peer group.</span>
+        <span class="text-muted" style="font-size:12.5px;">{{ bench_label }} here is the broad {{ county_profile.cad_abbr }} category — every {{ bench_label|lower }} property countywide, any size or use — not a use-code-specific peer group.</span>
         See the Peer Set and the Where This Property Stands benchmark below, which narrows to this property's actual use code, for parcel-level comparables.
       </p>
       {% endif %}
@@ -4651,7 +4651,7 @@
              updateSummary()), since once narrowed the caveat would itself become
              wrong. #}
           <span id="benchBroadCaveat" class="text-muted" style="font-size:12px; display:block; margin-top:4px;">
-            {{ bench_label }} here is the broad TCAD category — every {{ bench_label|lower }} property countywide, any size or use — not a use-code-specific peer group. Use the Use Code filter above to narrow to this property's actual type.
+            {{ bench_label }} here is the broad {{ county_profile.cad_abbr }} category — every {{ bench_label|lower }} property countywide, any size or use — not a use-code-specific peer group. Use the Use Code filter above to narrow to this property's actual type.
           </span>
         </p>
       {% endif %}

@@ -1260,6 +1260,19 @@ path.county[data-market] {
 .market-card.is-live { border-top-color: var(--map-live); }
 .market-card.is-soon { border-top-color: var(--map-soon-fill); }
 .market-card.is-soon:hover, .market-card.is-soon.is-hovered { border-top-color: var(--map-soon-stroke); }
+/* PX-20260828-11 Task 1: live markets sort first, in a grid, without
+   reshuffling the actual HTML/JS source order. .is-live/.is-soon are
+   already assigned per-card from live_slugs (the same registry the map
+   reads -- see the Jinja comment above the card markup), so keying
+   grid `order` off THOSE classes, rather than a hardcoded reshuffle of
+   the markup or the MARKETS array, means a future county lands in the
+   right visual group automatically the moment its class flips from
+   is-soon to is-live -- no reordering edit required here or anywhere
+   else. CSS `order` only sorts BETWEEN these two groups; items sharing
+   the same order value keep their original relative (source) order,
+   which is what preserves "existing order within each group." */
+.market-card.is-live { order: 0; }
+.market-card.is-soon { order: 1; }
 
 .market-thumb {
   position: absolute;
@@ -1848,8 +1861,15 @@ footer:not(.site-footer) {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: var(--s-5) var(--s-4);
+  /* PX-20260828-11 Task 2: stretch is CSS Grid's own default, but declared
+     explicitly here (rather than left implicit) so every .who-serve-card
+     in a row is forced to the row's full height -- e.g. Homeowners' longer
+     copy no longer leaves its row-mate visibly shorter. Cosmetic only, no
+     structural change: still the same 4 cards, same 2-column grid, same
+     content. */
+  align-items: stretch;
 }
-.who-serve-card { display: flex; gap: var(--s-4); align-items: flex-start; }
+.who-serve-card { display: flex; gap: var(--s-4); align-items: flex-start; height: 100%; }
 .who-serve-badge {
   width: 40px; height: 40px; border-radius: 50%;
   background: rgba(var(--accent-rgb), 0.10);
