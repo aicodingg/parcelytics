@@ -1,5 +1,7 @@
 {% extends "base.html" %}
-{% import "_macros.html" as m %}
+{# PX-20260829-03 Task 6: the `{% import "_macros.html" as m %}` this page
+   used to have (for coverage_map()) is gone along with the section that
+   called it -- no other macro in _macros.html is used on this page. #}
 {% block title %}About — Parcelytics{% endblock %}
 {% block container_class %} is-frontdoor{% endblock %}
 
@@ -37,12 +39,13 @@
 {# ══ HERO ══════════════════════════════════════════════════════════════════ #}
 <section class="hero">
   <div class="hero-inner" style="max-width:760px;">
-    <span class="hero-eyebrow"><span class="dot"></span> {{ county_profile.county_name }}, Texas</span>
-    {# PX-20260827-03-rev1 ruling (a), unchanged: About is a neutral, bare-
-       path page (no county prefix), so county_profile below falls back to
-       the default county via the existing context-processor -- this line
-       makes that fallback visible rather than silent. #}
-    <p class="text-muted mb-0" style="font-size:12.5px;">Showing {{ county_profile.county_name }}, TX coverage details below.</p>
+    {# PX-20260829-03 Task 1: removed the "{{ county_profile.county_name }},
+       Texas" eyebrow pill and the "Showing ... coverage details below"
+       disclosure -- both were PX-20260827-03-rev1's fix for making About's
+       neutral-page county_profile fallback visible rather than silent, but
+       Diego's live review called this out as exactly the wrong instinct for
+       this page: About is about the company, not any one county, so it
+       shouldn't carry county context AT ALL, not even a disclosed one. #}
     <h1 style="max-width:20ch;">Property tax data you can <span class="accent">cite</span>.</h1>
     <p class="hero-sub">
       Every county already keeps this record — appraised value, exemptions, ownership, tax
@@ -61,130 +64,87 @@
 </section>
 
 {# ══ WHY PARCELYTICS ═══════════════════════════════════════════════════════ #}
+{# PX-20260829-03 Task 2: condensed from 5 paragraphs to 3 (Diego-approved
+   draft, sign-off obtained before building) -- the old paragraph 4 ("once
+   centralized, it's useful") and paragraph 5 ("we're expanding county by
+   county") are cut entirely rather than compressed in. Usefulness is now
+   Our Mission's job ("actionable"), and the expansion/scale narrative no
+   longer has a section on this page at all once Task 6 removes the
+   coverage map below -- restating it here with nowhere to point would be
+   an orphaned claim. The 3 that remain are exactly the narrative arc Diego
+   named: records are authoritative -> the problem is where they live ->
+   Parcelytics connects them.
+
+   Also fixes the old empty-right-column layout complaint: this used to be
+   a single full-width column with the evidence table stacked below all 5
+   paragraphs (a lot of scroll before any visual variety). Now a genuine
+   2-column row -- prose left (col-lg-7, wants the width to read well),
+   the "see it for yourself" evidence card right (col-lg-5, restyled from a
+   3-column table to a compact per-county list since a wide table doesn't
+   fit a narrower column) -- so the concrete per-county proof sits directly
+   beside the fragmentation claim it's backing, not below a wall of text. #}
 <section class="fd-section-tight">
   <div class="fd-kicker">Why Parcelytics</div>
   <h2 class="fd-h2">Property tax data shouldn't require detective work.</h2>
-  <p class="fd-lead">
-    County appraisal districts and tax offices already keep the authoritative record on
-    every parcel — appraised value, exemptions, ownership, entity tax rates, what was billed
-    and what was paid. That record isn't unreliable, and it isn't hidden. It's public, and
-    it's official. It has always been the source of truth, and it always will be.
-  </p>
-  <p class="fd-lead mt-3">
-    The problem is where it lives. A single property's full tax picture is usually split
-    across a county appraisal district's site, a separate tax office's site, and whatever
-    historical filings happen to still be online — three different systems, three different
-    interfaces, none of them built to talk to each other. The information isn't unreliable —
-    it's just spread across sources that were never built to connect.
-  </p>
-  <p class="fd-lead mt-3">
-    Parcelytics connects directly to each county's own appraisal district and tax office and
-    brings that record together at the parcel level. One page, one property, its entire tax
-    history in one place — instead of piecing it together across half a dozen sites by hand.
-  </p>
-  <p class="fd-lead mt-3">
-    Once it's centralized, it becomes useful in ways a scattered record never can be: value
-    and rate history you can actually trace year over year, forward-looking projections built
-    from a parcel's own record, and every underlying detail one click away — all still labeled
-    with exactly how confident we are in it, and where it came from.
-  </p>
-  <p class="fd-lead mt-3">
-    We're building this county by county, verifying each new market against its own official
-    sources before it goes live, because the whole premise depends on getting the sourcing
-    right every single time.
-  </p>
-
-  {# PX-20260829-02: folded in from the old standalone "Data sources"
-     section per Diego's ruling -- kept as concrete, per-county evidence for
-     the fragmentation claim above, rather than either its own feature-led
-     section or dropped outright. Loop unchanged from the prior version;
-     still reads live_counties, not county_profile, so it's correct for
-     however many counties are live at request time (PX-20260828-12 fix). #}
-  <div class="card mt-4">
-    <div class="card-header">See it for yourself</div>
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table mb-0">
-          <thead>
-            <tr><th style="width:20%">County</th><th style="width:38%">Appraisal source</th><th style="width:42%">Tax office</th></tr>
-          </thead>
-          <tbody>
-            {% for c in live_counties %}
-            <tr>
-              <td class="fw-semibold">{{ c.county_name }}</td>
-              <td>{{ c.cad_name }} ({{ c.cad_abbr }}) — certified appraisal rolls: values, exemptions, ownership, land/improvement detail</td>
-              <td>{{ c.tax_office_name }} — rates and billing, where loaded for this county</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+  <div class="row g-5 align-items-start mt-1">
+    <div class="col-lg-7">
+      <p class="fd-lead">
+        County appraisal districts and tax offices already keep the definitive record on
+        every parcel — appraised value, exemptions, ownership, tax rates, what was billed
+        and what was paid. It's public, it's official, and it always has been. That was
+        never the problem.
+      </p>
+      <p class="fd-lead mt-3">
+        The problem is where it lives. A property's full tax picture is usually split
+        across an appraisal district's site, a separate tax office's site, and whatever
+        else happens to still be online — three systems, none built to talk to each other.
+        The information isn't unreliable — it's just spread across sources that were never
+        built to connect.
+      </p>
+      <p class="fd-lead mt-3">
+        Parcelytics connects directly to each county's own appraisal district and tax
+        office and brings that record together at the parcel level. One page, one
+        property, its entire tax history in one place — sourced, labeled, and traceable
+        back to where it came from.
+      </p>
     </div>
-    <div class="card-footer">All data sourced directly from official government records. No third-party aggregators. Every figure on a property page names its own source and as-of date.</div>
-  </div>
-</section>
-
-{# ══ DATA INTEGRITY STANDARD ═══════════════════════════════════════════════ #}
-{# Unchanged verbatim per Diego's ruling -- this is the page's own data
-   philosophy (how we label confidence), not a claim about the county data
-   itself, which is why it survives this redesign untouched. #}
-<section class="fd-section-tight">
-  <div class="fd-trust-panel">
-    <div class="row g-5">
-      <div class="col-lg-5">
-        <div class="fd-kicker">The standard</div>
-        <h2 class="fd-h2" style="color:#fff;">Honesty, made premium.</h2>
-        <p class="fd-lead" style="color:var(--text-on-dark-2);">Every figure carries a confidence label. We never blend a guess with a real number — and when data is missing, we say so.</p>
-      </div>
-      <div class="col-lg-7">
-        {% set rules = [
-          'No estimate or interpolation is ever presented as fact.',
-          'Every figure shows a visible confidence level.',
-          'Every figure is traceable to its source and as-of date.',
-          '"Not Available" is an explicit state — never blank, never zero.',
-          'Estimates carry distinct treatment: dashed, muted, ~ prefixed.'
-        ] %}
-        {% for r in rules %}
-        <div class="provenance-row"><span class="provenance-check">✓</span><div class="src" style="font-weight:500;">{{ r }}</div></div>
-        {% endfor %}
-        <div class="mt-4 confidence-legend">
-          <span class="item"><span class="badge-verified" style="font-size:10px;">Verified</span></span>
-          <span class="item"><span class="badge-preliminary" style="font-size:10px;">Preliminary</span></span>
-          <span class="item"><span class="badge-partial" style="font-size:10px;">Partial</span></span>
-          <span class="item"><span class="badge-estimated" style="font-size:10px;">Estimated</span></span>
-          <span class="item"><span class="na-cell">Not Available</span></span>
+    <div class="col-lg-5">
+      {# PX-20260829-02 originally folded this in as a full-width table
+         below the prose; PX-20260829-03 Task 2 moves it into this column
+         and restyles it as a compact per-county list (a 3-column table
+         doesn't read well at col-lg-5 width). Still loops live_counties,
+         not county_profile, so it stays correct as more counties go live
+         (PX-20260828-12 fix, unchanged). #}
+      <div class="card">
+        <div class="card-header">See it for yourself</div>
+        <div class="card-body">
+          {% for c in live_counties %}
+          <div class="{{ 'mb-3 pb-3' if not loop.last }}" style="{{ 'border-bottom:1px solid var(--border);' if not loop.last }}">
+            <div class="fw-semibold" style="font-size:13.5px;">{{ c.county_name }}</div>
+            <div class="text-muted mt-1" style="font-size:12.5px; line-height:1.6;">
+              {{ c.cad_name }} ({{ c.cad_abbr }}) — appraisal<br>
+              {{ c.tax_office_name }} — tax office
+            </div>
+          </div>
+          {% endfor %}
         </div>
+        <div class="card-footer" style="font-size:11.5px;">Sourced directly from official government records. No third-party aggregators.</div>
       </div>
     </div>
   </div>
 </section>
 
-{# ══ METHODOLOGY ═══════════════════════════════════════════════════════════ #}
-{# Unchanged verbatim -- id="methodology-billing-gap" is linked from 4 live
-   locations in property.html (Homeowner tax card + 5-year Total Tax column
-   "Why?" links). Kept immediately after The Standard, same as before this
-   redesign. #}
-<section class="fd-section-tight" id="methodology">
-  <div class="fd-kicker">Methodology</div>
-  <h2 class="fd-h2">What &ldquo;Not available&rdquo; means, and why it happens.</h2>
-  <p class="fd-lead">
-    Every figure on Parcelytics comes from a specific government source, tagged with its own confidence level (see the standard above). Some gaps come from the source data itself, not from anything on our end — here's the most common one.
-  </p>
-  <div class="card mt-3" id="methodology-billing-gap">
-    <div class="card-body">
-      <h3 style="font-size:15px; font-weight:700;">Why is a parcel's tax bill &ldquo;Not available from the county&rdquo;?</h3>
-      <p class="mb-2">
-        Travis County's own current-year billing extract doesn't include a row for every parcel in TCAD's appraisal roll. Some property types — personal property accounts, mobile homes, and a smaller number of ordinary single-family homes — don't appear in the county's public billing file the way most residential accounts do. This is a gap in Travis County's own published data, confirmed directly against the source file; it isn't something Parcelytics failed to load.
-      </p>
-      <p class="mb-2">
-        Where a parcel's actual bill isn't available, we don't leave the figure blank or show a stale placeholder. When we have enough certified data to produce a reasonable estimate — this year's taxable value × last known entity tax rates — we show it clearly marked <span class="badge-estimated" style="font-size:9px;">Estimated</span> and prefixed with &ldquo;~&rdquo;, an approximation, not a confirmed billed amount. Where we can't even estimate, we say so rather than guess.
-      </p>
-      <p class="mb-0 text-muted" style="font-size:12.5px;">
-        We're continuing to investigate the scope of this gap with Travis County directly. If you're a homeowner whose actual bill differs from an estimate shown here, your county tax statement is always the authoritative figure.
-      </p>
-    </div>
-  </div>
-</section>
+{# PX-20260829-03 Task 3 (amended): the Methodology section (id="methodology",
+   billing-gap explanation) is REMOVED. Originally sequenced to wait until
+   property.html's 4 links were repointed (see this file's git history for
+   the interim "flag, don't delete" version) -- Diego's amendment replaced
+   those 4 links entirely with an inline ⓘ info-icon tooltip on
+   property.html itself (see that file's PX-20260829-03 Task 3 comments),
+   so nothing anywhere links to this section or its #methodology-billing-gap
+   anchor anymore. Confirmed via repo-wide grep before deleting. The
+   content that used to live here (why a county's own billing file is
+   sometimes missing a row) now lives condensed, inline, at the point of
+   use instead of requiring a trip to this page. #}
 
 {# ══ WHO WE'RE BUILDING FOR ════════════════════════════════════════════════ #}
 {# PX-20260829-02: replaces the old 3-card ".audience-card" grid (Real
@@ -259,26 +219,21 @@
    built this way. #}
 <section class="fd-mission">
   <div class="fd-kicker">Our mission</div>
-  <p class="fd-mission-statement">Make property tax data <span class="accent">transparent, accessible, and actionable</span>.</p>
+  {# PX-20260829-03 Task 5: rewritten around centralization per Diego's
+     brief (approved copy) -- "centralized" leads the list since it's the
+     actual mechanism (Why Parcelytics' own narrative arc above), with
+     transparent/accessible/actionable as what that centralization makes
+     possible. #}
+  <p class="fd-mission-statement">Make property tax data <span class="accent">centralized, transparent, accessible, and actionable</span>.</p>
 </section>
 
-{# ══ WHERE WE'RE GOING ═════════════════════════════════════════════════════ #}
-{# PX-20260829-02: reuses the exact same live, D3-rendered coverage map as
-   the homepage via the shared coverage_map() macro (templates/_macros.html)
-   + static/coverage-map.js, instead of a second hand-copied instance -- see
-   that macro's own header comment for the full drift-avoidance reasoning.
-   Kicker/h2/lead here are About's own framing; the macro itself renders no
-   copy of its own. #}
-<section class="fd-section">
-  <div class="fd-kicker">Where we're going</div>
-  <h2 class="fd-h2">One platform. Every county. Better analysis.</h2>
-  <p class="fd-lead">
-    We're adding counties one at a time, verifying each one against its own official sources
-    before it goes live. As coverage grows, so does what we can build on top of it — deeper
-    analysis, more markets to compare against, the same standard applied everywhere.
-  </p>
-  {{ m.coverage_map(live_counties) }}
-</section>
+{# PX-20260829-03 Task 6: "Where We're Going" (the coverage_map() reuse)
+   removed entirely per Diego's ruling -- it duplicated the homepage's own
+   Coverage & Roadmap section and, per Diego's live review, rendered blank
+   on this page. The shared coverage_map() macro (templates/_macros.html)
+   and static/coverage-map.js are left fully intact -- index.html still
+   calls the macro and is the map's one real home now. Do not delete the
+   macro/JS just because this page no longer calls it. #}
 
 {# ══ CLOSING ═══════════════════════════════════════════════════════════════ #}
 {# PX-20260829-02: first real use of .fd-cta-band -- built out in full in
@@ -288,7 +243,9 @@
   <div class="fd-cta-band">
     <h2>Better data. Better understanding. Better decisions.</h2>
     <p>Search any live parcel and see the record for yourself.</p>
-    <a href="{{ url_for('home') }}" class="btn-cta">Explore Parcelytics →</a>
+    {# PX-20260829-03 Task 7: was url_for('home') -- now points straight at
+       the search experience itself rather than back to the homepage. #}
+    <a href="{{ url_for('search_landing') }}" class="btn-cta">Explore Parcelytics →</a>
   </div>
 </section>
 

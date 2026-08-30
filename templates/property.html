@@ -757,10 +757,22 @@
          row at all"). Reworded vague-honest ("Not available from the
          county", matching the headline above) rather than naming a specific
          row count here, which would go stale the next time that source file
-         reloads. "Why?" links to the new public Methodology section
-         (templates/about.html#methodology-billing-gap) on both the fully-
-         missing branch and the computed-estimate branch, since both stem
-         from the same underlying county-side gap. #}
+         reloads.
+
+         PX-20260829-03 Task 3 (amended): the "Why?" link used to navigate
+         away to templates/about.html#methodology-billing-gap. Replaced with
+         an inline ⓘ info icon carrying the explanation directly via a
+         native title tooltip -- this page's one existing hover-explanation
+         pattern everywhere else (see the stat() macro's own tooltip param
+         and the assessed-value anomaly badge above), not a new component.
+         No navigation needed, and this page no longer depends on About
+         having a Methodology section at all -- see about.html's own
+         PX-20260829-03 comment for the other half of this change. Same
+         icon + copy on both the fully-missing branch and the computed-
+         estimate branch below, since both stem from the same underlying
+         county-side gap. When the Demo page (PX-20260829-04) exists, a
+         "Further info →" link can sit beside this icon -- not nested
+         inside the tooltip, which can't hold a link. #}
       <div class="text-muted" style="font-size:12.5px; line-height:1.5;">
         {% if tax25 and current.billing_source == 'portal_scrape' %}
           Based on a payment receipt from the county tax portal — reflects what was paid, which may not match the full amount billed.
@@ -774,10 +786,10 @@
         {% elif current and current.computed_total_tax %}
           Not in the county's billing file — {% if is_residential %}your estimated 2025 tax{% else %}this property's estimated 2025 tax{% endif %}, based on certified value × certified rates.
           <span class="badge-estimated" style="font-size:9px;">Estimated</span>
-          <a href="{{ url_for('about') }}#methodology-billing-gap" class="text-muted" style="font-size:10.5px; text-decoration:underline;" title="Why isn't this parcel in the county's billing file?">Why?</a>
+          <span title="{{ county_profile.county_name }}'s own billing file doesn't include a row for every parcel on its appraisal roll — a gap in the county's published data, not something Parcelytics failed to load. Where we can, we show a labeled estimate; otherwise we say so rather than guess." style="cursor:help; color:var(--text-3); font-size:11px; margin-left:2px;">ⓘ</span>
         {% else %}
           {% if is_residential %}Your 2025 tax bill isn't in the county's billing file.{% else %}This property's 2025 tax bill isn't in the county's billing file.{% endif %}
-          <a href="{{ url_for('about') }}#methodology-billing-gap" class="text-muted" style="font-size:10.5px; text-decoration:underline;" title="Why isn't this parcel in the county's billing file?">Why?</a>
+          <span title="{{ county_profile.county_name }}'s own billing file doesn't include a row for every parcel on its appraisal roll — a gap in the county's published data, not something Parcelytics failed to load. Where we can, we show a labeled estimate; otherwise we say so rather than guess." style="cursor:help; color:var(--text-3); font-size:11px; margin-left:2px;">ⓘ</span>
         {% endif %}
       </div>
     </div></div>
@@ -4138,17 +4150,23 @@
                      disclosure inside a hover-only tooltip, with only "~$X" visible
                      in the cell itself — easy to misread as a normal billed figure at
                      a glance. Now visible inline as "not in county billing file · ~$X
-                     estimated", plus a "Why?" link to the new Methodology section
-                     (templates/about.html#methodology-billing-gap); tooltip kept for
-                     the fuller explanation on hover. #}
+                     estimated".
+
+                     PX-20260829-03 Task 3 (amended): the "Why?" link to
+                     templates/about.html#methodology-billing-gap is replaced
+                     with a second ⓘ icon (this cell already had one title
+                     tooltip explaining HOW the estimate is computed; this
+                     new one explains WHY the county's own file is missing
+                     the row in the first place -- see the Homeowner tax
+                     card's identical fix above for the full reasoning). #}
                   <span title="Computed: taxable value × combined entity rate — this year's row is not in {{ county_profile.county_name }}'s billing file"
                         style="font-style:italic; color:var(--text-muted); cursor:help;">
                     not in county billing file · ~${{ "{:,.0f}".format(r.computed_total_tax) }} estimated
                   </span>
-                  <a href="{{ url_for('about') }}#methodology-billing-gap" class="text-muted" style="font-size:10px; text-decoration:underline;" title="Why isn't this year in the county's billing file?">Why?</a>
+                  <span title="{{ county_profile.county_name }}'s own billing file doesn't include a row for every parcel on its appraisal roll — a gap in the county's published data, not something Parcelytics failed to load. Where we can, we show a labeled estimate; otherwise we say so rather than guess." style="cursor:help; color:var(--text-3); font-size:10px; margin-left:2px;">ⓘ</span>
                 {% else %}
                   <span class="na-cell" id="bna-{{ r.tax_year }}">not in county billing file</span>
-                  <a href="{{ url_for('about') }}#methodology-billing-gap" class="text-muted" style="font-size:10px; text-decoration:underline;" title="Why isn't this year in the county's billing file?">Why?</a>
+                  <span title="{{ county_profile.county_name }}'s own billing file doesn't include a row for every parcel on its appraisal roll — a gap in the county's published data, not something Parcelytics failed to load. Where we can, we show a labeled estimate; otherwise we say so rather than guess." style="cursor:help; color:var(--text-3); font-size:10px; margin-left:2px;">ⓘ</span>
                 {% endif %}
               </td>
               <td data-label="Source" {% if r.tax_year in [2021,2022,2023,2024] %}id="bsrc-{{ r.tax_year }}"{% endif %}>

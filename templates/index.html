@@ -192,57 +192,48 @@
   </div>
 </section>
 
-{# ══ TRUST PANEL (dark) — PX-20260827-03-rev1: registry-driven, not
-   hardcoded to Travis ═══════════════════════════════════════════════════ #}
-<section class="fd-section-tight">
+{# ══ THE STANDARD (dark) ═══════════════════════════════════════════════════
+   PX-20260829-03 Task 4: replaces the old per-county Provenance panel
+   (PX-20260827-03-rev1's registry-driven version, which looped live_counties
+   to list each county's CAD + tax office by name). Diego's ruling from the
+   About-page live review: that per-county table doesn't scale -- with more
+   counties live it becomes a list nobody actually reads, and it's county-
+   specific content sitting in a section that's supposed to be a general
+   statement. The Standard (5 principles + confidence legend) IS that general,
+   always-true statement of how this product treats data, regardless of which
+   or how many counties are live -- moved here verbatim from about.html
+   (which now no longer has its own copy -- Diego's ruling: don't duplicate
+   it across two pages). Sourcing credibility is kept with ONE general line
+   folded into the lead paragraph below ("every figure ... comes directly
+   from that county's own appraisal district and tax office") instead of
+   enumerating each county's specific CAD/tax-office names -- the per-county
+   detail lives on each property page itself (every figure already names its
+   own source), so nothing is actually lost, only the doesn't-scale list. #}
+<section class="fd-section-tight" id="the-standard">
   <div class="fd-trust-panel">
-    <div class="row g-5 align-items-center">
-      <div class="col-lg-6">
-        {# PX-20260827-04 Task 3: was a per-name join (Diego's ruling: stop
-           enumerating counties in running prose as the list grows) --
-           total-parcels-across-live-counties framing instead, same
-           live_counties source, summed not invented. #}
-        <div class="fd-kicker">Provenance · {{ total_live_parcel_count_display }}+ parcels, {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} — live today</div>
-        <h2 class="fd-h2" style="color:#fff;">Certified data, shown proudly.</h2>
-        <p class="fd-lead" style="color:var(--text-on-dark-2);">Two official sources per county, named on every figure — live across {{ live_counties|length }} {{ 'county' if live_counties|length == 1 else 'counties' }} today, with coverage and as-of dates stated plainly.</p>
+    <div class="row g-5">
+      <div class="col-lg-5">
+        <div class="fd-kicker">The standard</div>
+        <h2 class="fd-h2" style="color:#fff;">Honesty, made premium.</h2>
+        <p class="fd-lead" style="color:var(--text-on-dark-2);">Every figure carries a confidence label. We never blend a guess with a real number — and when data is missing, we say so. All of it comes directly from that county's own appraisal district and tax office, never a third-party aggregator.</p>
       </div>
-      <div class="col-lg-6">
-        {# PX-20260828-09 Task 3: was county_profile.cad_name/cad_abbr/
-           tax_office_name -- the CURRENT REQUEST's county only, which on
-           any neutral page (this homepage included) falls back to Travis's
-           profile regardless of which counties are actually live. Now
-           loops live_counties (same registered-AND-has-data list every
-           other "what's live" surface reads from), so Dallas's real DCAD/
-           Dallas County Tax Office sources render alongside Travis's, and
-           a future county appears automatically with no template edit.
-           Description text intentionally kept generic (institution/role
-           only, no specific year-coverage claim) rather than reusing
-           Travis's old "2021-2025 verified, 2026 preliminary" / "1990-2025"
-           wording verbatim for every county -- PX-20260828-07 Task 1 found
-           Dallas has ZERO rate-history rows loaded today, so repeating
-           Travis's "1990-2025" claim here for Dallas's own tax office row
-           would be the same overclaim that brief just fixed on the Rates
-           page itself, in the one section of the homepage most about
-           accurate sourcing. #}
-        {% for c in live_counties %}
-        <div class="provenance-row">
-          <span class="provenance-check">✓</span>
-          <div><div class="src">{{ c.cad_name }} ({{ c.cad_abbr }})</div><div class="desc">Certified appraisal rolls — values, exemptions, ownership</div></div>
-        </div>
-        <div class="provenance-row">
-          <span class="provenance-check">✓</span>
-          <div><div class="src">{{ c.tax_office_name }}</div><div class="desc">Tax rates by entity, current-year billing &amp; delinquency open data</div></div>
-        </div>
+      <div class="col-lg-7">
+        {% set rules = [
+          'No estimate or interpolation is ever presented as fact.',
+          'Every figure shows a visible confidence level.',
+          'Every figure is traceable to its source and as-of date.',
+          '"Not Available" is an explicit state — never blank, never zero.',
+          'Estimates carry distinct treatment: dashed, muted, ~ prefixed.'
+        ] %}
+        {% for r in rules %}
+        <div class="provenance-row"><span class="provenance-check">✓</span><div class="src" style="font-weight:500;">{{ r }}</div></div>
         {% endfor %}
-        <div class="mt-4">
-          <div class="label-caps mb-2" style="color:var(--text-on-dark-3);">The confidence system, previewed</div>
-          <div class="confidence-legend">
-            <span class="item"><span class="badge-verified" style="font-size:10px;">Verified</span></span>
-            <span class="item"><span class="badge-preliminary" style="font-size:10px;">Preliminary</span></span>
-            <span class="item"><span class="badge-partial" style="font-size:10px;">Partial</span></span>
-            <span class="item"><span class="badge-estimated" style="font-size:10px;">Estimated</span></span>
-            <span class="item"><span class="na-cell">Not Available</span></span>
-          </div>
+        <div class="mt-4 confidence-legend">
+          <span class="item"><span class="badge-verified" style="font-size:10px;">Verified</span></span>
+          <span class="item"><span class="badge-preliminary" style="font-size:10px;">Preliminary</span></span>
+          <span class="item"><span class="badge-partial" style="font-size:10px;">Partial</span></span>
+          <span class="item"><span class="badge-estimated" style="font-size:10px;">Estimated</span></span>
+          <span class="item"><span class="na-cell">Not Available</span></span>
         </div>
       </div>
     </div>

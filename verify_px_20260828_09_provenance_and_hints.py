@@ -12,6 +12,22 @@ _live_counties() (app.py) now returns as of this task -- each entry
 carries cad_name/cad_abbr/tax_office_name alongside slug/display_name/
 county_name/parcel_count, not a narrower ad-hoc shape.
 
+PX-20260829-03 UPDATE: Task 3's own per-county provenance panel (the
+"Provenance · N+ parcels..." block this task built, looping live_counties
+to print every county's CAD/tax-office name by name) was itself removed
+from index.html by PX-20260829-03 Task 4 -- replaced with The Standard
+(moved verbatim from about.html), which folds sourcing into ONE general
+line ("directly from that county's own appraisal district and tax
+office, never a third-party aggregator") rather than enumerating each
+county, per Diego's explicit ruling that per-county enumeration "doesn't
+scale." This is the same kind of legitimate supersession already
+documented in verify_launch_surface_registry.py and
+verify_px_20260829_02_about_redesign.py -- the two checks below are
+rewritten to assert the NEW reality (general sourcing line present, old
+per-county enumeration gone) rather than the original per-county-loop
+behavior, which no longer exists by design. Task 4's hint-genericization
+checks are untouched -- unaffected by the panel's removal.
+
 Run: python3 verify_px_20260828_09_provenance_and_hints.py
 """
 import sys
@@ -105,33 +121,43 @@ def check(label, fn):
 
 
 def main():
-    # ── Task 3: homepage provenance panel loops live_counties ─────────────
+    # ── Task 3 (superseded by PX-20260829-03 Task 4): homepage sourcing ────
     env = make_env(county_slug="travis-tx")
     tpl = env.get_template("index.html")
 
-    def _provenance_loops_both_counties():
+    def _standard_folds_in_one_general_sourcing_line():
         out = tpl.render(q="", error=None, addr_matches=None, api_county_slug="")
+        # The per-county provenance panel this task originally built is gone
+        # (PX-20260829-03 Task 4) -- replaced by The Standard's ONE general
+        # sourcing line. Assert the new line is present, and that the old
+        # per-county enumeration pattern it replaced is genuinely absent,
+        # not just relocated.
+        if "directly from that county's own appraisal district and tax office" not in out:
+            raise AssertionError("The Standard's general sourcing line is missing from index.html")
         for needle in ("Travis Central Appraisal District (TCAD)", "Travis County Tax Office",
                        "Dallas Central Appraisal District (DCAD)", "Dallas County Tax Office"):
-            if needle not in out:
-                raise AssertionError(f"provenance panel missing expected source: {needle!r}")
+            if needle in out:
+                raise AssertionError(
+                    f"old per-county source enumeration ({needle!r}) still present -- "
+                    "should be folded into one general line, not enumerated per county")
         return out
-    check("index.html / provenance panel lists BOTH Travis and Dallas real sources",
-          _provenance_loops_both_counties)
+    check("index.html / sourcing is ONE general line on The Standard, not a per-county enumeration",
+          _standard_folds_in_one_general_sourcing_line)
 
     def _provenance_drops_travis_only_year_claims():
         out = tpl.render(q="", error=None, addr_matches=None, api_county_slug="")
         # The old hardcoded "2021-2025 verified, 2026 preliminary" / "1990-
-        # 2025" claims must not survive into the per-county loop -- Dallas
+        # 2025" claims must not survive anywhere on the homepage -- Dallas
         # has zero rate-history rows loaded (PX-20260828-07 Task 1 finding),
-        # so repeating those year-range claims for Dallas's own row would
-        # overclaim coverage Dallas doesn't have.
+        # so repeating those year-range claims would overclaim coverage
+        # Dallas doesn't have. Still a valid check post-Task-4: this is a
+        # general homepage assertion, not scoped to the now-removed panel.
         if "2021–2025 verified, 2026 preliminary" in out:
-            raise AssertionError("stale Travis-only certified-year claim still present in provenance panel")
+            raise AssertionError("stale Travis-only certified-year claim still present on the homepage")
         if "Tax rates by entity (1990" in out:
-            raise AssertionError("stale Travis-only '1990-2025' rate-history claim still present in provenance panel")
+            raise AssertionError("stale Travis-only '1990-2025' rate-history claim still present on the homepage")
         return out
-    check("index.html / provenance panel no longer makes county-specific year-coverage claims",
+    check("index.html / homepage no longer makes county-specific year-coverage claims",
           _provenance_drops_travis_only_year_claims)
 
     # ── Task 4: hero + search-page hints no longer hardcode Travis format ──

@@ -167,20 +167,30 @@ columns, contact, and "not legal or tax advice".
 headline with accent, supporting sentence, the live search (behavior unchanged), a credible product
 *motif* built in HTML (mini property card with KPIs, confidence pills, entity bar — no stock art),
 and a trust strip (508K+ parcels, rates since 1990, 2021–26 coverage, 2 government sources / zero
-aggregators). Below: "what makes it different" (the 3 data-integrity principles), a dark provenance
-panel naming TCAD + Tax Office and previewing the confidence system, audience cards
+aggregators). Below: "what makes it different" (the 3 data-integrity principles), audience cards
 (investors / developers / homeowners), and a **Request access / feedback** CTA (`#request`,
 mailto:parcelytics@gmail.com) — there was previously no way for a visitor to request access.
+> **PX-20260829-03 update:** the old per-county dark provenance panel (naming TCAD + Tax Office by
+> name, "doesn't scale" per Diego past 1-2 counties) is gone from here. **The Standard** — the 5
+> data-integrity principles + confidence legend, moved verbatim from `about.html` — now lives on
+> the homepage instead (`id="the-standard"`), folding sourcing into one general line ("directly
+> from that county's own appraisal district and tax office") rather than enumerating every county.
 
-**About (`about.html`)** — PX-20260829-02 redesign: no longer a second homepage. Hero -> Why
-Parcelytics (the fragmentation narrative, with the per-county source table folded in as
-supporting evidence, not its own section) -> The Standard (dark data-integrity panel, unchanged)
--> Methodology (unchanged, linked from property.html) -> Who We're Building For (icon-grid,
-mirrors the homepage's 4 Who We Serve segments exactly) -> Our Mission (minimal, chrome-free
-statement, `.fd-mission`) -> Where We're Going (shares the homepage's `coverage_map()` macro +
-`static/coverage-map.js`, not a second copy) -> Closing (`.fd-cta-band`). The old feature-card
-grid, standalone data-sources table, and 3-card "Who it's for" section, along with the earlier
-`#request` CTA (removed separately, see PX-2026082x request-access cleanup), are gone.
+**About (`about.html`)** — PX-20260829-02 redesign, revised by PX-20260829-03 after Diego's live
+review. Now five sections: Hero (no county pill/disclosure — About is a neutral company page) ->
+Why Parcelytics (condensed to 3 paragraphs: records-authoritative -> fragmentation ->
+Parcelytics-connects, with the per-county source table moved into the freed right column as
+supporting evidence) -> Who We're Building For (icon-grid, mirrors the homepage's 4 Who We Serve
+segments exactly) -> Our Mission (`.fd-mission`, now reads "Make property tax data centralized,
+transparent, accessible, and actionable.") -> Closing (`.fd-cta-band`, CTA now points to `/search`,
+not the homepage). **The Standard, Methodology, and the coverage map/roadmap section have all been
+removed from About** — The Standard moved to the homepage (no duplication); the coverage map was
+already the shared homepage macro and never belonged on a static company page; Methodology's 4
+`property.html` tooltip links were replaced with a native `title`-attribute info-icon (this page's
+existing hover pattern) carrying the same condensed copy inline, so the section had no remaining
+consumers and was deleted rather than left orphaned. The old feature-card grid, standalone
+data-sources table, 3-card "Who it's for" section, and the earlier `#request` CTA (removed
+separately, see PX-2026082x request-access cleanup) were already gone as of PX-20260829-02.
 
 **Property detail (`property.html`)** — inherits the new tokens (KPI cards, tables, pills, section
 nav all elevated). Specific brief items:

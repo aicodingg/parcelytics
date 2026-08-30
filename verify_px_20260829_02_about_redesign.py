@@ -1,42 +1,74 @@
 #!/usr/bin/env python3
 """
 verify_px_20260829_02_about_redesign.py -- real Jinja RENDER verification for
-PX-20260829-02's About page redesign: the section reorder/rewrite
-(templates/about.html) and the Coverage Map extraction into a shared
-coverage_map() macro (templates/_macros.html) + static/coverage-map.js so
-about.html and index.html reuse the exact same component instead of a second
-hand-copied instance (same drift-avoidance precedent as
-static/parcel-typeahead.js and _macros.html's addr_match_results()).
+the About page redesign, PX-20260829-02 as amended by PX-20260829-03.
+
+PX-20260829-03 UPDATE: Diego's live review of -02 requested a follow-up
+pass -- most of this file's original checks were written against -02's
+8-section structure, which -03 changed substantially:
+  - The county pill + "Showing ... coverage details below" hero disclosure
+    are removed (Task 1) -- About carries no county context at all now.
+  - Why Parcelytics is condensed from 5 paragraphs to 3, in a new 2-column
+    layout (prose left, the "See it for yourself" evidence card moved into
+    the freed right column) (Task 2, sign-off obtained).
+  - The Standard (5 principles + confidence legend) MOVED to the homepage,
+    replacing its old per-county Provenance panel, and was removed from
+    About entirely -- no duplication across two pages (Task 4).
+  - Methodology (and its #methodology-billing-gap anchor) is REMOVED from
+    About -- not just moved, deleted. The 4 property.html "Why?" links that
+    used to point at it were replaced with an inline ⓘ info-icon tooltip on
+    property.html itself, so nothing needs that anchor anymore (Task 3,
+    amended mid-brief with its own sign-off).
+  - Our Mission is rewritten around centralization (Task 5, sign-off
+    obtained): "Make property tax data centralized, transparent,
+    accessible, and actionable."
+  - Where We're Going (the coverage_map() reuse) is REMOVED from About --
+    it duplicated the homepage and rendered blank on this page. The shared
+    coverage_map() macro itself is untouched; index.html is its only caller
+    now (Task 6).
+  - The closing CTA points at url_for('search_landing') = '/search', not
+    url_for('home') (Task 7).
+
+This is the same "scanner constant must follow a legitimate refactor"
+category as the PX-20260829-02 fixes to verify_launch_surface_registry.py
+and verify_px_20260828_15_task2_certification_copy.py -- the checks below
+are rewritten to match the CURRENT approved structure, not preserved as
+stale assertions against content that's supposed to be gone.
 
 Same lightweight-jinja2.Environment technique used throughout this repo's
-other verify_*.py fixtures (no Flask/DB in this sandbox). Unlike some of
-those fixtures, this one stubs `tojson` with real json.dumps (not a
-constant "null") so the coverage_map() macro's data-live-slugs attribute
-can actually be checked for content, not just for not crashing.
+other verify_*.py fixtures (no Flask/DB in this sandbox). Real tojson
+(json.dumps, not a stubbed constant) so index.html's coverage-map
+data-live-slugs attribute can be checked for real content.
 
 Checks:
   1. about.html renders with no exceptions for both a 1-live-county and a
      2-live-county scenario.
-  2. Section order matches Diego's approved structure: Hero -> Why
-     Parcelytics -> The Standard -> Methodology -> Who We're Building For
-     -> Our Mission -> Where We're Going -> Closing.
-  3. id="methodology-billing-gap" is still present verbatim -- property.html
-     has 4 live url_for('about')+'#methodology-billing-gap' links into it.
-  4. Who We're Building For renders exactly the homepage's 4 segments (no
-     5th "asset managers" card): Real estate investors, Developers,
-     Homeowners, Tax consultants.
-  5. The folded-in "See it for yourself" data-sources table has one row per
-     live_counties entry, reading real cad_name/cad_abbr/tax_office_name
-     (not a single hardcoded county).
-  6. coverage_map()'s data-live-slugs attribute on about.html's #roadmapMap
-     contains exactly the slugs passed in, in order -- proves the macro is
-     actually being called with the real live_counties, not a stale copy.
-  7. The strongest drift-avoidance proof: rendering index.html and
-     about.html with the IDENTICAL live_counties list produces a
-     byte-identical market-card-grid block on both pages -- true shared-
-     component reuse, not two implementations that merely look alike today.
-  8. Hero and Closing CTAs both resolve via url_for('home') = '/' (neutral
-     page, not hardcoded to a county).
+  2. Section order matches the -03 structure: Hero -> Why Parcelytics ->
+     Who We're Building For -> Our Mission -> Closing.
+  3. Hero carries NO county pill/eyebrow and NO "Showing ... coverage
+     details" disclosure, and never references county_profile at all.
+  4. Why Parcelytics is exactly 3 paragraphs, laid out in 2 columns, with
+     the source-evidence card in the right column (not full-width below).
+  5. The Standard and Methodology are entirely ABSENT from about.html --
+     not merely reordered. Methodology's own #methodology-billing-gap
+     anchor is gone too, and about.html no longer references
+     county_profile or the removed anchor anywhere.
+  6. The Standard now renders on the HOMEPAGE instead, with its own
+     id="the-standard", all 5 principles, the confidence legend, and the
+     folded general sourcing line -- and the homepage's old per-county
+     Provenance panel (CAD/tax-office loop, "Provenance ·" kicker) is gone.
+  7. Who We're Building For still renders exactly the homepage's 4
+     segments (no 5th "asset managers" card).
+  8. Our Mission renders the approved centralization line.
+  9. Where We're Going / coverage_map() is entirely ABSENT from about.html
+     (no #roadmapMap, no market-card-grid) -- but the shared macro/JS
+     themselves are untouched and index.html's own coverage map still
+     renders correctly with a real data-live-slugs attribute.
+  10. Hero CTA -> url_for('home') = '/'; Closing CTA -> url_for
+      ('search_landing') = '/search' (NOT the same target anymore).
+  11. property.html's 4 old "Why?" links to about.html#methodology-
+      billing-gap are gone, replaced by the approved ⓘ tooltip copy, and
+      no url_for('about') call remains in property.html at all.
 
 Run: python3 verify_px_20260829_02_about_redesign.py
 """
@@ -135,15 +167,12 @@ def main():
         out = tpl.render()
         check(f"[{scenario_name}] renders with no exceptions ({len(out)} chars)", len(out) > 1000)
 
-        # 2. Section order.
+        # 2. Section order (PX-20260829-03 structure).
         markers = [
             ("Hero", 'Property tax data you can'),
             ("Why Parcelytics", "shouldn't require detective work"),
-            ("The Standard", "Honesty, made premium."),
-            ("Methodology", 'id="methodology"'),
             ("Who We're Building For", "Built for anyone who cares about property taxes."),
             ("Our Mission", "Make property tax data"),
-            ("Where We're Going", "One platform. Every county. Better analysis."),
             ("Closing", "Better data. Better understanding. Better decisions."),
         ]
         positions = []
@@ -154,91 +183,155 @@ def main():
                 print(f"  FAIL section marker missing: {name} ({needle!r})")
             positions.append(idx)
         if all(p != -1 for p in positions):
-            check(f"[{scenario_name}] section order matches approved structure "
-                  f"(Hero -> Why Parcelytics -> Standard -> Methodology -> "
-                  f"Who We're Building For -> Mission -> Where We're Going -> Closing)",
+            check(f"[{scenario_name}] section order matches -03 structure "
+                  f"(Hero -> Why Parcelytics -> Who We're Building For -> "
+                  f"Mission -> Closing)",
                   positions == sorted(positions))
 
-        # 3. Methodology cross-link anchor still present verbatim.
-        check(f'[{scenario_name}] id="methodology-billing-gap" present '
-              "(property.html has 4 live links into this anchor)",
-              'id="methodology-billing-gap"' in out)
+        # 3. Hero carries no county context at all (Task 1).
+        check(f"[{scenario_name}] hero has no county eyebrow pill",
+              '<span class="hero-eyebrow">' not in out)
+        check(f"[{scenario_name}] hero has no 'Showing ... coverage details' disclosure",
+              "coverage details below" not in out)
+        # Scoped to the <section class="hero"> block itself, not the whole
+        # page -- base.html's shared <meta name="description"> tag also
+        # reads county_profile (a separate, pre-existing, site-wide SEO tag
+        # outside this brief's scope), so a whole-page substring check would
+        # false-fail on that unrelated tag. The eyebrow-pill and disclosure-
+        # line checks above already prove Task 1's actual requirement.
+        hero_match = re.search(r'<section class="hero">.*?</section>', out, re.DOTALL)
+        check(f"[{scenario_name}] hero section itself carries no county reference",
+              hero_match is not None and "Travis County" not in hero_match.group(0))
 
-        # 4. Who We're Building For -- exactly homepage's 4 segments.
+        # 4. Why Parcelytics: exactly 3 paragraphs, 2-column layout, evidence
+        # card in the right column (Task 2).
+        why_section_match = re.search(
+            r'Why Parcelytics.*?(?=Built for anyone who cares about property taxes)', out, re.DOTALL)
+        check(f"[{scenario_name}] Why Parcelytics section found for paragraph count check",
+              why_section_match is not None)
+        if why_section_match:
+            why_html = why_section_match.group(0)
+            para_count = len(re.findall(r'<p class="fd-lead', why_html))
+            check(f"[{scenario_name}] Why Parcelytics has exactly 3 paragraphs (got {para_count})",
+                  para_count == 3)
+            check(f"[{scenario_name}] Why Parcelytics uses a 2-column row (col-lg-7 / col-lg-5)",
+                  'class="col-lg-7"' in why_html and 'class="col-lg-5"' in why_html)
+            check(f"[{scenario_name}] evidence card ('See it for yourself') sits in the "
+                  "right column, not full-width below the prose",
+                  why_html.find('class="col-lg-5"') < why_html.find("See it for yourself"))
+
+        # 5. The Standard and Methodology are entirely absent from About now
+        # (Tasks 3-amended and 4) -- not reordered, GONE.
+        check(f"[{scenario_name}] 'Honesty, made premium.' (The Standard) is "
+              "absent from about.html -- moved to the homepage, not duplicated",
+              "Honesty, made premium." not in out)
+        check(f"[{scenario_name}] Methodology section (id=\"methodology\") is "
+              "absent from about.html -- deleted, not just reordered",
+              'id="methodology"' not in out)
+        check(f"[{scenario_name}] #methodology-billing-gap anchor is gone "
+              "(nothing links to it anymore -- see property.html checks below)",
+              'id="methodology-billing-gap"' not in out)
+
+        # 7. Who We're Building For -- exactly homepage's 4 segments (unchanged
+        # by -03, still verified here since this file replaces the -02 check).
         who_serve_titles = re.findall(
             r'<div class="who-serve-card">.*?<h3>([^<]+)</h3>', out, re.DOTALL)
         check(f"[{scenario_name}] exactly 4 who-serve-card segments "
               f"(got {len(who_serve_titles)}: {who_serve_titles})",
               who_serve_titles == ["Real estate investors", "Developers", "Homeowners", "Tax consultants"])
-        check(f'[{scenario_name}] no 5th "asset managers" card (no distinct '
-              "shipped capability backs it, per Diego's ruling)",
+        check(f'[{scenario_name}] no 5th "asset managers" card',
               "asset manager" not in out.lower())
 
-        # 5. Folded data-sources table -- one row per live county, real fields.
-        for c in live_counties:
-            check(f"[{scenario_name}] data-sources evidence table includes "
-                  f"{c['county_name']} ({c['cad_abbr']} / {c['tax_office_name']})",
-                  c["cad_name"] in out and c["cad_abbr"] in out and c["tax_office_name"] in out)
+        # 8. Our Mission -- approved centralization line (Task 5).
+        check(f"[{scenario_name}] Our Mission renders the approved centralization line",
+              "centralized, transparent, accessible, and actionable" in out)
 
-        # 6. coverage_map() macro's data-live-slugs reflects the real input.
-        m = re.search(r'<svg id="roadmapMap"[^>]*data-live-slugs=\'([^\']*)\'', out)
-        check(f"[{scenario_name}] #roadmapMap has a data-live-slugs attribute at all",
-              m is not None)
-        if m:
-            parsed_slugs = json.loads(m.group(1))
-            expected_slugs = [c["slug"] for c in live_counties]
-            check(f"[{scenario_name}] data-live-slugs == {expected_slugs} "
-                  f"(got {parsed_slugs})",
-                  parsed_slugs == expected_slugs)
+        # 9. Where We're Going / coverage_map() is entirely absent (Task 6).
+        check(f"[{scenario_name}] no #roadmapMap on about.html (coverage map removed)",
+              'id="roadmapMap"' not in out)
+        check(f"[{scenario_name}] no market-card-grid on about.html (coverage map removed)",
+              "market-card-grid" not in out)
 
-        # 8. CTAs resolve via url_for('home'), not a hardcoded county path.
+        # 10. CTAs: hero -> home ('/'), closing -> search ('/search') -- these
+        # are now DIFFERENT targets, unlike -02 where both went to '/'.
         cta_hrefs = re.findall(r'<a href="([^"]*)" class="btn-cta">', out)
-        check(f"[{scenario_name}] both CTAs (hero + closing) resolve to '/' "
-              f"via url_for('home') (found {cta_hrefs})",
-              cta_hrefs == ["/", "/"])
+        check(f"[{scenario_name}] hero CTA -> '/' (url_for('home')), "
+              f"closing CTA -> '/search' (url_for('search_landing')) "
+              f"(found {cta_hrefs})",
+              cta_hrefs == ["/", "/search"])
 
     # ─────────────────────────────────────────────────────────────────────
-    print("\n--- Drift-avoidance proof: shared coverage_map() macro ---")
+    print("\n--- Homepage: The Standard moved here, old Provenance panel gone ---")
     # ─────────────────────────────────────────────────────────────────────
-    # 7. Same live_counties fed to both pages -> byte-identical
-    # market-card-grid block. This is the actual proof the extraction did
-    # what it was supposed to: about.html isn't a second hand-copied
-    # instance of the coverage map, it's the SAME macro output.
     live_counties = [_TRAVIS_ENTRY, _DALLAS_ENTRY]
-    env_about = make_env(live_counties)
     env_index = make_env(live_counties)
-    # index.html needs a couple more globals the homepage template reads
-    # that about.html does not -- stub the minimum to get a clean render.
-    import config as _real_config
     env_index.globals["total_live_parcel_count_display"] = "1.13M"
+    index_out = env_index.get_template("index.html").render()
 
-    def _extract_grid(html):
-        m = re.search(r'<div class="market-card-grid mt-4">.*?</div>\s*\n</div>', html, re.DOTALL)
-        return m.group(0) if m else None
+    check("index.html now renders 'Honesty, made premium.' (The Standard, moved from About)",
+          "Honesty, made premium." in index_out)
+    check('index.html has id="the-standard" (About\'s Methodology intro links here)',
+          'id="the-standard"' in index_out)
+    for rule in (
+        "No estimate or interpolation is ever presented as fact.",
+        "Every figure shows a visible confidence level.",
+        "Every figure is traceable to its source and as-of date.",
+        '"Not Available" is an explicit state — never blank, never zero.',
+        "Estimates carry distinct treatment: dashed, muted, ~ prefixed.",
+    ):
+        check(f"index.html's Standard includes principle: {rule[:40]}...", rule in index_out)
+    check("index.html's Standard folds in ONE general sourcing line "
+          "(directly from county appraisal district/tax office) instead of "
+          "enumerating every county by name",
+          "directly from that county's own appraisal district and tax office" in index_out)
+    check("index.html no longer has the old per-county Provenance kicker "
+          "('Provenance ·' framing, doesn't scale per Diego's ruling)",
+          "Provenance ·" not in index_out)
+    check("index.html's Standard doesn't re-enumerate every live county's "
+          "CAD/tax-office by name (that per-county list is what didn't scale)",
+          "Dallas Central Appraisal District" not in index_out)
 
-    about_out = env_about.get_template("about.html").render()
-    try:
-        index_out = env_index.get_template("index.html").render()
-        about_grid = _extract_grid(about_out)
-        index_grid = _extract_grid(index_out)
-        check("both about.html and index.html's market-card-grid blocks were found",
-              about_grid is not None and index_grid is not None)
-        if about_grid and index_grid:
-            check("about.html and index.html render a BYTE-IDENTICAL "
-                  "market-card-grid from the same live_counties input "
-                  "(true shared-macro reuse, not a second hand-copied "
-                  "implementation)",
-                  about_grid == index_grid)
-    except Exception as e:
-        FAILURES.append(f"index.html render for drift-avoidance comparison raised: {e}")
-        print(f"  FAIL index.html render for drift-avoidance comparison raised: {e}")
+    # coverage_map() macro itself: index.html is still its one real caller,
+    # and it should still render correctly with real data-live-slugs.
+    m = re.search(r'<svg id="roadmapMap"[^>]*data-live-slugs=\'([^\']*)\'', index_out)
+    check("index.html's #roadmapMap still has a data-live-slugs attribute "
+          "(coverage_map() macro itself untouched by Task 6 -- About just "
+          "stopped calling it)",
+          m is not None)
+    if m:
+        parsed_slugs = json.loads(m.group(1))
+        expected_slugs = [c["slug"] for c in live_counties]
+        check(f"index.html's data-live-slugs == {expected_slugs} (got {parsed_slugs})",
+              parsed_slugs == expected_slugs)
+
+    # ─────────────────────────────────────────────────────────────────────
+    print("\n--- property.html: 4 old 'Why?' links replaced with ⓘ tooltip ---")
+    # ─────────────────────────────────────────────────────────────────────
+    property_src = open(os.path.join(TEMPLATE_DIR, "property.html")).read()
+    check("property.html has no live url_for('about') call anywhere "
+          "(the 4 old billing-gap links are gone; the only other historical "
+          "use -- a Why? link -- is gone too)",
+          "url_for('about')" not in property_src)
+    check("property.html has no more '#methodology-billing-gap' references "
+          "outside of explanatory comments",
+          not re.search(r'href="[^"]*#methodology-billing-gap"', property_src))
+    approved_tooltip = ("own billing file doesn't include a row for every parcel on its "
+                         "appraisal roll — a gap in the county's published data, not "
+                         "something Parcelytics failed to load.")
+    occurrences = property_src.count(approved_tooltip)
+    check(f"property.html carries the approved condensed tooltip copy at all "
+          f"4 sites (found {occurrences}, expected 4)",
+          occurrences == 4)
+    check("property.html's replacement uses a ⓘ info icon (native title "
+          "tooltip, this page's existing pattern), not a new component",
+          property_src.count('style="cursor:help; color:var(--text-3);') >= 4)
 
     # ─────────────────────────────────────────────────────────────────────
     print("\n--- Jinja syntax sanity ---")
     # ─────────────────────────────────────────────────────────────────────
     import jinja2
     plain_env = jinja2.Environment(loader=jinja2.FileSystemLoader(TEMPLATE_DIR))
-    for label in ("about.html", "_macros.html", "index.html"):
+    for label in ("about.html", "_macros.html", "index.html", "property.html"):
         try:
             src = plain_env.loader.get_source(plain_env, label)[0]
             plain_env.parse(src)
@@ -252,7 +345,7 @@ def main():
         for f in FAILURES:
             print(f"  - {f}")
         sys.exit(1)
-    print("All PX-20260829-02 (About page redesign) scenarios passed.")
+    print("All PX-20260829-02/-03 (About page redesign + revisions) scenarios passed.")
 
 
 if __name__ == "__main__":
