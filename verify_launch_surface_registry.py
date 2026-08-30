@@ -50,6 +50,19 @@ regression:
 Acceptance bar (per brief): zero findings today, and a fixture test proving
 the scanner fires on each violation class -- see
 test_verify_launch_surface_registry.py.
+
+PX-20260829-02 UPDATE: index.html's own MARKETS array and registry-binding
+<script> block were extracted into a shared coverage_map() Jinja macro
+(templates/_macros.html) + static/coverage-map.js, so the About page's new
+"Where We're Going" section could reuse the exact same component instead of
+a second hand-copied instance (see that macro's own header comment). Checks
+(A) and (B) above now target COVERAGE_MACRO_HTML/COVERAGE_MAP_JS instead of
+INDEX_HTML directly -- that's where this content actually lives now, and
+index.html's (and about.html's) RENDERED pages are still bound to the
+registry via the macro call. This is the same category of "scanner
+constant needs to follow a legitimate refactor" fix
+verify_template_county_scoping.py needed for PX-20260829-01's
+result.county_slug whitelist addition.
 """
 
 import ast
@@ -60,10 +73,34 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 TEMPLATES_DIR = REPO_ROOT / "templates"
+STATIC_DIR = REPO_ROOT / "static"
 APP_PY = REPO_ROOT / "app.py"
 
 INDEX_HTML = TEMPLATES_DIR / "index.html"
 SEARCH_HTML = TEMPLATES_DIR / "search.html"
+
+# PX-20260829-02: index.html's own MARKETS array + registry-binding <script>
+# were extracted into a shared coverage_map() Jinja macro (templates/
+# _macros.html) + static/coverage-map.js, so the About page's new "Where
+# We're Going" section could reuse the exact same, already-shipped
+# component instead of a second hand-copied ~150-line instance (see that
+# macro's own header comment for the full drift-avoidance reasoning --
+# it's the same class of fix static/parcel-typeahead.js's own extraction
+# was). index.html's RENDERED page is still bound to the registry (it
+# calls the macro, which emits the binding) -- only the byte location of
+# that binding moved. This scanner's two "index.html launch surface"
+# checks (the registry-binding presence check and the MARKETS-array
+# hardcoded-status/FIPS checks) now point at the real files that actually
+# contain that content post-extraction, rather than at index.html itself
+# (which would otherwise show a FALSE regression the moment this refactor
+# landed -- confirmed: this scanner DID fire a false missing-registry-
+# binding/fips-map-unparseable pair against index.html immediately after
+# the extraction, before these constants were updated to follow it).
+# search.html is unaffected -- it never shared this component and keeps
+# its own independent, inline MARKETS-equivalent/binding, so SEARCH_HTML
+# stays a real template path.
+COVERAGE_MACRO_HTML = TEMPLATES_DIR / "_macros.html"
+COVERAGE_MAP_JS = STATIC_DIR / "coverage-map.js"
 
 # Class (A): a Jinja expression that reads live_counties/live_slugs and
 # feeds a JS const. Matches both index.html's `{{ live_slugs | tojson }}`
@@ -134,7 +171,14 @@ def _load_county_slugs():
 
 def _check_registry_binding_present(filepath: Path) -> list:
     text = filepath.read_text()
-    rel = f"templates/{filepath.name}"
+    # PX-20260829-02: was `f"templates/{filepath.name}"` -- broke the moment
+    # this check started being called against a static/*.js file
+    # (COVERAGE_MAP_JS is not under templates/). relative_to(REPO_ROOT) is
+    # correct for any real file under the repo, templates/ or static/ alike.
+    try:
+        rel = str(filepath.relative_to(REPO_ROOT))
+    except ValueError:
+        rel = str(filepath)
     if _REGISTRY_BINDING_RE.search(text):
         return []
     return [Finding(
@@ -151,7 +195,13 @@ def _check_registry_binding_present(filepath: Path) -> list:
 
 def _check_no_hardcoded_market_status(filepath: Path) -> list:
     text = filepath.read_text()
-    rel = f"templates/{filepath.name}"
+    # PX-20260829-02: see _check_registry_binding_present's own comment --
+    # same fix, needed here for the same reason (this now runs against
+    # static/coverage-map.js, not templates/index.html).
+    try:
+        rel = str(filepath.relative_to(REPO_ROOT))
+    except ValueError:
+        rel = str(filepath)
     findings = []
     for m in _MARKETS_ENTRY_RE.finditer(text):
         expr = m.group("statusexpr").strip()
@@ -197,19 +247,25 @@ def _extract_search_fips_by_slug(filepath: Path = SEARCH_HTML) -> dict:
 
 
 def _check_cross_file_fips_consistency(
-    registered_slugs: set, index_path: Path = INDEX_HTML, search_path: Path = SEARCH_HTML
+    registered_slugs: set, index_path: Path = COVERAGE_MAP_JS, search_path: Path = SEARCH_HTML
 ) -> list:
+    # PX-20260829-02: index_path's default changed from templates/index.html
+    # to static/coverage-map.js -- that's where the real MARKETS array lives
+    # post-extraction (see COVERAGE_MAP_JS's own module-level comment).
+    # Callers that explicitly pass their own index_path (e.g. this file's
+    # own fixture tests, which write synthetic .html files) are unaffected.
     findings = []
     index_map = _extract_index_fips_by_slug(index_path)
     search_map = _extract_search_fips_by_slug(search_path)
 
     if not index_map:
         findings.append(Finding(
-            "templates/index.html", "fips-map-unparseable", "FAIL",
+            "static/coverage-map.js", "fips-map-unparseable", "FAIL",
             "Could not find/parse a MARKETS array with fips/slug/status "
-            "entries in index.html -- either the array was renamed/"
-            "restructured (update this scanner's regex to match) or it was "
-            "removed (a real regression: the coverage map has no data).",
+            "entries in static/coverage-map.js -- either the array was "
+            "renamed/restructured (update this scanner's regex to match) or "
+            "it was removed (a real regression: the coverage map has no "
+            "data).",
         ))
     if not search_map:
         findings.append(Finding(
@@ -235,29 +291,29 @@ def _check_cross_file_fips_consistency(
         in_search = slug in search_map
         if in_index and not in_search:
             findings.append(Finding(
-                "templates/index.html + templates/search.html", "fips-map-drift", "FAIL",
+                "static/coverage-map.js + templates/search.html", "fips-map-drift", "FAIL",
                 f"Registered slug {slug!r} has a FIPS mapping in "
-                f"index.html's MARKETS array ({index_map[slug]!r}) but is "
-                f"missing from search.html's FIPS_BY_SLUG object. Once this "
-                f"county goes live, index.html's coverage map will show it "
-                f"correctly but search.html's D3 map will silently keep "
-                f"treating it as a bare roadmap dot with no live styling -- "
-                f"add {slug!r}: {index_map[slug]!r} to search.html's "
-                f"FIPS_BY_SLUG.",
+                f"coverage-map.js's MARKETS array ({index_map[slug]!r}) but "
+                f"is missing from search.html's FIPS_BY_SLUG object. Once "
+                f"this county goes live, the index/about pages' shared "
+                f"coverage map will show it correctly but search.html's own "
+                f"D3 map will silently keep treating it as a bare roadmap "
+                f"dot with no live styling -- add {slug!r}: "
+                f"{index_map[slug]!r} to search.html's FIPS_BY_SLUG.",
             ))
         elif in_search and not in_index:
             findings.append(Finding(
-                "templates/index.html + templates/search.html", "fips-map-drift", "FAIL",
+                "static/coverage-map.js + templates/search.html", "fips-map-drift", "FAIL",
                 f"Registered slug {slug!r} has a FIPS mapping in "
                 f"search.html's FIPS_BY_SLUG ({search_map[slug]!r}) but is "
-                f"missing from index.html's MARKETS array -- add a MARKETS "
-                f"entry for {slug!r} with fips: {search_map[slug]!r}.",
+                f"missing from coverage-map.js's MARKETS array -- add a "
+                f"MARKETS entry for {slug!r} with fips: {search_map[slug]!r}.",
             ))
         elif in_index and in_search and index_map[slug] != search_map[slug]:
             findings.append(Finding(
-                "templates/index.html + templates/search.html", "fips-map-drift", "FAIL",
+                "static/coverage-map.js + templates/search.html", "fips-map-drift", "FAIL",
                 f"Registered slug {slug!r} has DIFFERENT FIPS codes in the "
-                f"two files: index.html says {index_map[slug]!r}, "
+                f"two files: coverage-map.js says {index_map[slug]!r}, "
                 f"search.html says {search_map[slug]!r}. A county's FIPS "
                 f"code never changes -- this is a typo in one of the two "
                 f"files, and it will make one of the two coverage maps "
@@ -271,18 +327,29 @@ def run_audit() -> list:
     findings = []
     registered_slugs = _load_county_slugs()
 
-    for filepath in (INDEX_HTML, SEARCH_HTML):
+    # PX-20260829-02: the "index.html launch surface" registry-binding and
+    # MARKETS-array checks now target COVERAGE_MACRO_HTML/COVERAGE_MAP_JS
+    # (where that content actually lives post-extraction), not INDEX_HTML
+    # itself -- see those constants' own module-level comment. search.html
+    # is untouched by that refactor and still checked directly.
+    for filepath in (COVERAGE_MACRO_HTML, SEARCH_HTML):
         if not filepath.exists():
             findings.append(Finding(
-                f"templates/{filepath.name}", "missing-file", "FAIL",
+                str(filepath.relative_to(REPO_ROOT)), "missing-file", "FAIL",
                 f"{filepath.name} does not exist -- cannot audit a launch "
                 f"surface that isn't there.",
             ))
             continue
         findings.extend(_check_registry_binding_present(filepath))
 
-    if INDEX_HTML.exists():
-        findings.extend(_check_no_hardcoded_market_status(INDEX_HTML))
+    if COVERAGE_MAP_JS.exists():
+        findings.extend(_check_no_hardcoded_market_status(COVERAGE_MAP_JS))
+    else:
+        findings.append(Finding(
+            "static/coverage-map.js", "missing-file", "FAIL",
+            "static/coverage-map.js does not exist -- cannot audit a launch "
+            "surface that isn't there.",
+        ))
 
     findings.extend(_check_cross_file_fips_consistency(registered_slugs))
 

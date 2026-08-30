@@ -1,30 +1,60 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
 {% block title %}About — Parcelytics{% endblock %}
 {% block container_class %} is-frontdoor{% endblock %}
 
 {% block content %}
 
+{# ══════════════════════════════════════════════════════════════════════════
+   PX-20260829-02: full About page redesign. Prior version read as a second
+   homepage -- founder-centered "Why Parcelytics," a duplicate feature grid
+   already covered on the homepage, and a "Who it's for" section using the
+   old 3-card style instead of the homepage's icon-grid. Rebuilt around the
+   brief's actual narrative: the data already exists at the county/appraisal-
+   district level (authoritative, not in question) -- the real problem is
+   that it's fragmented across sources never built to connect -- Parcelytics
+   centralizes it at the parcel level, then makes it useful, and the vision
+   is to keep doing that at scale, county by county.
+
+   Section order approved by Diego: Hero -> Why Parcelytics (now folding in
+   the old standalone "Data sources" table as supporting evidence, per his
+   ruling) -> The Standard (unchanged) -> Methodology (unchanged, kept
+   immediately after The Standard -- id="methodology-billing-gap" below is
+   linked from 4 live locations in property.html, do not rename) -> Who
+   We're Building For (icon-grid, exactly mirrors the homepage's 4 Who We
+   Serve segments -- Diego's ruling: no 5th "asset managers" card, since no
+   distinct shipped capability backs it, same test the homepage's own
+   broker/appraiser exclusion already used) -> Our Mission (the page's
+   deliberately minimal, chrome-free visual break -- see .fd-mission in
+   style.css) -> Where We're Going (reuses the shared coverage_map() macro
+   introduced by this same brief, instead of a second hand-copied map) ->
+   Closing (first real use of the previously-unused .fd-cta-band).
+
+   Multi-county correctness: no hardcoded county names or year ranges
+   anywhere below -- everything county-specific loops live_counties /
+   county_profile, same pattern as the rest of this codebase. #}
+
 {# ══ HERO ══════════════════════════════════════════════════════════════════ #}
 <section class="hero">
   <div class="hero-inner" style="max-width:760px;">
     <span class="hero-eyebrow"><span class="dot"></span> {{ county_profile.county_name }}, Texas</span>
-    <h1 style="max-width:20ch;">Property-tax intelligence you can <span class="accent">cite</span>.</h1>
-    {# PX-20260827-03-rev1: About is a neutral, bare-path page (no county
-       prefix), so county_profile below falls back to Travis via the
-       existing context-processor default -- this one-line disclosure makes
-       that fallback visible rather than silent, per Diego's ruling (a). #}
+    {# PX-20260827-03-rev1 ruling (a), unchanged: About is a neutral, bare-
+       path page (no county prefix), so county_profile below falls back to
+       the default county via the existing context-processor -- this line
+       makes that fallback visible rather than silent. #}
     <p class="text-muted mb-0" style="font-size:12.5px;">Showing {{ county_profile.county_name }}, TX coverage details below.</p>
+    <h1 style="max-width:20ch;">Property tax data you can <span class="accent">cite</span>.</h1>
     <p class="hero-sub">
-      Parcelytics turns certified government records into investment-grade analysis —
-      verified appraisal data, 35 years of tax-rate history, and parcel-level benchmarks,
-      every figure traceable to its source.
+      Every county already keeps this record — appraised value, exemptions, ownership, tax
+      rates, what was billed. Parcelytics gathers it straight from the source, county by
+      county, and keeps every figure traceable back to exactly where it came from.
     </p>
     <div class="hero-actions">
       {# PX-20260828-07: was url_for('index') -- /about is a neutral page (no
-         g.county_slug set), so this silently resolved to '/travis-tx' via
-         _add_county_slug()'s DEFAULT_COUNTY_SLUG fallback instead of landing
-         on the neutral homepage. Same fix/reasoning as index.html's hero
-         search form above -- url_for('home') mirrors base.html's navbar. #}
+         g.county_slug set), so this silently resolved to the default county
+         via _add_county_slug()'s fallback instead of landing on the neutral
+         homepage. url_for('home') mirrors base.html's navbar. Unchanged by
+         this redesign. #}
       <a href="{{ url_for('home') }}" class="btn-cta">Search a parcel →</a>
     </div>
   </div>
@@ -32,103 +62,46 @@
 
 {# ══ WHY PARCELYTICS ═══════════════════════════════════════════════════════ #}
 <section class="fd-section-tight">
-  <h2 class="fd-h2">Why Parcelytics</h2>
+  <div class="fd-kicker">Why Parcelytics</div>
+  <h2 class="fd-h2">Property tax data shouldn't require detective work.</h2>
   <p class="fd-lead">
-    Conceived from firsthand experience on the investment and lending side of commercial real estate.
-    Evaluating a property's tax position meant navigating a different county website, assessor's office,
-    and tax authority for every deal, with no consolidated source to verify against. Conversations with
-    colleagues across the industry confirmed this wasn't an isolated inefficiency. Rather than pulling from
-    third-party data brokers, Parcelytics connects directly to each county's own property tax and appraisal
-    records — with a direct link back to the original source for anyone who wants to verify it independently.
-    That means slower, more deliberate growth, but it also means every number on this platform can be traced
-    to its official source. We're expanding coverage county by county, starting with Travis County and
-    verifying each new market before it goes live.
+    County appraisal districts and tax offices already keep the authoritative record on
+    every parcel — appraised value, exemptions, ownership, entity tax rates, what was billed
+    and what was paid. That record isn't unreliable, and it isn't hidden. It's public, and
+    it's official. It has always been the source of truth, and it always will be.
   </p>
-</section>
+  <p class="fd-lead mt-3">
+    The problem is where it lives. A single property's full tax picture is usually split
+    across a county appraisal district's site, a separate tax office's site, and whatever
+    historical filings happen to still be online — three different systems, three different
+    interfaces, none of them built to talk to each other. The information isn't unreliable —
+    it's just spread across sources that were never built to connect.
+  </p>
+  <p class="fd-lead mt-3">
+    Parcelytics connects directly to each county's own appraisal district and tax office and
+    brings that record together at the parcel level. One page, one property, its entire tax
+    history in one place — instead of piecing it together across half a dozen sites by hand.
+  </p>
+  <p class="fd-lead mt-3">
+    Once it's centralized, it becomes useful in ways a scattered record never can be: value
+    and rate history you can actually trace year over year, forward-looking projections built
+    from a parcel's own record, and every underlying detail one click away — all still labeled
+    with exactly how confident we are in it, and where it came from.
+  </p>
+  <p class="fd-lead mt-3">
+    We're building this county by county, verifying each new market against its own official
+    sources before it goes live, because the whole premise depends on getting the sourcing
+    right every single time.
+  </p>
 
-{# ══ WHAT IT COVERS ════════════════════════════════════════════════════════ #}
-{# Copy trim (July 2026, per Diego's Copy review — Site-wide): "Everything
-   you need to underwrite a Travis County parcel" overstates it — this
-   platform's own Data-Integrity-Note comments document real, named gaps in
-   exactly the underwriting-relevant data TCAD provides: the Homesite/
-   Non-Homesite land-value split (property.html, Current Values card, ~line
-   1586), and Improvement Features/Number of Units/quality class/wall-roof-
-   foundation attributes per improvement (property.html, Improvement Detail
-   card, ~line 2159) — none of that is ingested today. "Everything you
-   need" isn't accurate against the platform's own documented scope.
-   Trimmed to describe what's actually covered — the tax side — rather
-   than claim completeness the product itself says it doesn't have. #}
-<section class="fd-section">
-  <div class="fd-kicker">What Parcelytics covers</div>
-  <h2 class="fd-h2">The tax side of underwriting, end to end.</h2>
-  <div class="row g-4 mt-2">
-    {# PX-20260828-12 fix: this list previously used county_profile (the
-       CURRENT request's county only, which on this neutral /about page
-       always falls back to Travis regardless of which counties are
-       actually live -- same root cause PX-20260828-09 Task 3 already fixed
-       on the homepage's provenance panel). It also hardcoded Travis-only
-       facts as if universal: "City of Austin" as a named jurisdiction
-       (NOT converted here -- no COUNTY_PROFILES field carries a colloquial
-       city name distinct from county_name, so this item is generalized
-       instead of parametrized, same approach as the homepage's provenance
-       panel per PX-20260828-09 Task 3's own comment), "1990-2025" rate
-       history and "2021-2026" appraisal-roll year ranges (Dallas has
-       neither loaded -- PX-20260828-07 Task 1 found zero Dallas rate-
-       history rows), and a fixed "(July 25, 2026)" certification date
-       (Travis's own date, not a general platform fact). Generalized to
-       describe what the product does without claiming every live county
-       has identical coverage -- same "generalize rather than parametrize
-       every number" approach as PX-20260828-11 Task 4. #}
-    {# PX-20260828-15 Task 2: "Property tax intelligence" body text below
-       was "Full certified appraisal history for every parcel in every live
-       county ... Sourced directly from each county's own certified
-       appraisal rolls." -- a second uniform-certification claim this
-       block's own PX-20260828-07/-11 generalization pass didn't catch
-       (it generalized away year ranges/city names/the certification date,
-       but left "certified" as a blanket adjective on the whole feature).
-       Wrong for the same reason as the homepage hero stat/Directly-sourced
-       card: current-year coverage includes counties still on a preliminary
-       roll (Travis's 2026), so "full certified ... history" overclaims.
-       Fixed by dropping "certified" as a blanket descriptor and disclosing
-       the per-county Certified/Preliminary labeling instead -- same
-       generalize-not-parametrize approach as the rest of this block. #}
-    {% set features = [
-      ('Property tax intelligence','Full appraisal history for every parcel in every live county — market, assessed, and taxable value, land/improvement breakdown, exemptions, and ownership, each figure labeled Certified or Preliminary per that county\'s own appraisal-district timeline. Sourced directly from each county\'s own appraisal district.'),
-      ('Tax rate history','Entity-level tax rates across each live county\'s taxing jurisdictions — county, school districts, cities, MUDs and more, where that county\'s rate history has been loaded. Track how each entity has moved over time.'),
-      ('Investor insight reports','Per-parcel analysis: year-over-year growth, assessment-ratio trends, homestead-cap risk, large-jump detection, and illustrative multi-year tax projections — built for underwriting.'),
-      ('County market snapshot','County-wide intelligence each appraisal cycle: median value change by property type, aggregate trends, and sector breakdowns across residential, multi-family, commercial, land and ag.'),
-      ('Submarket benchmarking','Compare any parcel against county medians and percentiles for its type, use code, and neighborhood. Filter by sector, use code, year, and geography.'),
-      ('Preliminary values','First-look at each county\'s newest preliminary appraisals as soon as they\'re published — clearly labeled preliminary, subject to change at certification.')
-    ] %}
-    {% for title, body in features %}
-    <div class="col-md-6 col-lg-4">
-      <div class="fd-card">
-        <h3>{{ title }}</h3>
-        <p>{{ body }}</p>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-</section>
-
-{# ══ DATA SOURCES ══════════════════════════════════════════════════════════ #}
-{# PX-20260828-12 fix: this table used county_profile (the current request's
-   county only -- Travis, always, on this neutral page) for BOTH the source
-   names AND fixed year-coverage claims ("2021-2025", "1990-2025",
-   "2021-2024"), presented under a general "Two government sources" framing
-   that implies every live county has identical coverage. Dallas has none
-   of that: no rate-history rows loaded and no billing rows loaded
-   (PX-20260828-07 Task 1), and its own certified-roll years differ from
-   Travis's. Rewritten to loop live_counties (same source the homepage's
-   provenance panel already reads, PX-20260828-09 Task 3) with one row per
-   county per source, and dropped the fixed year-coverage column in favor
-   of each county's own rates page / market snapshot for that county's
-   actual as-of coverage -- rather than repeat a specific year range here
-   that's only true for one county. #}
-<section class="fd-section-tight">
-  <div class="fd-kicker">Data sources</div>
-  <h2 class="fd-h2">Government sources. Zero aggregators.</h2>
-  <div class="card mt-3">
+  {# PX-20260829-02: folded in from the old standalone "Data sources"
+     section per Diego's ruling -- kept as concrete, per-county evidence for
+     the fragmentation claim above, rather than either its own feature-led
+     section or dropped outright. Loop unchanged from the prior version;
+     still reads live_counties, not county_profile, so it's correct for
+     however many counties are live at request time (PX-20260828-12 fix). #}
+  <div class="card mt-4">
+    <div class="card-header">See it for yourself</div>
     <div class="card-body p-0">
       <div class="table-responsive">
         <table class="table mb-0">
@@ -147,11 +120,14 @@
         </table>
       </div>
     </div>
-    <div class="card-footer">All data sourced directly from official government records. No third-party aggregators. Every figure on a property page names its own source and as-of date — see that county's Rates and Market Snapshot pages for its exact year coverage.</div>
+    <div class="card-footer">All data sourced directly from official government records. No third-party aggregators. Every figure on a property page names its own source and as-of date.</div>
   </div>
 </section>
 
 {# ══ DATA INTEGRITY STANDARD ═══════════════════════════════════════════════ #}
+{# Unchanged verbatim per Diego's ruling -- this is the page's own data
+   philosophy (how we label confidence), not a claim about the county data
+   itself, which is why it survives this redesign untouched. #}
 <section class="fd-section-tight">
   <div class="fd-trust-panel">
     <div class="row g-5">
@@ -184,17 +160,10 @@
 </section>
 
 {# ══ METHODOLOGY ═══════════════════════════════════════════════════════════ #}
-{# New section (July 2026, "Homestead-Cap Data Integrity" Cowork brief, Issue
-   5): user-facing home for the "Why?" links added to the Homeowner tax card
-   and the 5-year "Tax Rate & Bill" table's billing-gap disclosures
-   (templates/property.html, "What you paid in taxes" KPI card and the
-   Total Tax column of the 5-year table). Surfaces, in plain public-facing
-   language, the substance of the internal KNOWN_LIMITATIONS.md note "2025
-   tax_billing: parcels with NO billing row at all" -- deliberately without
-   repeating that note's specific row count here: a hardcoded count on a
-   public page goes stale the next time the source file is reloaded, and
-   isn't the kind of number a homeowner or investor needs in order to act on
-   the disclosure. #}
+{# Unchanged verbatim -- id="methodology-billing-gap" is linked from 4 live
+   locations in property.html (Homeowner tax card + 5-year Total Tax column
+   "Why?" links). Kept immediately after The Standard, same as before this
+   redesign. #}
 <section class="fd-section-tight" id="methodology">
   <div class="fd-kicker">Methodology</div>
   <h2 class="fd-h2">What &ldquo;Not available&rdquo; means, and why it happens.</h2>
@@ -217,13 +186,109 @@
   </div>
 </section>
 
-{# ══ WHO IT'S FOR ══════════════════════════════════════════════════════════ #}
+{# ══ WHO WE'RE BUILDING FOR ════════════════════════════════════════════════ #}
+{# PX-20260829-02: replaces the old 3-card ".audience-card" grid (Real
+   estate investors / Developers / Homeowners) with the homepage's own
+   4-segment icon-grid, verbatim, per Diego's ruling -- match the homepage's
+   Who We Serve section exactly, no 5th "asset managers" card, since no
+   distinct shipped capability (no portfolio/multi-property view anywhere in
+   the codebase) backs it. Same reasoning the homepage itself already used
+   to exclude brokers and appraisers (see index.html's own comment above
+   this block). Copy is duplicated rather than shared via a macro: unlike
+   the coverage map, there's no computed/derived data here that two copies
+   could disagree on -- it's static text describing capabilities, so the
+   drift risk that justified the coverage-map extraction doesn't apply the
+   same way. If this copy changes, update both pages together. #}
 <section class="fd-section">
-  <div class="fd-kicker">Who it's for</div>
-  <div class="row g-4 mt-2">
-    <div class="col-md-4"><div class="audience-card"><h3>Real estate investors</h3><p>Underwrite acquisitions with confidence — exact assessment, tax-burden history, and peer comparison. Identify homestead-cap expiry and delinquency risk before closing.</p></div></div>
-    <div class="col-md-4"><div class="audience-card"><h3>Developers</h3><p>Track value trends by neighborhood and property type, monitor the rate environment across entities, and use 2026 preliminary values to get ahead of the cycle.</p></div></div>
-    <div class="col-md-4"><div class="audience-card"><h3>Homeowners</h3><p>Understand how your value compares to neighbors, review your exemption and homestead-cap history, and verify the tax amounts on record match your bills.</p></div></div>
+  <div class="row g-5 align-items-start">
+    <div class="col-lg-5">
+      <div class="fd-kicker">Who we're building for</div>
+      <h2 class="fd-h2">Built for anyone who cares about property taxes.</h2>
+      <p class="fd-lead">The same certified record, structured for whatever question you're actually trying to answer.</p>
+    </div>
+    <div class="col-lg-7">
+      <div class="who-serve-grid">
+        <div class="who-serve-card">
+          <span class="who-serve-badge" aria-hidden="true">
+            {# "Trending up" -- underwriting / growth. #}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
+          </span>
+          <div>
+            <h3>Real estate investors</h3>
+            <p>Underwrite acquisitions on certified value, multi-year tax history, and peer benchmarks. Estimate the post-purchase tax burden and flag homestead-cap and delinquency risk before you close.</p>
+          </div>
+        </div>
+        <div class="who-serve-card">
+          <span class="who-serve-badge" aria-hidden="true">
+            {# "Layers" -- site plans / submarkets. #}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </span>
+          <div>
+            <h3>Developers</h3>
+            <p>Evaluate submarkets on value trends and tax-rate history by entity, and see how a site's tax burden compares across the market.</p>
+          </div>
+        </div>
+        <div class="who-serve-card">
+          <span class="who-serve-badge" aria-hidden="true">
+            {# House -- homeowners. #}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>
+          </span>
+          <div>
+            <h3>Homeowners</h3>
+            <p>Understand exactly what's driving your tax bill, see every exemption you're already receiving, and find out what you could be saving — including a real, itemized estimate if you haven't filed for homestead yet. Verify every number against your own bill and the county's record.</p>
+          </div>
+        </div>
+        <div class="who-serve-card">
+          <span class="who-serve-badge" aria-hidden="true">
+            {# Scale -- dispute / protest evidence. #}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 21h14"/><path d="M12 3 6 6M12 3l6 3"/><path d="M3 12l3-6 3 6M15 12l3-6 3 6"/><path d="M3 12a3 3 0 0 0 6 0M15 12a3 3 0 0 0 6 0"/></svg>
+          </span>
+          <div>
+            <h3>Tax consultants</h3>
+            <p>Filter and export a working set of parcels, then build each case on certified values, peer comps, and assessment-ratio anomaly flags. Link straight through to the county's own protest-filing tool when you're ready to file.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# ══ OUR MISSION ═══════════════════════════════════════════════════════════ #}
+{# PX-20260829-02: the page's deliberately minimal moment -- no card, no
+   grid, no icon. See .fd-mission's own comment in style.css for why it's
+   built this way. #}
+<section class="fd-mission">
+  <div class="fd-kicker">Our mission</div>
+  <p class="fd-mission-statement">Make property tax data <span class="accent">transparent, accessible, and actionable</span>.</p>
+</section>
+
+{# ══ WHERE WE'RE GOING ═════════════════════════════════════════════════════ #}
+{# PX-20260829-02: reuses the exact same live, D3-rendered coverage map as
+   the homepage via the shared coverage_map() macro (templates/_macros.html)
+   + static/coverage-map.js, instead of a second hand-copied instance -- see
+   that macro's own header comment for the full drift-avoidance reasoning.
+   Kicker/h2/lead here are About's own framing; the macro itself renders no
+   copy of its own. #}
+<section class="fd-section">
+  <div class="fd-kicker">Where we're going</div>
+  <h2 class="fd-h2">One platform. Every county. Better analysis.</h2>
+  <p class="fd-lead">
+    We're adding counties one at a time, verifying each one against its own official sources
+    before it goes live. As coverage grows, so does what we can build on top of it — deeper
+    analysis, more markets to compare against, the same standard applied everywhere.
+  </p>
+  {{ m.coverage_map(live_counties) }}
+</section>
+
+{# ══ CLOSING ═══════════════════════════════════════════════════════════════ #}
+{# PX-20260829-02: first real use of .fd-cta-band -- built out in full in
+   style.css when the front-door redesign shipped, but no template had used
+   it until now. #}
+<section class="fd-section-tight">
+  <div class="fd-cta-band">
+    <h2>Better data. Better understanding. Better decisions.</h2>
+    <p>Search any live parcel and see the record for yourself.</p>
+    <a href="{{ url_for('home') }}" class="btn-cta">Explore Parcelytics →</a>
   </div>
 </section>
 

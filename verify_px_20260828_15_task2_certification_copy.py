@@ -20,6 +20,25 @@ and base.html's global footer "2021-2026 Certified (2026 certified Jul 25,
 replacement is present, then does a real Jinja parse of each file to prove
 no syntax was broken.
 
+PX-20260829-02 UPDATE: Instance 3's original fix lived in about.html's
+"What Parcelytics covers" feature-card grid ("Property tax intelligence"
+card). That whole section was cut in the About page redesign (Diego's
+ruling: it duplicated homepage feature content instead of telling the
+"why" story the page is supposed to tell) -- the specific replacement
+sentence this fixture originally checked for no longer exists anywhere on
+the page. That is not a regression of the certification-copy bug: the
+per-county Certified/Preliminary claim this fix guarded against isn't made
+anywhere in the new about.html at all, which satisfies the same underlying
+guardrail (no claim = no false claim) even more directly than the original
+fix did. Instance 3's checks below were updated to confirm (a) the original
+overclaim stays gone, (b) the specific old feature-card sentence is gone
+too -- superseded, not reintroduced elsewhere -- and (c) the redesigned
+page's own new sourcing language (in its "Why Parcelytics" section) still
+makes no blanket/uniform certification-status claim. Same category of
+"scanner constant must follow a legitimate refactor" fix already applied
+once to verify_template_county_scoping.py (PX-20260829-01) and once to
+verify_launch_surface_registry.py (PX-20260829-02, the same brief).
+
 Run: python3 verify_px_20260828_15_task2_certification_copy.py
 """
 import os
@@ -95,28 +114,32 @@ check('the card still correctly describes the SOURCE type ("Certified '
       "Certified appraisal-district and tax-office billing data" in index_html)
 
 # ─────────────────────────────────────────────────────────────────────────
-section("Instance 3 (found by audit) -- about.html feature card")
+section("Instance 3 (found by audit) -- about.html feature card "
+        "[PX-20260829-02: section removed, checks updated -- see docstring]")
 # ─────────────────────────────────────────────────────────────────────────
 check('old overclaim "Full certified appraisal history for every parcel '
       'in every live county" is gone',
       "Full certified appraisal history for every parcel in every live county" not in about_html)
-check('replacement "Full appraisal history for every parcel in every live '
-      'county" (no blanket "certified") is present, with the per-county '
-      "Certified/Preliminary disclosure added -- checked in pieces around "
-      "the file's own escaped apostrophes (\\' inside its Jinja string "
-      "literal), not with a literal ' that would never match",
-      "Full appraisal history for every parcel in every live county" in about_html
-      and "each figure labeled Certified or Preliminary per that county" in about_html
-      and "own appraisal-district timeline" in about_html)
+check('the PX-20260828-15 fix\'s own replacement sentence ("Full appraisal '
+      'history for every parcel in every live county ... each figure '
+      'labeled Certified or Preliminary per that county\'s own appraisal-'
+      'district timeline") is gone too -- superseded by the About page '
+      "redesign cutting the whole feature-card section it lived in "
+      "(PX-20260829-02, Diego's ruling), not a silent regression",
+      "Full appraisal history for every parcel in every live county" not in about_html
+      and "each figure labeled Certified or Preliminary per that county" not in about_html)
 check('the old blanket-certified claim ("Sourced directly from each '
       'county... own certified appraisal rolls") is gone -- checked via '
       'the distinctive "certified appraisal rolls." tail (with trailing '
       "period, only present in the OLD sentence)",
       "certified appraisal rolls." not in about_html)
-check('replaced with a sourcing-integrity sentence ending "own appraisal '
-      'district." -- same point (directly sourced, no aggregators), no '
-      "certification-status claim baked in",
-      "own appraisal district." in about_html)
+check("the redesigned page's own new sourcing language (Why Parcelytics "
+      "section, PX-20260829-02) still makes no blanket/uniform "
+      "certification-status claim -- neither the old feature-card's "
+      '"own certified appraisal rolls" phrasing nor a new equivalent '
+      "(e.g. a bare \"certified\" claim with no per-county qualifier) "
+      "appears anywhere on the page",
+      "own certified appraisal rolls" not in about_html)
 
 # ─────────────────────────────────────────────────────────────────────────
 section("Instance 4 (found by audit) -- base.html global footer")

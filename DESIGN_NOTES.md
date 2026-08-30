@@ -172,9 +172,15 @@ panel naming TCAD + Tax Office and previewing the confidence system, audience ca
 (investors / developers / homeowners), and a **Request access / feedback** CTA (`#request`,
 mailto:parcelytics@gmail.com) — there was previously no way for a visitor to request access.
 
-**About (`about.html`)** — restyled to the same front-door craft: hero, feature cards, a clean
-data-source table, a dark "data-integrity standard" panel listing the 5 non-negotiables, audience
-cards, and the matching `#request` section the nav CTA targets.
+**About (`about.html`)** — PX-20260829-02 redesign: no longer a second homepage. Hero -> Why
+Parcelytics (the fragmentation narrative, with the per-county source table folded in as
+supporting evidence, not its own section) -> The Standard (dark data-integrity panel, unchanged)
+-> Methodology (unchanged, linked from property.html) -> Who We're Building For (icon-grid,
+mirrors the homepage's 4 Who We Serve segments exactly) -> Our Mission (minimal, chrome-free
+statement, `.fd-mission`) -> Where We're Going (shares the homepage's `coverage_map()` macro +
+`static/coverage-map.js`, not a second copy) -> Closing (`.fd-cta-band`). The old feature-card
+grid, standalone data-sources table, and 3-card "Who it's for" section, along with the earlier
+`#request` CTA (removed separately, see PX-2026082x request-access cleanup), are gone.
 
 **Property detail (`property.html`)** — inherits the new tokens (KPI cards, tables, pills, section
 nav all elevated). Specific brief items:

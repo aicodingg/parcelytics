@@ -1936,6 +1936,31 @@ footer:not(.site-footer) {
 .fd-cta-band .btn-cta { background: #fff; color: var(--accent-active); }
 .fd-cta-band .btn-cta:hover { background: #F2F4FF; color: var(--accent-active); }
 
+/* Mission statement (PX-20260829-02, About page "Our Mission" section).
+   Brief's own words: "the page's strongest visual moment — large type,
+   whitespace, minimal UI." Deliberately NOT a card, panel, or grid --
+   every other section on this page (and the homepage) uses one of those,
+   so a page-width, chrome-free statement is what actually reads as a
+   change of pace rather than another box. Reuses existing tokens only
+   (--fw-black/--track-display already power .hero h1 and .fd-h2; --ink
+   already the page's headline color) -- no new dependency, no new color.
+   Sized above .fd-h2's clamp() ceiling (2.25rem) so it's unambiguously
+   the largest text on the page short of the hero, but stays out of
+   .hero h1's own clamp() range (2.1rem–3.5rem) so the two don't compete
+   if a future page ever puts them close together. */
+.fd-mission { padding: var(--s-9) 0; text-align: center; }
+.fd-mission .fd-kicker { justify-content: center; display: flex; }
+.fd-mission-statement {
+  font-size: clamp(1.9rem, 4.5vw, 3.25rem);
+  font-weight: var(--fw-black);
+  letter-spacing: var(--track-display);
+  line-height: 1.15;
+  color: var(--ink);
+  max-width: 18ch;
+  margin: 0 auto;
+}
+.fd-mission-statement .accent { color: var(--accent); }
+
 /* Product visual frame (screenshot mock on hero) */
 .product-frame {
   border-radius: var(--r-lg);

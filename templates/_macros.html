@@ -21,6 +21,135 @@
    results view instead of rendering in place).
    ═══════════════════════════════════════════════════════════════════════ #}
 
+{# ═══════════════════════════════════════════════════════════════════════════
+   PX-20260829-02: coverage_map() -- extracted verbatim (HTML shape and all
+   real content unchanged) from index.html's inline "Coverage & roadmap"
+   card + market-card-grid, so the About page redesign's "Where We're
+   Going" section can reuse the SAME live, D3-rendered map instead of
+   hand-copying it a second time. Same reasoning as addr_match_results()
+   above and static/parcel-typeahead.js's own shared-script precedent: two
+   independently-maintained ~150-line copies of county fill/status/pill
+   logic is exactly the drift risk that's caused real, confirmed bugs on
+   this project before (three near-duplicate typeahead implementations
+   before "Search overhaul" Phase 2; two independently-written billing-
+   confidence checks that quietly disagreed on 8/36 combinations).
+
+   Takes ONLY live_counties -- computes live_slugs internally so callers
+   never have to keep two derived values in sync. Deliberately does NOT
+   render the section's own kicker/h2/lead: index.html and about.html each
+   tell a different story around this same map ("Live today across N
+   counties... expanding to the largest markets next" vs "One platform.
+   Every county. Better analysis."), so that copy stays with each page,
+   not baked into the shared component.
+
+   The map's actual D3 rendering logic (fill colors, hover linking,
+   thumbnails, tooltip, responsive stroke widths) lives in the paired
+   static/coverage-map.js, loaded once per page that calls this macro
+   (see that file's own header comment). This macro's only job is to
+   emit the HTML shape that script expects to find in the DOM, including
+   the data-live-slugs attribute coverage-map.js reads its one piece of
+   server-side config from -- no inline per-page <script> block with
+   Jinja-rendered JSON required anymore (that inline-JSON-per-page shape
+   is exactly what made a second, hand-copied instance of this component
+   a real risk instead of a one-line macro call).
+
+   Six-market total (Travis/NYC/LA/Chicago/Dallas/Houston) is a real,
+   disclosed product-roadmap constant, not a magic number invented here --
+   unchanged from the map's original build (PX-20260827-03-rev1 Task 3 and
+   earlier rounds already establish this same "6" as the total target-
+   market count, both here and in static/coverage-map.js's own MARKETS
+   array). #}
+{% macro coverage_map(live_counties) %}
+{% set live_slugs = live_counties | map(attribute='slug') | list %}
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <div>Coverage &amp; roadmap</div>
+      <div class="text-muted"
+           style="text-transform:none; font-weight:400; letter-spacing:normal; font-size:12px; margin-top:2px;">
+        Live in {{ live_counties|length }} market{{ 's' if live_counties|length != 1 }} today. {{ 6 - live_counties|length }} more mapped. Every market verified before it goes live.
+      </div>
+    </div>
+    <div class="d-flex flex-column align-items-end gap-1"
+         style="text-transform:none; font-weight:400; letter-spacing:normal;">
+      {% for c in live_counties %}
+      <span class="map-legend-chip"><span class="map-legend-swatch is-live"></span>{{ c.display_name }} — Live</span>
+      {% endfor %}
+      <span class="map-legend-chip"><span class="map-legend-swatch is-soon"></span>{{ 6 - live_counties|length }} markets — Coming soon</span>
+      <span class="map-legend-note">County shapes enlarged for visibility.</span>
+    </div>
+  </div>
+  <div class="card-body p-2" id="mapCardBody" style="position:relative;">
+    <svg id="roadmapMap" viewBox="0 0 975 610" preserveAspectRatio="xMidYMid meet"
+         data-live-slugs='{{ live_slugs | tojson }}'
+         style="width:100%; height:auto; display:block;"></svg>
+    <div id="roadmapMapFallback" class="text-muted small p-3" style="display:none;">
+      Map preview unavailable offline. Live today: {{ live_counties | map(attribute='display_name') | join(', ') }}.
+      Roadmap (not yet live): the remaining markets shown as "Coming soon" above.
+    </div>
+    <div id="mapTooltip" class="map-tooltip" style="display:none;"></div>
+  </div>
+</div>
+
+<div class="market-card-grid mt-4">
+  <div class="market-card {{ 'is-live' if 'travis-tx' in live_slugs else 'is-soon' }} audience-card" data-market="travis-tx" style="padding:14px 16px;">
+    <svg class="market-thumb" data-market="travis-tx" data-status="{{ 'live' if 'travis-tx' in live_slugs else 'soon' }}" width="56" height="56" viewBox="0 0 56 56"></svg>
+    <div class="market-card-title">Austin</div>
+    <div class="market-card-sub text-muted">Travis County, TX</div>
+    {% if 'travis-tx' in live_slugs %}
+    <span class="market-pill is-live">Live</span>
+    <div class="market-card-detail text-muted">{{ live_counties | selectattr('slug', 'equalto', 'travis-tx') | map(attribute='parcel_count_display') | first }}+ parcels · certified 2021–2025</div>
+    {% else %}
+    <span class="market-pill is-soon">Coming soon</span>
+    {% endif %}
+  </div>
+  <div class="market-card is-soon audience-card" data-market="newyork-ny" style="padding:14px 16px;">
+    <svg class="market-thumb" data-market="newyork-ny" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
+    <div class="market-card-title">New York City</div>
+    <div class="market-card-sub text-muted">New York County (Manhattan) core, metro to follow</div>
+    <span class="market-pill is-soon">Coming soon</span>
+  </div>
+  <div class="market-card is-soon audience-card" data-market="losangeles-ca" style="padding:14px 16px;">
+    <svg class="market-thumb" data-market="losangeles-ca" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
+    <div class="market-card-title">Los Angeles</div>
+    <div class="market-card-sub text-muted">Los Angeles County</div>
+    <span class="market-pill is-soon">Coming soon</span>
+  </div>
+  <div class="market-card is-soon audience-card" data-market="cook-il" style="padding:14px 16px;">
+    <svg class="market-thumb" data-market="cook-il" data-status="soon" width="56" height="56" viewBox="0 0 56 56"></svg>
+    <div class="market-card-title">Chicago</div>
+    <div class="market-card-sub text-muted">Cook County</div>
+    <span class="market-pill is-soon">Coming soon</span>
+  </div>
+  <div class="market-card {{ 'is-live' if 'dallas-tx' in live_slugs else 'is-soon' }} audience-card" data-market="dallas-tx" style="padding:14px 16px;">
+    <svg class="market-thumb" data-market="dallas-tx" data-status="{{ 'live' if 'dallas-tx' in live_slugs else 'soon' }}" width="56" height="56" viewBox="0 0 56 56"></svg>
+    <div class="market-card-title">Dallas</div>
+    <div class="market-card-sub text-muted">Dallas County</div>
+    {% if 'dallas-tx' in live_slugs %}
+    <span class="market-pill is-live">Live</span>
+    <div class="market-card-detail text-muted">{{ live_counties | selectattr('slug', 'equalto', 'dallas-tx') | map(attribute='parcel_count_display') | first }}+ parcels</div>
+    {% else %}
+    <span class="market-pill is-soon">Coming soon</span>
+    {% endif %}
+  </div>
+  <div class="market-card {{ 'is-live' if 'harris-tx' in live_slugs else 'is-soon' }} audience-card" data-market="harris-tx" style="padding:14px 16px;">
+    <svg class="market-thumb" data-market="harris-tx" data-status="{{ 'live' if 'harris-tx' in live_slugs else 'soon' }}" width="56" height="56" viewBox="0 0 56 56"></svg>
+    <div class="market-card-title">Houston</div>
+    <div class="market-card-sub text-muted">Harris County</div>
+    {% if 'harris-tx' in live_slugs %}
+    <span class="market-pill is-live">Live</span>
+    <div class="market-card-detail text-muted">{{ live_counties | selectattr('slug', 'equalto', 'harris-tx') | map(attribute='parcel_count_display') | first }}+ parcels</div>
+    {% else %}
+    <span class="market-pill is-soon">Coming soon</span>
+    {% endif %}
+  </div>
+</div>
+<p class="text-muted mt-3 mb-0" style="font-size:11.5px;">
+  Roadmap, not current coverage, for the markets above still marked "Coming soon" — {{ live_counties|length }} {{ 'market has' if live_counties|length == 1 else 'markets have' }} live
+  Parcelytics data today. Timing depends on each county's data pipeline and public-records access.
+</p>
+{% endmacro %}
+
 {% macro addr_match_results(addr_matches, error, wrapper_id='searchResults') %}
 <div id="{{ wrapper_id }}" data-search-happened="{{ 'true' if (addr_matches or error) else 'false' }}">
 {% if addr_matches %}
