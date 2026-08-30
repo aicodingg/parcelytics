@@ -242,14 +242,23 @@ check('neutral render (home(), api_county_slug=""): rendered JS literal '
 section("Real Node execution -- .replace(/\\/$/, '') and the actual fetch() concat")
 
 typeahead_src = open(os.path.join(REPO, "static", "parcel-typeahead.js")).read()
-fetch_line_match = re.search(r'fetch\(global\.COUNTY_BASE \+ .*?\)\)', typeahead_src)
+# PX-20260829-04 Task 2 added an AbortController as fetch()'s second argument
+# (`controller ? { signal: controller.signal } : undefined`) and wrapped the
+# call across two lines to fit it -- neither change touches the URL-building
+# FIRST argument this check actually cares about, so the match is now scoped
+# to just that first argument (DOTALL so it still spans the line break) and
+# the exact-string check was widened to also accept the new second-argument
+# call shape rather than only the pre-PX-20260829-04 single-argument one.
+fetch_first_arg_match = re.search(r'global\.COUNTY_BASE \+ "/api/address_search\?q=" \+ encodeURIComponent\(q\)', typeahead_src)
 check("static/parcel-typeahead.js's real fetch() call still reads "
-      "global.COUNTY_BASE + \"/api/address_search?q=...\" (plain string "
-      "concatenation, not a template literal or a different shape) -- "
-      "the exact expression Section 3's Node script below evaluates for "
-      "real, not a hand-copied guess",
-      fetch_line_match is not None
-      and fetch_line_match.group(0) == 'fetch(global.COUNTY_BASE + "/api/address_search?q=" + encodeURIComponent(q))')
+      "global.COUNTY_BASE + \"/api/address_search?q=...\" as its URL "
+      "argument (plain string concatenation, not a template literal or a "
+      "different shape) -- the exact expression Section 3's Node script "
+      "below evaluates for real, not a hand-copied guess. (PX-20260829-04 "
+      "Task 2 added an AbortController as fetch()'s second argument -- "
+      "this check now tolerates that addition since it doesn't touch the "
+      "URL-building expression under test here.)",
+      fetch_first_arg_match is not None)
 
 node_script = f"""
 const rawAnchored = {anchored_literal};

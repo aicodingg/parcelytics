@@ -163,6 +163,21 @@
     var currentResults = [];
     var highlightedIndex = -1;
     var isOpen = false;
+    // PX-20260829-04 Task 2: the previous in-flight request's AbortController,
+    // if any. Confirmed live bug (2026-08-27): typing produced an escalating
+    // 6.5s -> 12.3s -> 13.8s -> 18.5s delay across four successive keystrokes
+    // -- the signature of uncancelled requests queueing behind each other,
+    // not of each request independently slowing down. Root cause: this file
+    // never aborted a superseded fetch -- the `q !== lastQuery` guard in
+    // runQuery()'s .then() below only ever suppressed a stale response's
+    // RENDERING after the network/server work was already done, it never
+    // stopped that work from happening or freed up the (single, per
+    // PX-20260829-04's own server-side finding) gunicorn worker it was
+    // occupying. Aborting the previous request the instant a new one fires
+    // means at most ONE typeahead request is ever actually in flight per
+    // box, so a burst of keystrokes can no longer pile up server-side work
+    // regardless of how slow any individual request is.
+    var pendingRequest = null;
 
     function close() {
       list.style.display = "none";
@@ -215,6 +230,21 @@
       highlightedIndex = -1;
     }
 
+    // PX-20260829-04 Task 3: shown the moment a request actually goes out
+    // (called at the top of runQuery(), below -- not on every keystroke,
+    // since the debounce timer already gates that), so the box visibly
+    // reacts to typing well before a slow response comes back, instead of
+    // looking dead for however long the request takes. Ships regardless of
+    // the latency fix itself -- see this task's own brief: "a spinner on a
+    // 15-second wait makes a performance bug look intentional" is true, but
+    // "the box looks dead for 15 seconds" was the worse of the two.
+    function renderLoading() {
+      list.innerHTML = '<div class="ta-loading"><span class="ta-spinner" aria-hidden="true"></span>Searching&hellip;</div>';
+      list.style.display = "block";
+      isOpen = true;
+      highlightedIndex = -1;
+    }
+
     function renderResults(results) {
       currentResults = results;
       highlightedIndex = -1;
@@ -256,17 +286,45 @@
     }
 
     function runQuery(q) {
+      // PX-20260829-04 Task 2: abort whatever request is still in flight
+      // BEFORE starting a new one -- see pendingRequest's own declaration
+      // comment above for the full incident this fixes. AbortController is
+      // supported by every browser this site targets (no polyfill needed);
+      // calling .abort() on an already-settled controller is a documented
+      // no-op, so this is safe even if the previous request just happened
+      // to finish a moment ago.
+      if (pendingRequest) {
+        pendingRequest.abort();
+        pendingRequest = null;
+      }
+      var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      pendingRequest = controller;
+
+      // PX-20260829-04 Task 3: "Searching…" the instant the request fires,
+      // replaced by the real results/empty-state/(silently left alone on
+      // network error) once the response for the CURRENT query lands. A
+      // stale, slower response for an OLDER query must never clobber a
+      // newer query's still-in-flight loading state -- the existing
+      // `q !== lastQuery` guard below already prevents a stale response
+      // from rendering its RESULTS; this only shows the spinner for the
+      // query that is now the most recent one, same guard, same reasoning.
+      renderLoading();
       // PX-20260828-02: COUNTY_BASE, not a hardcoded bare path -- see this
       // file's own header comment. This was the confirmed live bug: every
       // one of the four boxes always searched Travis regardless of the
       // current page's (or, since PX-20260828-01, current in-page filter's)
       // real county.
-      fetch(global.COUNTY_BASE + "/api/address_search?q=" + encodeURIComponent(q))
+      fetch(global.COUNTY_BASE + "/api/address_search?q=" + encodeURIComponent(q),
+            controller ? { signal: controller.signal } : undefined)
         .then(function (r) { return r.json(); })
         .then(function (d) {
+          if (controller === pendingRequest) pendingRequest = null;
           // Stale-response guard: only render if this is still the most
           // recent query (a slower earlier request landing after a faster
           // later one should never clobber the current, correct dropdown).
+          // Kept as a second line of defense alongside the abort() above --
+          // e.g. a response that was already in-flight to the browser the
+          // instant abort() was called can still resolve on some browsers.
           if (q !== lastQuery) return;
           if (!d.ok) return;
           var results = (d.results || []).slice(0, cfg.maxResults);
@@ -276,7 +334,14 @@
             renderResults(results);
           }
         })
-        .catch(function () { /* network hiccup — leave dropdown as-is, don't show a false empty state */ });
+        .catch(function (err) {
+          if (controller === pendingRequest) pendingRequest = null;
+          // AbortError is the EXPECTED result of the abort() call above
+          // (every superseded request throws one) -- not a real network
+          // hiccup, and must not be surfaced or logged as one.
+          if (err && err.name === "AbortError") return;
+          /* real network hiccup — leave dropdown as-is, don't show a false empty state */
+        });
     }
 
     input.addEventListener("input", function () {

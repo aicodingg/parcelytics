@@ -9,7 +9,7 @@ import re
 import time
 from io import BytesIO
 from datetime import datetime, date
-from flask import Flask, render_template, request, redirect, url_for, jsonify, Response, g, abort
+from flask import Flask, render_template, request, redirect, url_for, jsonify, Response, g, abort, has_request_context
 import psycopg2
 import psycopg2.extras
 import psycopg2.errors
@@ -1617,16 +1617,44 @@ def query(sql, params=None, one=False, timeout_ms=None):
     user-supplied (every call site in this codebase passes a hardcoded
     literal), so formatting it into the SQL text after an int() cast is safe
     -- int() itself is the guard against anything unexpected reaching here.
+
+    PX-20260829-04 (Task 1 instrumentation): every call now records its own
+    wall-clock cost -- split into connect_ms (get_db()'s psycopg2.connect()
+    call specifically, isolated from the query itself) and exec_ms (cursor
+    execute+fetch) -- onto g._diag_db_calls, a per-REQUEST list, when running
+    inside a real Flask request (has_request_context()). This is additive
+    only: every existing call site's return value and behavior is byte-for-
+    byte unchanged; a caller that never reads g._diag_db_calls (i.e. every
+    caller today except the two typeahead endpoints below) sees no
+    difference at all. Exists so a single request's DB time can be measured
+    and reported separately from "everything else" (Flask-Limiter, JSON
+    serialization, Python-side loop overhead) -- the exact breakdown
+    PX-20260829-04's brief asks for -- and, just as importantly, so the
+    NUMBER of separate connect() calls one request makes is visible: this
+    codebase opens a brand-new physical connection per query() call (no
+    pooling anywhere in get_db()), so a code path that calls query() N times
+    pays N separate connection-setup costs, not one.
     """
+    _t0 = time.perf_counter()
     conn = get_db()
+    _t_connected = time.perf_counter()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if timeout_ms is not None:
                 cur.execute(f"SET statement_timeout = {int(timeout_ms)}")
             cur.execute(sql, params or ())
-            return cur.fetchone() if one else cur.fetchall()
+            result = cur.fetchone() if one else cur.fetchall()
+            return result
     finally:
         conn.close()
+        if has_request_context():
+            _t_done = time.perf_counter()
+            calls = g.setdefault("_diag_db_calls", [])
+            calls.append({
+                "connect_ms": round((_t_connected - _t0) * 1000, 2),
+                "exec_ms":    round((_t_done - _t_connected) * 1000, 2),
+                "sql_head":   " ".join(sql.split())[:60],
+            })
 
 
 # query_no_nestloop() -- RETIRED (Task AGGPRECOMP-2, Aug 2026). Used to live
@@ -1805,14 +1833,63 @@ def search_parcels_by_address(q, limit=8, county_code=None):
     # whichever county the match actually lives in -- _add_county_slug()'s
     # own DEFAULT_COUNTY_SLUG fallback would otherwise silently point every
     # result at Travis regardless of where the match was actually found.
+    #
+    # PX-20260829-04 Task 1 (measured-diagnosis fix, sign-off given): this
+    # branch used to recurse into itself once PER LIVE COUNTY, serially --
+    # each recursive call could itself issue up to (token count - 1)
+    # further serial query() calls (address_match_attempts()'s own
+    # progressive token-drop retry), and every single query() call opens a
+    # brand-new physical DB connection (get_db() has no pooling). For 2 live
+    # counties and a typical 4-token address with no match at full
+    # specificity, that was up to 6 serial connections for ONE keystroke,
+    # BEFORE _live_counties() itself (below) added 3 more. Rewritten to run
+    # ONE query per token-drop attempt, scoped to every live county at once
+    # via `county_code = ANY(%s)`, instead of one query per (county x
+    # attempt) combination -- caps this branch at (token count - 1) queries
+    # total regardless of how many counties are live, and that number only
+    # gets BETTER as more counties (Harris, etc.) come online, not worse.
+    # Also fixes a latent correctness quirk in the old per-county loop: a
+    # full-specificity match in county B was previously delayed behind
+    # county A's ENTIRE token-drop cascade failing first (recursion tried
+    # counties one at a time, each running its own complete cascade before
+    # moving on) -- the combined query now finds whichever county matches
+    # at a given specificity level in the same pass, for every county,
+    # every time.
     target_county = county_code or getattr(g, "county_code", None)
     if target_county is None:
-        results = []
-        for entry in _live_counties():
-            results.extend(search_parcels_by_address(q, limit=limit, county_code=entry["county_code"]))
-            if len(results) >= limit:
-                break
-        return results[:limit]
+        live = _live_counties()
+        if not live:
+            return []
+        live_codes = [entry["county_code"] for entry in live]
+        code_to_slug = {entry["county_code"]: entry["slug"] for entry in live}
+        tokens = search_logic.normalize_query_tokens(q)
+        if not tokens:
+            return []
+        for pattern_tokens, boost_tokens in search_logic.address_match_attempts(tokens):
+            pattern = " ".join(pattern_tokens)
+            rows = query("""
+                SELECT geo_id, situs_address, owner_name, county_code
+                FROM   parcel
+                WHERE  UPPER(situs_address) ILIKE %(pattern)s
+                  AND  geo_id NOT LIKE 'AJR%%'
+                  AND  county_code = ANY(%(county_codes)s)
+                ORDER  BY
+                    CASE WHEN UPPER(situs_address) LIKE %(prefix_pattern)s THEN 0 ELSE 1 END,
+                    situs_address
+                LIMIT  200
+            """, {"pattern": f"%{pattern}%", "prefix_pattern": f"{pattern}%",
+                  "county_codes": live_codes})
+            if rows:
+                ranked = search_logic.rank_candidates(
+                    [dict(r) for r in rows], boost_tokens, pattern_tokens
+                )
+                for r in ranked:
+                    r["county_slug"] = code_to_slug.get(r["county_code"], DEFAULT_COUNTY_SLUG)
+                    r["county_name"] = COUNTY_PROFILES.get(
+                        r["county_code"], COUNTY_PROFILES["TRAVIS"]
+                    )["county_name"]
+                return ranked[:limit]
+        return []
 
     county_slug = next((slug for slug, code in COUNTY_SLUGS.items() if code == target_county), DEFAULT_COUNTY_SLUG)
     # PX-20260828-03 Task 2: county_name alongside county_slug, same
@@ -5407,6 +5484,35 @@ FILTER_DATA_REQUIREMENTS = {
 }
 
 
+# PX-20260829-04 Task 1 (measured-diagnosis fix, sign-off given): TTL cache
+# for _live_counties(), same pattern as _SNAPSHOT_CACHE above (module-level
+# dict, TTL in seconds, no event-invalidation -- this data only ever changes
+# when Diego runs a loader that brings a new county live, not on any
+# request-driven signal this process could listen for). Before this cache,
+# EVERY call to _live_counties() -- and every typeahead keystroke on a
+# neutral page called it once, via search_parcels_by_address()'s own
+# cross-county branch above -- issued one query() (one fresh DB connection,
+# get_db() has no pooling) per REGISTERED slug (3 today: travis-tx,
+# dallas-tx, harris-tx), regardless of how many are actually live. That's 3
+# serial connections just to answer "what's live," before a single byte of
+# the actual address search had run. 60s is short enough that a real
+# go-live is visible within a minute (Diego doesn't need this instant --
+# there's no user-facing SLA on "how fast does a newly-loaded county appear
+# in the picker"), long enough to absorb an entire burst of typeahead
+# keystrokes on one cache fill.
+#
+# Per-process, same caveat as _SNAPSHOT_CACHE (see that comment above): under
+# N gunicorn workers, each worker keeps its own independent copy of this
+# cache -- correct, just N separate 60s windows rather than one shared one.
+# Worth stating plainly (flagged in this brief's own final report) rather
+# than leaving implicit, especially since this brief's own Task 1 finding
+# is that the app currently runs under gunicorn's default of ONE worker --
+# where this distinction doesn't even apply yet, but will the moment worker
+# count is increased per this same report's infra recommendation.
+_LIVE_COUNTIES_CACHE = {"ts": 0, "value": None}
+_LIVE_COUNTIES_CACHE_TTL_SECONDS = 60
+
+
 def _live_counties():
     """PX-20260827-03-rev1 Task 2/3: the one, real "what's live" list every
     county picker (search/info dropdowns, nav switcher) and every launch
@@ -5419,8 +5525,18 @@ def _live_counties():
     dicts (not a bare county_code list) so templates/JS get slug + display
     name for free, in COUNTY_SLUGS' own declared order -- one query per
     registered slug (currently 3 max), each an index-only prefix scan per
-    _county_has_data's own docstring, so this is cheap enough to call on
-    every page render via the context processor below."""
+    _county_has_data's own docstring.
+
+    PX-20260829-04: now TTL-cached (see _LIVE_COUNTIES_CACHE above) -- this
+    function used to be called fresh on every single invocation (every page
+    render via the context processor below, AND every typeahead keystroke
+    on a neutral page), each one paying 3 real DB round trips regardless of
+    whether anything could possibly have changed since the last call a
+    fraction of a second earlier."""
+    now = time.monotonic()
+    cached = _LIVE_COUNTIES_CACHE
+    if cached["value"] is not None and (now - cached["ts"]) < _LIVE_COUNTIES_CACHE_TTL_SECONDS:
+        return cached["value"]
     live = []
     for slug, county_code in COUNTY_SLUGS.items():
         if _county_has_data(county_code):
@@ -5445,6 +5561,8 @@ def _live_counties():
                 "cad_abbr": profile.get("cad_abbr", ""),
                 "tax_office_name": profile.get("tax_office_name", ""),
             })
+    _LIVE_COUNTIES_CACHE["ts"] = now
+    _LIVE_COUNTIES_CACHE["value"] = live
     return live
 
 
@@ -6206,6 +6324,41 @@ def api_estimate_acq(geo_id):
 
 
 
+def _log_typeahead_timing(endpoint_label, t0, q, result_count):
+    """
+    PX-20260829-04 Task 1: end-to-end timing breakdown for one typeahead
+    request -- "log time spent in the DB call vs. everything else", per the
+    brief's own wording. Reads g._diag_db_calls (populated by every query()
+    call this request made, see that function's own PX-20260829-04 comment)
+    and prints ONE structured line: total wall-clock time for the whole
+    request, DB time (connect + exec, summed across every query() call this
+    request happened to make), the resulting "everything else" remainder
+    (Python-side loop/JSON overhead, Flask-Limiter's own bookkeeping,
+    request/response plumbing), and -- critically for diagnosing the
+    suspected serial-per-county-query multiplier -- the actual NUMBER of
+    separate query() calls (each its own physical DB connection, since
+    get_db() does not pool) this one request made.
+
+    print()'d rather than routed through logging/Sentry: matches this
+    codebase's existing DIAG convention (see BILLING-DIAG-3 through -8,
+    api_billing's own breadcrumb style) for a lightweight, always-on,
+    grep-able diagnostic that needs no separate log-level configuration to
+    show up in Render's log stream. Safe to leave in past this incident --
+    each line is ~150 bytes, and every real production typeahead keystroke
+    is already rate-limited to 60/minute (_LIMIT_TYPEAHEAD) per client.
+    """
+    total_ms = round((time.perf_counter() - t0) * 1000, 2)
+    calls = g.get("_diag_db_calls", []) if has_request_context() else []
+    db_ms = round(sum(c["connect_ms"] + c["exec_ms"] for c in calls), 2)
+    connect_ms = round(sum(c["connect_ms"] for c in calls), 2)
+    other_ms = round(total_ms - db_ms, 2)
+    print(
+        f"  [DIAG PX-20260829-04] {endpoint_label} q={q!r} results={result_count} "
+        f"total_ms={total_ms} db_ms={db_ms} (connect_ms={connect_ms}) "
+        f"other_ms={other_ms} db_call_count={len(calls)}"
+    )
+
+
 @app.route("/<county_slug>/api/address_search")
 @limiter.limit(_LIMIT_TYPEAHEAD)
 def api_address_search():
@@ -6261,6 +6414,7 @@ def api_address_search():
     called from here), falling back to g.county_slug only for defense
     against a row that somehow lacks it.
     """
+    _t0 = time.perf_counter()
     q = request.args.get("q", "").strip()
     if len(q) < 3:
         return jsonify({"ok": True, "results": []})
@@ -6279,6 +6433,7 @@ def api_address_search():
     if search_logic.is_account_number_query(q):
         exact = resolve_exact_parcel(q)
         if exact:
+            _log_typeahead_timing("api_address_search[exact]", _t0, q, 1)
             return jsonify({"ok": True, "results": [{
                 "geo_id":      exact["geo_id"],
                 "address":     exact.get("situs_address") or "",
@@ -6300,6 +6455,7 @@ def api_address_search():
         }
         for r in rows
     ]
+    _log_typeahead_timing("api_address_search[address]", _t0, q, len(results))
     return jsonify({"ok": True, "results": results})
 
 
@@ -6358,6 +6514,7 @@ def api_address_search_landing():
     uses internally, rather than inventing a second lookup helper for one
     call site.
     """
+    _t0 = time.perf_counter()
     q = request.args.get("q", "").strip()
     if len(q) < 3:
         return jsonify({"ok": True, "results": []})
@@ -6380,6 +6537,7 @@ def api_address_search_landing():
                 (slug for slug, code in COUNTY_SLUGS.items() if code == exact_county_code),
                 DEFAULT_COUNTY_SLUG,
             )
+            _log_typeahead_timing("api_address_search_landing[exact]", _t0, q, 1)
             return jsonify({"ok": True, "results": [{
                 "geo_id":      exact["geo_id"],
                 "address":     exact.get("situs_address") or "",
@@ -6401,6 +6559,16 @@ def api_address_search_landing():
         }
         for r in rows
     ]
+    # PX-20260829-04 Task 1: this is the branch under live suspicion -- the
+    # cross-county loop inside search_parcels_by_address() (county_code=None
+    # above) calls itself once per live county, SERIALLY, and each of those
+    # per-county calls can itself issue up to (len(tokens)-1) separate
+    # query() calls (address_match_attempts()'s progressive token-drop
+    # retry, search_logic.py) before giving up on that county -- every one
+    # of which opens its own brand-new DB connection (get_db() has no
+    # pooling). db_call_count in the printed line below is the direct,
+    # measured count of how many of those this one request actually made.
+    _log_typeahead_timing("api_address_search_landing[address,CROSS-COUNTY]", _t0, q, len(results))
     return jsonify({"ok": True, "results": results})
 
 

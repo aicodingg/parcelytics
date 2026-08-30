@@ -17,8 +17,11 @@ these tests fail.
 Covers:
   Section 1: search_parcels_by_address()'s SQL carries county_code in its
              WHERE clause (DALLAS-GATE-1 Part 2's fix), and its neutral
-             (county_code=None) branch loops over _live_counties() rather
-             than ever issuing an unscoped query.
+             (county_code=None) branch scopes to every live county via a
+             single county_code = ANY(...) query rather than ever issuing
+             an unscoped query (PX-20260829-04 Task 1 replaced the original
+             per-county recursive-loop design with this single-query one;
+             see this file's own updated check for why).
   Section 2: resolve_exact_parcel()'s two SQL statements both carry
              county_code in their WHERE clause, with the same neutral-
              branch loop.
@@ -83,10 +86,15 @@ check("main ILIKE query's WHERE clause includes county_code = %(county_code)s",
       "AND  county_code = %(county_code)s" in search_parcels_src)
 check("county_code param is bound to target_county in the query() call",
       '"county_code": target_county' in search_parcels_src)
-check("neutral (county_code=None) branch loops over _live_counties() rather "
-      "than ever issuing an unscoped query",
-      "for entry in _live_counties():" in search_parcels_src
-      and "search_parcels_by_address(q, limit=limit, county_code=entry[\"county_code\"])" in search_parcels_src)
+check("neutral (county_code=None) branch scopes to every live county via a "
+      "single county_code = ANY(%(county_codes)s) query -- PX-20260829-04 "
+      "Task 1's measured-diagnosis fix, replacing the old per-county "
+      "recursive loop (one query per (county x token-drop attempt) "
+      "combination -- up to 6+ serial, unpooled DB connections per "
+      "keystroke) with one query per token-drop attempt regardless of how "
+      "many counties are live",
+      "live_codes = [entry[\"county_code\"] for entry in live]" in search_parcels_src
+      and "county_code = ANY(%(county_codes)s)" in search_parcels_src)
 check("geo_id NOT LIKE 'AJR%%' (real-property-only) still applied alongside "
       "the county_code scoping (D3 convention, unrelated to this brief but "
       "a real regression risk if this WHERE clause is ever touched again)",

@@ -1119,6 +1119,29 @@ canvas { max-height: 440px; }
   white-space: normal;
 }
 
+/* PX-20260829-04 Task 3: an explicit "Searching…" row, shown the instant a
+   request goes out (not just on a slow one) so the box never looks dead
+   while a fetch is in flight -- same "must never look identical to nothing
+   having happened" principle as .ta-empty above, just for the in-flight
+   state instead of the zero-results state. The spinner is a plain CSS
+   border-spin, not an image/icon asset (consistent with this codebase's
+   "no new component for a one-off" convention elsewhere). */
+.ta-loading {
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  display: flex; align-items: center; gap: 8px;
+  white-space: normal;
+}
+.ta-spinner {
+  width: 12px; height: 12px; flex-shrink: 0;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ta-spin 0.6s linear infinite;
+}
+@keyframes ta-spin { to { transform: rotate(360deg); } }
+
 /* Coverage map (Fable design spec, July 20, 2026) -- replaces Rounds 1-3's
    .map-callout* entirely (persistent callout boxes + leader lines are gone
    by design, see templates/index.html for the full rationale). New,

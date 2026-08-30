@@ -48,6 +48,7 @@ Run: python3 verify_px_20260829_01_search_result_county.py
 import os
 import re
 import sys
+import time
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 APP_PY = open(os.path.join(REPO, "app.py")).read()
@@ -152,6 +153,18 @@ def make_ns(resolve_exact_parcel_fn, search_parcels_by_address_fn):
         "search_logic": FakeSearchLogic(),
         "resolve_exact_parcel": resolve_exact_parcel_fn,
         "search_parcels_by_address": search_parcels_by_address_fn,
+        # PX-20260829-04 added real time.perf_counter()-based timing
+        # instrumentation (_log_typeahead_timing) directly inside these two
+        # endpoint bodies, guarded by has_request_context(). This fixture
+        # tests county_slug/county_name plumbing, not timing instrumentation,
+        # so `time` is the real module (harmless, just a clock) and the other
+        # two are no-op stubs: has_request_context() -> False so the timing
+        # branch's own internals don't need a real Flask app context, and
+        # _log_typeahead_timing is a no-op so its print() diagnostic doesn't
+        # fire during this unrelated test's output.
+        "time": time,
+        "has_request_context": lambda: False,
+        "_log_typeahead_timing": lambda *a, **k: None,
     }
 
 
