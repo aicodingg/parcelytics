@@ -70,14 +70,46 @@ CREATE TABLE IF NOT EXISTS tax_delinquent (
     bankruptcy_number   VARCHAR(50)
 );
 
--- Tax rates by entity and year (2025RatesHistory1990-2025.xlsx)
+-- Tax rates by entity and year (Travis: 2025RatesHistory1990-2025.xlsx;
+-- Dallas: dallascounty.org tax-rates.php / past-tax-rates.php, PX-20260829-07).
+--
+-- PX-20260829-07 Task 6: this CREATE TABLE had drifted from live production
+-- since PARTITION-2 -- county_code was added to the real table (confirmed
+-- via `\d` against production, 2026-08-23, per load_tax_rates.py's own
+-- comment) but this file's DDL was never updated to match, the 6th
+-- repo-vs-production drift catch this session (schema.sql is bootstrap
+-- DDL run against a fresh database, NOT a live description of the current
+-- schema -- a `CREATE TABLE IF NOT EXISTS` here is silently skipped against
+-- an existing production table no matter what this file says, which is
+-- exactly how this drifted unnoticed). Fixed here to match production's
+-- real PK, and mo_rate/is_rate added net-new (approved PX-20260829-07 Task 2):
+-- Dallas publishes Maintenance & Operations and Interest & Sinking
+-- separately; rather than collapsing that into `rate` alone, both
+-- components are preserved and `rate` remains the required total every
+-- county's loader can populate. mo_rate/is_rate are nullable -- NULL means
+-- "this county's source doesn't publish the breakdown" (Travis, today),
+-- not a data gap on our end -- see app.py's _rates_response()/rates.html's
+-- has_rate_split handling for the read-side honesty treatment.
 CREATE TABLE IF NOT EXISTS county_tax_rate (
+    county_code  VARCHAR(20) NOT NULL,
     entity_code  VARCHAR(10) NOT NULL,
     entity_name  VARCHAR(100),
     tax_year     SMALLINT    NOT NULL,
     rate         NUMERIC(8,6),
-    PRIMARY KEY (entity_code, tax_year)
+    mo_rate      NUMERIC(8,6),
+    is_rate      NUMERIC(8,6),
+    PRIMARY KEY (county_code, entity_code, tax_year)
 );
+-- Real, disclosed migration note for an existing production database that
+-- already has this table under the OLD (pre-this-brief) shape: county_code
+-- already exists there (added by an earlier PARTITION-2-era migration, not
+-- shown here since that ALTER already ran and this file's job is fresh-DB
+-- bootstrap, not a changelog) -- only mo_rate/is_rate are genuinely new.
+-- `CREATE TABLE IF NOT EXISTS` above does nothing on that existing
+-- database, so the two new nullable columns need one real, one-time ALTER
+-- run once against production (not part of this file's own execution path):
+--   ALTER TABLE county_tax_rate ADD COLUMN IF NOT EXISTS mo_rate NUMERIC(8,6);
+--   ALTER TABLE county_tax_rate ADD COLUMN IF NOT EXISTS is_rate NUMERIC(8,6);
 
 -- Migrate column types if tables were created with old definitions
 DO $$ BEGIN

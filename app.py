@@ -4032,8 +4032,17 @@ def _rates_response(county_code, county_slug_val, api_county_slug=None):
     # footer). No WHERE clause is needed at all — county_tax_rate only ever
     # gets rows from that same 1990-2025 loader — so the full confirmed
     # range is used here rather than re-imposing an arbitrary floor.
+    # PX-20260829-07 Task 2 (approved schema/display design): mo_rate/is_rate
+    # added to schema.sql's county_tax_rate (nullable, populated only when a
+    # county's source actually publishes the M&O/I&S split -- Dallas's DCTO
+    # rate pages do, back to 2015; Travis's loaded 1990-2025 blended workbook
+    # does not, and stays total-only per Diego's own Task 1 ruling: "don't
+    # layer a 5-year split source on top of the 36-year blended file"). Added
+    # to the SELECT unconditionally -- NULL for every Travis row until/unless
+    # that separate follow-up brief happens, same as any other per-county
+    # source gap this page already handles via data_unavailable-style flags.
     rates = query("""
-        SELECT entity_code, entity_name, tax_year, rate
+        SELECT entity_code, entity_name, tax_year, rate, mo_rate, is_rate
         FROM   county_tax_rate
         WHERE  county_code = %(county_code)s
         ORDER  BY entity_code, tax_year
@@ -4065,15 +4074,27 @@ def _rates_response(county_code, county_slug_val, api_county_slug=None):
             "rate data -- run loaders/load_tax_rates.py for this county to populate it."
         )
 
-    # Build {entity_code: [{year, rate}, …]} structure for JS
+    # Build {entity_code: [{year, rate, mo_rate, is_rate}, …]} structure for JS.
+    # PX-20260829-07 Task 2: mo_rate/is_rate carried through as None (not 0.0)
+    # when the source doesn't publish them for that entity/year -- same
+    # never-coerce-a-gap-to-zero rule loaders/dallas_rates_format.py's own
+    # _parse_rate_cell() already enforces at parse time; this is just not
+    # re-breaking that discipline on the read side.
     by_entity = {}
     entity_names = {}
+    has_rate_split = False
     for r in rates:
         code = r["entity_code"]
         entity_names[code] = r["entity_name"]
+        mo_rate = float(r["mo_rate"]) if r["mo_rate"] is not None else None
+        is_rate = float(r["is_rate"]) if r["is_rate"] is not None else None
+        if mo_rate is not None or is_rate is not None:
+            has_rate_split = True
         by_entity.setdefault(code, []).append({
             "year": r["tax_year"],
             "rate": float(r["rate"]) if r["rate"] else None,
+            "mo_rate": mo_rate,
+            "is_rate": is_rate,
         })
 
     # Actual available year range, computed from what's really loaded
@@ -4107,6 +4128,7 @@ def _rates_response(county_code, county_slug_val, api_county_slug=None):
         "rates.html",
         data_unavailable=data_unavailable,
         data_unavailable_reason=data_unavailable_reason,
+        has_rate_split=has_rate_split,
         by_entity_json=json.dumps(by_entity),
         entity_names_json=json.dumps(entity_names),
         entity_category_json=json.dumps(entity_category),

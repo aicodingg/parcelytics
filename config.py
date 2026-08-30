@@ -341,6 +341,34 @@ TAX_CUR_CSV  = _travis("tax_billing", "current", "TaxCurOpenData (1).csv")
 TAX_DELQ_CSV = _travis("tax_billing", "current", "TaxDelqOpenData.csv")
 TAX_RATES_XL = _travis("rates", "current", "2025RatesHistory1990-2025.xlsx")
 
+# ── Dallas rate history (PX-20260829-07) ────────────────────────────────────
+# Source: Dallas County Tax Office's own published rate pages -- NOT a single
+# downloadable workbook like Travis's TAX_RATES_XL. Two separate pages, each
+# saved as one HTML file per the same "current" local-root convention as
+# every other _travis()/_county_source() entry above:
+#   - DALLAS_RATES_HTML_CURRENT: dallascounty.org/departments/tax/tax-rates.php
+#     (current tax year only, no historical years)
+#   - DALLAS_RATES_HTML_HISTORY: dallascounty.org/departments/tax/past-tax-rates.php
+#     (multiple years concatenated on one page, year-tab-segmented tables --
+#     confirmed via live fetch, PX-20260829-06/-07, real years present:
+#     2015-2024 inclusive, i.e. 10 years, NOT just the 2017-2024 partial
+#     range the -06 research session's own tool-truncated fetch could
+#     confirm -- the 2015 tab is the page's genuine floor, confirmed via
+#     direct browser read of the page's own year-tab list.)
+#
+# Real, honest disclosure (same standing sandbox limitation already
+# documented for AJR_FILES/CERT_2021_PDF/PRELIM_2026_DIR above): this
+# session has no write access to a location Diego's browser/filesystem can
+# reach, so neither HTML file has actually been saved to either of these
+# paths yet. Diego needs to save each page (File -> Save Page As, complete
+# HTML, or a plain "view-source" save) to the exact paths below before
+# load_dallas_tax_rates.py can run for real. The loader fails loud with a
+# clear "file not found" message if run before that happens -- same
+# failure-mode posture as DALLAS_EXTRACTED_YEARS's "zip not extracted yet"
+# check for the certified-roll loader.
+DALLAS_RATES_HTML_CURRENT = _county_source("dallas", "rates", "current", "tax-rates.php.html")
+DALLAS_RATES_HTML_HISTORY = _county_source("dallas", "rates", "current", "past-tax-rates.php.html")
+
 # Real, single source of truth for the 4 real Travis PIR billing xlsx
 # files (2021 Revised + 2022/2023/2024) -- previously each of
 # load_pir_billing_2022.py / _2023.py / _2024.py and

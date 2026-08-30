@@ -174,6 +174,19 @@
     <div class="card mb-4">
       <div class="card-body" style="padding: 20px;">
         <canvas id="ratesChart" height="100"></canvas>
+        {# PX-20260829-07 Task 2 (approved design): source-limitation copy,
+           NOT a "missing data" apology -- names the SOURCE as the reason,
+           same posture as the delinquency/billing honesty affordances
+           already shipped. Only renders for a county whose loaded rows
+           never carry mo_rate/is_rate (Travis today) -- omitted entirely,
+           not shown blank/disabled, once a county's source does provide
+           the split (Dallas). #}
+        {% if not has_rate_split %}
+        <p class="mb-0 mt-2" style="font-size:11.5px; color: var(--text-3); font-style: italic;">
+          {{ county_profile.county_name }}'s published rate history reports a single combined
+          rate — the maintenance-and-operations / debt breakdown isn't available from this source.
+        </p>
+        {% endif %}
       </div>
     </div>
 
@@ -195,6 +208,13 @@
                 <th class="text-end" id="summaryColFrom">{{ default_year_from }} Rate</th>
                 <th class="text-end" id="summaryColTo">{{ year_max }} Rate</th>
                 <th class="text-end" id="summaryColDelta">{{ year_max - default_year_from }}yr Δ</th>
+                {% if has_rate_split %}
+                {# PX-20260829-07 Task 2: two additional columns, only for a
+                   county whose loaded rows actually carry the split -- see
+                   buildSummary()'s own HAS_RATE_SPLIT branch below. #}
+                <th class="text-end" id="summaryColMoDelta">M&amp;O Δ</th>
+                <th class="text-end" id="summaryColIsDelta">I&amp;S Δ</th>
+                {% endif %}
               </tr>
             </thead>
             <tbody id="summaryTable"></tbody>
@@ -217,6 +237,13 @@ const ENTITY_CATEGORY  = {{ entity_category_json | safe }};
 const KEY_ENTITIES     = {{ key_entities | tojson }};
 const YEAR_MIN          = {{ year_min }};
 const YEAR_MAX          = {{ year_max }};
+// PX-20260829-07 Task 2: true only for a county whose loaded county_tax_rate
+// rows carry a non-null mo_rate/is_rate on at least one row (Dallas, once
+// loaded) -- drives the chart's secondary M&O/I&S lines, the summary
+// table's two extra Δ columns, and the CSV export's two extra columns.
+// False for Travis (and any other total-only county) -- in that case this
+// page renders exactly as it always has, no empty/disabled split UI.
+const HAS_RATE_SPLIT   = {{ has_rate_split | tojson }};
 
 // Set/cleared by the Part 5 parcel-lookup block below, alongside the
 // "Showing entities for…" banner's own visibility — this is the single
@@ -314,6 +341,54 @@ function updateChart() {
       spanGaps: true,
     };
   });
+
+  // PX-20260829-07 Task 2: total line stays primary/bold (above, unchanged);
+  // add thinner M&O/I&S secondary lines per selected entity, but ONLY for
+  // entities that actually have at least one non-null mo_rate/is_rate in
+  // the selected range -- an entity with a split source but a genuine gap
+  // for these specific years contributes no secondary line for those years
+  // (spanGaps still bridges a mid-range null, same as the total line), and
+  // a county with no split at all (HAS_RATE_SPLIT false) adds nothing here,
+  // rendering identically to before this change.
+  if (HAS_RATE_SPLIT) {
+    checked.forEach(code => {
+      const pts = BY_ENTITY[code] || [];
+      const moMap = Object.fromEntries(pts.map(p => [p.year, p.mo_rate]));
+      const isMap = Object.fromEntries(pts.map(p => [p.year, p.is_rate]));
+      const hasMo = years.some(y => moMap[y] != null);
+      const hasIs = years.some(y => isMap[y] != null);
+      const base = getColor(code);
+      if (hasMo) {
+        chart.data.datasets.push({
+          label: `${code} M&O`,
+          data: years.map(y => moMap[y] ?? null),
+          borderColor: base,
+          backgroundColor: 'transparent',
+          borderWidth: 1,
+          borderDash: [4, 3],
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          tension: 0.25,
+          spanGaps: true,
+        });
+      }
+      if (hasIs) {
+        chart.data.datasets.push({
+          label: `${code} I&S`,
+          data: years.map(y => isMap[y] ?? null),
+          borderColor: base,
+          backgroundColor: 'transparent',
+          borderWidth: 1,
+          borderDash: [1, 2],
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          tension: 0.25,
+          spanGaps: true,
+        });
+      }
+    });
+  }
+
   chart.update();
   buildSummary();   // Task 9: keep the summary table in sync with the chart selection
 }
@@ -380,12 +455,24 @@ function buildSummary() {
     if (!rTo || rTo.rate == null) continue;
     const delta = (rTo.rate != null && rFrom && rFrom.rate != null)
       ? rTo.rate - rFrom.rate : null;
-    rows.push({ code, name: ENTITY_NAMES[code] || '', rTo: rTo.rate, rFrom: rFrom && rFrom.rate, delta });
+    // PX-20260829-07 Task 2: mo/is deltas computed the same way as the
+    // existing total delta -- null (rendered as —) whenever either side's
+    // component is null, never coerced to 0.
+    const moDelta = (rTo.mo_rate != null && rFrom && rFrom.mo_rate != null)
+      ? rTo.mo_rate - rFrom.mo_rate : null;
+    const isDelta = (rTo.is_rate != null && rFrom && rFrom.is_rate != null)
+      ? rTo.is_rate - rFrom.is_rate : null;
+    rows.push({ code, name: ENTITY_NAMES[code] || '', rTo: rTo.rate, rFrom: rFrom && rFrom.rate, delta, moDelta, isDelta });
   }
   rows.sort((a, b) => b.rTo - a.rTo);
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center p-3" style="font-size:12.5px;">No entities selected — choose entities at left to populate this table.</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${HAS_RATE_SPLIT ? 7 : 5}" class="text-muted text-center p-3" style="font-size:12.5px;">No entities selected — choose entities at left to populate this table.</td></tr>`;
     return;
+  }
+  function deltaCell(d) {
+    const color = d != null ? (d < 0 ? 'style="color: var(--down);"' : d > 0 ? 'style="color: var(--up);"' : '') : '';
+    const str = d != null ? (d > 0 ? '+' : '') + d.toFixed(4) + '%' : '—';
+    return `<td class="text-end" style="font-variant-numeric: tabular-nums;" ${color}>${str}</td>`;
   }
   const dataRowsHtml = rows.map(r => {
     const deltaColor = r.delta != null
@@ -401,6 +488,7 @@ function buildSummary() {
       <td class="text-end" style="font-variant-numeric: tabular-nums; color: var(--text-3);">${r.rFrom != null ? r.rFrom.toFixed(4) + '%' : '—'}</td>
       <td class="text-end" style="font-variant-numeric: tabular-nums;">${r.rTo.toFixed(4)}%</td>
       <td class="text-end" style="font-variant-numeric: tabular-nums;" ${deltaColor}>${deltaStr}</td>
+      ${HAS_RATE_SPLIT ? deltaCell(r.moDelta) + deltaCell(r.isDelta) : ''}
     </tr>`;
   }).join('');
   tbody.innerHTML = dataRowsHtml + buildTotalRow(checked, from, to);
@@ -424,16 +512,28 @@ function buildSummary() {
 function buildTotalRow(checked, from, to) {
   const n = checked.size;
   const toVals = [], fromVals = [];
+  const moToVals = [], moFromVals = [], isToVals = [], isFromVals = [];
   checked.forEach(code => {
     const pts   = BY_ENTITY[code] || [];
     const rTo   = pts.find(p => p.year === to);
     const rFrom = pts.find(p => p.year === from);
     if (rTo && rTo.rate != null) toVals.push(rTo.rate);
     if (rFrom && rFrom.rate != null) fromVals.push(rFrom.rate);
+    // PX-20260829-07 Task 2: same partial-sum honesty treatment extended to
+    // mo_rate/is_rate -- an entity's M&O rate is just as additive into the
+    // combined burden as its total, so the Total row shouldn't go blank on
+    // these two columns while showing a real number for Total Rate.
+    if (rTo && rTo.mo_rate != null) moToVals.push(rTo.mo_rate);
+    if (rFrom && rFrom.mo_rate != null) moFromVals.push(rFrom.mo_rate);
+    if (rTo && rTo.is_rate != null) isToVals.push(rTo.is_rate);
+    if (rFrom && rFrom.is_rate != null) isFromVals.push(rFrom.is_rate);
   });
-  const totalTo    = toVals.length   ? toVals.reduce((a, b) => a + b, 0)   : null;
-  const totalFrom  = fromVals.length ? fromVals.reduce((a, b) => a + b, 0) : null;
+  const sum = arr => arr.length ? arr.reduce((a, b) => a + b, 0) : null;
+  const totalTo    = sum(toVals);
+  const totalFrom  = sum(fromVals);
   const totalDelta = (totalTo != null && totalFrom != null) ? totalTo - totalFrom : null;
+  const moTotalDelta = (sum(moToVals) != null && sum(moFromVals) != null) ? sum(moToVals) - sum(moFromVals) : null;
+  const isTotalDelta = (sum(isToVals) != null && sum(isFromVals) != null) ? sum(isToVals) - sum(isFromVals) : null;
 
   function cell(val, matchedN) {
     if (val == null) return '<span class="na-cell">—</span>';
@@ -441,6 +541,11 @@ function buildTotalRow(checked, from, to) {
       ? `<span class="badge-partial d-block" style="font-size:9px; margin-top:2px;">${matchedN} of ${n}</span>`
       : '';
     return `${val.toFixed(4)}%${badge}`;
+  }
+  function deltaCellTotal(d) {
+    const color = d != null ? (d < 0 ? 'style="color: var(--down);"' : d > 0 ? 'style="color: var(--up);"' : '') : '';
+    const str = d != null ? (d > 0 ? '+' : '') + d.toFixed(4) + '%' : '<span class="na-cell">—</span>';
+    return `<td class="text-end" style="font-variant-numeric: tabular-nums;" ${color}>${str}</td>`;
   }
 
   const deltaColor = totalDelta != null
@@ -456,6 +561,7 @@ function buildTotalRow(checked, from, to) {
       <td class="text-end" style="font-variant-numeric: tabular-nums;">${cell(totalFrom, fromVals.length)}</td>
       <td class="text-end" style="font-variant-numeric: tabular-nums;">${cell(totalTo, toVals.length)}</td>
       <td class="text-end" style="font-variant-numeric: tabular-nums;" ${deltaColor}>${deltaStr}</td>
+      ${HAS_RATE_SPLIT ? deltaCellTotal(moTotalDelta) + deltaCellTotal(isTotalDelta) : ''}
     </tr>`;
 }
 
@@ -489,18 +595,27 @@ function exportCsv() {
   // but that specific parcel has no address on file, the Address column
   // still appears (the lookup itself is active) with an empty value for
   // that field — activeParcelAddress is null in that case, rendered as ''.
+  // PX-20260829-07 Task 2: M&O Rate / I&S Rate columns appended only for a
+  // county whose data actually carries the split -- blank per-row cell (not
+  // a missing column) whenever that specific entity/year lacks one, same
+  // "show all the data we have, blank where the source doesn't" posture as
+  // every other column here.
+  const splitCols = HAS_RATE_SPLIT ? ['M&O Rate', 'I&S Rate'] : [];
   const header = activeParcelGeoId
-    ? ['County', 'Parcel ID', 'Address', 'Entity Code', 'Entity Name', 'Year', 'Rate']
-    : ['County', 'Entity Code', 'Entity Name', 'Year', 'Rate'];
+    ? ['County', 'Parcel ID', 'Address', 'Entity Code', 'Entity Name', 'Year', 'Rate', ...splitCols]
+    : ['County', 'Entity Code', 'Entity Name', 'Year', 'Rate', ...splitCols];
   const rows = [header];
   checked.forEach(code => {
     const pts = (BY_ENTITY[code] || [])
       .filter(p => p.year >= from && p.year <= to)
       .sort((a, b) => a.year - b.year);
     pts.forEach(p => {
+      const splitVals = HAS_RATE_SPLIT
+        ? [p.mo_rate != null ? p.mo_rate : '', p.is_rate != null ? p.is_rate : '']
+        : [];
       const row = activeParcelGeoId
-        ? [countyLabel, activeParcelGeoId, activeParcelAddress || '', code, ENTITY_NAMES[code] || '', p.year, p.rate != null ? p.rate : '']
-        : [countyLabel, code, ENTITY_NAMES[code] || '', p.year, p.rate != null ? p.rate : ''];
+        ? [countyLabel, activeParcelGeoId, activeParcelAddress || '', code, ENTITY_NAMES[code] || '', p.year, p.rate != null ? p.rate : '', ...splitVals]
+        : [countyLabel, code, ENTITY_NAMES[code] || '', p.year, p.rate != null ? p.rate : '', ...splitVals];
       rows.push(row);
     });
   });
