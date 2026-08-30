@@ -10,7 +10,9 @@ pass -- most of this file's original checks were written against -02's
     are removed (Task 1) -- About carries no county context at all now.
   - Why Parcelytics is condensed from 5 paragraphs to 3, in a new 2-column
     layout (prose left, the "See it for yourself" evidence card moved into
-    the freed right column) (Task 2, sign-off obtained).
+    the freed right column) (Task 2, sign-off obtained). PX-20260829-05
+    later cut it further to 2 paragraphs -- see that check's own comment
+    below for what changed and why.
   - The Standard (5 principles + confidence legend) MOVED to the homepage,
     replacing its old per-county Provenance panel, and was removed from
     About entirely -- no duplication across two pages (Task 4).
@@ -203,8 +205,16 @@ def main():
         check(f"[{scenario_name}] hero section itself carries no county reference",
               hero_match is not None and "Travis County" not in hero_match.group(0))
 
-        # 4. Why Parcelytics: exactly 3 paragraphs, 2-column layout, evidence
-        # card in the right column (Task 2).
+        # 4. Why Parcelytics: 2-column layout, evidence card in the right
+        # column (Task 2). Paragraph count was originally 3 (this section's
+        # own PX-20260829-02 build); PX-20260829-05 cut the old middle
+        # paragraph (it restated paragraph 1 in more detail without adding
+        # anything -- PM's own read that the argument is tighter at two) and
+        # folded the old third paragraph's mechanism sentence into a new,
+        # longer closing paragraph naming the platform's centralization
+        # vision and concrete investor/developer + homeowner benefits. Now
+        # exactly 2 paragraphs, not 3 -- this is the approved, intentional
+        # shape, not a regression.
         why_section_match = re.search(
             r'Why Parcelytics.*?(?=Built for anyone who cares about property taxes)', out, re.DOTALL)
         check(f"[{scenario_name}] Why Parcelytics section found for paragraph count check",
@@ -212,8 +222,8 @@ def main():
         if why_section_match:
             why_html = why_section_match.group(0)
             para_count = len(re.findall(r'<p class="fd-lead', why_html))
-            check(f"[{scenario_name}] Why Parcelytics has exactly 3 paragraphs (got {para_count})",
-                  para_count == 3)
+            check(f"[{scenario_name}] Why Parcelytics has exactly 2 paragraphs post-PX-20260829-05 (got {para_count})",
+                  para_count == 2)
             check(f"[{scenario_name}] Why Parcelytics uses a 2-column row (col-lg-7 / col-lg-5)",
                   'class="col-lg-7"' in why_html and 'class="col-lg-5"' in why_html)
             check(f"[{scenario_name}] evidence card ('See it for yourself') sits in the "
