@@ -320,7 +320,11 @@ COUNTY_SCOPED_TABLES = {
         "write_mode": "upsert", "shadow_of": None,
         "source": "migrate_county_partitioning.py TABLE_SPECS (Mode 1)",
         "allowed_writers": {
-            "loaders/load_tax_rates.py": "the only real writer",
+            "loaders/load_tax_rates.py": "Travis writer (total-only rates, 1990-2025)",
+            "loaders/load_dallas_tax_rates.py": (
+                "Dallas writer (M&O/I&S split, 2015-2025); its --full-reload DELETE "
+                "is scoped to county_code='DALLAS' only -- registered under PX-20260830-01"
+            ),
         },
     },
     "group_stats": {

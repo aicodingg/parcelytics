@@ -70,6 +70,26 @@ UPSERT_SQL = """
             is_rate     = EXCLUDED.is_rate
 """
 
+# Real live finding (Diego, post-launch, deployed Dallas rates page): a
+# DALLAS_ENTITY_ALIASES fix that reassigns an existing entity's
+# entity_code (e.g. "Carrollton-Farmers Br ISD" merging into "...Branch
+# ISD"'s code) does NOT clean up the rows already written under the OLD,
+# now-orphaned code -- UPSERT_SQL's ON CONFLICT only ever touches rows
+# matching the row's OWN (county_code, entity_code, tax_year), so the old
+# code's rows just sit there forever, duplicating that district's history
+# under two codes. This DELETE is deliberately scoped to county_code=
+# 'DALLAS' only (never touches Travis's own county_code='TRAVIS' rows in
+# the same table) and is safe to run before every full reload BECAUSE
+# this table is single-source for Dallas -- every row this loader would
+# ever write is reconstructed fresh from parsing the two real HTML files,
+# nothing here is additive-only data a plain upsert can't fully rebuild.
+# Wired into main() as an explicit --full-reload flag (not the default --
+# a scoped-but-still-real DELETE shouldn't run silently on every
+# incremental load) and executed in the SAME transaction as the
+# subsequent upsert (see main()) so a failure before that transaction
+# commits rolls the delete back too, never leaving the table empty.
+FULL_RELOAD_DELETE_SQL = "DELETE FROM county_tax_rate WHERE county_code = %s"
+
 
 def _require_html(path, label):
     if not os.path.isfile(path):
@@ -157,7 +177,23 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                      help="Parse + build rows + print the skip ledger; ZERO DB "
                           "writes, ZERO DB connection opened -- matches "
-                          "load_dallas_certified.py's own --dry-run convention.")
+                          "load_dallas_certified.py's own --dry-run convention. "
+                          "Ignores --full-reload if both are given.")
+    ap.add_argument("--full-reload", action="store_true",
+                     help="DELETE FROM county_tax_rate WHERE county_code='DALLAS' "
+                          "before reinserting, in the SAME transaction as the "
+                          "upsert (a failure before that transaction commits "
+                          "rolls the delete back too -- never leaves the table "
+                          "empty). Safe because this table is single-source for "
+                          "Dallas: every row this loader writes is rebuilt fresh "
+                          "from the two real HTML files every run. NEEDED after "
+                          "any DALLAS_ENTITY_ALIASES change that reassigns an "
+                          "existing entity's entity_code -- otherwise the OLD "
+                          "code's rows are orphaned forever, since a plain upsert "
+                          "only ever touches rows matching each row's OWN code. "
+                          "Not the default -- a real DELETE, even this tightly "
+                          "scoped, shouldn't run silently on every incremental "
+                          "load.")
     args = ap.parse_args()
 
     print(f"\n{'-'*65}")
@@ -230,10 +266,68 @@ def main():
     # the crosswalk actually did something (rather than everything
     # silently getting its own code because canonicalize_name() alone
     # didn't close a real drift case still sitting in the raw names).
-    raw_names = set(r["entity_name"] for r in all_rows if r["skip_reason"] is None)
-    print(f"  ({len(raw_names):,} distinct raw entity_name strings collapsed to "
-          f"{len(entity_codes):,} entity_code values via canonicalize_name() + "
-          f"DALLAS_ENTITY_ALIASES)")
+    #
+    # PX-20260830-01 Task 6 (real off-by-one, found by Diego: "139 distinct
+    # raw names this run" on the audit line below vs "138 ... collapsed to"
+    # here -- confirmed NOT a bug, a genuine counting-SCOPE difference that
+    # was never labeled as such, so it read as a disagreement):
+    #   - accepted_raw_names (this line) counts distinct raw entity_name
+    #     strings among ACCEPTED rows only (skip_reason is None) -- this is
+    #     "how many raw spellings did the crosswalk actually have to
+    #     collapse to produce entity_codes," so a SKIPPED row's name
+    #     shouldn't count here at all: it never contributed a code.
+    #   - all_raw_names (the audit block below) deliberately counts EVERY
+    #     parsed row's name, skipped included -- find_near_duplicate_names()
+    #     needs the skipped names too (a same-district split doesn't care
+    #     whether that year's rate happened to be published).
+    #   These are two DIFFERENT, correctly-scoped counts of two different
+    #   things, not two attempts at the same count -- both are now labeled
+    #   explicitly below, and any name(s) present in one scope but not the
+    #   other are named directly so this can never again look like an
+    #   unexplained disagreement.
+    accepted_raw_names = set(r["entity_name"] for r in all_rows if r["skip_reason"] is None)
+    print(f"  ({len(accepted_raw_names):,} distinct raw entity_name strings among ACCEPTED "
+          f"rows collapsed to {len(entity_codes):,} entity_code values via "
+          f"canonicalize_name() + DALLAS_ENTITY_ALIASES)")
+
+    # Near-duplicate name AUDIT (added in direct response to a real live
+    # finding -- "Carrollton-Farmers Br ISD" / "Carrollton-Farmers Branch
+    # ISD" rendering as two entities on the deployed page; see
+    # dallas_rates_format.find_near_duplicate_names()'s own docstring for
+    # the full design rationale). Runs over EVERY raw name seen this run
+    # (skipped rows included -- a same-district name split doesn't care
+    # whether that particular year's rate was published), sorted for a
+    # human to scan. This is a candidate list, not a guard: it never
+    # blocks a load and never edits DALLAS_ENTITY_ALIASES itself -- a
+    # human confirms each real match, then adds the alias by hand (see
+    # dallas_entity_code()'s own docstring on the real "Levee District 14"
+    # vs "Levee District 4" pair -- similarly spelled, genuinely DIFFERENT
+    # entities, correctly a candidate here but correctly NOT an alias).
+    all_raw_names = [r["entity_name"] for r in all_rows]
+    all_distinct_raw_names = set(all_raw_names)
+    near_dupes = fmt.find_near_duplicate_names(all_raw_names)
+    print(f"\nNear-duplicate name audit ({len(all_distinct_raw_names):,} distinct raw names "
+          f"this run INCLUDING SKIPPED ROWS, sorted, similarity >= 0.90):")
+    if near_dupes:
+        for name_a, name_b, ratio in near_dupes:
+            print(f"  [{ratio:.3f}] {name_a!r}  <->  {name_b!r}")
+        print(f"  {len(near_dupes)} candidate pair(s) above -- review each by hand; "
+              f"add a DALLAS_ENTITY_ALIASES entry ONLY for ones confirmed to be the "
+              f"same real district (a high similarity score alone does not mean "
+              f"they are -- see the module's own docstring).")
+    else:
+        print("  (none at this threshold)")
+
+    # Task 6's own reconciliation line: name the exact names, if any, that
+    # exist in one scope but not the other, so the two counts above are
+    # never again read as an unexplained disagreement.
+    skip_only_names = all_distinct_raw_names - accepted_raw_names
+    if skip_only_names:
+        print(f"  (note: the two counts above differ by {len(skip_only_names)} -- "
+              f"{sorted(skip_only_names)} appear ONLY in a skipped row this run, "
+              f"never in an accepted one, so they count in the near-duplicate "
+              f"audit's broader scope above but not in the accepted-rows count "
+              f"further up. This is expected, not a bug.)")
 
     if args.dry_run:
         print(f"\n  *** --dry-run: no DB connection opened, zero writes ***")
@@ -244,10 +338,69 @@ def main():
               f"loader -- see UPSERT_SQL's own ON CONFLICT target.")
         return
 
-    from loaders.db import get_conn, execute_schema, batch_upsert
+    from loaders.db import get_conn, execute_schema, batch_upsert, column_exists, assert_production_db, WrongDatabaseError
 
     conn = get_conn()
+
+    # Standing project rule (Diego, PX-20260830-01 Task 4): verify this is
+    # really the one production database BEFORE any write -- including
+    # execute_schema()'s own CREATE TABLE IF NOT EXISTS below, which is
+    # itself a write. See loaders.db.assert_production_db()'s own
+    # docstring for the real footgun this closes (DATABASE_URL silently
+    # pointed at the wrong environment) and why this is a hard fail rather
+    # than the print-and-hope-a-human-reads-it pattern this project's
+    # other scripts already use. --dry-run never reaches this line at all
+    # (it returns above, before get_conn() is even called) -- unaffected.
+    try:
+        addr = assert_production_db(conn)
+    except WrongDatabaseError as e:
+        print(f"\nERROR: {e}")
+        conn.close()
+        sys.exit(1)
+    print(f"  [db] production address confirmed: {addr}")
+
     execute_schema(conn)
+
+    # Real bug this closes (Diego, live finding): execute_schema() above
+    # just printed "Schema applied." unconditionally, but schema.sql's own
+    # CREATE TABLE IF NOT EXISTS is a documented no-op against an
+    # already-existing production county_tax_rate table missing mo_rate/
+    # is_rate -- those two columns need a separately-run, one-time ALTER
+    # (see schema.sql's own comment above the county_tax_rate definition).
+    # Verify they actually exist NOW, right after the misleading success
+    # message, and fail loud with the exact ALTER TABLE needed rather than
+    # let batch_upsert() crash mid-write with a confusing "column mo_rate
+    # of relation county_tax_rate does not exist".
+    missing_cols = [c for c in ("mo_rate", "is_rate")
+                    if not column_exists(conn, "county_tax_rate", c)]
+    if missing_cols:
+        alters = "\n".join(
+            f"  ALTER TABLE county_tax_rate ADD COLUMN IF NOT EXISTS {c} NUMERIC(8,6);"
+            for c in missing_cols
+        )
+        print(
+            f"\nERROR: 'Schema applied.' above printed success, but "
+            f"county_tax_rate is still missing: {', '.join(missing_cols)}. "
+            f"execute_schema()'s CREATE TABLE IF NOT EXISTS is a no-op against "
+            f"this already-existing table -- it never adds a column introduced "
+            f"after the table was first created. Run this once against THIS "
+            f"SAME database, then retry:\n{alters}"
+        )
+        conn.close()
+        sys.exit(1)
+
+    if args.full_reload:
+        print(f"\n  *** --full-reload: DELETE FROM county_tax_rate WHERE "
+              f"county_code='{COUNTY_CODE}' before reinserting ***")
+        with conn.cursor() as cur:
+            cur.execute(FULL_RELOAD_DELETE_SQL, (COUNTY_CODE,))
+            deleted = cur.rowcount
+        print(f"  Deleted {deleted:,} existing {COUNTY_CODE} row(s) -- uncommitted, "
+              f"part of the same transaction as the upsert below, so a failure "
+              f"before that commits rolls this delete back too (Travis's own "
+              f"county_code='TRAVIS' rows in this table are untouched -- this "
+              f"DELETE is scoped to county_code='{COUNTY_CODE}' only).")
+
     n = batch_upsert(conn, UPSERT_SQL, accepted)
     print(f"\n  county_tax_rate: {n:,} rows upserted (county={COUNTY_CODE})")
     print(f"  Total elapsed: {time.time()-t0:.1f}s")

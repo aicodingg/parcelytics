@@ -4000,6 +4000,51 @@ def categorize_entity(code, name, county_code=None):
                       # that doesn't match a bucket above.
 
 
+def _most_recent_entity_names(rows):
+    """Deterministic display-name-per-entity_code rule (PX-20260830-01
+    Task 3). county_tax_rate stores the RAW entity_name string per row;
+    entity_code is the canonical join key. After a DALLAS_ENTITY_ALIASES
+    merge, one code can carry several distinct raw spellings across its
+    years (real example: DAL6A7524C now carries 'Oak Hollow Sheffield
+    PID', 'OakHollowSheffield PID', AND 'OakHollowSheffield' across its
+    merged 2015-2025 span) -- whatever picks ONE name to show for that
+    code must do so deterministically, not "whichever raw string a
+    GROUP BY/dict-overwrite happens to surface first."
+
+    Real finding this replaces: the previous inline version of this logic
+    (a bare `entity_names[code] = r["entity_name"]` inside the same loop
+    that builds by_entity, run over rows already sorted `ORDER BY
+    entity_code, tax_year` ASC) happened to ALREADY land on the most-
+    recent year's spelling for every code -- but only as a side effect of
+    that specific SQL ORDER BY combined with plain dict-overwrite
+    semantics (last write wins). That was never a documented rule
+    anywhere; a future change to the query's ORDER BY, or any other
+    caller feeding rows in a different order, would have silently changed
+    which spelling wins with no test to catch it. This function makes the
+    SAME rule (PM's own suggested default: most-recent tax_year's name
+    wins, since that matches what the source currently calls the entity)
+    explicit and independent of row order.
+
+    Generic/county-agnostic per Task 3's own requirement -- takes any
+    iterable of rows carrying entity_code/entity_name/tax_year (works
+    identically whether `rows` came from a Dallas query, a Travis query,
+    or any future county's; Travis has the same theoretical exposure even
+    though no real drift has been observed there yet).
+
+    Returns {entity_code: entity_name} using each code's highest tax_year
+    row (ties are impossible -- (county_code, entity_code, tax_year) is
+    this table's real primary key)."""
+    names = {}
+    best_year = {}
+    for r in rows:
+        code = r["entity_code"]
+        year = r["tax_year"]
+        if code not in best_year or year >= best_year[code]:
+            names[code] = r["entity_name"]
+            best_year[code] = year
+    return names
+
+
 def _rates_response(county_code, county_slug_val, api_county_slug=None):
     """Shared body for tax_rates() (county-anchored, '/<county_slug>/rates')
     and rates_landing() (neutral, bare '/rates') -- PX-20260828-01, same
@@ -4081,11 +4126,16 @@ def _rates_response(county_code, county_slug_val, api_county_slug=None):
     # _parse_rate_cell() already enforces at parse time; this is just not
     # re-breaking that discipline on the read side.
     by_entity = {}
-    entity_names = {}
+    # PX-20260830-01 Task 3: entity_names is now built by a dedicated,
+    # order-independent function -- see _most_recent_entity_names()'s own
+    # docstring for the real display-drift risk this closes (previously
+    # this was a bare per-row dict-overwrite in the loop below, which only
+    # happened to land on the most-recent spelling as a side effect of
+    # this query's own ORDER BY).
+    entity_names = _most_recent_entity_names(rates)
     has_rate_split = False
     for r in rates:
         code = r["entity_code"]
-        entity_names[code] = r["entity_name"]
         mo_rate = float(r["mo_rate"]) if r["mo_rate"] is not None else None
         is_rate = float(r["is_rate"]) if r["is_rate"] is not None else None
         if mo_rate is not None or is_rate is not None:
@@ -6252,8 +6302,9 @@ def api_estimate_acq(geo_id):
     if codes:
         for r in query(
             "SELECT entity_code, tax_year, rate FROM county_tax_rate "
-            "WHERE entity_code IN %s AND tax_year >= 2016 ORDER BY tax_year",
-            (codes,),
+            "WHERE entity_code IN %s AND county_code = %s AND tax_year >= 2016 "
+            "ORDER BY tax_year",
+            (codes, g.county_code),
         ):
             entity_rate_history.setdefault(r["entity_code"], {})[r["tax_year"]] = (
                 float(r["rate"]) if r["rate"] is not None else None

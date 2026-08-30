@@ -119,6 +119,99 @@ def execute_schema(conn):
     print("Schema applied.")
 
 
+def column_exists(conn, table, column):
+    """Real bug this closes (Diego, live finding, PX-20260829-07 follow-up):
+    execute_schema() above prints 'Schema applied.' unconditionally, but
+    schema.sql's own CREATE TABLE IF NOT EXISTS is a documented no-op
+    against an ALREADY-EXISTING production table -- it will never add a
+    column schema.sql introduced after that table was first created (see
+    schema.sql's own comment above the county_tax_rate mo_rate/is_rate
+    columns for exactly this case: those two columns need a one-time,
+    separately-run ALTER TABLE against production, NOT part of
+    execute_schema()'s own execution path). 'Schema applied.' printing
+    unconditional success made this look like it had worked when it had
+    silently applied nothing for those two columns. Callers that depend on
+    a specific new column existing should verify it with this function
+    right after execute_schema() and fail loud with the exact ALTER TABLE
+    needed, rather than let a later INSERT crash with a confusing 'column
+    does not exist' partway through a write."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = %s AND column_name = %s",
+            (table, column),
+        )
+        return cur.fetchone() is not None
+
+
+# Standing project rule (PX-20260830-01 Task 4): the ONE real production
+# Postgres address, per Diego's own explicit instruction. Earlier scripts
+# in this project (refresh_group_stats.py, migrate_county_partitioning.py,
+# g6_reconciliation.py, verify_index_coverage.py, backfill_prop_unit_tax_
+# year_geoid.py) already print inet_server_addr() for a HUMAN to eyeball
+# before trusting a run -- a real, useful defense, but one that depends on
+# someone actually reading the printed address correctly under time
+# pressure before a destructive write. EXPECTED_PRODUCTION_HOST +
+# assert_production_db() below is the first loader-level HARD version of
+# that same check, for a caller that wants a write refused outright rather
+# than merely flagged for review.
+EXPECTED_PRODUCTION_HOST = "10.30.105.217"
+
+
+class WrongDatabaseError(RuntimeError):
+    """Raised by assert_production_db() -- see that function's own
+    docstring."""
+
+
+def assert_production_db(conn, expected_addr=EXPECTED_PRODUCTION_HOST):
+    """Verify this connection's own inet_server_addr() matches
+    expected_addr EXACTLY before a caller performs any write that isn't
+    trivially undoable (a DELETE, a --full-reload, a batch upsert against
+    a shared table). Raises WrongDatabaseError -- never returns False;
+    absence of an exception IS the pass signal, same convention as
+    dallas_rates_format.check_entity_code_collisions() -- if it doesn't
+    match, so a call site can simply call this and let the exception
+    propagate (or catch it for a cleaner CLI message) rather than having
+    to remember to check a boolean return value itself.
+
+    Real footgun this closes: DATABASE_URL silently pointed at a local or
+    staging database (or, just as dangerous the other way, a real
+    production run intended for staging) -- get_conn()'s own
+    "local-fallback-defaults" banner already flags ONE version of this
+    (DATABASE_URL unset entirely); this closes the broader case where
+    DATABASE_URL IS set, but to the wrong place, which that banner cannot
+    detect at all.
+
+    Note: inet_server_addr() returns NULL for a connection made over a
+    Unix-domain socket (a real, common local-Postgres shape) rather than
+    TCP/IP -- that correctly compares unequal to expected_addr here and
+    raises, exactly as it should (a Unix-socket connection is never this
+    project's real production database, which is only ever reached over
+    TCP).
+
+    Deliberately a small, standalone function -- NOT folded into
+    get_conn() itself -- so it stays opt-in per call site rather than
+    hard-failing every existing script that connects for a read-only or
+    non-destructive purpose. See load_dallas_tax_rates.py's own call site
+    (called immediately after get_conn(), before execute_schema() or any
+    DELETE/INSERT) for the intended usage pattern; future loaders should
+    call this at their own real write boundary the same way."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT inet_server_addr()")
+        row = cur.fetchone()
+        addr = str(row[0]) if row and row[0] is not None else None
+    if addr != expected_addr:
+        raise WrongDatabaseError(
+            f"refusing to write -- expected production host "
+            f"{expected_addr!r}, but this connection's own "
+            f"inet_server_addr() reports {addr!r}. This is almost always "
+            f"DATABASE_URL pointed at a local/staging database instead of "
+            f"production (or vice versa) -- verify DATABASE_URL before "
+            f"retrying. No write has happened yet."
+        )
+    return addr
+
+
 def batch_upsert(conn, sql, rows, batch=2000):
     """Execute an INSERT … ON CONFLICT upsert in batches."""
     total = 0

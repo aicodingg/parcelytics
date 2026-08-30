@@ -133,6 +133,75 @@ DALLAS_ENTITY_ALIASES = {
     # are already handled by canonicalize_name() alone; this table only
     # needs the cases canonicalize_name() can't close by itself.
     canonicalize_name("Levee District l4"): canonicalize_name("Levee District 14"),
+    # LIVE FINDING (Diego, deployed Dallas rates page, post-PX-20260829-07):
+    # "Carrollton-Farmers Br ISD" and "Carrollton-Farmers Branch ISD" -- same
+    # real district, "Br" vs "Branch" abbreviation drift -- rendered as two
+    # distinct entities (DAL1E6C7C5 / DALCA625EF) because canonicalize_name()
+    # only closes spacing/punctuation/case, never word-abbreviation drift
+    # (by design -- see canonicalize_name()'s own docstring on why it
+    # deliberately doesn't fuzzy-match). This is exactly the class of bug
+    # this crosswalk exists to catch; see find_near_duplicate_names() below
+    # for the audit tool added in response, to catch the NEXT one before a
+    # live load rather than after.
+    canonicalize_name("Carrollton-Farmers Br ISD"): canonicalize_name("Carrollton-Farmers Branch ISD"),
+    # PX-20260830-01 Task 1: five more real duplicate pairs, all PM-ruled
+    # confirmed against live production evidence (year-coverage query per
+    # entity_code showed ZERO overlapping tax_year between the two sides
+    # of each pair -- a clean partition, i.e. the same district renamed/
+    # drifted mid-history, not two real siblings coexisting). Canonical
+    # direction chosen and applied uniformly across all five: the spelling
+    # the county publishes in the MOST RECENT year on each side wins as
+    # the alias TARGET (PM's own suggested default) -- so
+    # canonicalize_name(<older-years spelling>): canonicalize_name(<newer/
+    # current-years spelling>) in every entry below, even where the
+    # "newer" spelling is itself an abbreviation (see Dallas College
+    # entry's own note -- "most recent" is about what the source
+    # currently publishes, not about which string is less abbreviated).
+    #
+    # 1. "Berkshire Park PID #17" (2019-2023) / "Berkshire Park PID"
+    #    (2024-2025) -- county dropped the "#17" suffix; merged real
+    #    coverage 2019-2025, no duplicated year.
+    canonicalize_name("Berkshire Park PID #17"): canonicalize_name("Berkshire Park PID"),
+    # 2. "OakHollowSheffield" (2015 ONLY, no PID suffix) -- the PID-suffixed
+    #    forms ("Oak Hollow Sheffield PID" 2019, 2021-2025 and
+    #    "OakHollowSheffield PID" 2016-2018, 2020) already collapse to one
+    #    code via canonicalize_name() alone (its whitespace-collapse step
+    #    makes "OakHollowSheffield PID" and "Oak Hollow Sheffield PID"
+    #    identical keys) -- see dallas_entity_code(canonicalize_name(
+    #    "Oak Hollow Sheffield PID")) == DAL6A7524C, the code this alias
+    #    routes into. Only the bare, no-"PID" 2015 spelling slipped past
+    #    that automatic collapse (no "pid" token to match on). Adding this
+    #    one entry completes coverage 2015-2025 across all three spellings,
+    #    no duplicated year.
+    canonicalize_name("OakHollowSheffield"): canonicalize_name("Oak Hollow Sheffield PID"),
+    # 3. "Pleasant Run Estates PID" (2016-2018) / "Pleasant Run Est. PID"
+    #    (2019-2025) -- clean partition, "Estates" abbreviated to "Est."
+    #    starting 2019.
+    canonicalize_name("Pleasant Run Estates PID"): canonicalize_name("Pleasant Run Est. PID"),
+    # 4. "Dallas College" (2015-2022) / "Dallas College (DCCCD)"
+    #    (2023-2025) -- Dallas County has exactly one community college
+    #    district; zero year overlap. NOTE (see also
+    #    find_near_duplicate_names()'s own docstring, PX-20260830-01 Task
+    #    5): the drift direction here is chronologically BACKWARDS from
+    #    what a reviewer might assume -- the college actually renamed
+    #    itself from "Dallas County Community College District (DCCCD)" to
+    #    "Dallas College" around 2020, yet the county's OWN published rate
+    #    pages label 2015-2022 with the plain "Dallas College" name and
+    #    2023-2025 with the parenthetical legacy-acronym form. The "most
+    #    recent spelling wins" rule below is about what the source
+    #    currently publishes, not which string is chronologically "the old
+    #    one" -- do not use naming direction as a proxy for which side is
+    #    older.
+    canonicalize_name("Dallas College"): canonicalize_name("Dallas College (DCCCD)"),
+    # 5. "Dallas County Schools" (2015-2023) / "Dallas County School
+    #    Equalization" (2024-2025) -- rate-history evidence (production
+    #    query) confirms one continuous levy line, not two entities: rate
+    #    ~0.01 through 2022, 0.000000 in 2023, then relabeled at the 2024
+    #    boundary while staying zero. A rename of the same levy line.
+    #    (See Task 2 below for a real, DIFFERENT-in-kind anomaly on this
+    #    same entity's 2021 row -- that row's own mo_rate/is_rate split is
+    #    investigated separately and is not evidence against this merge.)
+    canonicalize_name("Dallas County Schools"): canonicalize_name("Dallas County School Equalization"),
     canonicalize_name("City of Lewisvile"): canonicalize_name("City of Lewisville"),
     canonicalize_name("City of Lewisvile (Denton Co)"): canonicalize_name("City of Lewisville"),
     canonicalize_name("City of Wylie (Collin Co)"): canonicalize_name("City of Wylie"),
@@ -230,6 +299,96 @@ def check_entity_code_collisions(rows):
             f"otherwise silently merge different entities' rate histories under "
             f"one code. Details: {collisions}"
         )
+
+
+import difflib  # noqa: E402 -- kept near point of use, mirrors this module's small-function style
+
+
+def find_near_duplicate_names(raw_names, threshold=0.90):
+    """Heuristic AUDIT tool, not a guard -- finds no exception, raises
+    nothing, never blocks a load. Built in direct response to a real live
+    finding (Diego, deployed Dallas rates page, post-PX-20260829-07):
+    "Carrollton-Farmers Br ISD" and "Carrollton-Farmers Branch ISD" (one
+    real district, "Br"/"Branch" abbreviation drift) rendered as two
+    entities because canonicalize_name() only closes spacing/punctuation/
+    case -- by design, it never fuzzy-matches abbreviations (see its own
+    docstring) -- so DALLAS_ENTITY_ALIASES is the only thing that closes
+    this class of drift, and it can only close cases someone has actually
+    found. This function is the "someone/something looks for the next
+    one" half of that fix: it can't replace a human's judgment (a
+    similarity score can't tell "same district, drifted spelling" apart
+    from "two real, distinct, similarly-named entities" -- this codebase
+    already has one confirmed real case of the LATTER, "Levee District
+    14" vs "Levee District 4", which this function WILL flag as a
+    candidate -- correctly, since a human reviewing the audit output is
+    expected to look at it and correctly decide NOT to alias it, exactly
+    as already happened for that pair; see dallas_entity_code()'s own
+    docstring), but it turns "read all ~100-200 names by eye, sorted,
+    looking for near-duplicates" into a short candidate list instead.
+
+    raw_names: iterable of raw entity_name strings actually seen in a
+    load (e.g. every row['entity_name'] across all parsed years/both
+    source files -- skipped rows included, since a same-district name
+    split doesn't care whether that particular year's rate was published).
+
+    Resolves each name to its POST-alias canonical key FIRST (so already-
+    known variants -- e.g. "City of Lewisvile"/"City of Lewisville" -- are
+    correctly treated as one name and never re-flagged), then compares
+    every remaining pair of DISTINCT canonical keys with
+    difflib.SequenceMatcher, flagging any pair at or above `threshold`.
+
+    Returns a sorted list of (name_a, name_b, ratio) tuples -- one
+    representative raw name per canonical key, sorted alphabetically so a
+    human can scan the list top-to-bottom, per Diego's own "sort by name,
+    look for near-duplicates" instruction. Adding a real
+    DALLAS_ENTITY_ALIASES entry for any TRUE positive here is a manual,
+    reviewed step -- this function only surfaces candidates, it never
+    writes to DALLAS_ENTITY_ALIASES itself.
+
+    threshold=0.90 is a starting point tuned to catch abbreviation drift
+    ("Br"/"Branch", "Elem"/"Elementary") without drowning the list in
+    every pair of ISDs that happen to share a long common suffix; lower
+    it for a more thorough manual pass at the cost of more false
+    positives to read past.
+
+    IMPORTANT for anyone reviewing this function's output (PX-20260830-01
+    Task 5): naming-drift DIRECTION on Dallas's own source pages carries
+    NO chronological meaning -- do not use "which spelling looks newer/
+    less abbreviated" as a proxy for which side of a candidate pair is
+    the older one. Concrete, real, confirmed case: Dallas County
+    Community College District renamed itself to "Dallas College" around
+    2020, yet the county's OWN published rate pages label 2015-2022 with
+    the plain "Dallas College" name and 2023-2025 with the parenthetical,
+    legacy-acronym form "Dallas College (DCCCD)" -- i.e. the page's most
+    RECENT years carry the OLDER acronym, backwards from what a reviewer
+    might assume from the string alone. When deciding a
+    DALLAS_ENTITY_ALIASES merge direction for a real candidate this
+    function surfaces, resolve which spelling the source currently
+    publishes by checking actual tax_year coverage per spelling (as this
+    project's own review process now does -- see DALLAS_ENTITY_ALIASES's
+    own comment block for the "most recent tax_year's spelling wins"
+    rule), never by eyeballing which string looks more current."""
+    canon_to_names = {}
+    for raw_name in raw_names:
+        key = canonicalize_name(raw_name)
+        key = DALLAS_ENTITY_ALIASES.get(key, key)
+        canon_to_names.setdefault(key, set()).add(raw_name)
+
+    # One representative display name per canonical key (the alphabetically
+    # first raw spelling seen), paired with its canonical key for comparison.
+    representatives = sorted(
+        (sorted(names)[0], key) for key, names in canon_to_names.items()
+    )
+
+    candidates = []
+    for i in range(len(representatives)):
+        name_a, key_a = representatives[i]
+        for j in range(i + 1, len(representatives)):
+            name_b, key_b = representatives[j]
+            ratio = difflib.SequenceMatcher(None, key_a, key_b).ratio()
+            if ratio >= threshold:
+                candidates.append((name_a, name_b, round(ratio, 3)))
+    return candidates
 
 
 def resolve_entity_identity(raw_name):

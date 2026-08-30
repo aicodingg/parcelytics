@@ -97,6 +97,15 @@ check("City of Lewisvile (typo) and City of Lewisville (correct) resolve to the 
       "via the maintained DALLAS_ENTITY_ALIASES crosswalk",
       code_lewisvile == code_lewisville)
 
+# LIVE FINDING (Diego, deployed Dallas rates page, post-PX-20260829-07):
+# "Carrollton-Farmers Br ISD" / "Carrollton-Farmers Branch ISD" rendered as
+# two distinct entities (DAL1E6C7C5 / DALCA625EF) before this alias existed.
+code_cfb_br, _ = fmt.resolve_entity_identity("Carrollton-Farmers Br ISD")
+code_cfb_branch, _ = fmt.resolve_entity_identity("Carrollton-Farmers Branch ISD")
+check("Carrollton-Farmers Br ISD and Carrollton-Farmers Branch ISD (real live-finding "
+      "drift, 'Br'/'Branch' abbreviation) resolve to the SAME entity_code",
+      code_cfb_br == code_cfb_branch)
+
 code_wylie_plain, _ = fmt.resolve_entity_identity("City of Wylie")
 code_wylie_suffixed, _ = fmt.resolve_entity_identity("City of Wylie (Collin Co)")
 check("City of Wylie and 'City of Wylie (Collin Co)' resolve to the SAME entity_code",
@@ -454,6 +463,169 @@ alias_rows_not_a_collision = [
 ]
 check("check_entity_code_collisions() does NOT flag two ALIASED spellings of the same real entity",
       fmt.check_entity_code_collisions(alias_rows_not_a_collision) is None)
+
+
+# ── find_near_duplicate_names(): the audit tool built in direct response
+# to the real Carrollton-Farmers Br/Branch ISD live finding ──────────────
+already_aliased_names = ["City of Lewisvile", "City of Lewisville", "Dallas County"]
+check("find_near_duplicate_names() does NOT flag two ALREADY-ALIASED spellings of the "
+      "same real entity (they resolve to one canonical key before comparison, so "
+      "there's only one representative to compare against everything else)",
+      fmt.find_near_duplicate_names(already_aliased_names) == [])
+
+undetected_drift_names = ["Grapevine-Colleyville ISD", "Grapevine-Colleyville lSD",  # lowercase-L typo
+                           "Dallas County"]
+undetected_candidates = fmt.find_near_duplicate_names(undetected_drift_names)
+check("find_near_duplicate_names() flags a close-but-not-yet-aliased pair as a human-review "
+      "candidate (simulates catching the NEXT Carrollton-Br/Branch-style drift before a "
+      "live load, not after)",
+      any({"Grapevine-Colleyville ISD", "Grapevine-Colleyville lSD"} == {a, b}
+          for a, b, _ in undetected_candidates))
+
+levee_pair_names = ["Levee District 14", "Levee District 4"]
+levee_candidates = fmt.find_near_duplicate_names(levee_pair_names, threshold=0.80)
+check("find_near_duplicate_names() DOES flag the real, genuinely-distinct 'Levee District "
+      "14'/'Levee District 4' pair as a candidate at a lower threshold -- by design, a "
+      "similarity score alone can't tell real drift from real distinct entities; a human "
+      "reviewing this candidate is expected to correctly decline to alias it (as already "
+      "happened for this exact pair -- see dallas_entity_code()'s own docstring)",
+      any({"Levee District 14", "Levee District 4"} == {a, b} for a, b, _ in levee_candidates))
+
+check("find_near_duplicate_names() results are sorted (by first representative name), "
+      "per Diego's own 'sort by name' instruction",
+      undetected_candidates == sorted(undetected_candidates))
+
+
+# ── column_exists(): the check that closes the misleading "Schema applied." ─
+# message (Diego, live finding: it printed unconditional success while
+# applying nothing when mo_rate/is_rate were missing from an existing table).
+# No live DB in this sandbox -- fixture-tests the SQL/logic shape only, via
+# a minimal fake connection/cursor, mirroring this codebase's established
+# convention of testing DB-adjacent logic without a real database.
+class _FakeCursor:
+    def __init__(self, existing_columns):
+        self.existing_columns = existing_columns
+        self.last_result = None
+
+    def execute(self, sql, params):
+        table, column = params
+        found = (table, column) in self.existing_columns
+        self.last_result = (1,) if found else None
+
+    def fetchone(self):
+        return self.last_result
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakeConn:
+    def __init__(self, existing_columns):
+        self._cols = existing_columns
+
+    def cursor(self):
+        return _FakeCursor(self._cols)
+
+
+import sys as _sys  # noqa: E402
+import types as _types  # noqa: E402
+
+if "psycopg2" not in _sys.modules:
+    # No real psycopg2 install in this sandbox (confirmed via `import
+    # psycopg2` -- same disclosed limitation as test_backfill_prop_unit_
+    # tax_year_geoid.py / test_dcad_format.py) -- loaders/db.py imports it
+    # at module level, so register minimal fake psycopg2/psycopg2.extras
+    # stand-ins before importing, same convention as those two files.
+    _fake_pg2 = _types.ModuleType("psycopg2")
+    _fake_pg2_extras = _types.ModuleType("psycopg2.extras")
+    _fake_pg2.extras = _fake_pg2_extras
+    _sys.modules["psycopg2"] = _fake_pg2
+    _sys.modules["psycopg2.extras"] = _fake_pg2_extras
+
+from loaders import db as db_module  # noqa: E402
+
+conn_with_cols = _FakeConn({("county_tax_rate", "mo_rate"), ("county_tax_rate", "is_rate")})
+check("column_exists() returns True when the column is present",
+      db_module.column_exists(conn_with_cols, "county_tax_rate", "mo_rate") is True)
+
+conn_missing_cols = _FakeConn(set())
+check("column_exists() returns False when the column is missing (this is the exact real "
+      "scenario schema.sql's own comment describes: CREATE TABLE IF NOT EXISTS is a "
+      "no-op against an existing table, so mo_rate/is_rate can be silently absent)",
+      db_module.column_exists(conn_missing_cols, "county_tax_rate", "mo_rate") is False)
+
+
+# ── assert_production_db(): the hard, fail-loud write-guard (PX-20260830-01
+# Task 4) -- verify it actually raises on mismatch/NULL and passes on the
+# real expected address, via a minimal fake connection returning a fixed
+# "SELECT inet_server_addr()" result.
+class _FakeAddrCursor:
+    def __init__(self, addr_value):
+        self.addr_value = addr_value
+
+    def execute(self, sql, params=None):
+        pass
+
+    def fetchone(self):
+        return (self.addr_value,)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakeAddrConn:
+    def __init__(self, addr_value):
+        self._addr = addr_value
+
+    def cursor(self):
+        return _FakeAddrCursor(self._addr)
+
+
+prod_conn = _FakeAddrConn("10.30.105.217")
+check("assert_production_db() returns the address (no exception) when it matches "
+      "EXPECTED_PRODUCTION_HOST exactly",
+      db_module.assert_production_db(prod_conn) == "10.30.105.217")
+
+wrong_conn = _FakeAddrConn("127.0.0.1")
+_raised_wrong = False
+try:
+    db_module.assert_production_db(wrong_conn)
+except db_module.WrongDatabaseError as e:
+    _raised_wrong = "127.0.0.1" in str(e) and "10.30.105.217" in str(e)
+check("assert_production_db() raises WrongDatabaseError (naming BOTH the expected and the "
+      "actual address) when inet_server_addr() does not match -- this is the real footgun "
+      "Task 4 closes: DATABASE_URL silently pointed at the wrong environment",
+      _raised_wrong)
+
+null_conn = _FakeAddrConn(None)
+_raised_null = False
+try:
+    db_module.assert_production_db(null_conn)
+except db_module.WrongDatabaseError:
+    _raised_null = True
+check("assert_production_db() raises when inet_server_addr() is NULL (the real shape for a "
+      "Unix-domain-socket connection per Postgres's own docs -- never this project's real "
+      "production database, which is only ever reached over TCP)",
+      _raised_null)
+
+
+# ── FULL_RELOAD_DELETE_SQL: county-scoping proof (the orphaned-code cleanup
+# Diego's alias fix needs) -- same string/regex-assertion convention as
+# UPSERT_SQL's own county-scoping checks above ─────────────────────────────
+check("FULL_RELOAD_DELETE_SQL targets county_tax_rate",
+      "DELETE FROM county_tax_rate" in loader.FULL_RELOAD_DELETE_SQL)
+check("FULL_RELOAD_DELETE_SQL filters by county_code (a parameterized placeholder, "
+      "never a literal -- county_code is passed in as COUNTY_CODE at call time, so "
+      "this can never accidentally hardcode 'TRAVIS' or omit the filter entirely)",
+      "WHERE county_code = %s" in loader.FULL_RELOAD_DELETE_SQL)
+check("FULL_RELOAD_DELETE_SQL never references TRAVIS literally",
+      "TRAVIS" not in loader.FULL_RELOAD_DELETE_SQL)
 
 
 # ── _require_html() fail-loud message ────────────────────────────────────
