@@ -685,6 +685,57 @@ def test_refresh_group_stats_sql_derives_county_code_from_parcel_not_a_parameter
           "GROUP BY county_code" in norm, norm)
 
 
+def test_tbe_sum_cte_projects_and_groups_by_county_code():
+    """
+    PX-20260830-03 hotfix regression test.
+
+    The test above (test_refresh_group_stats_sql_derives_county_code_from_
+    parcel_not_a_parameter) checks that the JOIN condition
+    `tbe.county_code = p.county_code` is present in the full SQL string --
+    but that check alone PASSED even while tbe_sum itself never projected a
+    county_code column at all, which is exactly how this bug shipped and
+    survived two prior rounds undetected: the join CONDITION existed in the
+    text, but the column it referenced on tbe's side did not exist in
+    tbe_sum's own SELECT list, which would fail at execution time with
+    Postgres's own "column tbe.county_code does not exist" error.
+
+    This test isolates the tbe_sum CTE's own text specifically (the
+    substring between "WITH tbe_sum AS (" and the following "), effective
+    AS (") and asserts directly on ITS SELECT list and ITS GROUP BY clause,
+    so this exact bug shape (join condition present, source CTE column
+    absent) can never pass silently again -- if tbe_sum's own SELECT or
+    GROUP BY ever drops county_code, this test fails on that CTE's own
+    text, not on some unrelated part of the statement that still happens to
+    mention county_code elsewhere.
+    """
+    sql = rgs.REFRESH_GROUP_STATS_SQL
+    norm = " ".join(sql.split())
+    start_marker = "WITH tbe_sum AS ("
+    end_marker = "), effective AS ("
+    assert start_marker in norm and end_marker in norm, (
+        "tbe_sum/effective CTE structure not found at all -- "
+        "REFRESH_GROUP_STATS_SQL's shape has changed; update this test's "
+        "markers before trusting its PASS/FAIL below."
+    )
+    tbe_sum_body = norm[norm.index(start_marker) + len(start_marker):norm.index(end_marker)]
+
+    check("tbe_sum CTE: its own SELECT list includes county_code, geo_id, "
+          "tax_year (county_code leading, matching this codebase's "
+          "established 'county_code leads' convention)",
+          "SELECT county_code, geo_id, tax_year, SUM(amount_due) AS entity_tax_sum" in tbe_sum_body,
+          tbe_sum_body)
+    check("tbe_sum CTE: its own GROUP BY includes county_code (not just "
+          "geo_id, tax_year) -- a geo_id present in two counties must "
+          "produce two separate sums, never one blended sum",
+          "GROUP BY county_code, geo_id, tax_year" in tbe_sum_body,
+          tbe_sum_body)
+    check("tbe_sum CTE: reads from tax_billing_entity (sanity check that "
+          "the isolated substring is really tbe_sum's body, not some other "
+          "CTE)",
+          "FROM tax_billing_entity" in tbe_sum_body,
+          tbe_sum_body)
+
+
 def test_build_shadow_and_refresh_group_stats_no_longer_accept_county_code_kwarg():
     """
     Direct negative proof that the OLD, buggy interface is gone, not just

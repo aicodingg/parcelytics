@@ -190,16 +190,35 @@ REAL_PROPERTY_ONLY_WHERE = (
 
 # Effective-tax dollar figure, per api_peer_benchmark_local's own proven
 # fallback (app.py ~line 5435-5440): tb.total_tax when real/nonzero, else
-# tbe.entity_tax_sum. tbe_sum is aggregated ONCE, globally, grouped by
-# (geo_id, tax_year) -- this is the one place a full-table GROUP BY over
-# tax_billing_entity is the RIGHT shape (refresh-time, ~10x/year), unlike
-# the live per-request case Task M6-PEER-QUERY-PERF fixed, where the same
-# full-table aggregation was being redone on every web request.
+# tbe.entity_tax_sum. tbe_sum is aggregated ONCE, grouped by
+# (county_code, geo_id, tax_year) -- this is the one place a full-table
+# GROUP BY over tax_billing_entity is the RIGHT shape (refresh-time,
+# ~10x/year), unlike the live per-request case Task M6-PEER-QUERY-PERF
+# fixed, where the same full-table aggregation was being redone on every
+# web request. (PX-20260830-03: county_code added to this grouping -- see
+# tbe_sum's own inline comment below for why.)
 REFRESH_GROUP_STATS_SQL = f"""
     WITH tbe_sum AS (
-        SELECT geo_id, tax_year, SUM(amount_due) AS entity_tax_sum
+        -- PX-20260830-03 hotfix: county_code added to both the SELECT list
+        -- and the GROUP BY. Before this fix, tbe_sum grouped ONLY by
+        -- (geo_id, tax_year) -- so if the same geo_id ever existed in two
+        -- counties (not the case for Travis alone, but geo_id is NOT
+        -- guaranteed globally unique across counties, which is exactly why
+        -- county_code became a leading composite-PK column project-wide),
+        -- this CTE would silently SUM both counties' amount_due into ONE
+        -- row. Worse, the outer `effective` CTE's join below
+        -- (`tbe.county_code = p.county_code`) referenced a column tbe_sum
+        -- never projected at all -- a real, execution-breaking bug
+        -- (`column tbe.county_code does not exist`), independent of the
+        -- blend risk, caught during PX-20260830-02's Stage 4 review and
+        -- fixed here. Projecting county_code without also grouping by it
+        -- would not be sufficient (Postgres would reject an ungrouped
+        -- column in the SELECT list here anyway, but the point stands
+        -- generally): a geo_id present in two counties must produce two
+        -- separate sums, never one blended sum.
+        SELECT county_code, geo_id, tax_year, SUM(amount_due) AS entity_tax_sum
         FROM   tax_billing_entity
-        GROUP  BY geo_id, tax_year
+        GROUP  BY county_code, geo_id, tax_year
     ),
     effective AS (
         SELECT
