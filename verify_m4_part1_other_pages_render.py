@@ -71,6 +71,25 @@ def make_env():
     }
     env.globals["county_profile"] = _MOCK_TRAVIS_PROFILE
     env.globals["county_cad_link"] = lambda field, prop_id=None, geo_id=None: None
+
+    # PX-20260830-04 Task 1: mirrors app.py's real unavailable_copy() shape
+    # (same two `kind` branches, same parameter names) so templates.snapshot
+    # .html's own call to it renders instead of raising UndefinedError --
+    # this harness doesn't import app.py (Flask/psycopg2 unavailable in this
+    # sandbox), so it's a hand-mirrored stub like every other _inject_
+    # county_helpers() global already mocked here, not the real function.
+    def _mock_unavailable_copy(kind, county_name, page_label=None, view_label=None):
+        if kind == "being_prepared":
+            page_label = page_label or "this data"
+            view_label = view_label or "it"
+            return (
+                f"{county_name}'s {page_label} is being prepared. Parcel and appraisal "
+                f"data for {county_name} are live; {view_label} will be available soon."
+            )
+        if kind == "not_published":
+            return f"{county_name} does not publish this data, so it isn't available on Parcelytics."
+        raise ValueError(f"unavailable_copy: unrecognized kind {kind!r}")
+    env.globals["unavailable_copy"] = _mock_unavailable_copy
     env.globals["live_counties"] = [
         {
             "slug": "travis-tx",
@@ -323,6 +342,88 @@ def main():
           lambda: tpl.render(view="residential", mode="homeowner",
                               data_unavailable=True, data_unavailable_reason="Test reason.",
                               status_2026="none"))
+
+    # ── PX-20260830-04 Task 2: subtitle tier-derivation fix ────────────────
+    # Live bug (Dallas, 2026-08-30): status_2026=="none" was rendered as if
+    # it were "preliminary" by a bare {% else %} catch-all in the header
+    # subtitle block (line ~27) -- see the root-cause comment there. This
+    # produced "2026 Preliminary vs 2025 Certified" text immediately
+    # followed by a "Preliminary" badge, which read as one garbled sentence
+    # ("...Certified Preliminary") exactly matching what PM reported live.
+    # These scenarios prove: (a) Dallas's real status (certified) now
+    # renders the PM-specified exact string; (b) Travis's real status
+    # (preliminary) is unchanged and still correct; (c) the actual bug
+    # condition (status_2026=="none", which is what Dallas's snapshot
+    # currently returns while data_unavailable=False and the view has no
+    # 2026-joined rows) no longer claims "Preliminary" anywhere in the
+    # output -- the direct regression proof for this brief's fix.
+    _DALLAS_PROFILE = {
+        "display_name": "Dallas County, TX",
+        "county_name": "Dallas County",
+        "cad_name": "Dallas Central Appraisal District",
+        "tax_office_name": "Dallas County Tax Office",
+    }
+    _TRAVIS_PROFILE = env.globals["county_profile"]
+
+    def check_subtitle(label, county_profile, status_2026, mode, expected, forbidden=None):
+        def _render():
+            ctx = {**_snapshot_ctx(status_2026, mode=mode), "county_profile": county_profile}
+            out = tpl.render(**ctx)
+            if expected not in out:
+                raise AssertionError(f"expected subtitle text {expected!r} not found in output")
+            if forbidden and forbidden in out:
+                raise AssertionError(f"forbidden text {forbidden!r} found in output (residual bug)")
+            return out
+        check(label, _render)
+
+    check_subtitle(
+        "snapshot.html / PX-20260830-04 Task 2: Dallas (dcad_certified -> "
+        "status_2026='certified') subtitle reads '2026 Certified vs 2025 Certified'",
+        _DALLAS_PROFILE, "certified", "investor", "2026 Certified vs 2025 Certified",
+    )
+    check_subtitle(
+        "snapshot.html / PX-20260830-04 Task 2: Travis (status_2026='preliminary') "
+        "subtitle unchanged, reads '2026 Preliminary vs 2025 Certified'",
+        _TRAVIS_PROFILE, "preliminary", "investor", "2026 Preliminary vs 2025 Certified",
+    )
+
+    # base.html's site-wide footer (line ~246) carries one legitimate,
+    # deliberate "Preliminary" mention -- a general, per-county-neutral
+    # disclosure ("2026 Certified or Preliminary by county, per that county's
+    # own certification date") that exists specifically so no single page
+    # asserts one blended status for every county (see base.html's own
+    # comment above it). This is orthogonal to snapshot.html's per-view
+    # status_2026 claim and must NOT trip this regression check.
+    _EXPECTED_FOOTER_PRELIMINARY_MENTION = (
+        "2026 Certified or Preliminary by county, per that county's own certification date"
+    )
+
+    def _render_none_status_no_false_preliminary_claim():
+        # Matches the real live-bug shape: data_unavailable=False (parcel/
+        # appraisal data IS loaded) but status_2026=="none" (the summary
+        # layer hasn't computed a real tier yet for this view) -- the exact
+        # condition that used to mislabel itself "Preliminary".
+        out = tpl.render(**{**_snapshot_ctx("none"), "county_profile": _DALLAS_PROFILE})
+        out_without_sitewide_footer = out.replace(_EXPECTED_FOOTER_PRELIMINARY_MENTION, "")
+        if "Preliminary" in out_without_sitewide_footer:
+            raise AssertionError(
+                "status_2026='none' rendered the word 'Preliminary' somewhere in the "
+                "page OUTSIDE the expected site-wide footer disclosure -- this is the "
+                "exact live Dallas bug this fix was required to close (a 'not yet "
+                "known' status must never claim a specific tier)."
+            )
+        if "Dallas County Market Snapshot" not in out:
+            raise AssertionError(
+                "expected the new status_2026=='none' fallback subtitle "
+                "'Dallas County Market Snapshot' not found in output"
+            )
+        return out
+
+    check(
+        "snapshot.html / PX-20260830-04 Task 2: status_2026='none' (real Dallas "
+        "shape, data available but tier not yet computed) makes NO 'Preliminary' claim",
+        _render_none_status_no_false_preliminary_claim,
+    )
 
     print()
     if FAILURES:

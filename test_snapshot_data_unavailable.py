@@ -71,6 +71,23 @@ def _extract_function_body(source, func_name):
     return source[start:end]
 
 
+def _extract_dict_literal(source, name):
+    """PX-20260830-04 Task 1: same extraction technique as
+    _extract_function_body(), for a top-level `NAME = { ... }` dict literal
+    instead of a `def`. app.py's own style always closes a top-level dict
+    literal with a bare "}" at column 0 on its own line (confirmed against
+    COUNTY_PROFILES specifically) -- that's the boundary used here."""
+    m = re.search(rf"\n{re.escape(name)} = \{{", source)
+    if not m:
+        return None
+    start = m.start() + 1
+    end_m = re.search(r"\n\}\n", source[start:])
+    if not end_m:
+        return None
+    end = start + end_m.start() + 2
+    return source[start:end]
+
+
 def _build_real_namespace(source):
     """Extracts the REAL, unmodified source of _snapshot_summary_freshness()
     and _compute_snapshot_data() from app.py and execs it into a fresh
@@ -91,8 +108,30 @@ def _build_real_namespace(source):
     actually proves.)"""
     freshness_src = _extract_function_body(source, "_snapshot_summary_freshness")
     compute_src = _extract_function_body(source, "_compute_snapshot_data")
+    # unavailable_copy() is immediately followed by "@app.context_processor"
+    # (decorating _inject_county_helpers() right after it) -- the shared
+    # _extract_function_body() boundary regex only stops at "\ndef " or
+    # "@app.route", so it would silently over-capture past unavailable_copy()
+    # through that decorator line. Widened locally to also stop at any
+    # "@app." decorator, rather than loosening the shared helper (used
+    # identically, and correctly, elsewhere for def-only boundaries).
+    m = re.search(r"\ndef unavailable_copy\(", source)
+    assert m, "unavailable_copy() not found in app.py -- extraction broke"
+    _start = m.start() + 1
+    _end_m = re.search(r"\n(def |@app\.)", source[_start + 1:])
+    unavailable_copy_src = source[_start:_start + 1 + _end_m.start()] if _end_m else source[_start:]
+    county_profiles_src = _extract_dict_literal(source, "COUNTY_PROFILES")
     assert freshness_src, "_snapshot_summary_freshness() not found in app.py -- extraction broke"
     assert compute_src, "_compute_snapshot_data() not found in app.py -- extraction broke"
+    # PX-20260830-04 Task 1: _snapshot_summary_freshness() now calls the
+    # real unavailable_copy() (COUNTY_PROFILES lookup + parameterized
+    # sentence) instead of building its own raw f-string -- both must be
+    # extracted and execed into this namespace too, or every real call
+    # inside the extracted function body raises NameError. This proves the
+    # REAL production wiring (not a stub) actually produces the honest
+    # copy end-to-end.
+    assert unavailable_copy_src, "unavailable_copy() not found in app.py -- extraction broke"
+    assert county_profiles_src, "COUNTY_PROFILES not found in app.py -- extraction broke"
 
     namespace = {
         "ptype_and_sort_case_for_view": ptype_and_sort_case_for_view,
@@ -100,6 +139,8 @@ def _build_real_namespace(source):
         "SNAPSHOT_SUBTYPE_CAP": 7,
         "query": None,  # set per-scenario by the caller before invoking
     }
+    exec(compile(county_profiles_src, "<extracted COUNTY_PROFILES>", "exec"), namespace)
+    exec(compile(unavailable_copy_src, "<extracted unavailable_copy>", "exec"), namespace)
     exec(compile(freshness_src, "<extracted _snapshot_summary_freshness>", "exec"), namespace)
     exec(compile(compute_src, "<extracted _compute_snapshot_data>", "exec"), namespace)
     return namespace
@@ -181,11 +222,28 @@ def test_real_compute_snapshot_data_returns_data_unavailable_when_stale():
 
     check("stale scenario: data_unavailable is True", result["data_unavailable"] is True, result)
     check("stale scenario: a real, honest reason string is present",
-          bool(result.get("data_unavailable_reason")) and "STALE" not in result["data_unavailable_reason"].upper()
-          or "stale" in result["data_unavailable_reason"].lower(),
-          result.get("data_unavailable_reason"))
-    check("stale scenario: reason mentions refresh_snapshot_summary.py (actionable, not vague)",
-          "refresh_snapshot_summary.py" in result["data_unavailable_reason"], result["data_unavailable_reason"])
+          bool(result.get("data_unavailable_reason")), result.get("data_unavailable_reason"))
+    # PX-20260830-04 Task 1: Diego's standing ruling -- user-facing
+    # data_unavailable_reason strings carry NO table names, file paths,
+    # function names, or internal county codes. This used to assert the
+    # OPPOSITE (that "refresh_snapshot_summary.py" WAS present) -- that
+    # assertion was itself testing for the developer-facing bug this brief
+    # was required to remove. Replaced with the real denylist check plus a
+    # positive check that the new parameterized copy actually landed.
+    check("stale scenario: reason contains NO developer-facing tokens "
+          "(file paths, table names, raw county code)",
+          not any(tok in result["data_unavailable_reason"] for tok in
+                  ("refresh_snapshot_summary.py", "snapshot_breakdown", "snapshot_totals",
+                   "snapshot_neighborhood_movers", "loaders/", ".py", "TRAVIS", "DALLAS")),
+          result["data_unavailable_reason"])
+    check("stale scenario: reason uses the real county name from COUNTY_PROFILES "
+          "('Travis County'), not the raw code",
+          "Travis County" in result["data_unavailable_reason"], result["data_unavailable_reason"])
+    check("stale scenario: reason follows the 'being prepared' honest shape "
+          "(parcel/appraisal data live, summary view not ready)",
+          "is being prepared" in result["data_unavailable_reason"]
+          and "will be available soon" in result["data_unavailable_reason"],
+          result["data_unavailable_reason"])
     check("stale scenario: rows is the empty-list placeholder, not a partial/crashed result",
           result["rows"] == [], result["rows"])
     check("stale scenario: totals is None", result["totals"] is None, result)
@@ -242,8 +300,13 @@ def test_real_freshness_gate_empty_table_case():
     result = ns["_compute_snapshot_data"]("residential", "TRAVIS")
 
     check("empty-table scenario: data_unavailable is True", result["data_unavailable"] is True, result)
-    check("empty-table scenario: reason names 'has not been generated yet'",
-          "has not been generated yet" in result["data_unavailable_reason"], result["data_unavailable_reason"])
+    check("empty-table scenario: reason follows the honest 'being prepared' shape, "
+          "no developer-facing tokens",
+          "is being prepared" in result["data_unavailable_reason"]
+          and "Travis County" in result["data_unavailable_reason"]
+          and not any(tok in result["data_unavailable_reason"] for tok in
+                      ("refresh_snapshot_summary.py", "snapshot_breakdown", "TRAVIS", "loaders/")),
+          result["data_unavailable_reason"])
 
 
 def main():

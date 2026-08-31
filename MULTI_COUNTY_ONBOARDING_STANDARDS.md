@@ -319,6 +319,35 @@ history — are previews of coordination load at two-counties-concurrent scale.
    `FIPS_BY_SLUG`) agree with each other for every registered slug —
    catching exactly the "onboarded a new county's FIPS code in one file,
    forgot the other" drift by name.
+9. **User-facing `data_unavailable`/error copy carries no developer-facing
+   detail, ever (PX-20260830-04).** A live Dallas pre-announcement check
+   found six places (the `/rates` page's own reason string, five branches
+   inside `_snapshot_summary_freshness()`, and one `templates/snapshot.html`
+   fallback) that built their own f-string naming a real table
+   (`snapshot_breakdown`, `county_tax_rate`), a real loader file
+   (`loaders/load_tax_rates.py`), or a raw internal county code (`"DALLAS"`)
+   directly into a sentence a visitor could see. One of these was also
+   simply *wrong* for Dallas specifically (it named a Travis-only loader
+   file). **Rule:** every user-facing "this isn't ready yet" or "this isn't
+   published" sentence is produced by one function, `unavailable_copy()`
+   (app.py; registered as a Jinja global for template call sites), which
+   takes a resolved county display name (never a raw code — the function's
+   own signature has no `county_code` parameter for a caller to thread
+   through by mistake) and returns one of two honest, parameterized shapes:
+   "being prepared" (data is loaded; this specific view isn't computed yet)
+   or "not published" (the county's own source doesn't publish this data
+   type at all — used only where that's literally true). **Enforcement:**
+   `verify_unavailable_copy_denylist.py` — an AST-based scan of app.py (for
+   `data_unavailable_reason` assignments, `return (False, <reason>)` gate
+   results, `unavailable_copy()`'s own return literals, and its call-site
+   `page_label=`/`view_label=` arguments) plus a comment-and-script-stripped
+   scan of `templates/*.html`, both checked against a denylist of
+   `loaders/`, `.py`, `_breakdown`, `_totals`, `snapshot_`, `group_stats`,
+   and any all-caps county code (the county-code half dynamically derived
+   from `COUNTY_SLUGS`, so a future county's code is covered with zero
+   scanner edit). This is a recurrence guard, not a one-time cleanup check:
+   it fires the moment any future call site reverts to a hand-rolled string
+   instead of routing through `unavailable_copy()`.
 
 ---
 

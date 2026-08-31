@@ -2279,6 +2279,65 @@ def county_cad_link(field, prop_id=None, geo_id=None):
     return value
 
 
+def unavailable_copy(kind, county_name, page_label=None, view_label=None):
+    """PX-20260830-04 Task 1: single source of truth for every user-facing
+    data_unavailable_reason string in the app (the rates page's own reason
+    at _rates_response(), all five real failure branches inside
+    _snapshot_summary_freshness(), and templates/snapshot.html's own
+    "no rows for this view" fallback -- registered into Jinja below so the
+    template can call it too, same mechanism as county_cad_link()).
+
+    Takes county_name directly (the real human-readable string, e.g.
+    "Dallas County") rather than an internal county_code -- every call
+    site already has this resolved one way or another (a `profile` dict
+    already looked up from COUNTY_PROFILES in the two Python call sites
+    below, or `county_profile.county_name` directly in the template), and
+    COUNTY_PROFILES' own per-county dicts do NOT carry their own key back
+    as a field, so re-deriving a code inside this function would need a
+    second lookup table for no benefit. This also keeps the "never the raw
+    code" rule structurally true: there is no county_code parameter here
+    for a caller to accidentally pass straight through.
+
+    Diego's standing ruling (PX-20260830-04): user-facing data_unavailable
+    messages carry NO table names, file paths, function names, or internal
+    county codes. Before this fix, every one of the six call sites above
+    built its own raw f-string mixing an internal county_code (e.g. the
+    literal "DALLAS") and/or a real table/file name straight into the
+    sentence a visitor sees. This collapses all six into two possible
+    published shapes, chosen by `kind`:
+
+      - "being_prepared": the honest, common case for a newly-onboarded
+        county -- parcel/appraisal data for the county IS loaded, but this
+        specific derived/summary view hasn't been computed for it yet (a
+        precomputation lag, not a coverage gap). This is what actually
+        applies at all six current call sites (Dallas's Market Snapshot
+        summary tables not yet refreshed; a hypothetical future county
+        whose rate loader hasn't run yet).
+      - "not_published": for the DIFFERENT, currently-unused case where a
+        county's own source genuinely does not publish the underlying data
+        type at all -- a real source-coverage gap, not a pipeline lag.
+        Deliberately narrower wording (no "will be available soon" promise,
+        since there may be nothing to become available). Only wire a call
+        site to this branch where that's literally true for that county;
+        do not use it as a generic "something's missing" fallback.
+
+    `page_label`/`view_label` are optional human phrases naming what's being
+    prepared and what will appear (e.g. page_label="Market Snapshot",
+    view_label="the summary view"; page_label="tax rate history",
+    view_label="rate data") -- both default to neutral generic phrasing so a
+    call site can omit them entirely and still get a safe, honest sentence."""
+    if kind == "being_prepared":
+        page_label = page_label or "this data"
+        view_label = view_label or "it"
+        return (
+            f"{county_name}'s {page_label} is being prepared. Parcel and appraisal "
+            f"data for {county_name} are live; {view_label} will be available soon."
+        )
+    if kind == "not_published":
+        return f"{county_name} does not publish this data, so it isn't available on Parcelytics."
+    raise ValueError(f"unavailable_copy: unrecognized kind {kind!r}")
+
+
 @app.context_processor
 def _inject_county_helpers():
     """PX-20260824-01: county_profile added alongside the existing
@@ -2306,6 +2365,7 @@ def _inject_county_helpers():
         "county_url": county_url,
         "county_profile": COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"]),
         "county_cad_link": county_cad_link,
+        "unavailable_copy": unavailable_copy,
         "live_counties": _live,
         # PX-20260828-09 Task 1: single shared source for every "N+ parcels
         # across M counties" summed-total display (base.html's brand
@@ -4113,10 +4173,15 @@ def _rates_response(county_code, county_slug_val, api_county_slug=None):
     data_unavailable = not rates
     data_unavailable_reason = None
     if data_unavailable:
-        data_unavailable_reason = (
-            f"Tax rate history has not been loaded yet for {profile['county_name']} -- "
-            "county_tax_rate has no rows for this county. This page reads only loaded "
-            "rate data -- run loaders/load_tax_rates.py for this county to populate it."
+        # PX-20260830-04 Task 1: was a raw f-string naming county_tax_rate
+        # and loaders/load_tax_rates.py directly -- also factually wrong for
+        # Dallas specifically, which is loaded via a different file
+        # (loaders/load_dallas_tax_rates.py) and in any case is no longer
+        # reachable for Dallas today (PX-20260829-07 loaded its rates); this
+        # branch now only fires for a genuinely not-yet-loaded county (e.g.
+        # Harris, reserved). See unavailable_copy()'s own docstring.
+        data_unavailable_reason = unavailable_copy(
+            "being_prepared", profile["county_name"], page_label="tax rate history", view_label="rate data"
         )
 
     # Build {entity_code: [{year, rate, mo_rate, is_rate}, …]} structure for JS.
@@ -4521,6 +4586,9 @@ def _snapshot_summary_freshness(county_code="TRAVIS"):
     migrate_county_partitioning.py's migration of these three tables has
     actually run there.
     """
+    # PX-20260830-04 Task 1: unavailable_copy() takes a resolved county_name,
+    # not the raw county_code -- see its own docstring for why.
+    profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
     tables = ("snapshot_breakdown", "snapshot_totals", "snapshot_neighborhood_movers")
     batch_ids_by_table = {}
     for tbl in tables:
@@ -4533,39 +4601,45 @@ def _snapshot_summary_freshness(county_code="TRAVIS"):
     latest_row = query("SELECT MAX(batch_id) AS latest FROM load_batch", one=True)
     latest_batch_id = latest_row["latest"] if latest_row else None
 
+    # PX-20260830-04 Task 1: all five reasons below used to be raw f-strings
+    # naming the internal county_code (e.g. literal "DALLAS"), real table
+    # names, and loaders/refresh_snapshot_summary.py directly -- exactly the
+    # developer-facing language Diego's standing ruling prohibits on a
+    # visitor-facing page. All five real failure shapes here (missing rows,
+    # >1 batch_id, no load recorded, tables out of sync, stale vs latest
+    # batch) are the SAME user-visible fact from a visitor's point of view:
+    # "this county's data is loaded, but the Market Snapshot summary view
+    # for it isn't ready yet" -- so all five now share one honest sentence
+    # via unavailable_copy() rather than five subtly different developer
+    # diagnostics. The distinct internal detail these five branches encode
+    # remains useful for US to know while debugging, so it stays in each
+    # return's own surrounding code comment/log context, just not in the
+    # string a visitor sees.
     for tbl in tables:
         if not batch_ids_by_table[tbl]:
-            return False, (
-                f"Market Snapshot summary data has not been generated yet for {county_code} "
-                f"({tbl} has no rows for this county). This page reads only precomputed data "
-                "-- run loaders/refresh_snapshot_summary.py to populate it."
+            return False, unavailable_copy(
+                "being_prepared", profile["county_name"], page_label="Market Snapshot", view_label="the summary view"
             )
         if len(batch_ids_by_table[tbl]) > 1:
-            return False, (
-                f"Market Snapshot data is in an inconsistent state for {county_code} ({tbl} "
-                "reflects more than one data batch for this county, indicating a partial or "
-                "failed refresh). Re-run loaders/refresh_snapshot_summary.py."
+            return False, unavailable_copy(
+                "being_prepared", profile["county_name"], page_label="Market Snapshot", view_label="the summary view"
             )
 
     if latest_batch_id is None:
-        return False, (
-            "No data load has been recorded yet -- Market Snapshot summary data "
-            "has not been generated."
+        return False, unavailable_copy(
+            "being_prepared", profile["county_name"], page_label="Market Snapshot", view_label="the summary view"
         )
 
     table_batch_ids = {tbl: next(iter(batch_ids_by_table[tbl])) for tbl in tables}
     if len(set(table_batch_ids.values())) > 1:
-        return False, (
-            f"Market Snapshot summary tables are out of sync with each other for {county_code} "
-            "-- a refresh did not complete atomically. Re-run "
-            "loaders/refresh_snapshot_summary.py."
+        return False, unavailable_copy(
+            "being_prepared", profile["county_name"], page_label="Market Snapshot", view_label="the summary view"
         )
 
     common_batch_id = next(iter(set(table_batch_ids.values())))
     if common_batch_id != latest_batch_id:
-        return False, (
-            f"Market Snapshot data for {county_code} is stale -- a newer data load has not yet "
-            "been reflected here. Run loaders/refresh_snapshot_summary.py to refresh it."
+        return False, unavailable_copy(
+            "being_prepared", profile["county_name"], page_label="Market Snapshot", view_label="the summary view"
         )
 
     return True, None

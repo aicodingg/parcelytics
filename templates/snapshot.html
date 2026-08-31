@@ -9,13 +9,27 @@
        "Preliminary" regardless of actual data_source. status_2026 is
        computed in _compute_snapshot_data() (app.py) from the real
        data_source split across this view's population. #}
+    {# PX-20260830-04 root-cause fix: status_2026 == "none" means "we don't
+       know yet" (either the summary tables haven't been generated for this
+       county at all -- data_unavailable's own early-return path always
+       passes status_2026="none" -- or, defensively, a view genuinely has no
+       2026-joined rows). The bare {% else %} that used to sit here treated
+       "none" exactly like "preliminary", which is a Travis-shaped
+       assumption (true 100% of the time when Travis was the only county,
+       since Travis's own 2026 data always starts preliminary before
+       certification) that silently mislabeled a brand-new county's
+       "not generated yet" state as "Preliminary" -- this is the literal
+       cause of the live Dallas bug ("2026 Preliminary vs 2025 Certified"
+       header text immediately followed by a "Preliminary" badge, which read
+       as one garbled sentence). "none" now gets its own explicit branch:
+       no year-tier claim, no badge. #}
     <p class="text-muted mb-0" style="font-size:13px; margin-top:4px;">
-      {% if mode == 'homeowner' %}How home values changed across {{ county_profile.county_name }}, 2025 → 2026{% else %}2026 {% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}(mixed Certified/Preliminary){% else %}Preliminary{% endif %} vs 2025 Certified{% endif %}
+      {% if mode == 'homeowner' %}How home values changed across {{ county_profile.county_name }}, 2025 → 2026{% elif status_2026 == "none" %}{{ county_profile.county_name }} Market Snapshot{% else %}2026 {% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}(mixed Certified/Preliminary){% else %}Preliminary{% endif %} vs 2025 Certified{% endif %}
       {% if status_2026 == "certified" %}
       <span class="badge-verified ms-2">Certified</span>
       {% elif status_2026 == "mixed" %}
       <span class="badge-preliminary ms-2">Mixed</span>
-      {% else %}
+      {% elif status_2026 == "preliminary" %}
       <span class="badge-preliminary ms-2">Preliminary</span>
       {% endif %}
     </p>
@@ -145,12 +159,15 @@
     <div class="kpi-sub"><span class="badge-verified" style="font-size:9px;">Verified</span></div>
   </div>
   <div class="kpi-card">
-    <div class="kpi-label">2026 Total MV ({% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}Mixed{% else %}Preliminary{% endif %})</div>
+    {# PX-20260830-04: "none" (no 2026-joined rows for this view) no longer
+       falls into the same branch as "preliminary" -- see the header block
+       above for the full root-cause explanation. #}
+    <div class="kpi-label">2026 Total MV ({% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}Mixed{% elif status_2026 == "preliminary" %}Preliminary{% else %}Pending{% endif %})</div>
     <div class="kpi-value">${{ "{:,.2f}B".format(totals.total_mv26_b) }}</div>
     <div class="kpi-sub">
       {% if status_2026 == "certified" %}<span class="badge-verified" style="font-size:9px;">Certified</span>
       {% elif status_2026 == "mixed" %}<span class="badge-preliminary" style="font-size:9px;">Mixed</span>
-      {% else %}<span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
+      {% elif status_2026 == "preliminary" %}<span class="badge-preliminary" style="font-size:9px;">Preliminary</span>
       {% endif %}
     </div>
   </div>
@@ -239,7 +256,7 @@
       <strong style="color:var(--accent);">
         {{ "declined" if totals.median_pct < 0 else "increased" }}
       </strong>
-      on a median basis ({{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%) from 2025 certified to 2026 {% if status_2026 == "certified" %}certified{% elif status_2026 == "mixed" %}certified/preliminary{% else %}preliminary{% endif %}.
+      on a median basis ({{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%) from 2025 certified to 2026 {% if status_2026 == "certified" %}certified{% elif status_2026 == "mixed" %}certified/preliminary{% elif status_2026 == "preliminary" %}preliminary{% else %}not-yet-certified{% endif %}.
       {% if sub1 %}
         {{ sub1.ptype }}: median {{ "+" if sub1.median_pct >= 0 else "" }}{{ sub1.median_pct }}%,
         {{ "{:,}".format(sub1.n_up) }} up / {{ "{:,}".format(sub1.n_down) }} down.
@@ -382,7 +399,7 @@
         {{ "{:,}".format(res.n_down) }} down / {{ "{:,}".format(res.n_up) }} up).
       {% endif %}
       {% if _com_sectors %}
-        Retail/Industrial/Office/Hotel combined added ${{ "{:,.1f}B".format(_com_total_mv26 - _com_total_mv25) }} in aggregate {% if status_2026 == "certified" %}certified{% elif status_2026 == "mixed" %}certified/preliminary{% else %}preliminary{% endif %} value
+        Retail/Industrial/Office/Hotel combined added ${{ "{:,.1f}B".format(_com_total_mv26 - _com_total_mv25) }} in aggregate {% if status_2026 == "certified" %}certified{% elif status_2026 == "mixed" %}certified/preliminary{% elif status_2026 == "preliminary" %}preliminary{% else %}not-yet-certified{% endif %} value
         {%- if _com_largest %} ({{ _com_largest.ptype }} is the largest of the four by parcel count, median {{ "+" if _com_largest.median_pct >= 0 else "" }}{{ _com_largest.median_pct }}%){% endif %}.
       {% endif %}
       {% if mf %}
@@ -397,10 +414,10 @@
 {# ── Property-type breakdown table ─────────────────────────────── #}
 <div class="card mb-4">
   <div class="card-header d-flex align-items-center gap-2">
-    2026 {% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}(mixed Certified/Preliminary){% else %}Preliminary{% endif %} vs 2025 Certified — By Property Type
+    2026 {% if status_2026 == "certified" %}Certified{% elif status_2026 == "mixed" %}(mixed Certified/Preliminary){% elif status_2026 == "preliminary" %}Preliminary{% else %}Pending{% endif %} vs 2025 Certified — By Property Type
     {% if status_2026 == "certified" %}<span class="badge-verified">Certified</span>
     {% elif status_2026 == "mixed" %}<span class="badge-preliminary">Mixed</span>
-    {% else %}<span class="badge-preliminary">Preliminary</span>
+    {% elif status_2026 == "preliminary" %}<span class="badge-preliminary">Preliminary</span>
     {% endif %}
   </div>
   <div class="card-body p-0">
@@ -521,13 +538,25 @@
     </div>
   </div>
   <div class="card-footer text-muted small">
+    {# PX-20260830-04 Task 2: 6th occurrence of the same status_2026=="none"
+       -> "Preliminary" bare-else anti-pattern found during fixture testing
+       (not caught by the initial 5-location sweep). This one was also the
+       most literal match for the "Travis-shaped hardcode" PM hypothesized --
+       the old mixed/preliminary branches hardcoded Travis's own 2026
+       preliminary/certified export dates ("June 9, 2026" / "July 25, 2026")
+       unconditionally, which is simply wrong copy for any other county (and
+       would go stale even for Travis in a future year). Genericized to drop
+       the county-specific dates rather than invent new per-county date
+       plumbing under this brief's no-data-change scope. #}
     {% if status_2026 == "certified" %}
     Based on 2026 Certified {{ county_profile.cad_abbr }} Appraisal Export vs 2025 Certified Export. 2026 values are final, not subject to change.
     {% elif status_2026 == "mixed" %}
-    Based on a mix of 2026 Certified and 2026 Preliminary {{ county_profile.cad_abbr }} Appraisal Export data (June 9, 2026 preliminary export; certified July 25, 2026) vs 2025 Certified Export.
+    Based on a mix of 2026 Certified and 2026 Preliminary {{ county_profile.cad_abbr }} Appraisal Export data vs 2025 Certified Export.
+    {% elif status_2026 == "preliminary" %}
+    Based on 2026 Preliminary {{ county_profile.cad_abbr }} Appraisal Export vs 2025 Certified Export.
+    Subject to change at certification.
     {% else %}
-    Based on 2026 Preliminary {{ county_profile.cad_abbr }} Appraisal Export (June 9, 2026) vs 2025 Certified Export.
-    Subject to change at certification (July 25, 2026).
+    Based on the most recently available 2026 {{ county_profile.cad_abbr }} Appraisal Export vs 2025 Certified Export.
     {% endif %}
     Excludes: tax-exempt accounts (X state_cd1 prefix), personal property accounts (N prefix, 3 accounts),
     and AJR* personal property supplement records (placeholder $1 values in certified data).
@@ -781,7 +810,14 @@
 
 {% else %}
 <div class="alert alert-info">
-  2026 data not yet loaded for this view. Run the 2026 loader to populate this page.
+  {# PX-20260830-04 Task 1: was "2026 data not yet loaded for this view. Run
+     the 2026 loader to populate this page." -- developer language (an
+     unnamed "loader"), not caught by the literal denylist patterns Diego
+     specified (no "loaders/", ".py", or all-caps county code present) but
+     the same class of violation. Uses the same registered Jinja global
+     unavailable_copy() as the Python call sites, not a separately hand-
+     written sentence, so this stays a one-function-swap change too. #}
+  {{ unavailable_copy("being_prepared", county_profile.county_name, page_label="this view", view_label="it") }}
 </div>
 {% endif %}
 {% endif %}{# /data_unavailable #}
