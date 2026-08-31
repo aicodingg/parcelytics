@@ -270,17 +270,29 @@ def write_csv(records, dest):
 
 
 # ── Validation (cross-check against DB) ──────────────────────────────────────
-def validate(csv_path):
+def validate(csv_path, county_code=None):
     """
     Compare extracted CSV against parcel_tax_year for tax_year=2021.
     Prints match rates and flags data quality issues.
     Requires DB access (run locally).
+
+    PX-20260830-05 Task 2 (Bucket B): county_code predicate added --
+    parcel_tax_year is composite_pk-migrated (county_code-leading); an
+    unscoped tax_year=2021 pull can now match another county's 2021 rows
+    against this file's own (single-county) extracted CSV. DEFAULT_COUNTY
+    imported lazily here (not at module level) to keep this standalone
+    script's import footprint minimal -- it doesn't otherwise touch
+    loaders.* or need a DB connection outside --validate.
     """
     try:
         import config, psycopg2, psycopg2.extras
+        from loaders.scrape_billing_history import DEFAULT_COUNTY  # DALLAS-GATE-4 convention
     except ImportError:
         print("psycopg2 not available. Run this on your local machine.", file=sys.stderr)
         sys.exit(1)
+
+    if county_code is None:
+        county_code = DEFAULT_COUNTY
 
     print(f"\nLoading extracted CSV: {csv_path}")
     extracted = {}
@@ -300,8 +312,9 @@ def validate(csv_path):
         SELECT geo_id, market_value, assessed_value
         FROM parcel_tax_year
         WHERE tax_year = 2021
+          AND county_code = %s
           AND geo_id = ANY(%s)
-    """, (geo_ids,))
+    """, (county_code, geo_ids))
     db_rows = {r['geo_id']: r for r in cur.fetchall()}
     conn.close()
 
@@ -413,10 +426,14 @@ def main():
                     help='Write extracted records to CSV. Add --pages to limit to a range.')
     ap.add_argument('--validate', metavar='FILE.csv',
                     help='Cross-check CSV against DB (requires local DB)')
+    ap.add_argument('--county', default=None,
+                    help="county_code to scope --validate's DB query to "
+                         "(default: DEFAULT_COUNTY, DALLAS-GATE-4 convention). "
+                         "Only meaningful with --validate.")
     args = ap.parse_args()
 
     if args.validate:
-        validate(args.validate)
+        validate(args.validate, county_code=args.county)
         return
 
     # Parse page range (used by both --sample and --output when --pages supplied)

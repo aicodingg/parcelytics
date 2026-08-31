@@ -190,8 +190,8 @@ def load_land_and_imprv(conn, cert_dir, county_code=DEFAULT_COUNTY):
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s",
-            (TAX_YEAR,),
+            "SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s AND county_code = %s",
+            (TAX_YEAR, county_code),
         )
         market_by_pid = {r[0]: r[1] for r in cur.fetchall()}
 

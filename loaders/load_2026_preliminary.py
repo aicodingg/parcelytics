@@ -190,8 +190,8 @@ def load_land_and_imprv(conn, county_code=DEFAULT_COUNTY):
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s",
-            (TAX_YEAR,),
+            "SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s AND county_code = %s",
+            (TAX_YEAR, county_code),
         )
         market_by_pid = {r[0]: r[1] for r in cur.fetchall()}
 
@@ -287,10 +287,18 @@ def load_sb12(conn, county_code=DEFAULT_COUNTY):
 # ── Step 5: Post-load QA (Item 8 from brief) — unchanged, reads the ─────────
 #           rolled-up parcel_tax_year, which is now populated by
 #           parcel_rollup.run() before this runs (see load() below).
-def run_qa(conn):
+def run_qa(conn, county_code=DEFAULT_COUNTY):
     """
     Post-load data quality checks for 2026 preliminary data.
     Reports findings but never modifies data.
+
+    PX-20260830-05 Task 2 (Bucket B): county_code predicate added to every
+    query below -- parcel_tax_year is composite_pk-migrated (county_code-
+    leading), and this is a per-county QA report (not a deliberate
+    cross-county aggregation the way refresh_group_stats.py's tbe_sum is),
+    so an unscoped read here would silently blend another county's rows
+    into this county's post-load sanity numbers the instant a second
+    county's data coexists in the table.
     """
     print("\n" + "="*72)
     print("  POST-LOAD QA — 2026 Preliminary")
@@ -299,9 +307,9 @@ def run_qa(conn):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     # 1. Row count
-    cur.execute("SELECT COUNT(*) AS n FROM parcel_tax_year WHERE tax_year = 2026")
+    cur.execute("SELECT COUNT(*) AS n FROM parcel_tax_year WHERE tax_year = 2026 AND county_code = %s", (county_code,))
     n_2026 = cur.fetchone()["n"]
-    cur.execute("SELECT COUNT(*) AS n FROM parcel_tax_year WHERE tax_year = 2025")
+    cur.execute("SELECT COUNT(*) AS n FROM parcel_tax_year WHERE tax_year = 2025 AND county_code = %s", (county_code,))
     n_2025 = cur.fetchone()["n"]
     pct_diff = abs(n_2026 - n_2025) / n_2025 * 100 if n_2025 else 0
     flag = "⚠ DEVIATED >5%" if pct_diff > 5 else "✓"
@@ -312,8 +320,8 @@ def run_qa(conn):
         cur.execute(f"""
             SELECT COUNT(*) FILTER (WHERE {col} IS NULL OR {col} = 0) AS nulls,
                    COUNT(*) AS total
-            FROM parcel_tax_year WHERE tax_year = 2026
-        """)
+            FROM parcel_tax_year WHERE tax_year = 2026 AND county_code = %s
+        """, (county_code,))
         r = cur.fetchone()
         pct = r["nulls"] / r["total"] * 100 if r["total"] else 0
         flag = "⚠" if pct > 20 else "✓"
@@ -326,7 +334,8 @@ def run_qa(conn):
         WHERE tax_year = 2026
           AND assessed_value > market_value
           AND market_value > 0 AND assessed_value > 0
-    """)
+          AND county_code = %s
+    """, (county_code,))
     n_anom = cur.fetchone()["n"]
     pct_anom = n_anom / n_2026 * 100 if n_2026 else 0
     print(f"\n  AV > MV anomalies in 2026: {n_anom:,} ({pct_anom:.2f}%)")
@@ -344,9 +353,9 @@ def run_qa(conn):
         cur.execute("""
             SELECT tax_year, market_value, assessed_value
             FROM parcel_tax_year
-            WHERE geo_id = %s AND tax_year IN (2025, 2026)
+            WHERE geo_id = %s AND tax_year IN (2025, 2026) AND county_code = %s
             ORDER BY tax_year
-        """, (geo_id,))
+        """, (geo_id, county_code))
         rows = {r["tax_year"]: r for r in cur.fetchall()}
         r25 = rows.get(2025)
         r26 = rows.get(2026)
@@ -366,10 +375,17 @@ def run_qa(conn):
 
 # ── Step 6: 2026 vs 2025 county-wide comparison (Item 9 from brief) — ───────
 #           unchanged, reads parcel/parcel_tax_year same as before.
-def run_county_comparison(conn):
+def run_county_comparison(conn, county_code=DEFAULT_COUNTY):
     """
     County-wide 2026 vs 2025 market value comparison by property type.
     Computation only — no UI built yet; results logged to terminal.
+
+    PX-20260830-05 Task 2 (Bucket B): county_code predicate added to the
+    `parcel` reference (both parcel_tax_year joins are scoped transitively
+    via p.county_code) and to the overall-summary query below -- this is a
+    single-county comparison report, not a deliberate cross-county
+    aggregation, so an unscoped join here would silently compare a blended
+    multi-county population once a second county's data exists.
     """
     print("\n" + "="*72)
     print("  2026 vs 2025 COUNTY-WIDE COMPARISON")
@@ -384,9 +400,10 @@ def run_county_comparison(conn):
                 p25.market_value                              AS mv_2025,
                 p26.market_value                              AS mv_2026
             FROM parcel p
-            JOIN parcel_tax_year p25 ON p25.geo_id = p.geo_id AND p25.tax_year = 2025
-            JOIN parcel_tax_year p26 ON p26.geo_id = p.geo_id AND p26.tax_year = 2026
+            JOIN parcel_tax_year p25 ON p25.geo_id = p.geo_id AND p25.tax_year = 2025 AND p25.county_code = p.county_code
+            JOIN parcel_tax_year p26 ON p26.geo_id = p.geo_id AND p26.tax_year = 2026 AND p26.county_code = p.county_code
             WHERE p25.market_value > 0 AND p26.market_value > 0
+              AND p.county_code = %(county_code)s
         ),
         with_pct AS (
             SELECT type_prefix,
@@ -406,7 +423,7 @@ def run_county_comparison(conn):
         FROM with_pct
         GROUP BY type_prefix
         ORDER BY parcel_count DESC
-    """)
+    """, {"county_code": county_code})
     rows = cur.fetchall()
 
     type_labels = {
@@ -435,10 +452,11 @@ def run_county_comparison(conn):
         SELECT COUNT(*) AS total,
                COUNT(*) FILTER (WHERE p26.market_value > p25.market_value) AS incr
         FROM parcel_tax_year p25
-        JOIN parcel_tax_year p26 USING (geo_id)
+        JOIN parcel_tax_year p26 USING (geo_id, county_code)
         WHERE p25.tax_year = 2025 AND p26.tax_year = 2026
           AND p25.market_value > 0 AND p26.market_value > 0
-    """)
+          AND p25.county_code = %(county_code)s
+    """, {"county_code": county_code})
     tot = cur.fetchone()
     print(f"\n  Overall: {tot['total']:,} parcels compared. "
           f"{tot['incr']:,} ({tot['incr']/tot['total']*100:.1f}%) increased in 2026 vs 2025.")
@@ -471,8 +489,8 @@ def load(conn, skip_qa=False, county_code=DEFAULT_COUNTY):
     print("\n  2026 Preliminary load complete.")
 
     if not skip_qa:
-        run_qa(conn)
-        run_county_comparison(conn)
+        run_qa(conn, county_code=county_code)
+        run_county_comparison(conn, county_code=county_code)
 
 
 if __name__ == "__main__":

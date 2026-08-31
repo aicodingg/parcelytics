@@ -187,23 +187,24 @@ def load(conn, cert_dir=None, county_code=DEFAULT_COUNTY):
           f"{time.time()-t1:.1f}s")
 
     # Sanity-check a few known parcels
-    _sanity_check(conn)
+    _sanity_check(conn, county_code)
 
     return updated
 
 
-def _sanity_check(conn):
+def _sanity_check(conn, county_code=DEFAULT_COUNTY):
     """Print living_area_sqft for a few well-known parcels."""
     print("\n  Sanity check — sample parcels:")
+    # PX-20260823-02: county_code added to the WHERE.
     sql = """
         SELECT geo_id, living_area_sqft
           FROM parcel
-         WHERE living_area_sqft IS NOT NULL
+         WHERE living_area_sqft IS NOT NULL AND county_code = %s
          ORDER BY living_area_sqft DESC
          LIMIT 5
     """
     with conn.cursor() as cur:
-        cur.execute(sql)
+        cur.execute(sql, (county_code,))
         for row in cur.fetchall():
             print(f"    geo_id={row[0]}  living_area_sqft={row[1]:,.0f} sqft")
 
@@ -212,10 +213,10 @@ def _sanity_check(conn):
     sql2 = """
         SELECT geo_id, living_area_sqft
           FROM parcel
-         WHERE geo_id = ANY(%s)
+         WHERE geo_id = ANY(%s) AND county_code = %s
     """
     with conn.cursor() as cur:
-        cur.execute(sql2, (test_geos,))
+        cur.execute(sql2, (test_geos, county_code))
         for row in cur.fetchall():
             sqft_str = f"{float(row[1]):,.0f}" if row[1] is not None else "NULL"
             print(f"    geo_id={row[0]}  living_area_sqft={sqft_str} sqft")

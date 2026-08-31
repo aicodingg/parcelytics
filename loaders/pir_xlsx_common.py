@@ -515,16 +515,23 @@ def load_and_aggregate(filepath, tax_year, progress_every=100_000, row_limit=Non
     return by_account, stats, dup_review_rows
 
 
-def reconcile_geo_ids(conn, by_account):
+def reconcile_geo_ids(conn, by_account, county_code=DEFAULT_COUNTY):
     """Split by_account (accnum -> (total, entities, geo_id)) into
     (matched, unmatched) by whether each account's geo_id exists in the real
     `parcel` table. Never silently drops -- unmatched accounts and their
     count are returned for explicit reporting. Needs a live DB connection --
     cannot run in an environment without one (see run_cli's handling below).
     TAX-BILLING-REKEY-3: per-account now, not per-geo_id -- see
-    load_pir_billing_2021_full.py's identical function."""
+    load_pir_billing_2021_full.py's identical function.
+
+    PX-20260830-05 Task 2 (Bucket B): county_code predicate added. parcel is
+    composite_pk-migrated (county_code-leading); county_code IS available at
+    this function's one real call site (run_cli() below already threads
+    args.county through to check_portal_scrape_divergence() a few lines
+    later) -- so per PM's ruling this is a thread-it fix, not an exemption,
+    even though this is a shared module."""
     with conn.cursor() as cur:
-        cur.execute("SELECT geo_id FROM parcel")
+        cur.execute("SELECT geo_id FROM parcel WHERE county_code = %s", (county_code,))
         real_geo_ids = {r[0] for r in cur.fetchall()}
     matched = {a: v for a, v in by_account.items() if v[2] in real_geo_ids}
     unmatched = {a: v for a, v in by_account.items() if v[2] not in real_geo_ids}
@@ -893,7 +900,7 @@ def run_cli(tax_year, data_source, confidence_level, filepath_default,
     from loaders.db import get_conn
     conn = get_conn()
     try:
-        matched, unmatched = reconcile_geo_ids(conn, by_account)
+        matched, unmatched = reconcile_geo_ids(conn, by_account, county_code=args.county)
         print(f"\n  account geo_id reconciliation against live `parcel` table:")
         print(f"    matched accounts:   {len(matched):,}")
         print(f"    unmatched accounts: {len(unmatched):,}  (skipped -- see review log)")

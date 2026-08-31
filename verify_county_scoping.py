@@ -1038,41 +1038,229 @@ EXEMPTIONS = {
         "approved_by": "PX-20260823-02",
         "applies_to": {"write"},
     },
-    # PX-20260828-16-followup / Stage 4 triage: the first real {"read"}-tagged
-    # entry in this registry. verify_index_coverage.py's Stage 4 (MISSING_
-    # TENANT_SCOPE) flagged 4 real call sites in app.py (:2785, :2845, :6249,
-    # :6290) referencing tax_billing_entity with an apparently empty filter
-    # set. Hand-verified against the real, current source at all 4 sites,
-    # not assumed: every one of them references tax_billing_entity ONLY
-    # inside a parenthesized subquery / derived table (an `IN (SELECT
-    # entity_code FROM tax_billing_entity WHERE ... AND county_code = %s)`
-    # at :2785/:2845, and a `LEFT JOIN (SELECT geo_id, SUM(amount_due) ...
-    # FROM tax_billing_entity WHERE ... AND county_code = %(county_code)s
-    # ...) tbe` derived table at :6249/:6290) -- and in all 4 cases, that
-    # inner, subquery-local WHERE clause DOES filter by county_code. This is
-    # a real, disclosed Stage 2 parsing limitation (parse_sql_shape walks
-    # only the outer statement's top-level WHERE/JOIN...ON clauses; a table
-    # referenced solely inside a subquery gets registered into tables_touched
-    # by the table-name regex without its own inner predicates ever being
-    # walked -- see verify_index_coverage.py's own module docstring, "Known
-    # false-positive source: subquery predicates"), not a real tenant-scoping
-    # gap. Exempted here, applies_to={"read"} only (this says nothing about
-    # any WRITE finding against tax_billing_entity, which would need its own,
-    # separately-verified justification) so Stage 4 stops re-flagging this
-    # exact, already-verified shape as noise on every future run.
-    ("app.py", "tax_billing_entity", "SELECT"): {
+    # PX-20260830-05 Task 1 (Bucket A) RETIRED this entry, deliberately, not
+    # just edited it: PM's own ruling on the follow-up Stage 4 grouping
+    # report was "fix the scanner, not the findings" -- root-cause the real
+    # gap (Stage 2's parse_sql_shape() only ever resolves the statement's
+    # FIRST top-level WHERE clause, so a table referenced only inside a
+    # WITH ... AS (...) CTE, an EXISTS (...) subquery, or a parenthesized
+    # derived table can look unscoped even when its own inner predicates DO
+    # filter by county_code) rather than leave the finding perpetually
+    # exempted. verify_index_coverage.py's Stage 4 now walks every nested
+    # parenthesized body of a statement (see its own
+    # _table_is_tenant_scoped_in_nested_bodies()) before reporting a gap --
+    # confirmed, by re-running Stage 4 after that fix landed, that all 4 real
+    # call sites this entry used to excuse (app.py:2785, :2845, :6249, :6290)
+    # now resolve as genuinely, correctly scoped on their own, with ZERO
+    # entries in this registry needed. Leaving this entry in place after that
+    # fix would have gone stale (zero matching findings left to convert to
+    # EXEMPT) and tripped Stage 4's own Law-3 stale-exemption alarm on the
+    # very next run -- confirmed live, this is exactly what happened when the
+    # scanner fix was tested with this entry still in place. Removed
+    # proactively instead, per the same discipline the PX-20260828-16-
+    # followup entry above (loaders/compute_metrics.py) already established
+    # for this registry.
+
+    # PX-20260830-05 Task 3 (Bucket C): re-checked against Task 1's nested-
+    # body walk first, per PM's explicit instruction -- does NOT resolve
+    # here, for a real, different reason than the 4 app.py call sites Task 1
+    # fixed above. Those had a genuine county_code EQUALITY predicate buried
+    # inside a nested CTE/EXISTS body that the old top-level-only walk
+    # missed. REFRESH_GROUP_STATS_SQL's tbe_sum CTE has no such predicate
+    # anywhere to find: this is a deliberate GLOBAL, all-counties-in-one-pass
+    # aggregation (PX-20260828-13 removed county_code as a parameter here on
+    # purpose -- see build_shadow()'s own docstring above) that derives each
+    # OUTPUT row's county_code from p.county_code via GROUP BY, rather than
+    # filtering any single county in. tax_billing_entity is read through
+    # exactly one path: tbe_sum's own bare `FROM tax_billing_entity` (grouped
+    # by county_code, geo_id, tax_year -- so a geo_id shared across counties
+    # correctly produces two separate sums, never one blended sum), then
+    # tbe_sum is joined into the `effective` CTE via
+    # `tbe.county_code = p.county_code` -- itself a transitive, no-blend-risk
+    # join, just not an equality-filter shape either walk (top-level or
+    # nested) is designed to recognize, because there IS no filter: every
+    # county's tax_billing_entity rows are legitimately included, correctly
+    # tagged, every run. Fixed for real by commit 5bfe005 (PX-20260830-03):
+    # before that hotfix this was a genuine, execution-breaking bug (tbe_sum
+    # never projected county_code at all, so the join referenced a column
+    # that didn't exist -- "column tbe.county_code does not exist"), not
+    # merely a scanner false-positive; test_tbe_sum_cte_projects_and_groups_
+    # by_county_code (loaders/test_refresh_group_stats.py) isolates the CTE
+    # body and proves both the SELECT list and the GROUP BY carry
+    # county_code, independent of this exemption.
+    ("loaders/refresh_group_stats.py", "tax_billing_entity", "SELECT"): {
         "reason": (
-            "All 4 real call sites (app.py:2785, :2845, :6249, :6290) "
-            "reference tax_billing_entity only inside a parenthesized "
-            "subquery/derived table whose OWN inner WHERE clause does "
-            "filter by county_code -- verified by reading the real, "
-            "current source, not assumed. The apparent empty filter set "
-            "is a Stage 2 parsing limitation (subquery predicates aren't "
-            "walked), not a real gap. See verify_index_coverage.py's "
-            "module docstring for the general limitation this instance "
-            "of."
+            "Correct-by-design, not a gap: REFRESH_GROUP_STATS_SQL's tbe_sum "
+            "CTE deliberately has no county_code filter because this is a "
+            "global, all-counties-in-one-pass aggregation (PX-20260828-13) -- "
+            "tax_billing_entity is grouped BY county_code (so no cross-county "
+            "blending) and joined into the outer `effective` CTE via "
+            "tbe.county_code = p.county_code, a transitive scoping shape with "
+            "no equality predicate for any walk to find because none is "
+            "needed or correct here. Fixed for real (not just documented "
+            "around) by commit 5bfe005 (PX-20260830-03), which is when "
+            "tbe_sum first projected county_code at all; "
+            "test_tbe_sum_cte_projects_and_groups_by_county_code proves the "
+            "fix independently of this exemption."
         ),
-        "approved_by": "PX-20260828-16-followup",
+        "approved_by": "PX-20260830-05",
+        "applies_to": {"read"},
+    },
+
+    # PX-20260830-05 Task 3 (Bucket C), caught during Task 5's acceptance
+    # sweep rather than when Task 3 itself was first marked done: the fixed
+    # assert_snapshot_breakdown_totals_consistent() (loaders/refresh_
+    # snapshot_summary.py) now correctly groups by (view, county_code) on
+    # both sides -- but Stage 4's scanner has no GROUP BY-aware pathway
+    # (only WHERE/JOIN equality predicates), so it still flags both queries
+    # as MISSING_TENANT_SCOPE even though the real bug this rewrite fixed
+    # (blending every county's rows into one sum) is closed. Exact same
+    # shape and reasoning as the tbe_sum CTE exemption above: a deliberate,
+    # cross-COUNTY-not-cross-VIEW consistency check that must read every
+    # county's rows in one pass to compare them against each other -- a
+    # county_code equality filter would defeat the entire point (it would
+    # only ever compare one county's own numbers against themselves, never
+    # catch a real cross-county blend). Both tables' real column lists
+    # (SELECT view, county_code, ... GROUP BY view, county_code /
+    # SELECT view, county_code, n_total, ...) are the correctness fix
+    # itself, not a byproduct -- see this function's own docstring and
+    # loaders/test_refresh_snapshot_summary.py's test_consistency_catches_
+    # cross_county_blending_regression, which proves the fix independently
+    # of this exemption.
+    ("loaders/refresh_snapshot_summary.py", "snapshot_breakdown", "SELECT"): {
+        "reason": (
+            "Correct-by-design, not a gap: assert_snapshot_breakdown_totals_"
+            "consistent() deliberately reads snapshot_breakdown with no "
+            "county_code filter because it is a cross-county consistency "
+            "check -- it must compare EVERY county's rows against their own "
+            "matching snapshot_totals row in one pass, grouped by "
+            "(view, county_code), not filtered to a single county. A "
+            "county_code equality predicate would defeat the check's "
+            "purpose (comparing one county's numbers to only itself proves "
+            "nothing about cross-county blending). Fixed for real by "
+            "PX-20260830-05 Task 3, which added county_code to both the "
+            "SELECT list and the GROUP BY on both sides of this comparison; "
+            "test_consistency_catches_cross_county_blending_regression "
+            "proves the fix independently of this exemption."
+        ),
+        "approved_by": "PX-20260830-05",
+        "applies_to": {"read"},
+    },
+    ("loaders/refresh_snapshot_summary.py", "snapshot_totals", "SELECT"): {
+        "reason": (
+            "Same function, same cross-county consistency check as this "
+            "file's snapshot_breakdown SELECT exemption above -- see that "
+            "entry for the full reason (identical (view, county_code) "
+            "grouping shape, same fix, same test)."
+        ),
+        "approved_by": "PX-20260830-05",
+        "applies_to": {"read"},
+    },
+
+    # PX-20260830-05 Task 4 (Bucket D, 18 rows): read-side Group 4 downgrade
+    # for the same two one-time incident-remediation scripts whose DELETE/
+    # INSERT statements are already exempted above (PX-20260823-02). One
+    # full reason block per file below (referenced by "see above" from every
+    # other table in the same file), not 18 near-identical paragraphs --
+    # both scripts exist because of the July 14, 2026 TAXYEAR-scoping
+    # incident, which happened back when Travis was the ONLY county this
+    # codebase held data for (Dallas onboarding hadn't started yet).
+    ("loaders/delete_confirmed_absent_taxcur_rows.py", "tax_billing", "SELECT"): {
+        "reason": (
+            "Group 4 downgrade per PX-20260823-02's explicit Not-in-scope "
+            "section, extended here to this script's READ side (the write- "
+            "side DELETE exemption above covers this same script's DELETE "
+            "statement). fetch_current_state()'s two SELECTs filter by "
+            "'WHERE (geo_id, tax_year) IN %s' against an EXACT, closed, "
+            "hand-verified list of 62 (geo_id, tax_year) pairs -- built once, "
+            "in July 2026, back when Travis was the ONLY county this "
+            "codebase had data for (Dallas onboarding hadn't started yet). "
+            "There is no county_code value this predicate could add: the "
+            "pair list itself is the entire scope, permanently -- this "
+            "script is not rerun against new incidents (a future incident "
+            "gets its own script, per this brief's own Not-in-scope ruling), "
+            "so the list will never grow to include a non-Travis pair. An "
+            "IN-list of specific, already-known pairs also carries no "
+            "blast-radius risk the way an unscoped table-wide WHERE would: "
+            "it cannot accidentally pull in another county's row."
+        ),
+        "approved_by": "PX-20260823-02",
+        "applies_to": {"read"},
+    },
+    ("loaders/delete_confirmed_absent_taxcur_rows.py", "tax_billing_entity", "SELECT"): {
+        "reason": (
+            "Same script, same Group 4 read-side downgrade as this file's "
+            "tax_billing SELECT exemption above -- see that entry for the "
+            "full reason (identical (geo_id, tax_year) IN %s shape, same "
+            "closed 62-pair list)."
+        ),
+        "approved_by": "PX-20260823-02",
+        "applies_to": {"read"},
+    },
+    ("loaders/quarantine_contamination.py", "tax_billing", "SELECT"): {
+        "reason": (
+            "Group 4 downgrade per PX-20260823-02's explicit Not-in-scope "
+            "section, extended here to this script's READ side (the write- "
+            "side DELETE exemption above covers this same file's DELETE "
+            "statement). This file's tax_billing reads split into two "
+            "deliberately different, both correct-by-design shapes: (1) "
+            "_CONTAMINATION_WHERE-based scans (investigate(), run(), "
+            "verify_year_bounds()) that must stay county-agnostic ON "
+            "PURPOSE -- the July 14, 2026 TAXYEAR-scoping incident happened "
+            "back when Travis was the ONLY county this codebase held data "
+            "for, and the whole point of this sweep is to catch ANY row "
+            "anywhere with a bad tax_year (< 2021 or = 9999); adding a "
+            "county_code filter now would reintroduce exactly the kind of "
+            "blind spot this incident already taught the codebase to avoid, "
+            "since a newly onboarded county (e.g. Dallas) could just as "
+            "easily produce the same TAXYEAR-scoping bug and a county- "
+            "scoped sweep would miss it entirely. (2) restore_class_a()'s "
+            "'geo_id = ANY(%s)' / '!= ALL(%s)' counts, scoped to "
+            "CLASS_A_TRACKED_EXCEPTIONS -- an exact, individually-reviewed, "
+            "named allowlist of specific geo_ids, not a table scan; the "
+            "blast radius is bounded by the named list itself, the same "
+            "no-accidental-cross-county-pull reasoning as this registry's "
+            "delete_confirmed_absent_taxcur_rows.py exemptions above."
+        ),
+        "approved_by": "PX-20260823-02",
+        "applies_to": {"read"},
+    },
+    ("loaders/quarantine_contamination.py", "tax_billing_quarantine", "SELECT"): {
+        "reason": (
+            "Same script, same Group 4 read-side downgrade (both the "
+            "county-agnostic contamination-sweep shape and the tracked- "
+            "allowlist shape) as this file's tax_billing SELECT exemption "
+            "above -- see that entry for the full reason. Read here via "
+            "_INVESTIGATE_SQL's UNION with tax_billing (the quarantine- "
+            "state-invariance fix) and restore_class_a()'s before/after "
+            "counts, both against CLASS_A_TRACKED_EXCEPTIONS."
+        ),
+        "approved_by": "PX-20260823-02",
+        "applies_to": {"read"},
+    },
+    ("loaders/quarantine_contamination.py", "parcel", "SELECT"): {
+        "reason": (
+            "Same script, same Group 4 read-side downgrade as this file's "
+            "tax_billing SELECT exemption above -- see that entry for the "
+            "full reason. Read here via _INVESTIGATE_SQL's "
+            "'LEFT JOIN parcel p ON p.geo_id = o.geo_id', pulling "
+            "situs_address/state_cd1 for orphan geo_ids already identified "
+            "by the county-agnostic contamination sweep -- correctly "
+            "unscoped for the same reason that sweep is."
+        ),
+        "approved_by": "PX-20260823-02",
+        "applies_to": {"read"},
+    },
+    ("loaders/quarantine_contamination.py", "parcel_tax_year", "SELECT"): {
+        "reason": (
+            "Same script, same Group 4 read-side downgrade as this file's "
+            "tax_billing SELECT exemption above -- see that entry for the "
+            "full reason. Read here via _INVESTIGATE_SQL's correlated "
+            "subquery counting each orphan geo_id's real 2021-2026 "
+            "appraisal years -- scoped to the same already-identified, "
+            "county-agnostic-by-design orphan set."
+        ),
+        "approved_by": "PX-20260823-02",
         "applies_to": {"read"},
     },
 }

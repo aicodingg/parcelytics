@@ -659,12 +659,23 @@ def assert_snapshot_breakdown_totals_consistent(conn, tolerance_b=0.01):
     assertion of a relationship that doesn't actually hold. Deliberate
     scope decision, not an oversight.
 
+    PX-20260830-05 Task 3 (Bucket C): grouped by (view, county_code) on
+    BOTH sides, not just view. snapshot_breakdown/snapshot_totals are
+    composite_pk-migrated live (county_code added by
+    migrate_county_partitioning.py per build_shadow()'s own docstring
+    above -- schema.sql's bootstrap CREATE TABLE for these three tables is
+    stale relative to that live migration; see Task 5's follow-up note),
+    so grouping by view alone would silently blend every county's
+    breakdown rows into one sum and compare it against whichever single
+    county's snapshot_totals row happened to exist for that view --
+    exactly the kind of false-pass this assertion exists to prevent.
+
     Returns (is_consistent: bool, detail: dict). detail["mismatches"] is a
     list of every real discrepancy found (empty when fully consistent).
     """
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT view,
+            SELECT view, county_code,
                    SUM(n_parcels)    AS sum_n_parcels,
                    SUM(n_up)         AS sum_n_up,
                    SUM(n_down)       AS sum_n_down,
@@ -672,48 +683,48 @@ def assert_snapshot_breakdown_totals_consistent(conn, tolerance_b=0.01):
                    SUM(total_mv25_b) AS sum_mv25,
                    SUM(total_mv26_b) AS sum_mv26
             FROM snapshot_breakdown
-            GROUP BY view
+            GROUP BY view, county_code
         """)
         breakdown_sums = {
-            r[0]: {"n_parcels": r[1], "n_up": r[2], "n_down": r[3], "n_flat": r[4],
-                   "total_mv25_b": r[5], "total_mv26_b": r[6]}
+            (r[0], r[1]): {"n_parcels": r[2], "n_up": r[3], "n_down": r[4], "n_flat": r[5],
+                           "total_mv25_b": r[6], "total_mv26_b": r[7]}
             for r in cur.fetchall()
         }
 
         cur.execute("""
-            SELECT view, n_total, n_up, n_down, n_flat, total_mv25_b, total_mv26_b
+            SELECT view, county_code, n_total, n_up, n_down, n_flat, total_mv25_b, total_mv26_b
             FROM snapshot_totals
         """)
         totals_by_view = {
-            r[0]: {"n_total": r[1], "n_up": r[2], "n_down": r[3], "n_flat": r[4],
-                   "total_mv25_b": r[5], "total_mv26_b": r[6]}
+            (r[0], r[1]): {"n_total": r[2], "n_up": r[3], "n_down": r[4], "n_flat": r[5],
+                           "total_mv25_b": r[6], "total_mv26_b": r[7]}
             for r in cur.fetchall()
         }
 
     mismatches = []
-    all_views = sorted(set(breakdown_sums) | set(totals_by_view))
-    for view in all_views:
-        bsum = breakdown_sums.get(view)
-        tot = totals_by_view.get(view)
+    all_keys = sorted(set(breakdown_sums) | set(totals_by_view))
+    for view, county_code in all_keys:
+        bsum = breakdown_sums.get((view, county_code))
+        tot = totals_by_view.get((view, county_code))
 
         if bsum is None:
-            mismatches.append({"view": view,
-                                "reason": "snapshot_totals has a row for this view but "
+            mismatches.append({"view": view, "county_code": county_code,
+                                "reason": "snapshot_totals has a row for this (view, county_code) but "
                                           "snapshot_breakdown has ZERO rows -- should be impossible"})
             continue
         if tot is None:
-            mismatches.append({"view": view,
-                                "reason": "snapshot_breakdown has rows for this view but "
+            mismatches.append({"view": view, "county_code": county_code,
+                                "reason": "snapshot_breakdown has rows for this (view, county_code) but "
                                           "snapshot_totals has NO row -- should be impossible"})
             continue
 
         if bsum["n_parcels"] != tot["n_total"]:
-            mismatches.append({"view": view, "field": "n_total",
+            mismatches.append({"view": view, "county_code": county_code, "field": "n_total",
                                 "breakdown_sum": bsum["n_parcels"], "totals_value": tot["n_total"],
                                 "reason": "SUM(snapshot_breakdown.n_parcels) != snapshot_totals.n_total"})
         for f in ("n_up", "n_down", "n_flat"):
             if bsum[f] != tot[f]:
-                mismatches.append({"view": view, "field": f,
+                mismatches.append({"view": view, "county_code": county_code, "field": f,
                                     "breakdown_sum": bsum[f], "totals_value": tot[f],
                                     "reason": f"SUM(snapshot_breakdown.{f}) != snapshot_totals.{f}"})
 
@@ -721,7 +732,7 @@ def assert_snapshot_breakdown_totals_consistent(conn, tolerance_b=0.01):
             b_val = float(bsum[f] or 0)
             t_val = float(tot[f] or 0)
             if abs(b_val - t_val) > tolerance_b:
-                mismatches.append({"view": view, "field": f,
+                mismatches.append({"view": view, "county_code": county_code, "field": f,
                                     "breakdown_sum": b_val, "totals_value": t_val,
                                     "diff": round(b_val - t_val, 6),
                                     "reason": f"SUM(snapshot_breakdown.{f}) vs snapshot_totals.{f} "
@@ -729,11 +740,11 @@ def assert_snapshot_breakdown_totals_consistent(conn, tolerance_b=0.01):
 
     is_consistent = len(mismatches) == 0
     detail = {
-        "views_checked": all_views,
+        "views_and_counties_checked": all_keys,
         "tolerance_b": tolerance_b,
         "mismatches": mismatches,
-        "reason": ("all views' snapshot_totals match the real computed sums over their own "
-                   "snapshot_breakdown rows" if is_consistent else
+        "reason": ("all (view, county_code) pairs' snapshot_totals match the real computed sums "
+                   "over their own snapshot_breakdown rows" if is_consistent else
                    f"{len(mismatches)} real cross-table mismatch(es) found -- see detail['mismatches']"),
     }
     return is_consistent, detail

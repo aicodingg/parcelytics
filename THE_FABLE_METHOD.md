@@ -119,6 +119,13 @@ Every claim in an artifact is one of these types; each has a specific trap:
   (partitioning + re-keying) into one rebuild, never two.
 - **Sequencing:** fixtures → full-file scan → canary → live. Each step is
   cheaper than discovering its failure class one step later.
+- **Scanner invocation convention:** `verify_index_coverage.py
+  --index-source live` is the one authoritative pre-commit command for any
+  index- or tenant-scope-affecting change (PX-20260830-05 Task 5).
+  `--index-source schema-sql` is offline-only (fixtures, demo runs) and
+  UNDERSTATES coverage for the 15 tables schema.sql's own CREATE TABLE
+  PRIMARY KEY text is confirmed stale for (see KNOWN_LIMITATIONS.md); a
+  schema-sql-mode "no gap found" is never sufficient grounds to commit.
 
 ## 6. Epistemics and voice (how findings are stated)
 

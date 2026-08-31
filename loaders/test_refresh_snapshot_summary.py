@@ -670,20 +670,22 @@ def test_schema_sort_key_width_covers_the_real_measured_maximum():
 
 def test_consistency_passes_on_matching_breakdown_and_totals():
     conn = FakeConn(results_queue=[
-        # SUM(...) FROM snapshot_breakdown GROUP BY view -- 2 views
-        ([("overall", 1000, 600, 300, 100, 180.0, 190.0),
-          ("retail", 50, 30, 15, 5, 12.5, 13.0)],
-         ["view", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
-        # view, n_total, n_up, n_down, n_flat, total_mv25_b, total_mv26_b FROM snapshot_totals
-        ([("overall", 1000, 600, 300, 100, 180.0, 190.0),
-          ("retail", 50, 30, 15, 5, 12.5, 13.0)],
-         ["view", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+        # SUM(...) FROM snapshot_breakdown GROUP BY view, county_code -- 2 (view, county_code) pairs
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.0, 190.0),
+          ("retail", "TRAVIS", 50, 30, 15, 5, 12.5, 13.0)],
+         ["view", "county_code", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        # view, county_code, n_total, n_up, n_down, n_flat, total_mv25_b, total_mv26_b FROM snapshot_totals
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.0, 190.0),
+          ("retail", "TRAVIS", 50, 30, 15, 5, 12.5, 13.0)],
+         ["view", "county_code", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
     ])
     is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn)
     check("consistency: is_consistent True when breakdown sums exactly match totals",
           is_consistent is True, detail)
     check("consistency: zero mismatches reported", detail["mismatches"] == [], detail["mismatches"])
-    check("consistency: both views checked", detail["views_checked"] == ["overall", "retail"], detail)
+    check("consistency: both (view, county_code) pairs checked (PX-20260830-05 Task 3: grouped "
+          "by (view, county_code), not just view)",
+          detail["views_and_counties_checked"] == [("overall", "TRAVIS"), ("retail", "TRAVIS")], detail)
 
 
 def test_consistency_passes_within_dollar_tolerance():
@@ -691,10 +693,10 @@ def test_consistency_passes_within_dollar_tolerance():
     per-ptype ROUND(...,3) and single_year_mv_sql()'s own independent
     ROUND(...,3) is expected, benign behavior -- must NOT false-positive."""
     conn = FakeConn(results_queue=[
-        ([("overall", 1000, 600, 300, 100, 180.004, 190.0)],
-         ["view", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
-        ([("overall", 1000, 600, 300, 100, 180.0, 190.0)],
-         ["view", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.004, 190.0)],
+         ["view", "county_code", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.0, 190.0)],
+         ["view", "county_code", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
     ])
     is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn, tolerance_b=0.01)
     check("consistency: tiny rounding drift ($4K on a billions column) within tolerance -> still consistent",
@@ -706,10 +708,10 @@ def test_consistency_fails_on_corrupted_n_total():
     sum of snapshot_breakdown.n_parcels for the same view -- proves the
     assertion actually FIRES, not just that it can pass."""
     conn = FakeConn(results_queue=[
-        ([("overall", 1000, 600, 300, 100, 180.0, 190.0)],
-         ["view", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
-        ([("overall", 995, 600, 300, 100, 180.0, 190.0)],  # n_total corrupted: 995 != real sum 1000
-         ["view", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.0, 190.0)],
+         ["view", "county_code", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        ([("overall", "TRAVIS", 995, 600, 300, 100, 180.0, 190.0)],  # n_total corrupted: 995 != real sum 1000
+         ["view", "county_code", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
     ])
     is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn)
     check("consistency CORRUPTION CASE: is_consistent False when n_total doesn't match real breakdown sum",
@@ -728,10 +730,10 @@ def test_consistency_fails_on_corrupted_dollar_total_beyond_tolerance():
     (matches the real SNAPSHOT-CORRECTNESS-1 bug class: one query site
     missing a WHERE-clause fragment the other one has)."""
     conn = FakeConn(results_queue=[
-        ([("overall", 1000, 600, 300, 100, 180.0, 190.0)],
-         ["view", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
-        ([("overall", 1000, 600, 300, 100, 180.0, 205.0)],  # total_mv26_b way off: 205 != real sum 190
-         ["view", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.0, 190.0)],
+         ["view", "county_code", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.0, 205.0)],  # total_mv26_b way off: 205 != real sum 190
+         ["view", "county_code", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
     ])
     is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn)
     check("consistency CORRUPTION CASE: is_consistent False on a real (non-rounding) dollar-total drift",
@@ -745,17 +747,44 @@ def test_consistency_fails_when_view_missing_from_one_table():
     rows (or vice versa) should be impossible under a correct refresh --
     proves this genuinely different corruption shape is also caught."""
     conn = FakeConn(results_queue=[
-        ([("overall", 1000, 600, 300, 100, 180.0, 190.0)],
-         ["view", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
-        ([("overall", 1000, 600, 300, 100, 180.0, 190.0),
-          ("retail", 50, 30, 15, 5, 12.5, 13.0)],  # "retail" totals row with NO matching breakdown rows
-         ["view", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.0, 190.0)],
+         ["view", "county_code", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.0, 190.0),
+          ("retail", "TRAVIS", 50, 30, 15, 5, 12.5, 13.0)],  # "retail" totals row with NO matching breakdown rows
+         ["view", "county_code", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
     ])
     is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn)
     check("consistency CORRUPTION CASE: is_consistent False when a view's totals row has no breakdown rows",
           is_consistent is False, detail)
     check("consistency CORRUPTION CASE: mismatch names the orphaned view",
           any(m["view"] == "retail" for m in detail["mismatches"]), detail["mismatches"])
+
+
+def test_consistency_catches_cross_county_blending_regression():
+    """PX-20260830-05 Task 3 (Bucket C): the exact false-pass this fix
+    closes. Two counties, same view: if the assertion still grouped by
+    view alone, TRAVIS's breakdown sum (1000) would get blended with
+    DALLAS's breakdown sum (500) into 1500, which happens to equal
+    neither county's real snapshot_totals row (1000 and 500) -- so a
+    view-only grouping would have reported BOTH counties' rows as
+    mismatches even though each one is individually, correctly
+    consistent. Grouped by (view, county_code), this must report zero
+    mismatches -- proving the fix actually changed behavior, not just
+    added an unused column to the SELECT list."""
+    conn = FakeConn(results_queue=[
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.0, 190.0),
+          ("overall", "DALLAS", 500, 300, 150, 50, 90.0, 95.0)],
+         ["view", "county_code", "sum_n_parcels", "sum_n_up", "sum_n_down", "sum_n_flat", "sum_mv25", "sum_mv26"]),
+        ([("overall", "TRAVIS", 1000, 600, 300, 100, 180.0, 190.0),
+          ("overall", "DALLAS", 500, 300, 150, 50, 90.0, 95.0)],
+         ["view", "county_code", "n_total", "n_up", "n_down", "n_flat", "total_mv25_b", "total_mv26_b"]),
+    ])
+    is_consistent, detail = rss.assert_snapshot_breakdown_totals_consistent(conn)
+    check("consistency: two counties, same view, each internally consistent -> "
+          "is_consistent True (would have been False under the old view-only grouping)",
+          is_consistent is True, detail)
+    check("consistency: both counties' (view, county_code) pairs present in the checked set",
+          set(detail["views_and_counties_checked"]) == {("overall", "TRAVIS"), ("overall", "DALLAS")}, detail)
 
 
 # ── Part 7: PARTITION-2-FIX-1 — county_code on all three real INSERTs ──────

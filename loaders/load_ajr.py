@@ -105,23 +105,24 @@ def _int_or_none(v):
         return None
 
 
-def build_pid_lookup(conn):
+def build_pid_lookup(conn, county_code=DEFAULT_COUNTY):
     """Return {prop_id: geo_id} from prop_unit (every unit ever loaded, any year).
 
-    KNOWN GAP (flagged, not fixed -- out of scope for PX-20260822-06-rev1,
-    which named exactly three load_ajr.py breakages to fix together:
-    PARCEL_SQL + the two PROP_UNIT/PROP_UNIT_TAX_YEAR arity mismatches
-    below. This query has no county_code WHERE scoping, so on a real
-    multi-county prop_unit table a prop_id that collides across counties
-    could resolve to the WRONG county's geo_id here -- a 3d-class
-    (dynamic-clause) gap per verify_county_scoping.py's own taxonomy, not
-    a 3b/3c one. Since this loader is Travis-only today (single-county
-    AJR_FILES config), it's not yet live-corrupting anything, but it
-    should be scoped to county_code the same way once load_ajr.py itself
-    is ever pointed at a second county's AJR files.
+    PX-20260830-05 Task 2 (Bucket B), formalizing the KNOWN GAP this
+    docstring used to flag-not-fix (deferred by PX-20260822-06-rev1, which
+    named exactly three load_ajr.py breakages to fix together and left this
+    one disclosed-but-open because the loader was Travis-only at the time):
+    prop_unit is composite_pk-migrated (county_code-leading), so an
+    unscoped prop_id lookup can resolve to the WRONG county's geo_id once a
+    prop_id collides across counties. county_code IS available at both real
+    call sites in load() below, so this is now scoped rather than left as a
+    standing gap.
     """
     with conn.cursor() as cur:
-        cur.execute("SELECT prop_id, geo_id FROM prop_unit WHERE prop_id IS NOT NULL")
+        cur.execute(
+            "SELECT prop_id, geo_id FROM prop_unit WHERE prop_id IS NOT NULL AND county_code = %s",
+            (county_code,)
+        )
         return {row[0]: row[1] for row in cur.fetchall()}
 
 
@@ -212,7 +213,7 @@ def load(conn, county_code=DEFAULT_COUNTY):
     import parcel_rollup
 
     print("  Building prop_id → geo_id lookup from prop_unit…")
-    pid_lookup = build_pid_lookup(conn)
+    pid_lookup = build_pid_lookup(conn, county_code=county_code)
     print(f"  {len(pid_lookup):,} units in lookup")
 
     total = 0
@@ -227,7 +228,7 @@ def load(conn, county_code=DEFAULT_COUNTY):
         # fallback (if ever needed) can resolve prop_ids this same run
         # just added — matches the old behavior of re-reading `parcel`
         # fresh each call, now against prop_unit instead.
-        pid_lookup = build_pid_lookup(conn)
+        pid_lookup = build_pid_lookup(conn, county_code=county_code)
 
     print(f"  AJR total: {total:,} unit-year rows")
 

@@ -161,12 +161,15 @@ def run_load(conn, records, with_exemptions, dry_run, county_code=DEFAULT_COUNTY
     sql = build_upsert_sql(with_exemptions)
 
     # Count 2021 rows before load
+    # PX-20260830-05 Task 2 (Bucket B): county_code predicate added -- parcel_tax_year
+    # is composite_pk-migrated, and county_code is already available here as this
+    # function's own param (DALLAS-GATE-4 threading), so this is a mechanical fix.
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s", (TAX_YEAR,))
+        cur.execute("SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND county_code = %s", (TAX_YEAR, county_code))
         rows_before = cur.fetchone()[0]
         cur.execute(
-            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s",
-            (TAX_YEAR, 'ajr_2021')
+            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s AND county_code = %s",
+            (TAX_YEAR, 'ajr_2021', county_code)
         )
         ajr_before = cur.fetchone()[0]
 
@@ -212,12 +215,14 @@ def run_load(conn, records, with_exemptions, dry_run, county_code=DEFAULT_COUNTY
     conn.commit()
 
     # Count after
+    # PX-20260830-05 Task 2 (Bucket B): county_code predicate added to every
+    # query below, same mechanical fix as the before-load counts above.
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s", (TAX_YEAR,))
+        cur.execute("SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND county_code = %s", (TAX_YEAR, county_code))
         rows_after = cur.fetchone()[0]
         cur.execute(
-            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s",
-            (TAX_YEAR, DATA_SOURCE)
+            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s AND county_code = %s",
+            (TAX_YEAR, DATA_SOURCE, county_code)
         )
         cert_after = cur.fetchone()[0]
         cur.execute("""
@@ -231,12 +236,12 @@ def run_load(conn, records, with_exemptions, dry_run, county_code=DEFAULT_COUNTY
                        (SELECT prop_type FROM (
                            SELECT regexp_replace(pty2.geo_id, '.*', '') AS prop_type
                            FROM parcel_tax_year pty2
-                           WHERE pty2.geo_id = pty.geo_id LIMIT 1
+                           WHERE pty2.geo_id = pty.geo_id AND pty2.county_code = pty.county_code LIMIT 1
                        ) sub)
                 FROM parcel_tax_year pty
-                WHERE tax_year = %s AND data_source = %s
+                WHERE tax_year = %s AND data_source = %s AND pty.county_code = %s
             ) sub2
-        """, (TAX_YEAR, DATA_SOURCE))
+        """, (TAX_YEAR, DATA_SOURCE, county_code))
         # Simpler version — just get totals
         cur.execute("""
             SELECT
@@ -244,8 +249,8 @@ def run_load(conn, records, with_exemptions, dry_run, county_code=DEFAULT_COUNTY
                 COUNT(land_value)  AS lv_non_null,
                 COUNT(imprv_value) AS iv_non_null
             FROM parcel_tax_year
-            WHERE tax_year = %s AND data_source = %s
-        """, (TAX_YEAR, DATA_SOURCE))
+            WHERE tax_year = %s AND data_source = %s AND county_code = %s
+        """, (TAX_YEAR, DATA_SOURCE, county_code))
         stats = cur.fetchone()
         total, lv_nn, iv_nn = stats
 
@@ -268,8 +273,16 @@ def run_load(conn, records, with_exemptions, dry_run, county_code=DEFAULT_COUNTY
 
 # ── Post-load validation query ────────────────────────────────────────────────
 
-def post_load_summary(conn):
-    """Print summary of 2021 data after load."""
+def post_load_summary(conn, county_code=DEFAULT_COUNTY):
+    """Print summary of 2021 data after load.
+
+    PX-20260830-05 Task 2 (Bucket B): thread county_code through this
+    function (it was reading module-global DEFAULT_COUNTY implicitly by
+    omission, not by the DALLAS-GATE-4 convention) and predicate the query
+    on it -- parcel_tax_year is composite_pk-migrated (county_code-leading),
+    and an unscoped tax_year=2021 breakdown pools rows across every loaded
+    county once more than one county has 2021 data.
+    """
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("""
             SELECT
@@ -280,10 +293,10 @@ def post_load_summary(conn):
                 ROUND(AVG(market_value))                     AS avg_market_value,
                 ROUND(AVG(assessed_value))                   AS avg_assessed_value
             FROM parcel_tax_year
-            WHERE tax_year = 2021
+            WHERE tax_year = 2021 AND county_code = %s
             GROUP BY data_source
             ORDER BY data_source
-        """)
+        """, (county_code,))
         rows = cur.fetchall()
 
     print(f"\n{'─'*70}")
@@ -376,7 +389,7 @@ def main():
     print(f"\n  Note: NULL land/imprv includes personal property (P-type) and")
     print(f"  some vacant land parcels — this is expected, not a parser failure.")
 
-    post_load_summary(conn)
+    post_load_summary(conn, county_code=args.county)
     print(f"{'='*70}\n")
 
     conn.close()

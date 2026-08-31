@@ -247,6 +247,7 @@ def get_eligible_geo_ids(
     exclude: set[str] | None = None,
     random_order: bool = False,
     commercial_only: bool = False,
+    county_code: str = None,
 ) -> list[str]:
     """Return geo_ids that have parcel_tax_year rows for 2021–2024.
 
@@ -258,7 +259,18 @@ def get_eligible_geo_ids(
         limit:        LIMIT N applied before returning (None = unlimited)
         exclude:      set of geo_ids to skip (for random fill, avoiding known parcels)
         random_order: ORDER BY RANDOM() for random sampling (test mode only)
+        county_code:  PX-20260830-05 Task 2 (Bucket B): both parcel and
+                      parcel_tax_year are composite_pk-migrated
+                      (county_code-leading). This formalizes the gap the
+                      --county help text used to only disclose (DALLAS-GATE-2:
+                      "NOT county-scoped -- harmless today since only Travis
+                      has real data loaded"); county_code IS available at
+                      both real call sites in main() below (args.county), so
+                      it's now threaded and predicated rather than left open.
+                      Defaults to None only to keep this a backwards-compatible
+                      addition for any other caller; main() always passes it.
     """
+    county_clause = "AND p.county_code = %(county_code)s" if county_code else ""
     exclude_clause = ""
     if exclude:
         # Build safe exclusion — geo_ids are always 10-char alphanumeric from TCAD
@@ -281,8 +293,10 @@ def get_eligible_geo_ids(
                 FROM   parcel p
                 JOIN   parcel_tax_year pty
                        ON pty.geo_id = p.geo_id
+                       AND pty.county_code = p.county_code
                        AND pty.tax_year BETWEEN 2021 AND 2024
                 WHERE  p.geo_id NOT LIKE 'AJR%%'
+                {county_clause}
                 {exclude_clause}
                 {commercial_clause}
             ) sub
@@ -295,15 +309,17 @@ def get_eligible_geo_ids(
             FROM   parcel p
             JOIN   parcel_tax_year pty
                    ON pty.geo_id = p.geo_id
+                   AND pty.county_code = p.county_code
                    AND pty.tax_year BETWEEN 2021 AND 2024
             WHERE  p.geo_id NOT LIKE 'AJR%%'
+            {county_clause}
             {exclude_clause}
             {commercial_clause}
             ORDER BY p.geo_id
             {limit_clause}
         """
     with conn.cursor() as cur:
-        cur.execute(sql)
+        cur.execute(sql, {"county_code": county_code})
         return [row[0] for row in cur.fetchall()]
 
 
@@ -523,14 +539,13 @@ def main() -> None:
     ap.add_argument(
         "--county", default=DEFAULT_COUNTY,
         help=(
-            f"county_code written to every upserted row (default: {DEFAULT_COUNTY}). "
-            "DALLAS-GATE-2: this loader's own geo_id-discovery query "
-            "(get_eligible_geo_ids) is NOT county-scoped -- harmless today "
-            "since only Travis has real data loaded (explicit scope boundary: "
-            "no Dallas data loading this brief), but will need a matching "
-            "p.county_code filter added once a second county's parcels exist, "
-            "or this flag will write the wrong county_code onto cross-county "
-            "results."
+            f"county_code written to every upserted row, AND used to scope "
+            f"the geo_id-discovery query (default: {DEFAULT_COUNTY}). "
+            "PX-20260830-05 Task 2 (Bucket B): get_eligible_geo_ids() is now "
+            "county-scoped on both parcel and parcel_tax_year -- resolves the "
+            "DALLAS-GATE-2 disclosed gap this help text used to describe "
+            "('NOT county-scoped -- harmless today since only Travis has "
+            "real data loaded')."
         ),
     )
     args = ap.parse_args()
@@ -604,6 +619,7 @@ def main() -> None:
             exclude=(set(KNOWN_PARCELS) | already_done),
             random_order=True,
             commercial_only=args.priority_commercial,
+            county_code=args.county,
         )
         geo_ids = known_to_run + random_geo_ids
         geo_ids = geo_ids[:TEST_LIMIT]
@@ -615,6 +631,7 @@ def main() -> None:
             conn,
             exclude=already_done,
             commercial_only=args.priority_commercial,
+            county_code=args.county,
         )
         label = "commercial/MF" if args.priority_commercial else "all eligible"
         print(f"  → {len(geo_ids):,} {label} geo_ids to process.")

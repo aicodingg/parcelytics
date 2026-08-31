@@ -118,8 +118,9 @@ def main():
                 SELECT geo_id, tax_year, exemption_codes
                 FROM parcel_tax_year
                 WHERE geo_id IN ('0426280206','0159180227') AND tax_year IN (2025,2026)
+                  AND county_code = %s
                 ORDER BY geo_id, tax_year
-            """)
+            """, (args.county,))
             for r in cur.fetchall():
                 print(f"    {r['geo_id']}  {r['tax_year']}  -> {r['exemption_codes']}")
     finally:

@@ -1,5 +1,5 @@
 # Known Limitations — Parcelytics Platform
-*Last updated: June 23, 2026*
+*Last updated: August 30, 2026*
 
 ## Data Coverage
 
@@ -854,3 +854,40 @@ the keyboard with DevTools open, not remote/automated testing.
 **Status: parked, not actively being worked.** Revisit if the above manual
 DevTools session becomes available, or if this bug's real symptom changes in
 a way that suggests a new, different cause.
+
+## Schema / Infrastructure
+
+### schema.sql's CREATE TABLE PRIMARY KEY text is stale for 15 tables (real, open, named-not-fixed)
+
+`migrate_county_partitioning.py`'s already-run live migration changed the
+real, live primary key of 15 tables to lead with `county_code`
+(`parcel`, `parcel_tax_year`, `parcel_metrics`, `tax_delinquent`,
+`prop_unit`, `prop_unit_tax_year`, `county_tax_rate`, `group_stats`,
+`snapshot_breakdown`, `snapshot_totals`, `snapshot_neighborhood_movers`,
+`tax_billing`, `tax_billing_entity`, `tax_billing_quarantine`,
+`parcel_2026_preliminary_snapshot`) — but `schema.sql`'s own `CREATE TABLE`
+bodies for every one of them were never updated to match. `schema.sql`
+still shows each table's pre-migration, single/no-`county_code`-leading
+`PRIMARY KEY` shape. This is not a live-data bug (production's real schema
+is correct); it is a documentation-of-schema bug: anyone who runs
+`schema.sql` fresh (a new dev environment, a disaster-recovery rebuild)
+would provision the WRONG primary keys, and any tool that reads
+`schema.sql` instead of introspecting the live database (e.g.
+`verify_index_coverage.py --index-source schema-sql`) necessarily
+understates real index/tenant-scope coverage for these 15 tables — see
+that script's own loud `--index-source schema-sql` warning banner, which
+names this exact table list every time it runs.
+
+**Confirmed, not fixed, as of PX-20260830-05 Task 5.** Fixing this means
+rewriting each of the 15 tables' `CREATE TABLE` `PRIMARY KEY` clauses (and
+possibly `ON CONFLICT` targets referenced elsewhere in the same file) to
+match `migrate_county_partitioning.py`'s real, live `TABLE_SPECS` — a
+real, scoped follow-up in its own right, deliberately not undertaken here.
+Named so it has a place to be picked up, not silently left for the next
+person to rediscover via the warning banner alone.
+
+**Until fixed:** treat any `--index-source schema-sql` run (fixture tests,
+offline demos) as a lower bound, never a substitute for
+`--index-source live` — see `verify_index_coverage.py`'s own module
+docstring and `THE_FABLE_METHOD.md`'s scanner-invocation convention for
+the required pre-commit command.

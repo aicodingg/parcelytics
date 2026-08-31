@@ -134,6 +134,15 @@ check("verify_sanity_parcels()'s SELECT scopes by county_code",
       "WHERE geo_id = %s AND tax_year = %s AND county_code = %s" in src)
 check("--county CLI flag added, default DEFAULT_COUNTY",
       '"--county", default=DEFAULT_COUNTY' in src)
+check("PX-20260830-05 Task 2 (Bucket B): reconcile_geo_ids() now threads "
+      "county_code and predicates its `parcel` existence-check query on it "
+      "(county_code IS available at this file's own main()/run call site, "
+      "which already threads args.county to write_to_db() and "
+      "verify_sanity_parcels() a few lines later)",
+      "def reconcile_geo_ids(conn, by_account, county_code=DEFAULT_COUNTY):" in src
+      and "SELECT geo_id FROM parcel WHERE county_code = %s" in src)
+check("reconcile_geo_ids() call site passes county_code=args.county",
+      "reconcile_geo_ids(conn, by_account, county_code=args.county)" in src)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -309,23 +318,27 @@ check("run_cli()'s write_to_db() call passes county_code=args.county",
       "county_code=args.county)" in src and "write_to_db(conn, matched, tax_year, data_source, confidence_level," in src)
 check("run_cli()'s verify_sanity_parcels() call passes county_code=args.county",
       "verify_sanity_parcels(conn, tax_year, sanity_expected, county_code=args.county)" in src)
-# UPDATE (TAX-BILLING-REKEY-3): reconcile_geo_ids()'s own county-code
-# scoping question below is unaffected by that migration (it's still an
-# identity-existence check against `parcel`, not a billing-grain write --
-# same reasoning as when this check was first written). Its PARAMETER
-# NAME changed as a real, intentional, disclosed consequence of that
-# migration though: pir_xlsx_common.py retired its old by-geo_id
-# TXACCNUM-sum-and-collapse step (the exact last-write-wins collision
-# mechanism the rekey exists to eliminate) in favor of per-account
-# handling, so the function now takes `by_account`, not `by_geo`. This
-# assertion is updated to match the real, current signature rather than
-# left silently stale against a parameter name that no longer exists.
-check("reconcile_geo_ids() deliberately left unscoped by county_code (matches DALLAS-GATE-4's own "
-      "precedent: load_pir_billing_2021_full.py's identical function was not scoped "
-      "by county_code either -- an identity-existence check against the full `parcel` "
-      "table, not a billing-grain write, same real reasoning both places; signature's "
-      "by_geo -> by_account rename is TAX-BILLING-REKEY-3's own real, disclosed change)",
-      "SELECT geo_id FROM parcel" in src and "def reconcile_geo_ids(conn, by_account):" in src)
+# UPDATE (PX-20260830-05 Task 2, Bucket B): the check below used to assert
+# reconcile_geo_ids() was DELIBERATELY left unscoped by county_code (a
+# stance carried over from DALLAS-GATE-4 / TAX-BILLING-REKEY-3). That
+# stance is now stale -- PM's Task 2 ruling for this exact function was
+# explicit: "If county_code is available at the call site, predicate; if
+# not, thread it -- do not exempt a shared module." county_code IS
+# available at this function's one real call site (run_cli() already
+# threads args.county to check_portal_scrape_divergence() a few lines
+# later), so this is now a thread-it fix, not a standing exemption. The
+# identical function in load_pir_billing_2021_full.py got the same fix,
+# same reasoning (see File 2's own new checks above).
+check("PX-20260830-05 Task 2 (Bucket B): reconcile_geo_ids() now threads "
+      "county_code and predicates its `parcel` existence-check query on it "
+      "(county_code IS available at run_cli()'s call site, which already "
+      "threads args.county to check_portal_scrape_divergence() a few lines "
+      "later -- per PM's ruling this is a thread-it fix, not an exemption, "
+      "even though this is a shared module)",
+      "def reconcile_geo_ids(conn, by_account, county_code=DEFAULT_COUNTY):" in src
+      and "SELECT geo_id FROM parcel WHERE county_code = %s" in src)
+check("run_cli()'s reconcile_geo_ids() call passes county_code=args.county",
+      "reconcile_geo_ids(conn, by_account, county_code=args.county)" in src)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -366,6 +379,39 @@ check("--county CLI flag added, default DEFAULT_COUNTY",
       "ap.add_argument('--county', default=DEFAULT_COUNTY," in src)
 check("main() passes county_code=args.county into run_load()",
       "run_load(conn, deduped, with_exemptions, args.dry_run, county_code=args.county)" in src)
+check("PX-20260830-05 Task 2 (Bucket B): post_load_summary() now threads "
+      "county_code and predicates its parcel_tax_year breakdown query on it "
+      "(it was pooling every loaded county's 2021 rows into one blended "
+      "breakdown before this fix)",
+      "def post_load_summary(conn, county_code=DEFAULT_COUNTY):" in src
+      and "WHERE tax_year = 2021 AND county_code = %s" in src)
+check("post_load_summary() call site passes county_code=args.county",
+      "post_load_summary(conn, county_code=args.county)" in src)
+# PX-20260830-05 Task 2 correction (reviewer-rejected "27 out of scope"
+# claim): load_cert_2021.py's own run_load() carries 6 MORE Bucket B rows
+# beyond the post_load_summary() fix above -- the before-load counts, the
+# after-load counts, a dead-code diagnostic subquery, and a "simpler
+# version" totals query. All predicated below, same mechanical convention.
+check("run_load()'s before-load row/ajr counts are both predicated on "
+      "county_code",
+      'cur.execute("SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND county_code = %s", (TAX_YEAR, county_code))'
+      in src
+      and '"SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s AND county_code = %s",\n            (TAX_YEAR, \'ajr_2021\', county_code)'
+      in src)
+check("run_load()'s after-load rows_after/cert_after counts are both "
+      "predicated on county_code",
+      '"SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s AND county_code = %s",\n            (TAX_YEAR, DATA_SOURCE, county_code)'
+      in src)
+check("run_load()'s dead-code diagnostic subquery (result discarded by the "
+      "immediately-following query -- left in place, only predicated, per "
+      "PM's 'mechanical' scope) is predicated on both the outer WHERE and "
+      "the correlated subquery's join",
+      "WHERE tax_year = %s AND data_source = %s AND pty.county_code = %s" in src
+      and "pty2.geo_id = pty.geo_id AND pty2.county_code = pty.county_code" in src)
+check("run_load()'s 'simpler version' totals query is predicated on "
+      "county_code",
+      "FROM parcel_tax_year\n            WHERE tax_year = %s AND data_source = %s AND county_code = %s\n        \"\"\", (TAX_YEAR, DATA_SOURCE, county_code))"
+      in src)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -379,9 +425,51 @@ check("parcel_metrics INSERT column list includes county_code first",
 check("parcel_metrics SELECT list sources county_code from pty.county_code "
       "(parcel_tax_year already carries it, written by every real writer)",
       "SELECT\n                pty.county_code,\n                pty.geo_id,\n                pty.tax_year," in src)
-check("DELETE FROM parcel_metrics's missing county_code scoping is explicitly "
-      "flagged as an out-of-scope 3d-class concern, not silently left unexplained",
-      "3d-class (blast-radius) concern" in src)
+# UPDATE (PX-20260830-05 Task 3, Bucket C): the check below used to assert
+# that parcel_metrics's DELETE was an explicitly-disclosed, out-of-scope
+# gap (a "3d-class (blast-radius) concern"). That's stale -- PX-20260828-16-
+# followup already closed this gap: the DELETE at compute_parcel_metrics()
+# is now `DELETE FROM parcel_metrics WHERE county_code = %s`, run in the
+# same transaction as the INSERT...SELECT rebuild it precedes. Replaced
+# with an assertion against the real, current scoped DELETE.
+check("compute_parcel_metrics()'s DELETE FROM parcel_metrics is scoped by "
+      "county_code (PX-20260828-16-followup already closed this gap; the "
+      "old disclosure-only fixture here was stale)",
+      'cur.execute("DELETE FROM parcel_metrics WHERE county_code = %s", (county_code,))' in src)
+check("PX-20260830-05 Task 3 (Bucket C): analyze_threshold() takes county_code "
+      "as a REQUIRED parameter with no default (unlike every other function "
+      "in this file) -- it's a per-county distribution report, and a silent "
+      "DEFAULT_COUNTY fallback would mislabel a blended multi-county result "
+      "as single-county",
+      "def analyze_threshold(conn, county_code):" in src)
+check("analyze_threshold()'s self-join is scoped by county_code on both "
+      "sides (b.county_code = a.county_code) plus a direct a.county_code "
+      "predicate in the WHERE clause -- parcel_tax_year is composite_pk-"
+      "migrated, so an unscoped self-join could pair one county's row a "
+      "with a same-geo_id different-county row b",
+      "ON b.county_code = a.county_code" in src
+      and "WHERE a.county_code = %s AND a.market_value > 0" in src)
+check("both analyze_threshold() call sites in main() pass county_code=args.county",
+      src.count("analyze_threshold(conn, county_code=args.county)") == 2)
+check("PX-20260830-05 Task 3 (Bucket C): print_sample() takes county_code, "
+      "default DEFAULT_COUNTY (a debug/sanity-check printout, not a "
+      "business figure -- a default is fine here, unlike analyze_threshold())",
+      "def print_sample(conn, county_code=DEFAULT_COUNTY):" in src)
+check("print_sample()'s tax_billing count/by-year queries are predicated "
+      "on county_code",
+      "SELECT COUNT(*) FROM tax_billing WHERE county_code = %s" in src
+      and "FROM tax_billing WHERE county_code = %s \"\n            \"GROUP BY tax_year" in src)
+check("print_sample()'s per-parcel tax_billing/tax_billing_entity/"
+      "parcel_metrics lookups are all predicated on county_code (geo_id "
+      "alone is not guaranteed unique across counties)",
+      "WHERE geo_id = %s AND county_code = %s ORDER BY tax_year\",\n                (geo_id, county_code)" in src
+      and "WHERE geo_id = %s AND county_code = %s GROUP BY tax_year ORDER BY tax_year\",\n                (geo_id, county_code)" in src
+      and "FROM parcel_metrics WHERE geo_id = %s AND county_code = %s ORDER BY tax_year" in src)
+check("print_sample()'s county_benchmark sample query is predicated on "
+      "county_code",
+      "WHERE property_type_label = 'Residential' AND tax_year = 2025 AND county_code = %s" in src)
+check("both print_sample() call sites in main() pass county_code=args.county",
+      src.count("print_sample(conn, county_code=args.county)") == 2)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -432,14 +520,38 @@ check("main() passes county_code=args.county into load()",
 # File 11: loaders/refresh_group_stats.py (group_stats) -- ALREADY CORRECT,
 # no code change this round; assertions confirm that, so a future
 # regression is caught the same way as every other file in this suite.
+#
+# STALE-FIXTURE FIX (PX-20260830-05, tracked as #1042): the two checks below
+# used to assert an externally-injected `%(county_code)s AS county_code`
+# literal in _build_insert_sql()'s SELECT list -- the PARTITION-2-FIX-1
+# shape. PX-20260828-13 (Stage 4 MISSING_TENANT_SCOPE follow-up) replaced
+# that shape for real: REFRESH_GROUP_STATS_SQL now selects `p.county_code`
+# as a genuine column, carried through the GROUP BY, so every output row's
+# county_code is DERIVED from that row's own parcel, not stamped on
+# uniformly from outside (see _build_insert_sql()'s own docstring, and
+# loaders/test_refresh_group_stats.py's REFRESH_GROUP_STATS_SQL fixtures,
+# which already cover the real current shape independently of this file).
+# These two checks were left asserting the retired shape and would have
+# failed forever after that fix landed -- rewritten here to assert the
+# real, current column-list shape instead of being deleted, so this
+# section keeps doing its stated job (catch a REAL future regression on
+# this file) rather than silently losing coverage.
 # ─────────────────────────────────────────────────────────────────────────
-section("loaders/refresh_group_stats.py (verify-only -- already fixed by PARTITION-2-FIX-1)")
+section("loaders/refresh_group_stats.py (verify-only -- already fixed by PX-20260828-13, superseding PARTITION-2-FIX-1)")
 src = open("loaders/refresh_group_stats.py").read()
 
-check("_build_insert_sql()'s columns list includes county_code",
-      "county_code, source_import_batch_id, refreshed_at" in src)
-check("_build_insert_sql()'s SELECT includes %(county_code)s AS county_code",
-      "%(county_code)s                                                        AS county_code," in src)
+check("_build_insert_sql()'s INSERT column list includes county_code, "
+      "leading the batch/refresh-metadata columns",
+      "county_code, neighborhood_cd_key, state_cd1_class, classi_cd_key, tax_year," in src)
+check("_build_insert_sql()'s SELECT no longer injects an external "
+      "%(county_code)s literal (that shape was PX-20260828-13's actual bug, "
+      "not a fix) -- county_code is a real, derived column instead. (The "
+      "docstring's own historical mention of the retired shape, quoted for "
+      "context, is expected and is not what this check looks for.)",
+      "%(county_code)s                                                        AS county_code," not in src)
+check("REFRESH_GROUP_STATS_SQL's own SELECT list carries p.county_code as a "
+      "real column (the thing _build_insert_sql()'s SELECT list now relies on)",
+      "p.county_code               AS county_code," in src)
 check("shadow table is built via LIKE group_stats INCLUDING ALL -- inherits "
       "whatever the LIVE group_stats PK/constraints are, so this file needs no "
       "hardcoded ON CONFLICT target to stay correct against future PK changes",
@@ -524,10 +636,210 @@ check("--county CLI flag added, default DEFAULT_COUNTY",
       '"--county", default=DEFAULT_COUNTY' in src)
 check("main() passes county_code=args.county into load()",
       "load(conn, county_code=args.county)" in src)
-check("build_pid_lookup()'s missing county_code WHERE scoping is explicitly "
-      "flagged as an out-of-scope 3d-class concern (Travis-only today, so not "
-      "yet live-corrupting), not silently left unexplained",
-      "a 3d-class" in src and "(dynamic-clause) gap" in src)
+check("PX-20260830-05 Task 2 (Bucket B): build_pid_lookup() now threads "
+      "county_code and predicates the prop_unit query on it (formalizes the "
+      "gap DALLAS-GATE-4/PX-20260822-06-rev1 used to only flag-not-fix)",
+      "def build_pid_lookup(conn, county_code=DEFAULT_COUNTY):" in src
+      and "WHERE prop_id IS NOT NULL AND county_code = %s" in src)
+check("load()'s build_pid_lookup() calls pass county_code=county_code "
+      "(both the initial call and the post-year-load refresh)",
+      src.count("build_pid_lookup(conn, county_code=county_code)") == 2)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 15: loaders/parse_cert_2021_pdf.py (validate())
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/parse_cert_2021_pdf.py")
+src = open("loaders/parse_cert_2021_pdf.py").read()
+
+check("PX-20260830-05 Task 2 (Bucket B): validate() signature accepts "
+      "county_code=None (standalone script -- DEFAULT_COUNTY imported "
+      "lazily inside the function, not at module level, to keep this "
+      "script's import footprint minimal)",
+      "def validate(csv_path, county_code=None):" in src)
+check("validate() imports DEFAULT_COUNTY lazily and falls back to it when "
+      "county_code isn't passed",
+      "from loaders.scrape_billing_history import DEFAULT_COUNTY  # DALLAS-GATE-4 convention" in src
+      and "if county_code is None:\n        county_code = DEFAULT_COUNTY" in src)
+check("validate()'s parcel_tax_year SELECT is now predicated on county_code "
+      "(parcel_tax_year is composite_pk-migrated; an unscoped tax_year=2021 "
+      "pull could match another county's rows against this file's own "
+      "single-county extracted CSV)",
+      "WHERE tax_year = 2021\n          AND county_code = %s\n          AND geo_id = ANY(%s)" in src)
+check("--county CLI flag added to argparse, default None (only meaningful "
+      "with --validate)",
+      "ap.add_argument('--county', default=None," in src)
+check("main()'s --validate dispatch passes county_code=args.county",
+      "validate(args.validate, county_code=args.county)" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 16: loaders/scrape_billing_history.py (get_eligible_geo_ids())
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/scrape_billing_history.py")
+src = open("loaders/scrape_billing_history.py").read()
+
+check("PX-20260830-05 Task 2 (Bucket B): get_eligible_geo_ids() signature "
+      "accepts county_code (both parcel and parcel_tax_year are "
+      "composite_pk-migrated)",
+      "county_code: str = None,\n) -> list[str]:" in src)
+check("get_eligible_geo_ids() predicates the direct `parcel` reference "
+      "via county_clause",
+      'county_clause = "AND p.county_code = %(county_code)s" if county_code else ""' in src
+      and src.count("{county_clause}") == 2)
+check("get_eligible_geo_ids() scopes the transitive `parcel_tax_year` join "
+      "too (both table references, per PM's explicit instruction), in both "
+      "the random_order and non-random SQL branches",
+      src.count("ON pty.geo_id = p.geo_id\n                       AND pty.county_code = p.county_code") == 1
+      and src.count("ON pty.geo_id = p.geo_id\n                   AND pty.county_code = p.county_code") == 1)
+check("cur.execute() passes county_code through the params dict",
+      'cur.execute(sql, {"county_code": county_code})' in src)
+check("both real call sites in main() pass county_code=args.county",
+      src.count("county_code=args.county,") == 2)
+check("--county help text now states the gap is resolved, not just disclosed "
+      "(PX-20260830-05 supersedes the DALLAS-GATE-2 disclosure this text "
+      "used to carry)",
+      "PX-20260830-05 Task 2 (Bucket B): get_eligible_geo_ids() is now" in src
+      and "county-scoped on both parcel and parcel_tax_year -- resolves the" in src
+      and "DALLAS-GATE-2 disclosed gap this help text used to describe" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# PX-20260830-05 Task 2 correction (reviewer-rejected "27 out of scope"
+# claim): Files 17-23 below cover the remaining 6 of the 8 files named in
+# the reviewer's row list (load_2026_preliminary.py and load_cert_2021.py's
+# additional fixes are covered above, in File 7's section and its
+# extension). Same string-assertion-against-real-shipping-source technique
+# as every other file in this suite.
+# ─────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 17: loaders/load_2026_preliminary.py (parcel_tax_year / prop_unit_tax_year)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_2026_preliminary.py")
+src = open("loaders/load_2026_preliminary.py").read()
+
+check("load_land_and_imprv()'s prop_unit_tax_year market_value SELECT is "
+      "predicated on county_code",
+      '"SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s AND county_code = %s",\n            (TAX_YEAR, county_code),'
+      in src)
+check("run_qa() signature threads county_code=DEFAULT_COUNTY and its row-count "
+      "queries (2026 and 2025) are both predicated",
+      "def run_qa(conn, county_code=DEFAULT_COUNTY):" in src
+      and 'FROM parcel_tax_year WHERE tax_year = 2026 AND county_code = %s' in src
+      and 'FROM parcel_tax_year WHERE tax_year = 2025 AND county_code = %s' in src)
+check("run_qa()'s null-rate loop query is predicated on county_code",
+      "FROM parcel_tax_year WHERE tax_year = 2026 AND county_code = %s\n        \"\"\", (county_code,))" in src)
+check("run_qa()'s AV>MV anomaly check is predicated on county_code",
+      "AND county_code = %s\n    \"\"\", (county_code,))" in src)
+check("run_qa()'s known-parcel sanity check is predicated on county_code",
+      "WHERE geo_id = %s AND tax_year IN (2025, 2026) AND county_code = %s" in src)
+check("run_county_comparison() signature threads county_code=DEFAULT_COUNTY, "
+      "and both parcel_tax_year JOINs are correlated on county_code",
+      "def run_county_comparison(conn, county_code=DEFAULT_COUNTY):" in src
+      and "JOIN parcel_tax_year p25 ON p25.geo_id = p.geo_id AND p25.tax_year = 2025 AND p25.county_code = p.county_code" in src
+      and "JOIN parcel_tax_year p26 ON p26.geo_id = p.geo_id AND p26.tax_year = 2026 AND p26.county_code = p.county_code" in src
+      and "AND p.county_code = %(county_code)s" in src)
+check("run_county_comparison()'s 'Overall' summary query USING clause includes "
+      "county_code and is predicated",
+      "JOIN parcel_tax_year p26 USING (geo_id, county_code)" in src
+      and "AND p25.county_code = %(county_code)s" in src)
+check("load() passes county_code=county_code into both run_qa() and "
+      "run_county_comparison()",
+      "run_qa(conn, county_code=county_code)" in src
+      and "run_county_comparison(conn, county_code=county_code)" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 18: loaders/load_certified_2025.py (prop_unit_tax_year)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_certified_2025.py")
+src = open("loaders/load_certified_2025.py").read()
+
+check("load_land_and_imprv()'s prop_unit_tax_year market_value SELECT is "
+      "predicated on county_code",
+      '"SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s AND county_code = %s",\n            (TAX_YEAR, county_code),'
+      in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 19: loaders/load_certified_historical.py (prop_unit_tax_year / parcel_tax_year)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_certified_historical.py")
+src = open("loaders/load_certified_historical.py").read()
+
+check("load_land_imprv()'s prop_unit_tax_year market_value SELECT is "
+      "predicated on county_code",
+      '"SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s AND county_code = %s",\n            (year, county_code),'
+      in src)
+check("post_load_summary() threads county_code=DEFAULT_COUNTY and predicates "
+      "all 3 of its parcel_tax_year queries (rows_after, cert_count, the "
+      "land/imprv non-null breakdown)",
+      "def post_load_summary(conn, year, data_source, rows_before, ajr_before, county_code=DEFAULT_COUNTY):" in src
+      and '"SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND county_code = %s",\n            (year, county_code)' in src
+      and '"SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s AND county_code = %s",\n            (year, data_source, county_code)' in src
+      and "WHERE tax_year = %s AND data_source = %s AND county_code = %s\n        \"\"\", (year, data_source, county_code))" in src)
+check("main()'s before-load snapshot counts (rows_before, ajr_before) are "
+      "both predicated on args.county",
+      '"SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND county_code = %s",\n            (year, args.county),' in src
+      and '"SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s AND county_code = %s",\n            (year, ajr_source, args.county)' in src)
+check("main()'s post_load_summary() call passes county_code=args.county",
+      "post_load_summary(conn, year, data_source, rows_before, ajr_before, county_code=args.county)" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 20: loaders/load_exemptions.py (parcel_tax_year)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_exemptions.py")
+src = open("loaders/load_exemptions.py").read()
+
+check("main()'s sanity-sample SELECT is predicated on county_code (the "
+      "known-parcel exemption_codes printout after load)",
+      "WHERE geo_id IN ('0426280206','0159180227') AND tax_year IN (2025,2026)\n                  AND county_code = %s" in src
+      and '""", (args.county,))' in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 21: loaders/load_imp_det_sqft.py (parcel)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_imp_det_sqft.py")
+src = open("loaders/load_imp_det_sqft.py").read()
+
+check("_sanity_check() signature threads county_code=DEFAULT_COUNTY",
+      "def _sanity_check(conn, county_code=DEFAULT_COUNTY):" in src)
+check("_sanity_check()'s top-5-by-sqft SELECT is predicated on county_code",
+      "WHERE living_area_sqft IS NOT NULL AND county_code = %s" in src)
+check("_sanity_check()'s named-parcel SELECT is predicated on county_code",
+      "WHERE geo_id = ANY(%s) AND county_code = %s" in src
+      and "cur.execute(sql2, (test_geos, county_code))" in src)
+check("load()'s call site passes county_code through to _sanity_check()",
+      "_sanity_check(conn, county_code)" in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 22: loaders/load_parcel_attrs.py (parcel)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_parcel_attrs.py")
+src = open("loaders/load_parcel_attrs.py").read()
+
+check("main()'s sanity-report SELECT (SANITY geo_id list) is predicated on "
+      "county_code",
+      "FROM parcel WHERE geo_id = ANY(%s) AND county_code = %s ORDER BY geo_id" in src
+      and '""", (SANITY, args.county))' in src)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# File 23: loaders/load_pir_tcad.py (parcel)
+# ─────────────────────────────────────────────────────────────────────────
+section("loaders/load_pir_tcad.py")
+src = open("loaders/load_pir_tcad.py").read()
+
+check("build_pid_lookup() signature threads county_code=DEFAULT_COUNTY and "
+      "its parcel SELECT is predicated on it",
+      "def build_pid_lookup(conn, county_code=DEFAULT_COUNTY):" in src
+      and "SELECT prop_id, geo_id FROM parcel WHERE prop_id IS NOT NULL AND county_code = %s" in src)
+check("main()'s build_pid_lookup() call passes county_code=args.county",
+      "build_pid_lookup(conn, county_code=args.county)" in src)
 
 
 # ─────────────────────────────────────────────────────────────────────────

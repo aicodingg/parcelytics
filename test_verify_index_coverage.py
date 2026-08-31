@@ -662,6 +662,224 @@ def test_stage4_write_tagged_only_exemption_is_never_stale_checked_here():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# PX-20260830-05 Task 1 (Bucket A): nested-paren-body tenant-scope walk
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_stage4_cte_scoped_query_passes():
+    """A real, live query shape (app.py's Tier-2 peer-set query): TWO
+    independent `WITH ... AS MATERIALIZED (...)` CTEs, each with its own
+    county_code-scoped WHERE clause, joined together at the outer level with
+    no top-level WHERE at all. Stage 2's own single-WHERE-clause walk can
+    only ever see ONE of the two CTE bodies' WHERE text (whichever "WHERE"
+    keyword appears FIRST in the raw statement) -- confirmed against the
+    real app.py query this reproduces, this shape used to flag the SECOND
+    CTE's own table as MISSING_TENANT_SCOPE despite that CTE's own body
+    genuinely filtering by county_code. Must now pass with zero findings."""
+    sql = """
+        WITH candidates AS MATERIALIZED (
+            SELECT p.geo_id FROM parcel p
+            WHERE p.classi_cd = %(cc)s AND p.county_code = %(county_code)s
+        ),
+        mv_band AS MATERIALIZED (
+            SELECT pty.geo_id, pty.market_value FROM parcel_tax_year pty
+            WHERE pty.tax_year = 2025 AND pty.county_code = %(county_code)s
+        )
+        SELECT c.geo_id, m.market_value
+        FROM candidates c JOIN mv_band m ON m.geo_id = c.geo_id
+    """
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="app.py"),
+        required_tables={"parcel", "parcel_tax_year"},
+        shared_exemptions={},
+    )
+    gaps = [f for f in findings if f.status == "MISSING_TENANT_SCOPE"]
+    assert not gaps, f"expected zero findings (both CTEs are genuinely county_code-scoped), got: {gaps}"
+
+
+def test_stage4_exists_scoped_query_passes():
+    """A real, live query shape (app.py's already_fetched cache-check): a
+    bare `SELECT (EXISTS (...)) OR (EXISTS (...)) AS already_fetched` with
+    no top-level FROM/WHERE at all -- both real tables only ever appear
+    inside their own EXISTS(...) subquery, each with its own county_code
+    predicate. Stage 2's single-WHERE walk only ever resolves the FIRST
+    EXISTS's own WHERE text, and (since both tables are already registered
+    into tables_touched by the flat FROM-regex scan before the WHERE walk
+    runs) the ambiguous-unaliased-column branch fires and drops county_code
+    for BOTH tables. Must now pass with zero findings for the composite_pk
+    table under test (tax_billing)."""
+    sql = (
+        "SELECT "
+        "(EXISTS (SELECT 1 FROM tax_billing_portal_scrape WHERE geo_id = %s AND county_code = %s)) "
+        "OR "
+        "(EXISTS (SELECT 1 FROM tax_billing WHERE geo_id = %s AND county_code = %s AND tax_year BETWEEN 2021 AND 2024)) "
+        "AS already_fetched"
+    )
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="app.py"),
+        required_tables={"tax_billing"},
+        shared_exemptions={},
+    )
+    gaps = [f for f in findings if f.status == "MISSING_TENANT_SCOPE"]
+    assert not gaps, f"expected zero findings for tax_billing (its own EXISTS body is county_code-scoped), got: {gaps}"
+
+
+def test_stage4_derived_table_with_nested_in_subquery_still_resolves():
+    """The trickiest real shape found while building this walk: a
+    parenthesized derived table whose OWN WHERE clause has bare (unaliased)
+    county_code AND a further-nested `geo_id IN (SELECT geo_id FROM
+    candidates)` sub-subquery. Without _blank_inner_parens(), that inner
+    `FROM candidates` leaks into the derived table's own tables_touched,
+    flips the bare county_code predicate into 'ambiguous, 2 tables in
+    scope', and county_code is silently never attributed to
+    tax_billing_entity at all -- reproduced here as its own regression case
+    (this exact shape was found live in app.py's real peer-set fallback
+    query, and required a fix beyond the basic CTE/EXISTS walk)."""
+    sql = """
+        WITH candidates AS (
+            SELECT p.geo_id FROM parcel p WHERE p.county_code = %(county_code)s
+        )
+        SELECT c.geo_id, tbe.entity_tax_sum
+        FROM candidates c
+        LEFT JOIN (
+            SELECT geo_id, SUM(amount_due) AS entity_tax_sum
+            FROM tax_billing_entity
+            WHERE tax_year = 2025
+              AND county_code = %(county_code)s
+              AND geo_id IN (SELECT geo_id FROM candidates)
+            GROUP BY geo_id
+        ) tbe ON tbe.geo_id = c.geo_id
+    """
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="app.py"),
+        required_tables={"tax_billing_entity"},
+        shared_exemptions={},
+    )
+    gaps = [f for f in findings if f.status == "MISSING_TENANT_SCOPE"]
+    assert not gaps, f"expected zero findings (derived table's own WHERE scopes county_code), got: {gaps}"
+
+
+def test_stage4_nested_body_without_county_code_still_fails():
+    """The negative control the brief explicitly requires: a CTE-shaped
+    query where the predicate is GENUINELY absent (not just hard for Stage 2
+    to see) must still be flagged. Proves the nested-body walk is additive
+    scoping detection, not a blanket 'any CTE passes' loophole."""
+    sql = """
+        WITH candidates AS MATERIALIZED (
+            SELECT p.geo_id FROM parcel p WHERE p.classi_cd = %(cc)s
+        )
+        SELECT c.geo_id FROM candidates c
+    """
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="app.py"),
+        required_tables={"parcel"},
+        shared_exemptions={},
+    )
+    gaps = [f for f in findings if f.status == "MISSING_TENANT_SCOPE" and f.table == "parcel"]
+    assert len(gaps) == 1, f"expected a real MISSING_TENANT_SCOPE finding for parcel (no county_code anywhere), got: {findings}"
+
+
+def test_stage4_real_app_py_tax_delinquent_now_scoped():
+    """Source-level regression proof for the real app.py fix (PX-20260830-05
+    Bucket A): property_detail()'s tax_delinquent lookup used to be `WHERE
+    geo_id = %s` alone. Reads the real, shipping app.py source directly (not
+    a reimplementation) and asserts the fixed line is present, and that no
+    bare, single-column tax_delinquent lookup survives anywhere in the file."""
+    src = open("app.py", encoding="utf-8").read()
+    assert 'FROM tax_delinquent WHERE geo_id = %s AND county_code = %s' in src, (
+        "expected the fixed, county_code-scoped tax_delinquent query to be present in app.py"
+    )
+    assert 'FROM tax_delinquent WHERE geo_id = %s"' not in src, (
+        "a stale, unscoped bare-geo_id tax_delinquent query still exists in app.py"
+    )
+
+
+def test_stage4_real_app_py_and_registry_end_to_end_clean():
+    """End-to-end proof against the REAL, current app.py source tree (not a
+    fixture) that the four CTE/EXISTS false positives this walk was built to
+    resolve, plus the tax_delinquent fix, are both reflected in the live
+    Stage 4 run, and that the four tax_billing_entity findings PX-20260828-16
+    used to carry as {'read'} exemptions now resolve on their own -- i.e.
+    that registry entry's removal (PX-20260830-05 Task 1) was safe.
+
+    Narrowed to app.py specifically (PX-20260830-05 Task 3/4): this
+    assertion originally checked "zero EXEMPT tax_billing_entity findings"
+    repo-wide, back when the shared registry carried zero {'read'}-tagged
+    entries anywhere (see verify_index_coverage.py's own module docstring,
+    updated same session) -- at that point "zero in app.py" and "zero
+    anywhere" were the same claim by coincidence, not by this test's actual
+    design. Tasks 3-4 registered real, unrelated {'read'} exemptions for
+    loaders/refresh_group_stats.py and loaders/delete_confirmed_
+    absent_taxcur_rows.py (both correct-by-design, not app.py regressions --
+    see verify_county_scoping.EXEMPTIONS' own PX-20260830-05 entries), which
+    made the repo-wide version of this assertion fail for a reason that has
+    nothing to do with what this test actually verifies. Scoped to
+    filepath == 'app.py' so it keeps testing its own real claim -- the four
+    app.py call sites resolve on their own -- without being coupled to
+    exemptions this brief registers elsewhere in the same run."""
+    import verify_county_scoping as vcs
+    result = vic.run_audit(index_source="schema-sql")
+    tenant = result["tenant_scope_findings"]
+    exempt = [f for f in tenant if f.status == "EXEMPT" and f.table == "tax_billing_entity"
+              and f.filepath == "app.py"]
+    assert not exempt, f"expected zero EXEMPT tax_billing_entity findings in app.py (registry entry was retired), got: {exempt}"
+    stale = [f for f in tenant if f.status == "STALE_EXEMPTION"]
+    assert not stale, f"expected zero stale exemptions after retiring the tax_billing_entity entry, got: {stale}"
+    key = ("app.py", "tax_billing_entity", "SELECT")
+    assert key not in vcs.EXEMPTIONS, "the retired tax_billing_entity exemption entry must not reappear in the registry"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PX-20260830-05 Task 2 correction: FILTER(WHERE ...) parser bug (found live
+# against load_2026_preliminary.py's run_qa() null-rate loop during this
+# brief's acceptance sweep, after all 27 remaining Bucket B rows were
+# predicated)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_stage4_filter_where_before_real_where_does_not_mask_scoping():
+    """Real, live shape (load_2026_preliminary.py:320's null-rate loop): a
+    `COUNT(*) FILTER (WHERE ...)` aggregate clause sits in the SELECT list,
+    BEFORE the statement's real, top-level WHERE clause. The old WHERE-
+    clause finder used `re.search(r'\\bWHERE\\b', sql_text)` -- the FIRST
+    occurrence anywhere in the text -- so it locked onto the FILTER's own
+    nested WHERE, and _clause_end() stopped right at the FILTER's closing
+    paren, meaning the real outer WHERE (carrying the actual county_code
+    predicate) was NEVER examined at all -- a false MISSING_TENANT_SCOPE on
+    a query that IS correctly scoped. Must now produce zero findings."""
+    sql = (
+        "SELECT COUNT(*) FILTER (WHERE market_value IS NULL OR market_value = 0) AS nulls, "
+        "COUNT(*) AS total "
+        "FROM parcel_tax_year WHERE tax_year = 2026 AND county_code = %s"
+    )
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="app.py"),
+        required_tables={"parcel_tax_year"},
+        shared_exemptions={},
+    )
+    gaps = [f for f in findings if f.status == "MISSING_TENANT_SCOPE"]
+    assert not gaps, f"expected zero findings (the real outer WHERE scopes county_code), got: {gaps}"
+
+
+def test_stage4_filter_where_shape_still_fails_when_county_code_genuinely_absent():
+    """Negative control for the fixture above: same FILTER(WHERE ...)-before-
+    real-WHERE shape, but county_code is genuinely absent from the real
+    outer WHERE this time. Must still be flagged -- proves the fix finds the
+    real top-level WHERE and evaluates ITS content correctly, not that a
+    FILTER clause in the SELECT list now makes everything pass."""
+    sql = (
+        "SELECT COUNT(*) FILTER (WHERE market_value IS NULL OR market_value = 0) AS nulls, "
+        "COUNT(*) AS total "
+        "FROM parcel_tax_year WHERE tax_year = 2026"
+    )
+    findings = vic.audit_tenant_scope(
+        _tenant_extracted(sql, filepath="app.py"),
+        required_tables={"parcel_tax_year"},
+        shared_exemptions={},
+    )
+    gaps = [f for f in findings if f.status == "MISSING_TENANT_SCOPE" and f.table == "parcel_tax_year"]
+    assert len(gaps) == 1, f"expected a real MISSING_TENANT_SCOPE finding (county_code genuinely absent), got: {findings}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Manual runner (no confirmed pytest/pip access in this sandbox)
 # ═══════════════════════════════════════════════════════════════════════════
 

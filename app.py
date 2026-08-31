@@ -3543,7 +3543,13 @@ def export_due_diligence_pdf(geo_id):
         WHERE  tbe.geo_id = %s AND tbe.tax_year = 2024 AND tbe.county_code = %s
     """, (geo_id, county_code))
 
-    delinquent = query("SELECT * FROM tax_delinquent WHERE geo_id = %s", (geo_id,), one=True)
+    # PX-20260830-05 Task 1 (Bucket A): was WHERE geo_id = %s only -- tax_delinquent
+    # is composite_pk-migrated (county_code-leading, see migrate_county_partitioning.py's
+    # TABLE_SPECS), so a bare geo_id filter can't use the real leading-prefix index and,
+    # more importantly, is a real tenant-scoping gap for the same route this whole
+    # session's other queries already scope by county_code. county_code is already
+    # resolved in this function's own scope (used by every query above it).
+    delinquent = query("SELECT * FROM tax_delinquent WHERE geo_id = %s AND county_code = %s", (geo_id, county_code), one=True)
 
     current = next((r for r in history if r["tax_year"] == 2025), None)
     # 2026 Preliminary row (July 2026, per Diego's PDF feedback round): the

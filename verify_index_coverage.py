@@ -100,6 +100,25 @@ against production himself for the real, authoritative answer to "did
 tonight's 4 indexes cover everything" -- see this task's final report for
 the exact command and how to read its output.
 
+── Scanner invocation convention: `--index-source live` is the authoritative ──
+   pre-commit command (PX-20260830-05 Task 5) ──────────────────────────────
+`--index-source schema-sql` (the CLI default, UNCHANGED by this note -- see
+"Usage" below) exists for offline iteration: fixture tests, demo runs, and
+any environment without a live DB connection. It is never sufficient
+grounds, on its own, to treat a Stage 3 or Stage 4 finding as resolved for
+the 15 tables named in the stale-PK warning banner this module prints
+every time that mode runs (see the CRITICAL section above and
+KNOWN_LIMITATIONS.md's "schema.sql's CREATE TABLE PRIMARY KEY text is
+stale for 15 tables" entry). The one authoritative pre-commit invocation --
+the command that must actually be run, by Diego, against production,
+before trusting a "no gap found" verdict enough to commit index- or
+tenant-scope-affecting changes -- is:
+
+    python3 verify_index_coverage.py --index-source live
+
+This convention is also recorded in THE_FABLE_METHOD.md's engineering
+checklist, so it isn't a fact that lives only in this one docstring.
+
 ── CRITICAL: schema.sql's CREATE TABLE PRIMARY KEY text is STALE ──────────
 Confirmed by direct inspection while building this script: schema.sql's
 CREATE TABLE bodies for parcel/parcel_tax_year/parcel_metrics/
@@ -178,17 +197,27 @@ question.
 Exemptions are SHARED with verify_county_scoping.EXEMPTIONS (one registry,
 not two that can drift -- see that module's own comment on the
 "applies_to" field). An entry is only ever honored by Stage 4 if it is
-explicitly tagged {"read"} in applies_to. As of this build, a full,
-explicit audit of all 7 real entries in that registry (done before this
-stage was written, not assumed) found every one of them write-only --
-each justifies skipping an INSERT's ON CONFLICT target or an UPDATE/
-DELETE's WHERE-clause scoping for reasons specific to that write's own
-transactional mechanics (a same-transaction whole-table rebuild, a NOT
-NULL constraint failing loud at write time, a one-time incident-remediation
-script) -- none of which establishes that a SELECT reading the same table
-is safe to leave unscoped. So Stage 4 currently treats the shared registry
-as contributing zero exemptions in practice; this is confirmed, not a gap
-this stage papers over.
+explicitly tagged {"read"} in applies_to. At the time this stage was first
+written, a full, explicit audit of all 7 real entries in that registry
+found every one of them write-only -- each justified skipping an INSERT's
+ON CONFLICT target or an UPDATE/DELETE's WHERE-clause scoping for reasons
+specific to that write's own transactional mechanics (a same-transaction
+whole-table rebuild, a NOT NULL constraint failing loud at write time, a
+one-time incident-remediation script) -- none of which by itself
+established that a SELECT reading the same table was safe to leave
+unscoped, so Stage 4 initially treated the shared registry as contributing
+zero exemptions in practice. UPDATED by PX-20260830-05 Tasks 3-4: 7 real
+{"read"}-tagged entries now exist (a deliberate, all-counties-in-one-pass
+aggregation shape in loaders/refresh_group_stats.py, plus the read-side
+Group 4 downgrade for the two one-time incident-remediation scripts,
+loaders/quarantine_contamination.py and loaders/
+delete_confirmed_absent_taxcur_rows.py) -- each individually re-justified
+against the read-path question from scratch, per this docstring's own
+original instruction, not carried over from the write-side reasoning by
+assumption. Stage 4 no longer treats the registry as read-exemption-free;
+this note is updated here specifically so the next person reading this
+docstring never has to independently rediscover that the claim above went
+stale.
 
 ── Known false-positive source: subquery predicates (inherited from Stage 2, ──
    NOT something Stage 4 introduces) ─────────────────────────────────────────
@@ -570,7 +599,30 @@ def parse_sql_shape(sql_text):
                 target.setdefault(table, set()).add(col)
 
     # WHERE clause
-    where_m = re.search(r'\bWHERE\b', sql_text, re.IGNORECASE)
+    # PX-20260830-05 Task 2 (Bucket B acceptance-sweep follow-up, real
+    # scanner bug found live against load_2026_preliminary.py): a naive
+    # "find the first WHERE anywhere in the text" search is fooled by a
+    # `COUNT(*) FILTER (WHERE ...)` aggregate clause that appears in the
+    # SELECT list BEFORE the statement's real, top-level WHERE -- the old
+    # `re.search(r'\bWHERE\b', sql_text)` would match that nested FILTER's
+    # WHERE, then _clause_end() would stop at the FILTER's own closing
+    # paren, so the real outer WHERE (carrying the actual county_code
+    # predicate) was never examined at all, producing a false
+    # MISSING_TENANT_SCOPE finding on a query that IS correctly scoped.
+    # Fixed by walking every WHERE occurrence and picking the first one
+    # sitting at paren-depth 0 relative to the whole statement -- a
+    # FILTER's WHERE is always inside at least one open paren, so it's
+    # skipped in favor of the real top-level one. Falls back to the first
+    # occurrence if none is ever at depth 0 (should not happen for valid
+    # SQL, but degrades gracefully rather than raising on malformed input).
+    where_m = None
+    for candidate in re.finditer(r'\bWHERE\b', sql_text, re.IGNORECASE):
+        depth = sql_text.count("(", 0, candidate.start()) - sql_text.count(")", 0, candidate.start())
+        if where_m is None:
+            where_m = candidate
+        if depth == 0:
+            where_m = candidate
+            break
     if where_m:
         where_start = where_m.end()
         where_end = _clause_end(sql_text, where_start)
@@ -709,6 +761,8 @@ def load_table_indexes_from_schema_sql(schema_path):
         print("for --index-source live:", file=sys.stderr)
         for t in stale_tables:
             print(f"    - {t}", file=sys.stderr)
+        print("Tracked, named-not-fixed follow-up: KNOWN_LIMITATIONS.md,", file=sys.stderr)
+        print("'schema.sql's CREATE TABLE PRIMARY KEY text is stale for 15 tables'.", file=sys.stderr)
         print("=" * 78, file=sys.stderr)
     return indexes
 
@@ -800,6 +854,120 @@ def _is_write_statement(sql_text):
     return bool(_UPDATE_RE.search(sql_text) or _DELETE_RE.search(sql_text) or _INSERT_INTO_RE.search(sql_text))
 
 
+# ── PX-20260830-05 Task 1 (Bucket A): nested-paren-body tenant-scope walk ──
+# Confirmed live, against this repo's own real queries, while building this:
+# Stage 2's parse_sql_shape() only ever resolves ONE WHERE clause per
+# statement -- `where_m = re.search(r'\bWHERE\b', sql_text)` matches the
+# FIRST "WHERE" keyword in the whole raw text, full stop. A statement with
+# more than one WHERE (a multi-CTE query, each with its own WHERE; a bare
+# SELECT built from two EXISTS(...) subqueries, each with its own WHERE) has
+# every WHERE past the first one silently invisible to Stage 2's walk --
+# not reported as unresolved/dynamic, just never looked at. That is exactly
+# the shape of app.py's own real Tier-2/Tier-3 peer-set queries (two
+# INDEPENDENT `WITH ... AS MATERIALIZED (...)` CTEs, each scoped by its own
+# `county_code = %(county_code)s`) and its own real already_fetched/response
+# EXISTS/CTE-based cache-check queries -- each one is a real, live query that
+# DOES filter every table it touches by county_code, just never at the one
+# textual position Stage 2's single-WHERE walk happens to look.
+#
+# Rather than rewrite parse_sql_shape() to track multiple WHERE clauses
+# (which would also change Stage 3's COVERED/NO_COVERAGE verdicts -- a much
+# bigger blast radius than this brief asks for), Stage 4 gets its own,
+# additional, purely-additive check: for a table that still looks unscoped
+# after the normal top-level walk, recursively extract EVERY parenthesized
+# body in the statement (a WITH ... AS (...) CTE definition, an
+# EXISTS (...) subquery, or a parenthesized derived table/scalar-subquery --
+# all three are, textually, just "some SQL wrapped in parens", so one
+# generic paren-walker covers all three PM-named shapes without needing to
+# special-case CTE vs EXISTS vs derived-table syntax) and parse EACH one
+# with parse_sql_shape() itself -- reused, not reimplemented, because each
+# such body is, on its own, a real complete mini-SELECT statement (confirmed
+# against every real shape in this codebase: a CTE body, an EXISTS body, and
+# a derived-table body are always themselves a full `SELECT ... FROM ...
+# [WHERE ...]`). If any nested body both touches the table in question AND
+# carries a real county_code equality/IN predicate for it (directly in its
+# own WHERE, or transitively via a JOIN...ON county_code equality, exactly
+# like the outer-statement check already does), that nested scoping is real
+# and satisfies Stage 4 for that table at that call site -- no exemption
+# needed, because there is no gap to exempt.
+def _iter_paren_bodies(text):
+    """Yields every parenthesized substring of `text` (the text strictly
+    between a '(' and its matching ')'), at every nesting depth, depth-first.
+    Reuses Stage 3's own _find_matching_paren_end (one paren-matching
+    implementation, not a second copy)."""
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "(":
+            end = _find_matching_paren_end(text, i)
+            body = text[i + 1:end]
+            yield body
+            yield from _iter_paren_bodies(body)
+            i = end + 1
+        else:
+            i += 1
+
+
+def _blank_inner_parens(text):
+    """Blanks the CONTENTS of every parenthesized group nested inside `text`
+    (replacing non-newline characters with spaces; the parens themselves are
+    kept so brace-balance-dependent regexes elsewhere are unaffected).
+    `text` here is already the inside of some outer paren body (as yielded
+    by _iter_paren_bodies) -- this prepares it for a flat, single-body
+    parse_sql_shape() call by hiding any DEEPER sub-subquery's own FROM/table
+    references from that call's own _FROM_RE.finditer (which -- like Stage
+    2's top-level scan -- is not itself paren-depth-aware about registration,
+    only about WHERE/ON clause boundaries). Confirmed necessary live: a real
+    derived-table body in this codebase (app.py's peer-set queries) is
+    itself `SELECT geo_id, SUM(amount_due) ... FROM tax_billing_entity
+    WHERE tax_year = 2025 AND county_code = %(county_code)s AND geo_id IN
+    (SELECT geo_id FROM candidates) GROUP BY geo_id` -- without this
+    blanking, that inner `FROM candidates` gets registered as a SECOND table
+    in this body's own tables_touched, which flips the bare-column WHERE
+    predicates (tax_year, county_code -- neither alias-qualified) into the
+    "ambiguous unaliased column, len(tables_touched) != 1" branch, and
+    county_code is silently never attributed to tax_billing_entity at all.
+    _iter_paren_bodies still separately yields that deeper `candidates`
+    sub-subquery body on its own recursive pass, so a table reference that
+    only exists inside a deeper sub-subquery is not lost -- it is simply not
+    allowed to leak into a SHALLOWER body's own table count."""
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "(":
+            end = _find_matching_paren_end(text, i)
+            out.append("(")
+            out.append("".join(ch if ch == "\n" else " " for ch in text[i + 1:end]))
+            out.append(")")
+            i = end + 1
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def _table_is_tenant_scoped_in_nested_bodies(sql_text, table):
+    """True if `table` is both referenced AND county_code-scoped (directly
+    or via a JOIN...ON equality, same rule as the top-level check) inside
+    ANY nested parenthesized SQL body of `sql_text` -- see the block comment
+    above for why this exists and why reusing parse_sql_shape() per body is
+    correct. A body that doesn't even contain a SELECT (e.g. a bare column
+    list in an INSERT's column-list parens, or a plain IN-list of literals)
+    is skipped outright -- nothing to parse, and parse_sql_shape() would
+    only produce noise on it."""
+    for body in _iter_paren_bodies(sql_text):
+        if not re.search(r'\bSELECT\b', body, re.IGNORECASE):
+            continue
+        try:
+            nested_shape = parse_sql_shape(_blank_inner_parens(body))
+        except Exception:
+            continue
+        if table in nested_shape.tables_touched and _TENANT_SCOPE_COLUMN in nested_shape.filter_columns.get(table, set()):
+            return True
+    return False
+
+
 def _load_shared_tenant_exemptions():
     """The exemptions registry lives in ONE place -- verify_county_scoping.
     EXEMPTIONS -- not duplicated here (see module docstring's "Exemptions
@@ -873,6 +1041,16 @@ def audit_tenant_scope(extracted, required_tables=None, shared_exemptions=None):
             cols = shape.filter_columns.get(table, set())
             if _TENANT_SCOPE_COLUMN in cols:
                 continue  # directly or transitively scoped -- see docstring above
+
+            # PX-20260830-05 Task 1 (Bucket A): before treating this as a real
+            # gap, check every nested parenthesized body of the SAME statement
+            # (a WITH ... AS (...) CTE, an EXISTS (...) subquery, or a
+            # parenthesized derived table) for a county_code-scoped reference
+            # to this table -- see the block comment above
+            # _table_is_tenant_scoped_in_nested_bodies() for why the top-level
+            # walk alone misses this real, live query shape.
+            if _table_is_tenant_scoped_in_nested_bodies(item.sql_text, table):
+                continue
 
             info_cols = shape.informational_columns.get(table, set())
             note = ""

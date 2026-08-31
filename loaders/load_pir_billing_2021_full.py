@@ -664,7 +664,7 @@ def load_and_aggregate(filepath, progress_every=100_000, row_limit=None):
     return by_account, stats, dup_review_rows
 
 
-def reconcile_geo_ids(conn, by_account):
+def reconcile_geo_ids(conn, by_account, county_code=DEFAULT_COUNTY):
     """Split by_account (accnum -> (total, entities, geo_id)) into
     (matched, unmatched) by whether each account's geo_id exists in the
     real `parcel` table. Never silently drops -- unmatched accounts and
@@ -672,9 +672,15 @@ def reconcile_geo_ids(conn, by_account):
     operates per-account now, not per-geo_id -- an account's geo_id is
     still what's checked against `parcel` (accounts have no independent
     existence in the parcel table), but every matched account is kept and
-    written individually, not summed away."""
+    written individually, not summed away.
+
+    PX-20260830-05 Task 2 (Bucket B): county_code predicate added -- same
+    fix, same reasoning, as pir_xlsx_common.py's identical function.
+    county_code IS available at this function's one real call site
+    (main()/run below already threads args.county to write_to_db() and
+    verify_sanity_parcels() a few lines later)."""
     with conn.cursor() as cur:
-        cur.execute("SELECT geo_id FROM parcel")
+        cur.execute("SELECT geo_id FROM parcel WHERE county_code = %s", (county_code,))
         real_geo_ids = {r[0] for r in cur.fetchall()}
     matched = {a: v for a, v in by_account.items() if v[2] in real_geo_ids}
     unmatched = {a: v for a, v in by_account.items() if v[2] not in real_geo_ids}
@@ -908,7 +914,7 @@ def main():
 
     conn = get_conn()
     try:
-        matched, unmatched = reconcile_geo_ids(conn, by_account)
+        matched, unmatched = reconcile_geo_ids(conn, by_account, county_code=args.county)
         print(f"\n  account geo_id reconciliation against live `parcel` table:")
         print(f"    matched accounts:   {len(matched):,}")
         print(f"    unmatched accounts: {len(unmatched):,}  (skipped -- see review log)")

@@ -201,8 +201,8 @@ def load_land_imprv(conn, cert_dir, year, county_code=DEFAULT_COUNTY):
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s",
-            (year,),
+            "SELECT prop_id, market_value FROM prop_unit_tax_year WHERE tax_year = %s AND county_code = %s",
+            (year, county_code),
         )
         market_by_pid = {r[0]: r[1] for r in cur.fetchall()}
 
@@ -229,17 +229,17 @@ def load_land_imprv(conn, cert_dir, year, county_code=DEFAULT_COUNTY):
 
 
 # ── Post-load summary ─────────────────────────────────────────────────────────
-def post_load_summary(conn, year, data_source, rows_before, ajr_before):
+def post_load_summary(conn, year, data_source, rows_before, ajr_before, county_code=DEFAULT_COUNTY):
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s",
-            (year,)
+            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND county_code = %s",
+            (year, county_code)
         )
         rows_after = cur.fetchone()[0]
 
         cur.execute(
-            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s",
-            (year, data_source)
+            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s AND county_code = %s",
+            (year, data_source, county_code)
         )
         cert_count = cur.fetchone()[0]
 
@@ -249,8 +249,8 @@ def post_load_summary(conn, year, data_source, rows_before, ajr_before):
                 COUNT(land_value)  AS lv_non_null,
                 COUNT(imprv_value) AS iv_non_null
             FROM parcel_tax_year
-            WHERE tax_year = %s AND data_source = %s
-        """, (year, data_source))
+            WHERE tax_year = %s AND data_source = %s AND county_code = %s
+        """, (year, data_source, county_code))
         total, lv_nn, iv_nn = cur.fetchone()
 
     inserted = rows_after - rows_before
@@ -337,11 +337,14 @@ def main():
 
     # Snapshot counts before load
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s", (year,))
+        cur.execute(
+            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND county_code = %s",
+            (year, args.county),
+        )
         rows_before = cur.fetchone()[0]
         cur.execute(
-            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s",
-            (year, ajr_source)
+            "SELECT COUNT(*) FROM parcel_tax_year WHERE tax_year = %s AND data_source = %s AND county_code = %s",
+            (year, ajr_source, args.county)
         )
         ajr_before = cur.fetchone()[0]
 
@@ -404,7 +407,7 @@ def main():
                   f"ordering). Investigate ingest_audit before trusting this year's "
                   f"figures.")
 
-    post_load_summary(conn, year, data_source, rows_before, ajr_before)
+    post_load_summary(conn, year, data_source, rows_before, ajr_before, county_code=args.county)
 
     conn.close()
     print(f"Done. Run compute_metrics.py after loading all three years.")

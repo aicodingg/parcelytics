@@ -81,9 +81,13 @@ def inspect(filepath):
     print("Adjust F_TAXABLE, F_LAND, F_IMPRV in this file to match, then run without --inspect.")
 
 
-def build_pid_lookup(conn):
+def build_pid_lookup(conn, county_code=DEFAULT_COUNTY):
+    # PX-20260823-02: county_code added to the WHERE.
     with conn.cursor() as cur:
-        cur.execute("SELECT prop_id, geo_id FROM parcel WHERE prop_id IS NOT NULL")
+        cur.execute(
+            "SELECT prop_id, geo_id FROM parcel WHERE prop_id IS NOT NULL AND county_code = %s",
+            (county_code,),
+        )
         return {row[0]: row[1] for row in cur.fetchall()}
 
 
@@ -195,7 +199,7 @@ def main():
 
     conn = get_conn()
     try:
-        pid_lookup = build_pid_lookup(conn)
+        pid_lookup = build_pid_lookup(conn, county_code=args.county)
         print(f"  prop_id → geo_id lookup: {len(pid_lookup):,} entries")
 
         target_years = [args.year] if args.year else sorted(files.keys())

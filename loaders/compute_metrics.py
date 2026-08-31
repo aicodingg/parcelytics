@@ -229,9 +229,22 @@ def _like_clause(prefixes):
 
 
 # ── Step 4: Threshold distribution analysis ─────────────────────────────────────
-def analyze_threshold(conn):
+def analyze_threshold(conn, county_code):
+    """PX-20260830-05 Task 3 (Bucket C): county_code is a REQUIRED parameter
+    here, with no default -- unlike every other function in this file, a
+    silent DEFAULT_COUNTY fallback would be actively wrong for this one.
+    This is a per-county distribution report (the printed percentiles/flag
+    counts describe ONE county's YoY value-change shape); parcel_tax_year is
+    composite_pk-migrated (county_code-leading), and the self-join below
+    would otherwise pool every loaded county's parcel-year pairs into one
+    blended distribution, silently mislabeling it as if it were Travis's (or
+    whichever single county the caller had in mind) once a second county has
+    real data. Forcing every caller to pass county_code explicitly (see
+    main()'s two call sites) makes that scoping decision visible at the call
+    site instead of hidden behind a default.
+    """
     print("\n" + "=" * 60)
-    print("  Step 4 — Risk Threshold Distribution Analysis")
+    print(f"  Step 4 — Risk Threshold Distribution Analysis (county_code={county_code})")
     print("=" * 60)
     print("  Computing YoY market value changes across all parcel-years…")
     t0 = time.time()
@@ -250,8 +263,10 @@ def analyze_threshold(conn):
                     END AS yoy_pct
                 FROM parcel_tax_year a
                 JOIN parcel_tax_year b
-                  ON b.geo_id = a.geo_id AND b.tax_year = a.tax_year - 1
-                WHERE a.market_value > 0 AND b.market_value > 0
+                  ON b.county_code = a.county_code
+                 AND b.geo_id = a.geo_id
+                 AND b.tax_year = a.tax_year - 1
+                WHERE a.county_code = %s AND a.market_value > 0 AND b.market_value > 0
             )
             SELECT
                 COUNT(*)                                                             AS total_pairs,
@@ -271,7 +286,7 @@ def analyze_threshold(conn):
                 ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY yoy_pct)::NUMERIC, 2) AS p95,
                 ROUND(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY yoy_pct)::NUMERIC, 2) AS p99
             FROM yoy
-        """)
+        """, (county_code,))
         r = cur.fetchone()
 
     total = r[0]
@@ -837,18 +852,32 @@ def compute_county_benchmarks(conn, county_code=DEFAULT_COUNTY):
 
 
 # ── Sample verification output ──────────────────────────────────────────────────
-def print_sample(conn):
+def print_sample(conn, county_code=DEFAULT_COUNTY):
+    """PX-20260830-05 Task 3 (Bucket C): county_code param added, default
+    DEFAULT_COUNTY (unlike analyze_threshold() above, a default is fine
+    here -- this is a debug/sanity-check printout, not a business figure,
+    and the three sanity_parcels geo_ids are Travis-specific real accounts
+    anyway). Every query below is now predicated on county_code --
+    tax_billing/tax_billing_entity/parcel_metrics are all composite_pk-
+    migrated, and geo_id alone is not guaranteed unique across counties, so
+    an unscoped lookup could silently print another county's rows under a
+    Travis-labeled sample parcel once a second county's data shares a geo_id.
+    """
     sanity_parcels = [
         ("0100030105", "Commercial F1 — 1201 S Lamar"),
         ("0100030109", "Multi-family B — 1219 S Lamar"),
         ("0284460113", "Residential A — Abbeyglen Castle Dr"),
     ]
-    print("\n=== Sample: sanity-check parcels ===")
+    print(f"\n=== Sample: sanity-check parcels (county_code={county_code}) ===")
     # First show tax_billing state so we can diagnose eff_rate issues
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM tax_billing")
+        cur.execute("SELECT COUNT(*) FROM tax_billing WHERE county_code = %s", (county_code,))
         tb_total = cur.fetchone()[0]
-        cur.execute("SELECT tax_year, COUNT(*) FROM tax_billing GROUP BY tax_year ORDER BY tax_year")
+        cur.execute(
+            "SELECT tax_year, COUNT(*) FROM tax_billing WHERE county_code = %s "
+            "GROUP BY tax_year ORDER BY tax_year",
+            (county_code,)
+        )
         tb_by_year = cur.fetchall()
     print(f"\n  tax_billing rows: {tb_total:,}")
     for yr, cnt in tb_by_year:
@@ -858,8 +887,9 @@ def print_sample(conn):
         for geo_id, label in sanity_parcels:
             print(f"\n  {label} ({geo_id})")
             cur.execute(
-                "SELECT tax_year, total_tax FROM tax_billing WHERE geo_id = %s ORDER BY tax_year",
-                (geo_id,)
+                "SELECT tax_year, total_tax FROM tax_billing "
+                "WHERE geo_id = %s AND county_code = %s ORDER BY tax_year",
+                (geo_id, county_code)
             )
             billing_rows = cur.fetchall()
             if billing_rows:
@@ -868,8 +898,9 @@ def print_sample(conn):
             else:
                 print("    billing: (no rows in tax_billing)")
             cur.execute(
-                "SELECT tax_year, SUM(amount_due) as entity_total FROM tax_billing_entity WHERE geo_id = %s GROUP BY tax_year ORDER BY tax_year",
-                (geo_id,)
+                "SELECT tax_year, SUM(amount_due) as entity_total FROM tax_billing_entity "
+                "WHERE geo_id = %s AND county_code = %s GROUP BY tax_year ORDER BY tax_year",
+                (geo_id, county_code)
             )
             entity_rows = cur.fetchall()
             if entity_rows:
@@ -890,8 +921,8 @@ def print_sample(conn):
                        cap_expiry_signal,
                        risk_delinquent,
                        risk_data_incomplete
-                FROM parcel_metrics WHERE geo_id = %s ORDER BY tax_year
-            """, (geo_id,))
+                FROM parcel_metrics WHERE geo_id = %s AND county_code = %s ORDER BY tax_year
+            """, (geo_id, county_code))
             for r in cur.fetchall():
                 d = dict(r)
                 print(f"    {d['tax_year']} [{d['coverage_level']}]"
@@ -909,8 +940,8 @@ def print_sample(conn):
             SELECT parcel_count, median_market_value, p25_market_value, p75_market_value,
                    median_assessment_ratio, median_yoy_value_change_pct
             FROM county_benchmark
-            WHERE property_type_label = 'Residential' AND tax_year = 2025
-        """)
+            WHERE property_type_label = 'Residential' AND tax_year = 2025 AND county_code = %s
+        """, (county_code,))
         r = cur.fetchone()
         if r:
             d = dict(r)
@@ -946,7 +977,7 @@ def main():
     conn = get_conn()
     try:
         if args.analyze:
-            analyze_threshold(conn)
+            analyze_threshold(conn, county_code=args.county)
             return
 
         # Apply any new schema additions (parcel_metrics, county_benchmark, rate_trend view)
@@ -963,12 +994,12 @@ def main():
                 print("\n*** county_benchmark rebuild FAILED and was rolled back — "
                       "the table is unchanged from before this run. ***")
                 raise
-            print_sample(conn)
+            print_sample(conn, county_code=args.county)
             print("\nDone (benchmarks only).")
             return
 
         # Threshold analysis runs first so you can see what the current setting flags
-        analyze_threshold(conn)
+        analyze_threshold(conn, county_code=args.county)
 
         # Compute. Each function commits its own table's DELETE+rebuild as one
         # transaction; if either raises (including the row-count sanity checks
@@ -989,7 +1020,7 @@ def main():
                   "was already committed and is current; whichever step didn't "
                   "finish is unchanged from before this run. ***")
             raise
-        print_sample(conn)
+        print_sample(conn, county_code=args.county)
 
         print("\nDone.")
     finally:

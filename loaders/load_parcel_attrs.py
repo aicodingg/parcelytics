@@ -290,8 +290,8 @@ def main():
                 SELECT geo_id, living_area_sqft, gross_building_area_sqft,
                        gross_excluded_sqft, gross_excluded_detail,
                        land_sqft, year_built
-                FROM parcel WHERE geo_id = ANY(%s) ORDER BY geo_id
-            """, (SANITY,))
+                FROM parcel WHERE geo_id = ANY(%s) AND county_code = %s ORDER BY geo_id
+            """, (SANITY, args.county))
             for r in cur.fetchall():
                 ac = (float(r["land_sqft"]) / 43560.0) if r["land_sqft"] else None
                 print(f"    {r['geo_id']}  main={r['living_area_sqft']}  "
