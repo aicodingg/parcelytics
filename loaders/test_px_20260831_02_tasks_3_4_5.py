@@ -318,8 +318,13 @@ def test_cap_step_up_exposure_subquery_scoped():
     check("cap_step_up_exposure's inner subquery WHERE now scopes pty.county_code = %s "
           "(previously completely unscoped by county)",
           re.search(
-              r"WHERE COALESCE\(p\.state_cd1, ''\) LIKE 'A%'\s+AND pty\.county_code = %s\s+"
-              r"AND pty\.tax_year = 2025\s+AND pty\.exemption_codes LIKE '%HS%'",
+              # PX-20260831-03 HOTFIX: 'A%' / '%HS%' are now correctly doubled
+              # ('A%%' / '%%HS%%') -- this statement is executed WITH a params
+              # tuple, so an un-doubled '%' anywhere in it (even inside a LIKE
+              # pattern) is live ammunition for psycopg2's substitution. See
+              # that hotfix's report for the full mechanism/incident.
+              r"WHERE COALESCE\(p\.state_cd1, ''\) LIKE 'A%%'\s+AND pty\.county_code = %s\s+"
+              r"AND pty\.tax_year = 2025\s+AND pty\.exemption_codes LIKE '%%HS%%'",
               _SRC_NORM,
           ) is not None)
 
@@ -336,8 +341,11 @@ def test_cap_expiry_signal_subquery_scoped():
     check("cap_expiry_signal's inner subquery WHERE now scopes pty25.county_code = %s "
           "(previously completely unscoped by county)",
           re.search(
-              r"WHERE COALESCE\(p\.state_cd1, ''\) LIKE 'A%'\s+AND pty25\.county_code = %s\s+"
-              r"AND pty25\.tax_year = 2025\s+AND pty25\.exemption_codes LIKE '%HS%'",
+              # PX-20260831-03 HOTFIX: 'A%' / '%HS%' are now correctly doubled
+              # ('A%%' / '%%HS%%') -- see the matching comment on the
+              # cap_step_up_exposure check above for the full reason.
+              r"WHERE COALESCE\(p\.state_cd1, ''\) LIKE 'A%%'\s+AND pty25\.county_code = %s\s+"
+              r"AND pty25\.tax_year = 2025\s+AND pty25\.exemption_codes LIKE '%%HS%%'",
               _SRC_NORM,
           ) is not None)
 

@@ -569,11 +569,17 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
 
                 -- Effective tax rate: real billing for 2025 only; Not Available otherwise.
                 -- Uses SUM(amount_due) from tax_billing_entity rather than tax_billing.total_tax,
-                -- because TOTAL_TAX in the TaxCurOpenData source is 0.00 for ~93% of all 2025
+                -- because TOTAL_TAX in the TaxCurOpenData source is 0.00 for ~93%% of all 2025
                 -- rows (confirmed by direct inspection of the raw CSV — not narrowly scoped to
                 -- "some property types"; it's the majority of rows regardless of type), even
                 -- when entity-level DUE amounts are correct. See KNOWN_LIMITATIONS.md.
-                -- Cap at 1.0 (100%) — values above that are bad data.
+                -- Cap at 1.0 (100%%) — values above that are bad data.
+                -- PX-20260831-03 HOTFIX: percent signs above are now doubled (previously
+                -- single, unescaped characters) -- this whole INSERT is executed WITH a
+                -- params tuple, and psycopg2 substitutes over the ENTIRE string it is
+                -- given, comments included. Any single, un-doubled percent character in
+                -- this text (not just in real SQL) is unsafe once params are passed --
+                -- see the PX-20260831-03 incident report for the full mechanism.
                 CASE
                     WHEN pty.tax_year = 2025
                      AND pty.market_value > 0
@@ -606,7 +612,7 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
                 -- effective_tax_rate_derived (Effective Tax Rate KPI masking-bug fix,
                 -- July 2026, per Diego): the CASE above always derives effective_tax_rate
                 -- from SUM(tax_billing_entity.amount_due) -- it never uses tb.total_tax as
-                -- the numerator, because TOTAL_TAX is blank for ~93% of 2025 rows (see
+                -- the numerator, because TOTAL_TAX is blank for ~93%% of 2025 rows (see
                 -- comment above). This flag is the general, per-row signal of whether a
                 -- real tax_billing.total_tax figure was even available to cross-check
                 -- against, mirroring total_tax_derived's provenance concept at the display
@@ -614,7 +620,7 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
                 -- (already LEFT JOINed below), so it will correctly flip to FALSE for any
                 -- parcel whose total_tax field is genuinely populated, now or after a
                 -- future reload. Confirmed via live query (July 2026): of 411,043 rows
-                -- with a populated effective_tax_rate, only 11,501 (~2.8%) currently have
+                -- with a populated effective_tax_rate, only 11,501 (~2.8%%) currently have
                 -- a usable tax_billing.total_tax on file.
                 -- Same WHEN conditions as the effective_tax_rate CASE above, so this flag
                 -- is non-NULL in exactly the same rows effective_tax_rate is -- NULL
@@ -769,10 +775,10 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
                 LEFT JOIN tax_billing tb
                        ON tb.geo_id = pty.geo_id AND tb.tax_year = 2025
                       AND tb.county_code = pty.county_code
-                WHERE COALESCE(p.state_cd1, '') LIKE 'A%'
+                WHERE COALESCE(p.state_cd1, '') LIKE 'A%%'
                   AND pty.county_code = %s
                   AND pty.tax_year = 2025
-                  AND pty.exemption_codes LIKE '%HS%'
+                  AND pty.exemption_codes LIKE '%%HS%%'
                   AND pty.market_value > 0
                   AND pty.assessed_value IS NOT NULL
                   AND pty.assessed_value < pty.market_value
@@ -784,7 +790,7 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
                   -- Migration M2 gating (SPEC_UNIT_MODEL_AND_INGEST_GATE.md §3.5):
                   -- a multi-unit account's market_value/assessed_value are now
                   -- SUMS across every unit sharing this geo_id (parcel_rollup.py).
-                  -- A summed gap crossing the 22%/$500 thresholds doesn't mean any
+                  -- A summed gap crossing the 22%%/$500 thresholds doesn't mean any
                   -- ONE homestead has that much cap exposure -- it can just be an
                   -- artifact of adding several units' unrelated gaps together. Only
                   -- evaluate genuinely single-unit parcels (unit_count = 1) or rows
@@ -812,14 +818,14 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
                 LEFT JOIN parcel_tax_year pty26
                        ON pty26.geo_id = pty25.geo_id AND pty26.tax_year = 2026
                       AND pty26.county_code = pty25.county_code
-                WHERE COALESCE(p.state_cd1, '') LIKE 'A%'
+                WHERE COALESCE(p.state_cd1, '') LIKE 'A%%'
                   AND pty25.county_code = %s
                   AND pty25.tax_year = 2025
-                  AND pty25.exemption_codes LIKE '%HS%'
+                  AND pty25.exemption_codes LIKE '%%HS%%'
                   AND (
                         pty26.geo_id IS NULL
                         OR pty26.exemption_codes IS NULL
-                        OR pty26.exemption_codes NOT LIKE '%HS%'
+                        OR pty26.exemption_codes NOT LIKE '%%HS%%'
                       )
                   -- Migration M2 gating -- same rationale as cap_step_up_exposure
                   -- above: exemption_codes on a multi-unit row is a UNION across
@@ -962,7 +968,7 @@ def compute_county_benchmarks(conn, county_code=DEFAULT_COUNTY):
                   AND (pty.data_source IS NULL OR pty.data_source != 'preliminary')
                   -- PX-20260828-16-followup: this INSERT...SELECT previously
                   -- aggregated across EVERY county's parcel_tax_year/parcel
-                  -- rows before stamping the single %s county_code value
+                  -- rows before stamping the single %%s county_code value
                   -- (first SELECT-list column above) onto every resulting
                   -- row -- confirmed the exact bug load_dallas_certified.py's
                   -- own comment already flagged. Scoped now, together with

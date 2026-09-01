@@ -22,7 +22,7 @@ REV 0 named a specific commit (`5bfe005`) to confirm against. That commit predat
 /usr/bin/python3 -c "import subprocess; print(subprocess.check_output(['git','rev-parse','HEAD']).decode().strip())"
 ```
 
-**Expect: the commit hash that ships PX-20260831-02's Tasks 1–5 (fill in the real hash here once this brief is committed — this runbook deliberately does not hardcode it, since doing so was exactly REV 0's mistake; as of this writing, HEAD is still `0fcddcd`, PX-20260830-05, and every one of this brief's fixes exists only as uncommitted working-tree changes).** Before running R1.1's check for real, confirm the deployed HEAD includes:
+**Expect: `9cd17f6` (PX-20260831-02, committed 2026-08-31 — ships Tasks 1–5). A later descendant is acceptable only if the three greps below all still pass.** Before running R1.1's check for real, confirm the deployed HEAD includes:
 - `refresh_snapshot_summary.py`'s per-row `county_code` derivation (grep for `_ALL_COUNTIES_BATCH_SENTINEL` — its presence confirms Task 1 shipped)
 - `compute_metrics.py`'s `LARGE_JUMP_THRESHOLD_PCT_BY_COUNTY` dict and `_parcel_metrics_row_floor()` function (confirms Tasks 3–4 shipped)
 - `compute_metrics.py`'s `p.county_code = pty.county_code` equality on the main INSERT's `parcel p` join (confirms Task 5 shipped)
