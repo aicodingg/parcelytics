@@ -42,6 +42,7 @@ This file proves:
 Run: python3 loaders/test_px_20260901_02.py
 """
 import importlib
+import importlib.util
 import os
 import re
 import sys
