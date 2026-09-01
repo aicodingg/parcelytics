@@ -90,47 +90,23 @@
    not one of the buttons here anymore. #}
 {% if mode != 'homeowner' %}
 <div class="mb-4">
+  {# PX-20260901-03 Task 2: tabs are now generated from `available_tabs`
+     (app.py's _compute_snapshot_data(), filtered from the fixed
+     _SNAPSHOT_VIEW_TAB_ORDER down to whichever views this county's
+     snapshot_totals rows actually cover) instead of a hardcoded, always-
+     all-10 list. Diego's standing "compose from the data a county has"
+     principle: no tab renders for a view with zero rows for this county
+     -- not disabled, not empty, just absent. For a county with full
+     coverage (Travis today) `available_tabs` is the same 10 entries in
+     the same order this hardcoded list used to render, so this loop's
+     output is unchanged for Travis. #}
   <div class="btn-group btn-group-sm flex-wrap" role="group">
-    <a href="{{ url_for('county_snapshot', view='overall') }}"
-       class="btn {% if view == 'overall' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Overall
+    {% for v in available_tabs %}
+    <a href="{{ url_for('county_snapshot', view=v) }}"
+       class="btn {% if view == v %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+      {{ tab_button_labels[v] }}
     </a>
-    <a href="{{ url_for('county_snapshot', view='residential') }}"
-       class="btn {% if view == 'residential' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Residential
-    </a>
-    <a href="{{ url_for('county_snapshot', view='multifamily') }}"
-       class="btn {% if view == 'multifamily' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Multi-Family
-    </a>
-    <a href="{{ url_for('county_snapshot', view='retail') }}"
-       class="btn {% if view == 'retail' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Retail
-    </a>
-    <a href="{{ url_for('county_snapshot', view='industrial') }}"
-       class="btn {% if view == 'industrial' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Industrial
-    </a>
-    <a href="{{ url_for('county_snapshot', view='office') }}"
-       class="btn {% if view == 'office' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Office
-    </a>
-    <a href="{{ url_for('county_snapshot', view='hotel') }}"
-       class="btn {% if view == 'hotel' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Hotel
-    </a>
-    <a href="{{ url_for('county_snapshot', view='land') }}"
-       class="btn {% if view == 'land' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Land
-    </a>
-    <a href="{{ url_for('county_snapshot', view='agricultural') }}"
-       class="btn {% if view == 'agricultural' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Agricultural
-    </a>
-    <a href="{{ url_for('county_snapshot', view='other') }}"
-       class="btn {% if view == 'other' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-      Other
-    </a>
+    {% endfor %}
   </div>
   <div class="text-muted mt-2" style="font-size:12px;">
     {% if view == 'overall' %}All taxable real property — residential, multi-family, retail, industrial, office, hotel, land, ag, other
@@ -147,6 +123,15 @@
   </div>
 </div>
 {% endif %}{# /mode != homeowner — view toggle #}
+
+{# PX-20260901-03 Task 2: one honest coverage line, generated from the same
+   availability facts the tab bar above and the movers panel below branch
+   on (app.py's snapshot_coverage_copy()) -- never a hand-typed per-county
+   sentence. Returns None for a county with full coverage (Travis today),
+   so this renders nothing there -- byte-identical to before this brief. #}
+{% if coverage_line %}
+<p class="text-muted mb-3" style="font-size:12px;">{{ coverage_line }}</p>
+{% endif %}
 
 {% if totals %}
 {# ── Headline cards ────────────────────────────────────────────── #}

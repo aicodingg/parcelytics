@@ -46,6 +46,7 @@ from snapshot_taxonomy import (
     _snapshot_taxonomy_sql, _SNAPSHOT_TAB_ORDER, _snapshot_taxonomy_sort_case_sql,
     _SNAPSHOT_SECTOR_VIEWS, _SNAPSHOT_VALID_VIEWS, _SNAPSHOT_VIEW_PROP_TYPE_LABEL,
     _snapshot_view_where, ptype_and_sort_case_for_view,
+    _SNAPSHOT_VIEW_TAB_ORDER, _SNAPSHOT_TAB_BUTTON_LABEL, _SNAPSHOT_COVERAGE_LABELS,
 )
 
 # BILLING-DIAG-1: _BILLING_TARGET_YEARS used to be its own separately-
@@ -2338,6 +2339,53 @@ def unavailable_copy(kind, county_name, page_label=None, view_label=None):
     raise ValueError(f"unavailable_copy: unrecognized kind {kind!r}")
 
 
+def snapshot_coverage_copy(county_name, available_views, has_neighborhood_movers):
+    """PX-20260901-03 Task 2: the one honest, GENERATED "here's what this
+    county's Market Snapshot actually covers" sentence -- Diego's standing
+    principle that a county's page is composed from the data that county
+    has, complete on its own terms, never Travis's template rendered with
+    holes.
+
+    `available_views` is the real set of view values present in
+    snapshot_totals for this county (app.py's _compute_snapshot_data());
+    `has_neighborhood_movers` is the same county-level coverage fact
+    _snapshot_summary_freshness() uses to decide whether
+    snapshot_neighborhood_movers is even a required table for this county
+    (see _county_has_neighborhood_data()). Both are real facts passed in
+    by the caller -- this function itself never queries anything and never
+    hand-types a per-county sentence; only the fixed label VOCABULARY
+    (snapshot_taxonomy._SNAPSHOT_COVERAGE_LABELS) is a static lookup table.
+
+    Returns None when the county has full coverage (every known view AND
+    neighborhood movers) -- Travis today -- so a fully-covered county's
+    page renders with NO coverage line at all, byte-identical to before
+    this brief. The line only appears for a county missing something
+    real."""
+    all_views = tuple(_SNAPSHOT_COVERAGE_LABELS)
+    missing_views = [v for v in all_views if v not in available_views]
+
+    if not missing_views and has_neighborhood_movers:
+        return None
+
+    available_list = ", ".join(_SNAPSHOT_COVERAGE_LABELS[v] for v in all_views if v in available_views)
+
+    missing_clauses = []
+    if missing_views:
+        missing_list = ", ".join(_SNAPSHOT_COVERAGE_LABELS[v] for v in missing_views)
+        noun = "Sub-sector breakdown" if len(missing_views) == 1 else "Sub-sector breakdowns"
+        missing_clauses.append(f"{noun} ({missing_list})")
+    if not has_neighborhood_movers:
+        missing_clauses.append("neighborhood detail")
+
+    if len(missing_clauses) == 2:
+        missing_sentence = f"{missing_clauses[0]} and {missing_clauses[1]} are not yet available for this county."
+    else:
+        verb = "is" if missing_clauses[0] == "neighborhood detail" else "are"
+        missing_sentence = f"{missing_clauses[0]} {verb} not yet available for this county."
+
+    return f"{county_name}: {available_list}. {missing_sentence}"
+
+
 @app.context_processor
 def _inject_county_helpers():
     """PX-20260824-01: county_profile added alongside the existing
@@ -4533,6 +4581,36 @@ def snapshot_landing():
     return _snapshot_response(view, county_code, slug, api_county_slug=(slug if explicit else ""))
 
 
+def _county_has_neighborhood_data(county_code):
+    """PX-20260901-03 Task 1: whether this county's `parcel` rows carry any
+    real neighborhood_cd at all -- a coverage FACT independent of any one
+    Market Snapshot view, derived from data, never a hardcoded county list.
+    Dallas's DCAD neighborhood_cd field was never mapped during onboarding
+    (a separate, not-yet-scheduled loader brief) -- Dallas correctly has
+    zero snapshot_neighborhood_movers rows for every view, forever, until
+    that loader work happens, and that absence must never be mistaken for
+    a freshness failure (_snapshot_summary_freshness() below).
+
+    Cached on flask.g for the lifetime of one request: this fact is asked
+    for twice per snapshot request (once by the freshness gate, once by
+    snapshot_coverage_copy()'s missing-coverage line) and the underlying
+    query is identical every time within a request -- same g-based
+    per-request caching convention as this file's other
+    getattr(g, ..., None) call sites."""
+    cache = getattr(g, "_snapshot_neighborhood_data_cache", None)
+    if cache is None:
+        cache = {}
+        g._snapshot_neighborhood_data_cache = cache
+    if county_code not in cache:
+        row = query(
+            "SELECT EXISTS (SELECT 1 FROM parcel WHERE county_code = %s "
+            "AND neighborhood_cd IS NOT NULL AND neighborhood_cd <> '') AS has_data",
+            (county_code,), one=True,
+        )
+        cache[county_code] = bool(row["has_data"]) if row else False
+    return cache[county_code]
+
+
 def _snapshot_summary_freshness(county_code="TRAVIS"):
     """
     Tier 1 "no live fallback, ever" gate for /snapshot (SPEC_AGGREGATE_
@@ -4541,8 +4619,12 @@ def _snapshot_summary_freshness(county_code="TRAVIS"):
     explaining WHY the data isn't available when is_fresh is False, None
     when it is.
 
-    Same 3-table-agree-with-each-other + agree-with-the-latest-load_batch
+    Same tables-agree-with-each-other + agree-with-the-latest-load_batch
     logic as loaders/refresh_snapshot_summary.assert_snapshot_summary_fresh()
+    -- PX-20260901-03 Task 1: the neighborhood-movers table is REQUIRED in
+    that table set only for a county that actually has neighborhood data
+    (see _county_has_neighborhood_data() below); breakdown/totals remain
+    required for every county
     -- reimplemented here directly against this file's own query() helper
     rather than cross-imported from loaders/, to keep app.py and loaders/
     mutually independent (matching this codebase's existing module-boundary
@@ -4595,7 +4677,23 @@ def _snapshot_summary_freshness(county_code="TRAVIS"):
     # PX-20260830-04 Task 1: unavailable_copy() takes a resolved county_name,
     # not the raw county_code -- see its own docstring for why.
     profile = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
-    tables = ("snapshot_breakdown", "snapshot_totals", "snapshot_neighborhood_movers")
+    # PX-20260901-03 Task 1: snapshot_neighborhood_movers is only a REQUIRED
+    # table for a county that actually has neighborhood data to begin with
+    # -- derived from data (_county_has_neighborhood_data()), never a
+    # hardcoded county list. Dallas has zero rows in this table for every
+    # view (DCAD's neighborhood_cd field was never mapped -- see that
+    # function's docstring) and that is CORRECT, complete-on-its-own-terms
+    # coverage, not a freshness failure: the old unconditional 3-table
+    # check would have permanently reported Dallas's Market Snapshot as
+    # "being prepared" even after breakdown/totals committed successfully,
+    # which is exactly the live bug this task fixes. A county that DOES
+    # have neighborhood data (Travis) keeps the original 3-table
+    # requirement unchanged -- if ITS movers rows are missing or
+    # batch-mismatched, that is still a real freshness gap.
+    tables = ["snapshot_breakdown", "snapshot_totals"]
+    if _county_has_neighborhood_data(county_code):
+        tables.append("snapshot_neighborhood_movers")
+
     batch_ids_by_table = {}
     for tbl in tables:
         rows = query(
@@ -4727,7 +4825,35 @@ def _compute_snapshot_data(view, county_code):
             "top_neighborhoods": [],
             "bottom_neighborhoods": [],
             "status_2026": "none",
+            # PX-20260901-03 Task 2: safe defaults -- the template's tab bar
+            # and coverage line both live inside the same {% else %} branch
+            # as the rest of this page's real content, so these are never
+            # actually read on the data_unavailable path, but declared here
+            # anyway to match this dict's existing every-key-explicit style.
+            "available_tabs": [],
+            "tab_button_labels": _SNAPSHOT_TAB_BUTTON_LABEL,
+            "coverage_line": None,
         }
+
+    # PX-20260901-03 Task 2: composition facts -- which views this county's
+    # snapshot_totals rows actually cover, and whether it has neighborhood
+    # data at all. Independent of the specific `view` being rendered (a
+    # nav-bar/coverage-line concern, not a per-view one); real, generated
+    # facts from the already-precomputed summary tables, never a hardcoded
+    # per-county list -- reading a small DISTINCT off an already-small
+    # summary table, not a live aggregation, so this stays within Tier 1's
+    # "no live fallback" principle (see this function's own docstring).
+    available_view_rows = query(
+        "SELECT DISTINCT view FROM snapshot_totals WHERE county_code = %s",
+        (county_code,),
+    )
+    available_views = {r["view"] for r in available_view_rows}
+    available_tabs = [v for v in _SNAPSHOT_VIEW_TAB_ORDER if v in available_views]
+    has_neighborhood_movers = _county_has_neighborhood_data(county_code)
+    coverage_line = snapshot_coverage_copy(
+        COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])["county_name"],
+        available_views, has_neighborhood_movers,
+    )
 
     # bench_labels/fallback_label reused verbatim from the same shared
     # helper the refresh script itself used to build these views' SQL --
@@ -4839,6 +4965,11 @@ def _compute_snapshot_data(view, county_code):
         "top_neighborhoods": top_neighborhoods,
         "bottom_neighborhoods": bottom_neighborhoods,
         "status_2026": status_2026,
+        # PX-20260901-03 Task 2: composition-from-availability facts, computed
+        # above the freshness-gate branch point in this function's body.
+        "available_tabs": available_tabs,
+        "tab_button_labels": _SNAPSHOT_TAB_BUTTON_LABEL,
+        "coverage_line": coverage_line,
     }
 
 

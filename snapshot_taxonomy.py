@@ -444,6 +444,50 @@ _SNAPSHOT_VIEW_PROP_TYPE_LABEL = {
     "commercial": "Commercial", "land": "Land/Vacant", "agricultural": "Agricultural",
 }
 
+# PX-20260901-03 Task 2: the tab bar's fixed nav ORDER, keyed by view value
+# (NOT the same thing as the module-level _SNAPSHOT_TAB_ORDER tuple above,
+# which is display LABELS used for a SQL sort CASE -- this one is the view
+# keys the tab bar's own <a href> loop iterates over). "overall" + the 9
+# sector views, in the exact order templates/snapshot.html's tab buttons
+# have always rendered in. "commercial" is deliberately excluded -- it's
+# the legacy, non-tab-bar deep-link view (see _snapshot_view_where()'s
+# docstring above), never a rendered tab.
+#
+# A county's REAL tab bar is this tuple filtered down to whichever views
+# that county's snapshot_totals rows actually cover (app.py's
+# _compute_snapshot_data() computes `available_tabs` this way) -- Diego's
+# standing "compose a county's page from the data it has, complete on its
+# own terms" principle: no disabled tab, no empty tab for a view with zero
+# rows, just no tab.
+_SNAPSHOT_VIEW_TAB_ORDER = ("overall",) + tuple(_SNAPSHOT_SECTOR_VIEWS)
+
+# Exact button label text for each tab -- matches the literal strings the
+# hardcoded <a> tags in templates/snapshot.html used before this brief
+# (e.g. "Land", not "Land/Vacant" -- _SNAPSHOT_SECTOR_VIEWS' own values are
+# a different, longer string used for SQL property_type_label matching,
+# not button copy, so this is a deliberately separate small map).
+_SNAPSHOT_TAB_BUTTON_LABEL = {
+    "overall": "Overall", "residential": "Residential", "multifamily": "Multi-Family",
+    "retail": "Retail", "industrial": "Industrial", "office": "Office", "hotel": "Hotel",
+    "land": "Land", "agricultural": "Agricultural", "other": "Other",
+}
+
+# PX-20260901-03 Task 2: order + lowercase prose label for the Market
+# Snapshot coverage line (app.py's snapshot_coverage_copy()). Covers every
+# view a county's snapshot_totals COULD carry, including the legacy
+# "commercial" view (a real, live, deep-linkable view even though it isn't
+# one of the 9 tabs -- see _snapshot_view_where()'s docstring) -- the
+# coverage line is about what DATA exists for a county, not what has a nav
+# tab. One fixed vocabulary dict (dict preserves insertion order, so this
+# is both the order and the label text); the per-county SENTENCE built
+# from it is generated at read time (app.py), never a hand-typed literal
+# per county -- same pattern as _SNAPSHOT_VIEW_PROP_TYPE_LABEL above.
+_SNAPSHOT_COVERAGE_LABELS = {
+    "overall": "overall", "residential": "residential", "multifamily": "multi-family",
+    "retail": "retail", "industrial": "industrial", "office": "office", "hotel": "hotel",
+    "commercial": "commercial", "land": "land", "agricultural": "agricultural", "other": "other",
+}
+
 
 def _snapshot_view_where(view):
     """

@@ -37,7 +37,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from snapshot_taxonomy import ptype_and_sort_case_for_view, _SNAPSHOT_SECTOR_VIEWS
+from snapshot_taxonomy import (
+    ptype_and_sort_case_for_view, _SNAPSHOT_SECTOR_VIEWS,
+    _SNAPSHOT_VIEW_TAB_ORDER, _SNAPSHOT_TAB_BUTTON_LABEL, _SNAPSHOT_COVERAGE_LABELS,
+)
 
 FAILURES = []
 
@@ -108,6 +111,27 @@ def _build_real_namespace(source):
     actually proves.)"""
     freshness_src = _extract_function_body(source, "_snapshot_summary_freshness")
     compute_src = _extract_function_body(source, "_compute_snapshot_data")
+    # PX-20260901-03 Task 1/2: _snapshot_summary_freshness() and
+    # _compute_snapshot_data() now both call two more real app.py functions
+    # -- _county_has_neighborhood_data() (Task 1's coverage-derived movers
+    # requirement) and snapshot_coverage_copy() (Task 2's coverage line).
+    # Both must be extracted and execed here too, or the real extracted
+    # function bodies above raise NameError the moment they're called.
+    neighborhood_data_src = _extract_function_body(source, "_county_has_neighborhood_data")
+    assert neighborhood_data_src, "_county_has_neighborhood_data() not found in app.py -- extraction broke"
+    # snapshot_coverage_copy() is immediately followed by
+    # "@app.context_processor" (same shape as unavailable_copy() right
+    # above it) -- the shared _extract_function_body() boundary regex only
+    # stops at "\ndef " or "@app\.route", so it would silently over-capture
+    # into _inject_county_helpers()'s own @app.context_processor decorator
+    # line, which raises NameError on exec (no real `app` object in this
+    # stub namespace). Same manual widened-boundary technique as
+    # unavailable_copy_src above.
+    _scc_m = re.search(r"\ndef snapshot_coverage_copy\(", source)
+    assert _scc_m, "snapshot_coverage_copy() not found in app.py -- extraction broke"
+    _scc_start = _scc_m.start() + 1
+    _scc_end_m = re.search(r"\n(def |@app\.)", source[_scc_start + 1:])
+    coverage_copy_src = source[_scc_start:_scc_start + 1 + _scc_end_m.start()] if _scc_end_m else source[_scc_start:]
     # unavailable_copy() is immediately followed by "@app.context_processor"
     # (decorating _inject_county_helpers() right after it) -- the shared
     # _extract_function_body() boundary regex only stops at "\ndef " or
@@ -133,14 +157,27 @@ def _build_real_namespace(source):
     assert unavailable_copy_src, "unavailable_copy() not found in app.py -- extraction broke"
     assert county_profiles_src, "COUNTY_PROFILES not found in app.py -- extraction broke"
 
+    # PX-20260901-03 Task 1: _county_has_neighborhood_data() reads/writes
+    # flask.g (a per-request cache) -- a plain object stands in fine here,
+    # since getattr(g, ..., None) / g.attr = ... don't need a real Flask
+    # app context, just something that supports arbitrary attributes.
+    class _FakeG:
+        pass
+
     namespace = {
         "ptype_and_sort_case_for_view": ptype_and_sort_case_for_view,
         "_SNAPSHOT_SECTOR_VIEWS": _SNAPSHOT_SECTOR_VIEWS,
+        "_SNAPSHOT_VIEW_TAB_ORDER": _SNAPSHOT_VIEW_TAB_ORDER,
+        "_SNAPSHOT_TAB_BUTTON_LABEL": _SNAPSHOT_TAB_BUTTON_LABEL,
+        "_SNAPSHOT_COVERAGE_LABELS": _SNAPSHOT_COVERAGE_LABELS,
         "SNAPSHOT_SUBTYPE_CAP": 7,
+        "g": _FakeG(),
         "query": None,  # set per-scenario by the caller before invoking
     }
     exec(compile(county_profiles_src, "<extracted COUNTY_PROFILES>", "exec"), namespace)
     exec(compile(unavailable_copy_src, "<extracted unavailable_copy>", "exec"), namespace)
+    exec(compile(coverage_copy_src, "<extracted snapshot_coverage_copy>", "exec"), namespace)
+    exec(compile(neighborhood_data_src, "<extracted _county_has_neighborhood_data>", "exec"), namespace)
     exec(compile(freshness_src, "<extracted _snapshot_summary_freshness>", "exec"), namespace)
     exec(compile(compute_src, "<extracted _compute_snapshot_data>", "exec"), namespace)
     return namespace
@@ -161,6 +198,14 @@ class _StaleQueryStub:
     def __call__(self, sql, params=None, one=False):
         self.calls.append(sql)
         norm = " ".join(sql.split())
+        # PX-20260901-03 Task 1: _county_has_neighborhood_data()'s coverage
+        # check now runs FIRST, as part of the freshness gate itself (it
+        # decides whether snapshot_neighborhood_movers is even a required
+        # table). Travis has real neighborhood data, so this stays True --
+        # movers remains a required table for this stub, matching this
+        # scenario's pre-existing 3-table-required behavior exactly.
+        if "AS has_data" in norm:
+            return {"has_data": True}
         if "source_import_batch_id FROM" in norm:
             return [{"source_import_batch_id": self.table_batch_id}]
         if "MAX(batch_id)" in norm:
@@ -188,6 +233,18 @@ class _FreshQueryStub:
             return [{"source_import_batch_id": 5}]
         if "MAX(batch_id)" in norm:
             return {"latest": 5}
+        # PX-20260901-03: Travis has real neighborhood-code data -- matches
+        # this stub's overall "fully-populated, full-coverage" shape.
+        if "AS has_data" in norm:
+            return {"has_data": True}
+        # PX-20260901-03: checked BEFORE the generic "FROM snapshot_totals"
+        # branch below since both share that substring -- this is the new
+        # DISTINCT-view availability query, which returns a LIST of view
+        # rows, not the single per-view totals dict the generic branch
+        # returns. Travis has full coverage: all 10 tab-order views plus
+        # the legacy "commercial" bucket (PM's evidence: "Travis: 11").
+        if "SELECT DISTINCT view FROM snapshot_totals" in norm:
+            return [{"view": v} for v in _SNAPSHOT_VIEW_TAB_ORDER] + [{"view": "commercial"}]
         if "FROM snapshot_breakdown" in norm:
             return [
                 {"ptype": "Residential", "sort_key": "1", "n_parcels": 900, "n_up": 500, "n_down": 300,
@@ -251,7 +308,17 @@ def test_real_compute_snapshot_data_returns_data_unavailable_when_stale():
           result["bench_trends"] == [], result)
     check("stale scenario: status_2026 defaults to 'none'", result["status_2026"] == "none", result)
     check("stale scenario: NEVER issued a query past the freshness gate (proves no live fallback)",
-          all("source_import_batch_id FROM" in " ".join(c.split()) or "MAX(batch_id)" in " ".join(c.split())
+          # PX-20260901-03: _county_has_neighborhood_data()'s "AS has_data"
+          # check is now PART OF the freshness gate itself (it runs first,
+          # to decide whether snapshot_neighborhood_movers even belongs in
+          # the required-tables list) -- not a live-fallback query issued
+          # AFTER the gate has already failed. The no-live-fallback
+          # guarantee this assertion protects is still intact: every query
+          # in stub.calls belongs to the gate, none of them is a real
+          # aggregate/rows query for the page itself.
+          all("source_import_batch_id FROM" in " ".join(c.split())
+              or "MAX(batch_id)" in " ".join(c.split())
+              or "AS has_data" in " ".join(c.split())
               for c in stub.calls),
           stub.calls)
 
@@ -290,6 +357,14 @@ def test_real_freshness_gate_empty_table_case():
     def empty_table_stub(sql, params=None, one=False):
         calls.append(sql)
         norm = " ".join(sql.split())
+        # PX-20260901-03: _snapshot_summary_freshness() now calls
+        # _county_has_neighborhood_data() FIRST, before any batch-id query,
+        # to decide whether snapshot_neighborhood_movers belongs in the
+        # required-tables list at all -- Travis (this scenario's county)
+        # has real neighborhood data, so the original 3-table requirement
+        # is unchanged here.
+        if "AS has_data" in norm:
+            return {"has_data": True}
         if "source_import_batch_id FROM" in norm:
             return []  # empty table -- nothing refreshed yet
         if "MAX(batch_id)" in norm:
