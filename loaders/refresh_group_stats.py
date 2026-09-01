@@ -385,8 +385,14 @@ def build_shadow(conn, batch_id, verbose=True):
     """
     def _log(msg):
         if verbose:
-            print(msg)
+            print(msg, flush=True)
 
+    # PX-20260901-01 HOTFIX Task 3: same observability fix applied to
+    # compute_metrics.py's passes -- flushed start/done lines around the
+    # one real aggregation query in this build phase, so a long build is
+    # visible in a `tee`d log the moment it starts, not just after it
+    # finishes (or never, if it's killed mid-run).
+    _log("  → group_stats_shadow build start")
     t0 = time.time()
     with conn.cursor() as cur:
         cur.execute("DROP TABLE IF EXISTS group_stats_shadow")
@@ -395,6 +401,7 @@ def build_shadow(conn, batch_id, verbose=True):
         row_count = cur.rowcount
     conn.commit()
     _log(f"    group_stats_shadow built: {row_count:,} rows (all counties)  [{time.time()-t0:.1f}s]")
+    _log(f"  → group_stats_shadow build done ({time.time()-t0:.1f}s, {row_count:,} rows)")
     return row_count
 
 
@@ -561,6 +568,11 @@ def assert_group_stats_fresh(conn, county_code="TRAVIS"):
 
 
 def main():
+    # PX-20260901-01 HOTFIX Task 3: line-buffer stdout so a long build's
+    # flushed progress lines actually reach a `tee`d log in real time,
+    # matching the fix applied to compute_metrics.py's main().
+    sys.stdout.reconfigure(line_buffering=True)
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="Compute + report row count only; no writes")
     ap.add_argument("--check-staleness", action="store_true", help="Run the staleness assertion only; no refresh")

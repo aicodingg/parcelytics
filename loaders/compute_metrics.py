@@ -494,6 +494,7 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
     # scoped TOGETHER with the DELETE above (see its comment) -- was
     # previously EXEMPT (PX-20260823-02) as a disclosed, coupled follow-up;
     # fixed now per Diego's ruling, as part of unblocking Dallas metrics.
+    print("  → Pass 1 start (main INSERT)", flush=True)
     with conn.cursor() as cur:
         cur.execute(f"""
             INSERT INTO parcel_metrics (
@@ -663,7 +664,8 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
             WINDOW w AS (PARTITION BY pty.geo_id ORDER BY pty.tax_year)
         """, (county_code,))
         n = cur.rowcount
-    print(f"    Inserted {n:,} rows  ({time.time()-t0:.1f}s)")
+    print(f"    Inserted {n:,} rows  ({time.time()-t0:.1f}s)", flush=True)
+    print(f"  → Pass 1 done ({time.time()-t0:.1f}s, {n:,} rows)", flush=True)
 
     # Row-count sanity floor (silent-failure fix): a JOIN/WHERE bug that
     # silently matched far fewer rows than it should used to "succeed" here
@@ -672,6 +674,7 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
     _assert_row_count_sane("parcel_metrics", n, prev_count, hard_floor=row_floor)
 
     # Pass 2: large value jump flag
+    print("  → Pass 2 start (risk_large_value_jump)", flush=True)
     t1 = time.time()
     # PX-20260831-02 Task 4: threshold is now per-county, looked up here (once
     # per run, same transaction) via _large_jump_threshold_for_county() --
@@ -689,7 +692,9 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
               AND county_code = %s
         """, (county_code,))
         n_jump = cur.rowcount
-    print(f"    risk_large_value_jump: {n_jump:,} rows flagged (>{jump_threshold}%)  ({time.time()-t1:.1f}s)")
+    print(f"    risk_large_value_jump: {n_jump:,} rows flagged (>{jump_threshold}%)  ({time.time()-t1:.1f}s)",
+          flush=True)
+    print(f"  → Pass 2 done ({time.time()-t1:.1f}s, {n_jump:,} rows)", flush=True)
 
     # Pass 3: homestead cap signals — residential only, consistent with Phase 1 guard.
     #
@@ -763,6 +768,8 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
     # real fix would need a classi_cd-based residential check (matching
     # label_case_sql()'s classi_cd-first approach) as a fallback when
     # state_cd1 is NULL -- flagged for a future brief, not built here.
+    print("  → Pass 3 start (cap_step_up_exposure, cap_expiry_signal)", flush=True)
+    t3_start = time.time()
     t1 = time.time()
     with conn.cursor() as cur:
         cur.execute("""
@@ -804,7 +811,7 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
         """, (county_code, county_code))
         n_step_up = cur.rowcount
     print(f"    cap_step_up_exposure: {n_step_up:,} rows flagged (2025 only, >=22% relative gap "
-          f"AND >=$500 estimated)  ({time.time()-t1:.1f}s)")
+          f"AND >=$500 estimated)  ({time.time()-t1:.1f}s)", flush=True)
 
     t1 = time.time()
     with conn.cursor() as cur:
@@ -842,14 +849,66 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
         """, (county_code, county_code))
         n_expiry = cur.rowcount
     print(f"    cap_expiry_signal: {n_expiry:,} rows flagged (2025 only, HS on 2025 "
-          f"certified, absent from 2026 preliminary)  ({time.time()-t1:.1f}s)")
+          f"certified, absent from 2026 preliminary)  ({time.time()-t1:.1f}s)", flush=True)
     print("    (risk_homestead_cap_expiry column left in place for backward "
           "compatibility but no longer written by this script -- see schema.sql's "
-          "migration comment)")
+          "migration comment)", flush=True)
+    print(f"  → Pass 3 done ({time.time()-t3_start:.1f}s, {n_step_up + n_expiry:,} rows)", flush=True)
 
     # Pass 4: cumulative value growth (on 2025 row, from each parcel's earliest valid year)
+    #
+    # PX-20260901-01 HOTFIX: this pass ran 13h07m (cancelled by PM, no wait
+    # event -- pure CPU/IO) on its second live run, against Dallas. Root cause
+    # (confirmed against `git show 0fcddcd`, the pre-PX-20260831-02-Task-5
+    # version -- not assumed): the inner subquery below (formerly aliased
+    # `mn`) computed MIN(tax_year) GROUP BY geo_id[, county_code] with NO
+    # county_code predicate in its own WHERE clause -- it NEVER has, in
+    # either version. Pre-Task-5, that was harmless: the ENTIRE
+    # parcel_tax_year table was Travis-only, so "whole table" and "this
+    # county" were the same set -- the query wasn't scoped, it just never
+    # needed to be. Task 5 added county_code to that subquery's
+    # SELECT/GROUP BY/join condition -- a real, necessary CORRECTNESS fix,
+    # preventing a geo_id collision between counties from blending two
+    # counties' "earliest valid market value" together -- but did NOT add a
+    # matching `WHERE county_code = %s` filter to scope the aggregation
+    # itself. The moment Dallas's rows coexisted with Travis's in
+    # parcel_tax_year (~6.4M rows combined per the incident report, vs.
+    # ~2.8M when this ran for Travis alone on Aug 3), every run of this pass
+    # -- even a single-county run like this one -- paid the cost of a
+    # MIN()/GROUP BY aggregation across BOTH counties' complete history
+    # before the join ever narrowed anything down to the one county actually
+    # being computed. On a Render Basic-1gb instance, a HashAggregate over
+    # that many distinct (geo_id, county_code) groups is memory-pressure-
+    # prone and can spill heavily to local disk -- consistent with "active,
+    # no wait event, pure CPU/IO for 13 hours" (no lock contention, just very
+    # large local I/O).
+    #
+    # Fix: materialize this county's per-geo earliest-valid-year values into
+    # an indexed temp table FIRST, with county_code = %s inside the
+    # aggregation's own WHERE clause (before GROUP BY, not just present in
+    # the SELECT list) -- so the aggregation only ever scans this county's
+    # rows. This also makes the cross-county-collision guard STRONGER than a
+    # same-shape scoped-subquery-in-place would: since _pass4_earliest_year
+    # only ever contains this county's geo_ids (by construction, not just by
+    # an added equality check), no cross-county geo_id collision is possible
+    # at the join below. ON COMMIT DROP -- self-cleaning within this
+    # function's single transaction (see top-of-function note).
+    #
+    # Diego's EXPLAIN (loaders/explain_compute_metrics_passes.py) is what
+    # confirms the plan against the live DB; this diagnosis is from reading
+    # the code + the git history, not a live plan.
+    print("  → Pass 4 start (cumulative_value_growth_pct)", flush=True)
     t1 = time.time()
     with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TEMP TABLE _pass4_earliest_year ON COMMIT DROP AS
+            SELECT geo_id, MIN(tax_year) AS earliest_year
+            FROM parcel_tax_year
+            WHERE county_code = %s
+              AND market_value > 0
+            GROUP BY geo_id
+        """, (county_code,))
+        cur.execute("CREATE UNIQUE INDEX ON _pass4_earliest_year (geo_id)")
         cur.execute("""
             UPDATE parcel_metrics pm
             SET cumulative_value_growth_pct = sub.cum_pct
@@ -861,27 +920,11 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
                         / earliest.market_value, 4
                     ) AS cum_pct
                 FROM parcel_tax_year cur
-                JOIN (
-                    -- PX-20260831-02 Task 5: county_code added to both the
-                    -- SELECT/GROUP BY here and the join condition below --
-                    -- this subquery used to find each geo_id's earliest
-                    -- market_value MIN(tax_year) across the ENTIRE
-                    -- parcel_tax_year table with no county_code involved at
-                    -- all. With a single county that's harmless (every
-                    -- geo_id row in the table already belongs to that one
-                    -- county), but once a second county coexists, a geo_id
-                    -- collision between counties could silently compute one
-                    -- county's "earliest valid market value" from a
-                    -- DIFFERENT county's row for the same geo_id string.
-                    SELECT geo_id, county_code, MIN(tax_year) AS earliest_year
-                    FROM parcel_tax_year
-                    WHERE market_value > 0
-                    GROUP BY geo_id, county_code
-                ) mn ON mn.geo_id = cur.geo_id AND mn.county_code = cur.county_code
+                JOIN _pass4_earliest_year mn ON mn.geo_id = cur.geo_id
                 JOIN parcel_tax_year earliest
                   ON earliest.geo_id = mn.geo_id
                  AND earliest.tax_year = mn.earliest_year
-                 AND earliest.county_code = mn.county_code
+                 AND earliest.county_code = %s
                 WHERE cur.county_code = %s
                   AND cur.tax_year = 2025
                   AND cur.market_value > 0
@@ -890,13 +933,15 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
             ) sub
             WHERE pm.geo_id = sub.geo_id AND pm.tax_year = 2025
               AND pm.county_code = %s
-        """, (county_code, county_code))
+        """, (county_code, county_code, county_code))
         n_cum = cur.rowcount
-    print(f"    cumulative_value_growth_pct: {n_cum:,} rows updated  ({time.time()-t1:.1f}s)")
+    print(f"    cumulative_value_growth_pct: {n_cum:,} rows updated  ({time.time()-t1:.1f}s)",
+          flush=True)
+    print(f"  → Pass 4 done ({time.time()-t1:.1f}s, {n_cum:,} rows)", flush=True)
 
     # Single commit for the whole DELETE + rebuild (see top-of-function note).
     conn.commit()
-    print(f"  → parcel_metrics done in {time.time()-t0:.1f}s total")
+    print(f"  → parcel_metrics done in {time.time()-t0:.1f}s total", flush=True)
 
 
 # ── Step 2b: Compute county_benchmark ──────────────────────────────────────────
@@ -1112,6 +1157,20 @@ def print_sample(conn, county_code=DEFAULT_COUNTY):
 
 # ── Entrypoint ──────────────────────────────────────────────────────────────────
 def main():
+    # PX-20260901-01 HOTFIX Task 3: Pass 4's 13-hour runaway printed NOTHING
+    # to the terminal/log the whole time it ran, even though the code between
+    # passes does call print() -- Python block-buffers stdout by default
+    # whenever it isn't a TTY (e.g. piped through `tee`, as the runbook's run
+    # commands do), so those print()s were sitting in an internal buffer, not
+    # actually reaching the log, until either the buffer filled or the
+    # process exited. This line -- plus flush=True on every print() inside
+    # compute_parcel_metrics()'s passes below -- means PM will see each
+    # pass's start/done line the moment it happens, not after the fact (or
+    # never, if the process is killed mid-run). The runbook's run commands
+    # also gain `-u` (Python's own unbuffered-stdio flag) as a second,
+    # redundant guard against the same class of silence.
+    sys.stdout.reconfigure(line_buffering=True)
+
     parser = argparse.ArgumentParser(description="Phase 2 metric computation")
     parser.add_argument("--analyze", action="store_true",
                         help="Print threshold distribution analysis only; skip compute")

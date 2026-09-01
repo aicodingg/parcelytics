@@ -242,13 +242,23 @@ Re-run required before proceeding to R4?   [ ] No — no Dallas data has loaded 
 
 ## R4 — `compute_metrics.py` run `[Diego/live]`
 
-### Exact command — unchanged
+### REV 2 (PX-20260901-01 HOTFIX, 2026-09-01) — command line changed, read this before running
+
+The SECOND live R4 run (against commit `a6a3ccb`) completed Passes 1–3 in ~12 minutes but Pass 4 (`cumulative_value_growth_pct`) ran active, no wait event, for 13h07m before PM cancelled it. Root cause (confirmed against pre-Task-5 source, `git show 0fcddcd:loaders/compute_metrics.py`): Pass 4's inner earliest-year aggregation had no `county_code = %s` filter in its own WHERE clause — pre-Task-5 this was harmless (Travis was the only county in the table), but once Dallas coexisted with Travis in `parcel_tax_year` (~6.4M rows combined), every run of this pass aggregated across BOTH counties' full history before the join ever narrowed anything down. **Fixed** — Pass 4 now materializes its earliest-year values into a temp table scoped by `WHERE county_code = %s` inside the aggregation itself, before `GROUP BY`. See the PX-20260901-01 incident report for the full diagnosis and diff.
+
+Also fixed: nothing printed to the terminal for the entire 13h07m, even though the code between passes does call `print()` — Python block-buffers stdout under `tee` by default. Every pass now prints a flushed `→ Pass N start` / `→ Pass N done (Ns, rows)` line, and `main()` now sets `sys.stdout.reconfigure(line_buffering=True)`. **The command below gains `-u` (Python's own unbuffered-stdio flag) as a second, redundant guard against the same class of silence.**
+
+**Before running the command below for real:** run `loaders/explain_compute_metrics_passes.py` (read-only, EXPLAIN-only, safe to run any time) and confirm Pass 4a's plan shows a scan restricted to `county_code = 'DALLAS'`, not a sequential scan of the whole `parcel_tax_year` table. That script's own output tells you exactly what to look for.
+
+**Expected Pass 4 duration:** not yet known — this will be recorded here after this fix's first successful post-fix run. Do not assume "fast" or "slow" ahead of time; watch for the flushed `→ Pass 4 start` / `→ Pass 4 done` lines and record the real elapsed time.
+
+### Exact command — `-u` added (PX-20260901-01)
 
 ```bash
-/usr/bin/python3 loaders/compute_metrics.py --county DALLAS
+/usr/bin/python3 -u loaders/compute_metrics.py --county DALLAS
 ```
 
-Runs `analyze_threshold()`, then `compute_parcel_metrics()`, then `compute_county_benchmarks()`, then `print_sample()` — same sequence as REV 0, same single try/except/rollback wrapper.
+Runs `analyze_threshold()`, then `compute_parcel_metrics()`, then `compute_county_benchmarks()`, then `print_sample()` — same sequence as REV 0/REV 1, same single try/except/rollback wrapper. `-u` is new in this revision; nothing else about the invocation changed.
 
 ### Expected row-count range in `parcel_metrics` for DALLAS — arithmetic shown
 
@@ -366,10 +376,10 @@ Two phases, stated exactly as the code implements them:
 
 **Phase 2 (`swap_shadow_in()`):** one transaction, three DDL statements — `ALTER TABLE group_stats RENAME TO group_stats_old`, `ALTER TABLE group_stats_shadow RENAME TO group_stats`, `DROP TABLE group_stats_old`. Metadata-only, near-instant ACCESS EXCLUSIVE lock.
 
-### Exact command
+### Exact command — `-u` added (PX-20260901-01, same unbuffered-stdio guard as R4)
 
 ```bash
-/usr/bin/python3 loaders/refresh_group_stats.py
+/usr/bin/python3 -u loaders/refresh_group_stats.py
 ```
 
 Note: **this script has no `--county` flag that affects a real run** — `refresh_group_stats()`/`build_shadow()` always rebuild every county's rows together in one pass. There is no `--county DALLAS`-scoped invocation to run separately; this single command recomputes both counties' `group_stats` rows at once, which is exactly why the Travis-invariant check below matters.
@@ -420,10 +430,10 @@ pg_restore --host=<DB_HOST> --port=<DB_PORT> --username=<DB_USER> --dbname=<DB_N
 
 REV 0 marked this entire section `[PM checkpoint — do not run as-is]` because `build_shadow()` stamped one externally-passed `county_code` onto every row of a full-table rebuild whose underlying aggregation blended every county's parcels together. **That bug is fixed** (PX-20260831-02 Task 1): all five query builders now derive `county_code` per-row from `parcel.county_code` (mirroring `refresh_group_stats.py`'s own established pattern), `build_shadow()`/`refresh_snapshot_summary()` no longer accept an external `county_code` parameter at all, and a real run computes every county's rows in one pass, exactly like `refresh_group_stats.py` already did safely in R5.
 
-### Exact command
+### Exact command — `-u` added (PX-20260901-01, same unbuffered-stdio guard as R4/R5)
 
 ```bash
-/usr/bin/python3 loaders/refresh_snapshot_summary.py
+/usr/bin/python3 -u loaders/refresh_snapshot_summary.py
 ```
 
 Same shape as R5's `refresh_group_stats.py` invocation: **no `--county` flag affects a real run** (the flag still exists, but as of this fix it only selects which county's freshness `--check-staleness` reports on — see the flag's own updated help text). This single command recomputes both counties' `snapshot_breakdown`/`snapshot_totals`/`snapshot_neighborhood_movers` rows at once.
@@ -542,6 +552,17 @@ Diego (or whoever commits this run's post-run documentation) can commit this tex
 | R6 | `[PM checkpoint — do not run as-is]`, full section describing a confirmed blocking bug | Runnable, with a new live EXPLAIN proof step before the real write; `--check-consistency` confirmed to be a real, currently-shipping flag, and now also runs automatically after every real refresh (not just on manual invocation) |
 | R8 (Metrics/Task Log) | — | Unchanged (inlined; still Notion, still no committed template in-repo) |
 | R8 (KNOWN_LIMITATIONS wording) | `[PM checkpoint]`, draft pending approval | Approved verbatim, no longer an open checkpoint |
+
+## REV 2 changes (PX-20260901-01 HOTFIX, 2026-09-01)
+
+Second live R4 run hit a 13h07m runaway on Pass 4 (`cumulative_value_growth_pct`), cancelled by PM, no data corruption (transaction rolled back). Root cause and fix are in `compute_metrics.py` (see PX-20260901-01 report); this runbook's only changes are command-line and observability, not sequencing or row-count expectations.
+
+| Section | REV 1 status | This revision's status |
+|---|---|---|
+| R4 | `/usr/bin/python3 loaders/compute_metrics.py --county DALLAS` | `/usr/bin/python3 -u loaders/compute_metrics.py --county DALLAS` — `-u` added as a second, redundant guard alongside the code's own `sys.stdout.reconfigure(line_buffering=True)`, so pass-by-pass progress prints (`→ Pass N start` / `→ Pass N done (Ns, rows)`) reach the terminal/log immediately instead of sitting in a block-buffered pipe under `tee`. Also: run `loaders/explain_compute_metrics_passes.py` first (new script, read-only, rolled-back EXPLAIN) before the real run — see the new REV 2 subsection inline in R4 above. Expected Pass 4 duration is not yet known; record it here after this fix's first successful run. |
+| R5 | `/usr/bin/python3 loaders/refresh_group_stats.py` | `/usr/bin/python3 -u loaders/refresh_group_stats.py` — same unbuffered-stdio guard, `build_shadow()` now prints flushed start/done lines. |
+| R6 (main build) | `/usr/bin/python3 loaders/refresh_snapshot_summary.py` | `/usr/bin/python3 -u loaders/refresh_snapshot_summary.py` — same guard, `build_shadow()`/`swap_shadow_in()`/`refresh_snapshot_summary()` logging now flushed. |
+| R6 (`--check-consistency`) | `/usr/bin/python3 loaders/refresh_snapshot_summary.py --check-consistency` | Unchanged — left without `-u` deliberately. This is a fast, already-synchronous read-only check (not a multi-hour build), so it was never a candidate for the silent-13-hours failure mode this hotfix addresses. |
 
 ## Open questions remaining (down from REV 0's 8)
 

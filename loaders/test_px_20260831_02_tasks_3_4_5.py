@@ -351,27 +351,51 @@ def test_cap_expiry_signal_subquery_scoped():
 
 
 def test_cumulative_value_growth_pct_subquery_fully_scoped():
-    """The most severe Task 5 finding: this subquery's inner `mn` grouping
-    used to run across the ENTIRE parcel_tax_year table with no county_code
-    at all -- a genuine cross-county geo_id-collision bug, invisible with
-    only one county live. Proves every layer of the fix: mn's own
-    SELECT/GROUP BY, both join conditions, and the new outer WHERE scope."""
-    check("inner `mn` subquery's SELECT list now includes county_code",
-          "SELECT geo_id, county_code, MIN(tax_year) AS earliest_year" in _SRC_NORM)
-    check("inner `mn` subquery's GROUP BY now includes county_code (not geo_id alone)",
-          "GROUP BY geo_id, county_code" in _SRC_NORM)
-    check("`mn` join condition scopes county_code alongside geo_id",
-          "JOIN ( -- PX-20260831-02" in _SRC_NORM.replace("(\n", "( ") or
-          re.search(r"\)\s*mn ON mn\.geo_id = cur\.geo_id AND mn\.county_code = cur\.county_code", _SRC_NORM)
-          is not None)
-    check("`earliest` join condition scopes county_code alongside geo_id/tax_year",
+    """PX-20260831-02 Task 5 fixed a CORRECTNESS bug here (cross-county
+    geo_id collisions in the old inline `mn` subquery). PX-20260901-01 then
+    fixed a PERFORMANCE bug Task 5's fix left behind: that `mn` subquery had
+    county_code in its SELECT/GROUP BY/join condition but never in its own
+    WHERE clause, so it aggregated MIN(tax_year) across BOTH counties'
+    complete history (~6.4M rows) on every run, regardless of which single
+    county was being computed -- a 13-hour runaway once Dallas coexisted
+    with Travis (see PX-20260901-01 incident report). The fix replaces the
+    inline `mn` subquery with a materialized temp table
+    (_pass4_earliest_year) built with `WHERE county_code = %s` INSIDE the
+    aggregation (before GROUP BY) -- so it only ever contains this county's
+    geo_ids, making a cross-county collision impossible by construction
+    rather than by an added equality check. This test now proves THAT
+    shape, not the old inline-subquery shape."""
+    check("earliest-year values are materialized into a temp table scoped to "
+          "county_code = %s INSIDE the aggregation's own WHERE, before GROUP BY "
+          "(not just present in the SELECT/GROUP BY list)",
           re.search(
-              r"JOIN parcel_tax_year earliest\s+ON earliest\.geo_id = mn\.geo_id\s+"
-              r"AND earliest\.tax_year = mn\.earliest_year\s+AND earliest\.county_code = mn\.county_code",
+              r"CREATE TEMP TABLE _pass4_earliest_year ON COMMIT DROP AS\s+"
+              r"SELECT geo_id, MIN\(tax_year\) AS earliest_year\s+"
+              r"FROM parcel_tax_year\s+"
+              r"WHERE county_code = %s\s+"
+              r"AND market_value > 0\s+"
+              r"GROUP BY geo_id",
               _SRC_NORM,
           ) is not None)
-    check("outer WHERE now scopes cur.county_code = %s (previously this whole "
-          "subquery had NO county_code anywhere)",
+    check("temp table is indexed on geo_id for the join below",
+          "CREATE UNIQUE INDEX ON _pass4_earliest_year (geo_id)" in _SRC_NORM)
+    check("`mn` join now targets the pre-scoped temp table (no county_code "
+          "column needed on this side -- the temp table is already "
+          "single-county by construction)",
+          "JOIN _pass4_earliest_year mn ON mn.geo_id = cur.geo_id" in _SRC_NORM)
+    check("`earliest` join condition still scopes county_code alongside "
+          "geo_id/tax_year (this cross-county-collision guard is unchanged "
+          "and still required: _pass4_earliest_year narrows candidate geo_ids "
+          "to one county, but `earliest` re-joins parcel_tax_year directly, "
+          "which still holds every county's rows)",
+          re.search(
+              r"JOIN parcel_tax_year earliest\s+"
+              r"ON earliest\.geo_id = mn\.geo_id\s+"
+              r"AND earliest\.tax_year = mn\.earliest_year\s+"
+              r"AND earliest\.county_code = %s",
+              _SRC_NORM,
+          ) is not None)
+    check("outer WHERE still scopes cur.county_code = %s",
           re.search(r"WHERE cur\.county_code = %s\s+AND cur\.tax_year = 2025", _SRC_NORM) is not None)
 
 

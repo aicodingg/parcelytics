@@ -486,8 +486,13 @@ def build_shadow(conn, batch_id, verbose=True):
     """
     def _log(msg):
         if verbose:
-            print(msg)
+            print(msg, flush=True)
 
+    # PX-20260901-01 HOTFIX Task 3: same observability fix as
+    # compute_metrics.py's passes and refresh_group_stats.py's build_shadow()
+    # -- flushed start/per-view/done lines so a long build is visible in a
+    # `tee`d log as it happens, not just after it finishes.
+    _log("  → snapshot summary shadow build start (11 views)")
     t0 = time.time()
     with conn.cursor() as cur:
         for tbl in ("snapshot_breakdown", "snapshot_totals", "snapshot_neighborhood_movers"):
@@ -574,6 +579,8 @@ def build_shadow(conn, batch_id, verbose=True):
     conn.commit()
     _log(f"    shadow tables built: {breakdown_row_count:,} breakdown / {totals_row_count:,} totals / "
          f"{nb_row_count:,} neighborhood rows (all counties, one pass)  [{time.time()-t0:.1f}s]")
+    _log(f"  → snapshot summary shadow build done ({time.time()-t0:.1f}s, "
+         f"{breakdown_row_count + totals_row_count + nb_row_count:,} rows)")
     return breakdown_row_count, totals_row_count, nb_row_count
 
 
@@ -589,7 +596,7 @@ def swap_shadow_in(conn, verbose=True):
     """
     def _log(msg):
         if verbose:
-            print(msg)
+            print(msg, flush=True)
 
     t0 = time.time()
     with conn.cursor() as cur:
@@ -625,7 +632,7 @@ def refresh_snapshot_summary(conn, batch_id=None, dry_run=False, verbose=True):
     """
     def _log(msg):
         if verbose:
-            print(msg)
+            print(msg, flush=True)
 
     if dry_run:
         t0 = time.time()
@@ -935,6 +942,12 @@ def assert_snapshot_breakdown_totals_consistent(conn, tolerance_b=0.01):
 
 
 def main():
+    # PX-20260901-01 HOTFIX Task 3: line-buffer stdout so a long build's
+    # flushed progress lines actually reach a `tee`d log in real time,
+    # matching the fix applied to compute_metrics.py's and
+    # refresh_group_stats.py's main().
+    sys.stdout.reconfigure(line_buffering=True)
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="Compute + report row counts only; no writes")
     ap.add_argument("--check-staleness", action="store_true",
