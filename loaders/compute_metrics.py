@@ -954,7 +954,17 @@ def compute_county_benchmarks(conn, county_code=DEFAULT_COUNTY):
     # once at the end. A crash or sanity-check failure anywhere in between
     # rolls back the DELETE too, leaving county_benchmark in its prior state.
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM county_benchmark")
+        # PX-20260901-02 HOTFIX: this was a GLOBAL count across every county's
+        # rows in county_benchmark, not this county's own prior count -- the
+        # exact same class of bug PX-20260828-16-followup already fixed for
+        # parcel_metrics' prev_count just above, missed here. Dallas's real
+        # rebuild is 25 rows (5 TYPE_GROUPS x 5 loaded years); the unscoped
+        # query compared that against Travis+Dallas combined (30, Travis's
+        # count from its 6 loaded years, since Dallas hadn't been inserted
+        # yet when this ran), a bogus 16.7% "drop" that tripped the 5%
+        # tolerance and rolled back an otherwise-correct rebuild. Scoped now,
+        # exactly like compute_parcel_metrics()'s prev_count above.
+        cur.execute("SELECT COUNT(*) FROM county_benchmark WHERE county_code = %s", (county_code,))
         prev_count = cur.fetchone()[0]
 
     with conn.cursor() as cur:
