@@ -2119,6 +2119,29 @@ COUNTY_PROFILES = {
         # unpopulated profile field (e.g. cad_interactive_map_url = None),
         # not a special case.
         "info_content_available": True,
+        # PX-20260901-05 Task 1: field_coverage is the first concrete piece
+        # of the standing "compose a county's page from what it has"
+        # principle -- a single, queryable map of which real source fields
+        # this county's `parcel` rows actually carry, instead of every
+        # exemption/neighborhood/year_built/billing call site guessing or
+        # (as PX-20260901-02/-03/-04 each found independently) silently
+        # assuming Travis's shape. Declared here by hand for now, verified
+        # against production by the PM's own queries this week (see
+        # KNOWN_LIMITATIONS.md for each field's exact evidence) -- NOT
+        # derived from a live query at read time. A future loader-gate
+        # brief is expected to populate these mechanically (e.g. the same
+        # kind of EXISTS-based coverage check _county_has_neighborhood_data()/
+        # _county_has_ajr_data()/_county_has_year_built_data() already run
+        # per-request, promoted to a one-time, cached-at-load fact instead
+        # of a per-field helper function each) -- until then, treat every
+        # value below as a manually-declared fact that must be updated by
+        # hand if a loader change alters this county's real coverage.
+        "field_coverage": {
+            "exemption_codes": True,
+            "neighborhood_cd": True,
+            "year_built": True,
+            "billing": True,
+        },
     },
     "DALLAS": {
         "display_name": "Dallas County, TX",
@@ -2145,6 +2168,25 @@ COUNTY_PROFILES = {
         # than guessed True -- same "unknown renders as absent" rule this
         # profile already applies to every URL field above.
         "info_content_available": False,
+        # PX-20260901-05 Task 1: PX-20260901-02's live-verified findings --
+        # exemption_codes empty for 100% of Dallas rows (703,446 in 2025;
+        # 705,536 in 2026 -- the DCAD exemption field was never mapped by
+        # the loader), neighborhood_cd empty for 100% (PX-20260901-03's own
+        # _county_has_neighborhood_data() finding), year_built unmapped
+        # (PX-20260901-04 Task 3's RES_DETAIL/COM_DETAIL investigation).
+        # billing is False here for the same reason it's already handled
+        # elsewhere in this codebase (KNOWN_LIMITATIONS.md's existing
+        # Dallas billing/ETR entry) -- this key doesn't change that
+        # existing handling, it just makes the same fact queryable through
+        # one shared shape instead of bespoke per-feature checks. All four
+        # are hand-declared today; a future loader-gate brief populates
+        # this map mechanically once each field's loader actually runs.
+        "field_coverage": {
+            "exemption_codes": False,
+            "neighborhood_cd": False,
+            "year_built": False,
+            "billing": False,
+        },
     },
     # HARRIS intentionally NOT registered here yet -- COUNTY_SLUGS reserves
     # the routing slug, but Notion's County Public Profile row for Harris
@@ -2156,6 +2198,27 @@ COUNTY_PROFILES = {
     # having the institutional link fields above populated or explicitly
     # None -- not just the pre-existing name/website fields.
 }
+
+
+def county_has_field(county_code, field):
+    """PX-20260901-05 Task 1: the one call-site shape for reading
+    COUNTY_PROFILES' new `field_coverage` map -- every exemption/
+    neighborhood/year_built/billing gate in this file and in
+    templates/*.html (registered as `county_has_field` in
+    _inject_county_helpers() below) should call this instead of reaching
+    into `COUNTY_PROFILES[...]["field_coverage"][...]` directly, so the
+    dict shape itself can change in one place later (e.g. once a real
+    loader-gate mechanism replaces these hand-declared booleans) without
+    hunting down every call site.
+
+    Defaults to False for an unrecognized county_code, an unregistered
+    field name, or a county profile that predates this map entirely --
+    "unknown" must never read as "covered". This mirrors every other
+    COUNTY_PROFILES helper's convention in this file (county_cad_link(),
+    the info_content_available reads) of treating an absent value as an
+    honest gap, not a guessed default of True."""
+    profile = COUNTY_PROFILES.get(county_code, {})
+    return bool(profile.get("field_coverage", {}).get(field, False))
 
 
 @app.url_value_preprocessor
@@ -2414,6 +2477,22 @@ def _inject_county_helpers():
         "county_profile": COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"]),
         "county_cad_link": county_cad_link,
         "unavailable_copy": unavailable_copy,
+        # PX-20260901-05 Task 1: registers county_has_field alongside this
+        # processor's other COUNTY_PROFILES-backed globals (county_cad_link,
+        # unavailable_copy above) so Task 2's template-side exemption/
+        # neighborhood/year_built/billing gates can call
+        # county_has_field(county_code, "exemption_codes") directly in
+        # Jinja instead of reaching into county_profile.field_coverage[...]
+        # by hand -- same call-site-shape-hiding rationale as the module-
+        # level function's own docstring (see COUNTY_PROFILES block above).
+        "county_has_field": county_has_field,
+        # PX-20260901-05 Task 2: templates need the raw county_code (not just
+        # the already-resolved county_profile dict) to call county_has_field(
+        # county_code, field) themselves -- this is the exact same variable
+        # this function already computed above (getattr(g, "county_code",
+        # ...) fallback and all), just also exposed to Jinja rather than
+        # kept as a Python-only local.
+        "county_code": county_code,
         "live_counties": _live,
         # PX-20260828-09 Task 1: single shared source for every "N+ parcels
         # across M counties" summed-total display (base.html's brand
@@ -6182,6 +6261,25 @@ def api_search_filter():
             "error": f"{county_name} data hasn't been loaded yet.",
         }), 200
 
+    # PX-20260901-05 Task 2 item 2, defense-in-depth: the UI gate above (the
+    # Quick Filter button and the fltHomestead <select> in search.html) keeps
+    # this param from ever being SENT by this page's own controls for a
+    # no-coverage county, but this route is a real, independently-callable
+    # API -- a stale bookmark, a hand-crafted URL, or an old cached page
+    # could still pass homestead=has/not_has straight through. Rejecting it
+    # here, rather than silently either matching nothing (has) or matching
+    # everything (not_has) against a column that's 100% NULL, is the same
+    # honest-error convention _county_has_data() above already uses for
+    # "this county genuinely can't answer that request" rather than letting
+    # it fall through to a misleading result.
+    if homestead in ("has", "not_has") and not county_has_field(county_code, "exemption_codes"):
+        county_name = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])["county_name"]
+        return jsonify({
+            "ok": False,
+            "error": (f"Homestead exemption status isn't available for {county_name} yet -- "
+                      f"exemption data hasn't been loaded for this county."),
+        }), 400
+
     where = ["1=1", "p.county_code = %(county_code)s"]
     params = {"tax_year": tax_year, "county_code": county_code}
 
@@ -6669,6 +6767,13 @@ def api_estimate_acq(geo_id):
         rate_mode=rate_mode,
         entity_rate_history=entity_rate_history,
         market_growth=market_growth,
+        # PX-20260901-05 Task 2 item 4: current_yr_row.exemption_codes is always
+        # NULL for a no-coverage county (Dallas) -- estimate_post_acquisition()
+        # uses this flag to keep its "no active homestead cap" assumption line
+        # and the 20% circuit-breaker warning from asserting a checked-and-
+        # confirmed negative when it's really an unverified unknown. See that
+        # function's own docstring for why this never changes a dollar figure.
+        exemption_coverage=county_has_field(g.county_code, "exemption_codes"),
     )
     result["ok"] = True
 
@@ -8491,6 +8596,14 @@ def compare_parcels():
                 and cur_dict.get("market_value") and cur_dict.get("assessed_value") is not None
                 and cur_dict["market_value"] > cur_dict["assessed_value"]):
             cap_loss_est = cur_dict["market_value"] - cur_dict["assessed_value"]
+        # PX-20260901-05 Task 2 item 4: for a county with no exemption_codes
+        # coverage (Dallas), cur_dict.get("exemption_codes") above is always
+        # None/empty, so cap_loss_est already fails safe to None here -- no
+        # code change needed in this function. compare.html gates the
+        # DISPLAY of this value on county_has_field(county_code,
+        # "exemption_codes") so a coverage-gap "—" can't be read as a
+        # checked-and-confirmed "no cap loss" (see that template's own
+        # comment on the "Cap Loss (HS, Est.)" row).
         cur_dict["cap_loss_estimate"] = cap_loss_est
 
         parcels.append({

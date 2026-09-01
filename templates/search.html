@@ -119,10 +119,27 @@
           One-click presets — each fills in the filter panel below and runs the search.
         </div>
         <div class="d-flex flex-column gap-1">
+          {# PX-20260901-05 Task 2 item 2: "Homes Without Homestead Exemption"
+             is a lead-gen filter over pty.exemption_codes -- for a
+             no-coverage county that field is empty for every row, so BOTH
+             directions of this filter are wrong (has: matches nothing;
+             not_has: matches everything, including parcels that likely DO
+             have an exemption we just can't see). Diego's own ruling for
+             this exact shape (the sector tabs, PX-20260901-03) is absent,
+             not disabled -- a permanently-disabled button with no real path
+             to ever becoming enabled reads as broken, not as "not
+             applicable here." Removed from the DOM entirely for a
+             no-coverage county rather than left disabled like the
+             delinquent-data-gap button below (that one's a genuine, will-
+             resolve-later loading/coverage gap communicated in place;
+             this filter's problem is structural in the same way a missing
+             sector tab is). #}
+          {% if county_has_field(county_code, "exemption_codes") %}
           <button type="button" class="quick-filter-btn" data-preset="no_homestead" disabled>
             <span class="qf-title">Homes Without Homestead Exemption</span>
             <span class="qf-desc">Residential parcels that haven't filed for homestead</span>
           </button>
+          {% endif %}
           <button type="button" class="quick-filter-btn" data-preset="value_jump" disabled>
             <span class="qf-title">Large Value Jumps — Recent</span>
             <span class="qf-desc">Parcels flagged for an unusually large year-over-year value change</span>
@@ -330,6 +347,15 @@
           </div>
 
           {# ── Homestead exemption status ──────────────────────────────────── #}
+          {# PX-20260901-05 Task 2 item 2: same gate + reasoning as the Quick
+             Filters preset above -- absent, not disabled, for a county
+             without exemption_codes coverage. Removing this <select> means
+             getFilterParams()/clearAllFilterFields() in the scripts block
+             below can no longer assume it exists -- both null-guarded there
+             (search "fltHomestead" in this file) so every OTHER filter
+             action (Apply, Clear, the remaining Quick Filters) keeps working
+             on a no-coverage county. #}
+          {% if county_has_field(county_code, "exemption_codes") %}
           <div class="col-md-3">
             <label class="form-label small text-muted mb-1" for="fltHomestead">Homestead Exemption</label>
             <select id="fltHomestead" class="form-select form-select-sm" style="font-size:12px;">
@@ -338,6 +364,7 @@
               <option value="not_has">Does not have homestead exemption</option>
             </select>
           </div>
+          {% endif %}
 
           {# ── Tax Year ─────────────────────────────────────────────────────── #}
           <div class="col-md-3">
@@ -886,7 +913,12 @@ ParcelTypeahead.attach({ inputId: "spQ" });
     const yMin = document.getElementById("fltYrMin").value; if (yMin) p.set("yr_min", yMin);
     const yMax = document.getElementById("fltYrMax").value; if (yMax) p.set("yr_max", yMax);
     if (document.getElementById("fltLargeValueJump").checked) p.set("large_value_jump", "1");
-    const hs = document.getElementById("fltHomestead").value; if (hs) p.set("homestead", hs);
+    // PX-20260901-05 Task 2 item 2: fltHomestead is now conditionally absent
+    // (removed server-side for a county without exemption_codes coverage --
+    // see this file's Filter Parcels panel above), so this can't assume the
+    // element exists the way every sibling read on this line does.
+    const fltHomesteadEl = document.getElementById("fltHomestead");
+    const hs = fltHomesteadEl ? fltHomesteadEl.value : ""; if (hs) p.set("homestead", hs);
     if (document.getElementById("fltVerifiedOnly").checked) p.set("verified_only", "1");
     if (document.getElementById("fltDelinquentOnly").checked) p.set("delinquent_only", "1");
     return p;
@@ -1131,7 +1163,11 @@ ParcelTypeahead.attach({ inputId: "spQ" });
     document.getElementById("fltLargeValueJump").checked = false;
     document.getElementById("fltVerifiedOnly").checked = false;
     document.getElementById("fltDelinquentOnly").checked = false;
-    document.getElementById("fltHomestead").value = "";
+    // PX-20260901-05 Task 2 item 2: null-guarded for the same reason as
+    // getFilterParams() above -- clearAllFilterFields() runs on every Quick
+    // Filter click (including ones unrelated to homestead), not just this
+    // one, so it must not throw on a county where this element is absent.
+    { const _fh = document.getElementById("fltHomestead"); if (_fh) _fh.value = ""; }
     document.getElementById("fltTaxYear").value = "2025";
     errorBox.style.display = "none";
   }

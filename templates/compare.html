@@ -75,11 +75,25 @@
          which was structurally always False (hs_cap_loss is never
          populated for 2025). This route doesn't load 2021-2024 history, so
          the estimate is always the market-minus-assessed approximation
-         here, never a real AJR figure -- always tilde-prefixed. #}
+         here, never a real AJR figure -- always tilde-prefixed.
+
+         PX-20260901-05 Task 2 item 4: cap_loss_estimate itself already
+         fails safe for a no-coverage county (it's gated on 'HS' in
+         exemption_codes in compare_parcels(), which is NULL/empty for
+         Dallas, so it's always None there) -- no false cap-loss claim
+         can happen. But the plain "—" this row falls back to is
+         ambiguous: it reads identically whether we checked and found no
+         exemption, or we have no exemption data to check at all. This
+         route is anchored to a single county for the whole comparison
+         (county_code = g.county_code in compare_parcels()), so the gate
+         below applies uniformly to every parcel column, same as the
+         Assessment Gap treatment in property.html. #}
       <tr>
         <td class="small text-muted">Cap Loss (HS, Est.)</td>
         {% for p in parcels %}<td class="text-center" style="font-family:var(--font-mono); font-size:12px; color:var(--text-2);">
-          {% if p.current and p.current.cap_loss_estimate %}
+          {% if not county_has_field(county_code, "exemption_codes") %}
+            <span class="badge-partial" style="font-size:9px;" title="{{ county_profile.county_name if county_profile else 'This county' }}'s exemption records aren't available on Parcelytics yet, so cap loss can't be estimated for this parcel.">Not Available</span>
+          {% elif p.current and p.current.cap_loss_estimate %}
             <span title="Estimated as market value minus assessed value for the 2025 certified row; no 2021-2024 AJR-recorded cap-loss figure is available in this comparison view.">~${{ "{:,.0f}".format(p.current.cap_loss_estimate) }}</span>
           {% else %}—{% endif %}
         </td>{% endfor %}
@@ -166,7 +180,16 @@
     {% endif %}
   {% endif %}
   Effective tax rate = Total Tax ÷ Market Value.
+  {% if county_has_field(county_code, "exemption_codes") %}
   Cap loss (Est.) is market value minus assessed value for parcels with a homestead exemption on file — not a TCAD-reported figure for 2025.
+  {% else %}
+  {# PX-20260901-05 Task 2 item 4: this county's exemption records aren't
+     loaded, so the Cap Loss row above always shows "Not Available" rather
+     than a real-or-zero estimate -- the old blanket disclosure line
+     presumed every parcel's exemption status had been checked, which
+     isn't true here. #}
+  Cap loss (Est.) requires exemption records, which {{ county_profile.county_name if county_profile else "this county" }} hasn't loaded on Parcelytics yet — see "Not Available" above.
+  {% endif %}
   Click any parcel heading to view its full detail page.
 </p>
 

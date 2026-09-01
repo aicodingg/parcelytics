@@ -200,6 +200,30 @@ def make_env():
     # this StrictUndefined harness needs it mocked too or ANY page render
     # (including property.html, via base.html) raises UndefinedError.
     env.globals["total_live_parcel_count_display"] = "1.13M"
+    # PX-20260901-05 Task 1/2 incidental fix: county_has_field/county_code
+    # (from app.py's @app.context_processor, this brief) were NEVER
+    # registered here -- same gap class as the county_profile/live_counties
+    # fixes above, this time raising UndefinedError the moment property.html's
+    # new has_exemption_coverage {% set %} (and every macro call/template
+    # branch it gates) is reached. Mocked to mirror app.py's real
+    # county_has_field(): Travis's real COUNTY_PROFILES entry has every
+    # field_coverage flag True, so this harness's Travis-only fixtures all
+    # get has_exemption_coverage=True by default, matching pre-existing
+    # (pre-gate) render behavior exactly -- no scenario's expected output
+    # should change from this mock alone. No dedicated Dallas/no-coverage
+    # render scenario exists in this harness yet (PX-20260901-05 Task 2 was
+    # scoped to gating + this fixture-file wiring, not a full second
+    # base_context() fixture set) -- the has_exemption_coverage=False path
+    # was instead verified directly: a real property.html render with this
+    # global monkey-patched to return False (see PX-20260901-05's own report
+    # for the reproduction script and traceback) confirmed both (a) the
+    # mode-split scoping bug this move fixes, and (b) that every gated
+    # surface renders its "Not Available" fallback instead of raising or
+    # showing a false claim. A future brief adding real Dallas fixtures to
+    # this harness should override this global's lambda per-scenario rather
+    # than add a second env.
+    env.globals["county_code"] = "TRAVIS"
+    env.globals["county_has_field"] = lambda county_code_arg, field: county_code_arg == "TRAVIS"
     return env
 
 
@@ -1574,6 +1598,95 @@ def run():
               f"{tx_result_none.get('cap_was_active')!r} with no exemption on file")
         all_ok = False
 
+    # ── PX-20260901-05 Task 2 item 4: exemption_coverage flag ────────────────
+    # A no-coverage county (Dallas) has exemption_codes = NULL on every row --
+    # the SAME shape as tx_result_none above (a Travis parcel with genuinely
+    # no exemption). Without the coverage flag these two cases are
+    # indistinguishable, and estimate_post_acquisition() would assert "no
+    # active homestead cap" as a checked-and-confirmed negative for BOTH,
+    # when for a no-coverage county it's really "we don't know." These
+    # fixtures prove the flag changes the copy (never a dollar figure) and
+    # that the pre-existing coverage=True (default) behavior is unchanged.
+    print()
+    print("── tax_logic/texas.py exemption_coverage flag (PX-20260901-05 Task 2 item 4) ──")
+
+    # Fixture 1: no-coverage county, no exemption_codes (Dallas' real shape).
+    # The assumptions line must be the honest "could not be verified" copy,
+    # NOT the "no active homestead cap" flat assertion -- and no dollar
+    # figure anywhere in the result may differ from tx_result_none above
+    # (same inputs otherwise) since this flag is presentation-only.
+    tx_result_nocov = _texas.estimate_post_acquisition(
+        _tx_parcel, _tx_current_yr_row_none, _tx_entities,
+        purchase_price=850000, buyer_status="owner_occupant",
+        exemption_coverage=False,
+    )
+    ok = True
+    cap_line_nocov = next((a for a in tx_result_nocov.get("assumptions", []) if a.startswith("Cap")), None)
+    if not cap_line_nocov or "could not be verified" not in cap_line_nocov:
+        print(f"FAIL [texas.py: exemption_coverage=False] assumptions Cap line should read "
+              f"'could not be verified', got: {cap_line_nocov!r}")
+        ok = False
+    if "Cap: no active homestead cap on this parcel (hs_cap_loss = $0)" == (cap_line_nocov or ""):
+        print(f"FAIL [texas.py: exemption_coverage=False] assumptions Cap line still asserts "
+              f"a checked-and-confirmed negative: {cap_line_nocov!r}")
+        ok = False
+    for _dollar_key in ("estimated_total_tax", "delta", "gap_year_tax", "base_value", "taxable_new"):
+        if tx_result_nocov.get(_dollar_key) != tx_result_none.get(_dollar_key):
+            print(f"FAIL [texas.py: exemption_coverage=False] {_dollar_key} changed "
+                  f"({tx_result_none.get(_dollar_key)!r} -> {tx_result_nocov.get(_dollar_key)!r}) -- "
+                  f"the coverage flag must be presentation-only, never affect a dollar figure")
+            ok = False
+    if ok:
+        print(f"PASS [texas.py: exemption_coverage=False] Cap line reads honestly-unknown, "
+              f"all dollar figures identical to the coverage=True fixture: {cap_line_nocov!r}")
+    else:
+        all_ok = False
+
+    # Fixture 2: regression -- coverage=True (the default every existing
+    # caller/fixture already uses) must be completely unaffected, so this
+    # brief's fix can't silently change Travis's own estimator output.
+    if tx_result_none.get("assumptions") == _texas.estimate_post_acquisition(
+        _tx_parcel, _tx_current_yr_row_none, _tx_entities,
+        purchase_price=850000, buyer_status="owner_occupant",
+        exemption_coverage=True,
+    ).get("assumptions"):
+        print(f"PASS [texas.py: exemption_coverage=True regression] identical assumptions list "
+              f"to the pre-existing default (no exemption_coverage kwarg) -- Travis unaffected")
+    else:
+        print(f"FAIL [texas.py: exemption_coverage=True regression] assumptions list changed "
+              f"when exemption_coverage=True was passed explicitly vs. omitted")
+        all_ok = False
+
+    # Fixture 3: circuit-breaker warning must be suppressed for a no-coverage
+    # county on a low-value, non-owner-occupant purchase that WOULD otherwise
+    # trigger it (seller_has_homestead reads False here purely because
+    # exemption_codes is None -- the coverage gap, not a real homestead
+    # check) -- firing it would falsely claim a specific 20% non-homestead
+    # cap status for a parcel whose homestead status is actually unverified.
+    _tx_cb_row = {
+        "market_value": 300000, "assessed_value": 300000, "taxable_value": 300000,
+        "hs_cap_loss": None, "exemption_codes": None,
+    }
+    tx_cb_nocov = _texas.estimate_post_acquisition(
+        _tx_parcel, _tx_cb_row, _tx_entities,
+        purchase_price=310000, buyer_status="non_owner_occupant",
+        exemption_coverage=False,
+    )
+    tx_cb_cov = _texas.estimate_post_acquisition(
+        _tx_parcel, _tx_cb_row, _tx_entities,
+        purchase_price=310000, buyer_status="non_owner_occupant",
+        exemption_coverage=True,
+    )
+    if tx_cb_nocov.get("circuit_breaker_note") is None and tx_cb_cov.get("circuit_breaker_note") is not None:
+        print(f"PASS [texas.py: circuit-breaker suppression] warning fires under coverage=True "
+              f"(confirms the fixture WOULD trigger it) and is suppressed under coverage=False")
+    else:
+        print(f"FAIL [texas.py: circuit-breaker suppression] expected None under coverage=False "
+              f"and non-None under coverage=True, got "
+              f"nocov={tx_cb_nocov.get('circuit_breaker_note')!r} "
+              f"cov={tx_cb_cov.get('circuit_breaker_note')!r}")
+        all_ok = False
+
     # ── compute_metrics.py's cap_step_up_exposure / cap_expiry_signal SQL
     # (Issue 2, "Homestead-Cap Data Integrity: Full Fix Set" Cowork brief,
     # July 2026 -- replaces risk_homestead_cap_expiry) ─────────────────────
@@ -1591,7 +1704,7 @@ def run():
     else:
         print("FAIL [compute_metrics.py source] expected cap_step_up_exposure UPDATE/threshold not found -- possible revert")
         all_ok = False
-    if "SET cap_expiry_signal = TRUE" in _cm_src and "NOT LIKE '%HS%'" in _cm_src:
+    if "SET cap_expiry_signal = TRUE" in _cm_src and "NOT LIKE '%%HS%%'" in _cm_src:
         print("PASS [compute_metrics.py source] cap_expiry_signal UPDATE present")
     else:
         print("FAIL [compute_metrics.py source] expected cap_expiry_signal UPDATE not found -- possible revert")

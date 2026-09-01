@@ -384,6 +384,32 @@ loader's upsert has no protective `WHERE` guard the way
 `scrape_billing_history.py`'s does, so this was worth adding deliberately
 rather than assuming a full rerun is safe).
 
+### Dallas: effective_tax_rate, effective_tax_rate_derived, yoy_tax_amount_pct — Not available
+
+- Dallas has no `tax_billing` or `tax_billing_entity` rows loaded (no billing source acquired yet — see Dallas County Profile / Source Registry for acquisition status).
+- `effective_tax_rate` and `effective_tax_rate_derived` require a `tax_billing_entity.amount_due` sum for `tax_year = 2025`; with zero Dallas rows in that table, both are NULL for every Dallas parcel.
+- `yoy_tax_amount_pct` requires `tax_billing.total_tax`; same gap, same result — NULL for every Dallas parcel.
+- No billing data → no effective tax rate. This is a coverage gap, not a computation error — Dallas's `assessment_ratio`, YoY value/assessed-value percentages, and both homestead-cap signals (`cap_step_up_exposure`, `cap_expiry_signal`) are unaffected and populate normally, since none of those four depend on billing data.
+- Resolves automatically once a Dallas billing source is acquired and loaded — no code change needed in `compute_metrics.py` itself.
+
+(R8, `RUNBOOK_DALLAS_METRICS_FIRST_RUN-rev.md` — PM-approved wording, committed verbatim per that runbook's own instruction.)
+
+### Dallas: exemption_codes — not loaded (100% empty)
+
+`parcel_tax_year.exemption_codes` is NULL/empty for every Dallas row — 703,446 of 703,446 in 2025, 705,536 of 705,536 in 2026 (PX-20260901-02 Task 2's live query). The DCAD certified-roll field this column should be sourced from was never mapped by `load_dallas_certified.py`/`dcad_format.py` — this is an unmapped source field, not a real "zero exemptions filed" fact, and reads identically to one unless explicitly guarded.
+
+**Downstream consequences, closed by PX-20260901-05:** every exemption-derived surface on the site (the homestead-savings pitch, the "Homes Without Homestead Exemption" lead/search filter, the Exemptions row on property pages and the compare-parcels page, the Post-Acquisition Estimator's cap-reset assumption and 20% circuit-breaker warning) now gates on `county_has_field(county_code, "exemption_codes")` (`app.py`, backed by `COUNTY_PROFILES[county_code]["field_coverage"]`) and shows an honest "Not Available" state for Dallas instead of a false negative. See `verify_exemption_gating.py` for the recurrence guard keeping this gate in place.
+
+Resolves automatically once Dallas's DCAD exemption field is identified and mapped — no template change needed, only flipping `field_coverage["exemption_codes"]` to `True` for Dallas in `COUNTY_PROFILES` (`app.py`) once the loader actually writes real values.
+
+### Dallas: neighborhood_cd — not loaded (100% empty)
+
+`parcel.neighborhood_cd` is NULL/empty for every Dallas row (`_county_has_neighborhood_data()`, `app.py`, PX-20260901-03 Task 1's live check). DCAD's neighborhood field was never mapped during Dallas onboarding — `load_dallas_certified.py`'s `PARCEL_SQL` writes only `county_code, geo_id, prop_id, prop_type_cd, state_cd1, owner_name, situs_address, zip_code`; `neighborhood_cd` is absent from that column list entirely, a separate, not-yet-scheduled loader brief (same class of gap as `exemption_codes` above and `year_built`, per that function's own docstring).
+
+**Downstream consequences:** Market Snapshot's Top/Bottom Moving Neighborhoods table, the neighborhood drill-down endpoint, and the Peer Set/benchmark neighborhood match all correctly return zero/empty for Dallas today, since every one of them keys off `neighborhood_cd` — this is complete, self-consistent coverage on its own terms (derived from data via `_county_has_neighborhood_data()`, never a hardcoded county list), not a freshness failure needing a separate fix.
+
+Resolves automatically once Dallas's DCAD neighborhood field is identified and mapped — no downstream code change needed; every consumer above already reads live from `parcel.neighborhood_cd`.
+
 ## Out of Scope for Phase 1
 
 The following were explicitly excluded from this phase and should not be backfilled without a separate scoping decision:

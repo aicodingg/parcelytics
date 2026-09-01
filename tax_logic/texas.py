@@ -612,6 +612,7 @@ def estimate_post_acquisition(
     entity_rate_history: dict  = None,          # {entity_code: {year: rate}}
     market_growth:       float = None,          # annual appreciation assumption
     horizon_years:       int   = 5,
+    exemption_coverage:  bool  = True,          # PX-20260901-05 Task 2 item 4
 ) -> dict:
     """
     Estimate Year-1 / Year-2+ post-acquisition tax under Texas law.
@@ -625,6 +626,20 @@ def estimate_post_acquisition(
       Year-1 (gap year, same as investor) is returned in gap_year_tax.
       School entity: $140,000 mandatory exemption.
       Non-school entities: conservative -- no optional exemption modelled.
+
+    exemption_coverage (PX-20260901-05 Task 2 item 4): pass False for a
+    county whose exemption_codes field isn't loaded (Dallas, as of this
+    brief -- see COUNTY_PROFILES[county]["field_coverage"]). This does NOT
+    change any dollar figure this function computes -- seller_has_homestead/
+    cap_was_active are read-only inputs to two presentational strings below
+    (the "Cap reset" assumption line and the circuit-breaker warning), never
+    to estimated_total_tax/delta/gap_year_tax. Without this flag, a
+    genuinely-homesteaded Dallas parcel would (a) tell the buyer "no active
+    homestead cap on this parcel" as a flat assertion instead of an unknown,
+    and (b) could wrongly fire the 20% non-homestead circuit-breaker warning
+    for a parcel that's actually homesteaded (mutually exclusive under Texas
+    law) -- both are coverage-gap-shaped false claims of certainty, not
+    correctness bugs in the underlying math.
 
     Returns a dict suitable for JSON serialisation and Jinja rendering.
     All monetary values are plain Python ints/floats -- no Decimal.
@@ -783,8 +798,17 @@ def estimate_post_acquisition(
     delta = estimated_total_tax - seller_total_tax
 
     # ── Circuit-breaker exposure ──────────────────────────────────────────────
+    # PX-20260901-05 Task 2 item 4: cb_eligible_now's "not seller_has_homestead"
+    # leg is only trustworthy when exemption_coverage is True. For a no-coverage
+    # county, seller_has_homestead is always False by construction (see its own
+    # definition above), which would make this warning fire for every eligible-
+    # value parcel regardless of whether it's actually homesteaded -- a real
+    # homesteaded parcel gets the 10% cap, not this 20% non-homestead circuit-
+    # breaker, so the two are mutually exclusive and firing this warning on one
+    # would be a straightforwardly false claim, not just an optimistic guess.
     cb_eligible_now = (
-        not seller_has_homestead
+        exemption_coverage
+        and not seller_has_homestead
         and _circuit_breaker_eligible(market_value)
     )
     circuit_breaker_note = None
@@ -837,7 +861,22 @@ def estimate_post_acquisition(
                 + " does NOT transfer to buyer"
             )
             if cap_was_active
-            else "Cap: no active homestead cap on this parcel (hs_cap_loss = $0)"
+            else (
+                # PX-20260901-05 Task 2 item 4: "no active homestead cap" is a
+                # confirmed-negative claim -- only honest when exemption_codes
+                # coverage exists to have actually checked it. For a no-coverage
+                # county, seller_has_homestead is always False by construction
+                # (never a real "we checked and it's not homesteaded" result),
+                # so asserting "no active cap" here would be indistinguishable
+                # from a genuine negative when it's really an unknown.
+                "Cap: homestead-exemption status could not be verified for this "
+                "parcel -- exemption records aren't loaded for this county yet. "
+                "Assumed no active homestead cap for this estimate; if this "
+                "parcel is actually homesteaded, cap-reset exposure above is "
+                "understated."
+                if not exemption_coverage else
+                "Cap: no active homestead cap on this parcel (hs_cap_loss = $0)"
+            )
         ),
         exemption_note,
         (f"Multi-year: assumes {market_growth*100:.1f}%/yr market appreciation. "

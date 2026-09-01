@@ -385,6 +385,33 @@
   {% endif %}
 {% endmacro %}
 
+{# PX-20260901-05 Task 1/2: the one gate every exemption-dependent surface
+   on this page reads -- county_has_field() (app.py, registered in
+   _inject_county_helpers()) against this request's county_code, which the
+   same context processor now also exposes. False for a county whose
+   exemption_codes field was never mapped by its loader (Dallas: 100% empty,
+   confirmed by PX-20260901-02's live queries) -- distinct from has_hs below,
+   which is "no exemption found" and reads identically whether that's a real
+   negative or an unmapped field. Every excodes/has_hs/excodes_list read
+   below stays as-is (Dallas's real, honestly-empty exemption_codes already
+   makes them compute to "no exemption" on its own) -- this flag instead
+   gates what the PAGE CLAIMS about that computed absence: a covered county
+   showing "no exemption" is a real fact; an uncovered county showing the
+   same text would be a guess dressed as a fact. See the homestead-savings
+   KPI cards and the Your Exemptions panel below for the two places this is
+   actually read.
+
+   Set here, BEFORE the {% if mode == 'homeowner' %} split below, not inside
+   either branch -- same document-order/scope trap this file's own
+   tax_calendar_strip()/value_taxable_gap_chart() macros above were already
+   moved here to avoid (see their comments): a plain {% set %} made inside
+   one mode's branch is invisible once that {% if %} block ends, so an
+   Investor-mode render never saw a homeowner-branch-scoped
+   has_exemption_coverage by the time it reached the shared Assessment
+   Gap / Risk Indicators / Exemptions-row sections further down (confirmed
+   by this exact UndefinedError in the render harness before this move). #}
+{% set has_exemption_coverage = county_has_field(county_code, "exemption_codes") %}
+
 {% if mode == 'homeowner' %}
 {# ═══════════════ HOMEOWNER MODE — plain-language view ═══════════════ #}
 {% set mv25 = current.market_value if current else none %}
@@ -797,7 +824,22 @@
   <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Your homestead savings (2025){% else %}Homestead Exemption{% endif %}</div>
+      {# PX-20260901-05 Task 2 item 1: the homestead-savings pitch (whether
+         the "$X saved" branch or the "no exemption on record, apply now"
+         branch inside homestead_savings_card()) is a claim this county's
+         data can't actually support without exemption_codes coverage --
+         Dallas's field is unmapped, not genuinely all-zero, so "no
+         exemption on record" would be a guess dressed as a fact for every
+         one of its ~700K parcels. Not rendered at all for a no-coverage
+         county (absent, not hedged, matching the sector-tab convention) --
+         replaced with the same honest "not available" copy used everywhere
+         else on this page for a structural data gap. #}
+      {% if has_exemption_coverage %}
       {{ homestead_savings_card(is_residential, bench_label, has_hs, mv25, tv25, rate, 2025, tax25, excodes_year, parcel_prop_id=parcel.prop_id, parcel_geo_id=parcel.geo_id) }}
+      {% else %}
+      <div style="font-size:15px; font-weight:700;">Not available</div>
+      <div class="text-muted" style="font-size:12px; line-height:1.5;">{{ unavailable_copy("being_prepared", county_profile.county_name, page_label="homestead exemption status", view_label="it") }}</div>
+      {% endif %}
     </div></div>
   </div>
 </div>
@@ -894,7 +936,18 @@
   <div class="col-md-3">
     <div class="card h-100"><div class="card-body">
       <div class="text-muted" style="font-size:13px; font-weight:600;">{% if is_residential %}Estimated 2026 homestead savings{% else %}Homestead Exemption{% endif %}</div>
+      {# PX-20260901-05 Task 2 item 1: same gate as the 2025 card above --
+         hs_potential_savings (the "what if you filed" pitch this card would
+         otherwise show for has_hs=False) is itself computed independent of
+         real exemption knowledge (see its own app.py docstring), so it's
+         just as much a guess for a no-coverage county as the "no exemption
+         on record" copy is. #}
+      {% if has_exemption_coverage %}
       {{ homestead_savings_card(is_residential, bench_label, has_hs, mv26, tv26, assumed_rate_2026, 2026, estimated_tax_2026, excodes_year, hs_potential_savings, parcel_prop_id=parcel.prop_id, parcel_geo_id=parcel.geo_id) }}
+      {% else %}
+      <div style="font-size:15px; font-weight:700;">Not available</div>
+      <div class="text-muted" style="font-size:12px; line-height:1.5;">{{ unavailable_copy("being_prepared", county_profile.county_name, page_label="homestead exemption status", view_label="it") }}</div>
+      {% endif %}
       {% if is_residential and (has_hs or bench_label == 'Residential' or not bench_label) %}
       {# Tightened (July 2026, per Diego, item 19b + the P0-4 crowding fix
          above): was a full explanatory sentence about why this card's badge
@@ -1282,7 +1335,22 @@
    already correctly gated. #}
 <div class="card mb-3"><div class="card-header">{% if is_residential %}Your Exemptions{% else %}Exemptions{% endif %}</div>
   <div class="card-body">
-    {% if excodes_list %}
+    {# PX-20260901-05 Task 2 item 3: exemption DISPLAY (as opposed to item 1's
+       homestead-savings PITCH above) is the informational "what's on file"
+       listing -- for a no-coverage county, an empty excodes_list here isn't
+       a real "zero exemptions" fact, it's an unmapped field reading as zero.
+       Rendering the pre-existing "No exemptions are currently applied"
+       copy in that case would be exactly the "blank reads as none" failure
+       mode this brief exists to close -- so a no-coverage county gets the
+       existing honest "Not Available" confidence state instead (same
+       unavailable_copy() mechanism the KPI cards above now use), never the
+       excodes_list-driven branches below. #}
+    {% if not has_exemption_coverage %}
+    <p class="mb-0">
+      <span class="badge-partial" style="font-size:9px; vertical-align:1px;">Not Available</span>
+      {{ unavailable_copy("being_prepared", county_profile.county_name, page_label="exemption records", view_label="they") }}
+    </p>
+    {% elif excodes_list %}
     <p class="mb-2">{% if is_residential %}You have{% else %}This property has{% endif %} <strong>{{ excodes_list | length }}</strong> exemption{{ "s" if excodes_list|length != 1 }} applied{% if is_residential %} to this property{% endif %}{% if excodes_year == 2026 %} <span class="text-muted" style="font-size:12px;">(as of the 2026 preliminary roll)</span>{% endif %}:</p>
     <table class="table table-sm mb-0" style="max-width:420px;">
       <tbody>
@@ -1310,7 +1378,7 @@
       {% else %}This parcel is classified {{ bench_label or "non-residential" }}, so the homestead exemption (which requires an owner-occupied primary residence) doesn't apply here.
       {% endif %}</p>
     {% endif %}
-    {% if is_residential and not has_hs and hs_potential_savings %}
+    {% if has_exemption_coverage and is_residential and not has_hs and hs_potential_savings %}
     {# Estimated tier only — a modeled "what if you filed" figure, never blended
        with a real/verified number. Gated on has_hs (not excodes_list) so a
        parcel with some OTHER exemption but no Homestead specifically still
@@ -2744,16 +2812,39 @@
       </p>
       {% endif %}
 
-      {# Assessment gap — only for parcels with no HS cap history at all #}
+      {# Assessment gap — only for parcels with no HS cap history at all.
+         PX-20260901-05 Task 2 item 4: "no HS cap history" here (hs_history_year
+         undefined) is ALWAYS true for a no-coverage county -- build_insights()'s
+         hs_history_* fields can only ever be set from real hs_cap_loss (AJR,
+         Travis-only) or a real exemption_codes 'HS' match, both of which are
+         unavailable for e.g. Dallas by construction, not because no cap
+         exists. The original "suggesting potential for an upward assessment"
+         framing presumes we've already ruled out an exemption/cap explanation
+         for the gap -- true when coverage exists (a real absence of HS
+         history), false when it doesn't (an absence we can't actually see).
+         Reworded coverage-aware rather than suppressed: the dollar gap itself
+         is still real, certified data worth showing, just not editorialized
+         into a one-sided "upside" read for a county where the other
+         explanation is invisible to us. #}
       {% if not (insights.hs_history_year is defined) and insights.latest_assessed and insights.latest_market %}
         {% set gap = insights.latest_market - insights.latest_assessed %}
         {% if gap > 1000 %}
+        {% if has_exemption_coverage %}
         <p class="mb-2">
           <strong>Assessment Gap:</strong>
           Assessed value (${{ "{:,.0f}".format(insights.latest_assessed) }}) is
           ${{ "{:,.0f}".format(gap) }} below market value, suggesting potential
           for an upward assessment in future years.
         </p>
+        {% else %}
+        <p class="mb-2">
+          <strong>Assessment Gap:</strong>
+          Assessed value (${{ "{:,.0f}".format(insights.latest_assessed) }}) is
+          ${{ "{:,.0f}".format(gap) }} below market value.
+          <span class="badge-partial" style="font-size:9px;">Not Available</span>
+          {{ county_profile.county_name }}'s exemption records aren't available on Parcelytics yet, so we can't confirm whether this reflects an existing exemption or value-growth cap versus room for a future assessment increase.
+        </p>
+        {% endif %}
         {% endif %}
       {% endif %}
 
@@ -3415,7 +3506,21 @@
           <div class="risk-icon">✓</div>
           <div>
             <div class="risk-title" style="color: var(--down);">No risk indicators flagged</div>
-            <p class="risk-desc">No large value jumps, delinquencies, or data anomalies found for this parcel.</p>
+            <p class="risk-desc">
+              No large value jumps, delinquencies, or data anomalies found for this parcel.
+              {# PX-20260901-05 Task 2 item 4: cap_step_up_exposure/cap_expiry_signal
+                 (compute_metrics.py) both key off pty.exemption_codes LIKE '%HS%' --
+                 for a no-coverage county that condition can never be TRUE, so
+                 has_risk silently never picks up a real homestead-cap risk here,
+                 not because none exists. "No risk indicators flagged" would read
+                 as "we checked homestead-cap exposure and it's clear," which isn't
+                 true -- we couldn't check it at all. Named explicitly rather than
+                 folded into the reassuring sentence above it. #}
+              {% if not has_exemption_coverage %}
+              Homestead-cap exposure specifically could not be evaluated —
+              {{ county_profile.county_name }}'s exemption records aren't available on Parcelytics yet.
+              {% endif %}
+            </p>
           </div>
         </div>
       {% endif %}
@@ -3747,8 +3852,26 @@
                 {% else %}<span class="na-cell">—</span>{% endif %}
               </td>
             </tr>
-            {# Exemptions (show only if either year has them) #}
-            {% if (current and (current.exemption_codes or current.billing_exemptions)) or (current_2026 and current_2026.exemption_codes) %}
+            {# Exemptions (show only if either year has them).
+               PX-20260901-05 Task 2 item 3: this row's old condition being
+               False reads identically whether a parcel genuinely has no
+               exemption on record (Travis) OR the county's exemption data
+               was simply never loaded (Dallas, always False here) -- the
+               row silently disappearing lets the second case pass for the
+               first. Since a Travis parcel with a real "no exemption"
+               result and a Dallas parcel (unknown either way) would
+               otherwise render identically (both: no row), a no-coverage
+               county now gets an explicit "Not Available" row instead of
+               silence, so the omission can't be misread as a confirmed
+               clean record. #}
+            {% if not has_exemption_coverage %}
+            <tr>
+              <th class="text-muted fw-normal small ps-3">Exemptions</th>
+              <td class="text-end" style="font-size:11.5px;"><span class="badge-partial" style="font-size:9px;">Not Available</span></td>
+              <td class="text-end" style="font-size:11.5px;"><span class="badge-partial" style="font-size:9px;">Not Available</span></td>
+              <td></td>
+            </tr>
+            {% elif (current and (current.exemption_codes or current.billing_exemptions)) or (current_2026 and current_2026.exemption_codes) %}
             <tr>
               <th class="text-muted fw-normal small ps-3">Exemptions</th>
               <td class="text-end" style="font-size:11.5px;">{{ current_2026.exemption_codes if current_2026 and current_2026.exemption_codes else "—" }}</td>
