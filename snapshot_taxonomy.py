@@ -562,7 +562,26 @@ def ptype_and_sort_case_for_view(view):
         order_by_expr = "n_parcels DESC NULLS LAST"
         fallback_label = "Other Commercial"
     else:  # overall
-        bench_labels = ["Residential", "Multi-Family", "Commercial", "Land/Vacant", "Agricultural"]
+        # PX-20260901-04 Task 1 fix: this used to list all 5 canonical
+        # county_benchmark labels ("Residential", "Multi-Family",
+        # "Commercial", "Land/Vacant", "Agricultural"). app.py's Annual
+        # Trends query builds `WHERE property_type_label IN (bench_labels)`
+        # and the template then does `bench_trends | selectattr('tax_year',
+        # 'equalto', yr) | list | first` per year -- with 5 labels in the
+        # result set for the SAME tax_year, "first" silently picked
+        # whichever row postgres/Jinja happened to return first (in
+        # practice, alphabetically-first: "Agricultural"), for BOTH
+        # counties. There is no county-wide benchmark row in
+        # county_benchmark to fall back to instead, so per the PM's
+        # explicit ruling, the Overall view's Annual Trends panel now shows
+        # the Residential row specifically (labeled "Residential", not
+        # "County Median" -- see the panel header in snapshot.html) rather
+        # than a blended or arbitrary category. bench_labels is consumed
+        # ONLY by app.py's Annual Trends query (refresh_snapshot_summary.py
+        # discards this same tuple's bench_labels slot as `_bench_labels`,
+        # confirmed via repo-wide grep) -- safe to narrow with no other
+        # caller affected.
+        bench_labels = ["Residential"]
         _ov_tax = _snapshot_taxonomy_sql("p.classi_cd", "p.state_cd1")
         ptype_case = _ov_tax
         sort_case = _snapshot_taxonomy_sort_case_sql(_ov_tax)

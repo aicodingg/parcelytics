@@ -24,6 +24,17 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 from jinja2 import Environment, FileSystemLoader
 
+# PX-20260901-04 Task 5: pull the real tab-order/label/coverage-vocabulary
+# constants so this harness's snapshot.html contexts stay in sync with
+# app.py's actual _compute_snapshot_data() output shape, rather than a
+# hand-typed approximation that can silently drift (see the disclosed gap
+# this brief's Task 5 closes, below).
+from snapshot_taxonomy import (
+    _SNAPSHOT_VIEW_TAB_ORDER,
+    _SNAPSHOT_TAB_BUTTON_LABEL,
+    _SNAPSHOT_COVERAGE_LABELS,
+)
+
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
 
@@ -122,8 +133,10 @@ def check(label, fn):
             FAILURES.append(f"{label}: leaked raw Jinja delimiter in output")
         else:
             print(f"  OK   {label} ({len(out)} chars)")
+        return out
     except Exception as e:
         FAILURES.append(f"{label}: {type(e).__name__}: {e}")
+        return None
 
 
 def parcel(geo_id, is_2026_certified, mv26=850000):
@@ -232,6 +245,34 @@ def main():
                 "median_pct": med_pct, "p25_pct": med_pct - 2, "p75_pct": med_pct + 2,
                 "total_mv25_b": mv25_b, "total_mv26_b": mv26_b}
 
+    # PX-20260901-04 Task 5: disclosed gap closed. This shared context used
+    # to omit available_tabs/tab_button_labels entirely -- Jinja's default
+    # permissive Undefined iterates an undefined value as empty rather than
+    # raising, so `{% for v in available_tabs %}` silently rendered ZERO
+    # tabs in every scenario below, and no assertion here ever checked tab
+    # content, so this harness kept reporting green while proving nothing
+    # about the tab bar. Fixed two ways: (1) this context now carries the
+    # real full-coverage Travis shape for every new PX-20260901-04 key
+    # (available_tabs/tab_button_labels/coverage_line/bench_label/
+    # overall_tab_description/has_ajr_data/has_year_built_data), matching
+    # what _compute_snapshot_data() actually returns for a fully-covered
+    # county; (2) _assert_snapshot_tabs_rendered() below now fails the run
+    # loudly if a scenario that should show tabs renders zero of them,
+    # instead of the old silent pass.
+    _TRAVIS_TAB_CTX = dict(
+        available_tabs=list(_SNAPSHOT_VIEW_TAB_ORDER),
+        tab_button_labels=_SNAPSHOT_TAB_BUTTON_LABEL,
+        coverage_line=None,  # full coverage -> snapshot_coverage_copy() returns None
+        bench_label="Residential",  # PX-20260901-04 Task 1: overall view's only real benchmark row
+        overall_tab_description=(
+            "All taxable real property — " + ", ".join(
+                _SNAPSHOT_COVERAGE_LABELS[v] for v in _SNAPSHOT_VIEW_TAB_ORDER if v != "overall"
+            )
+        ),
+        has_ajr_data=True,  # Travis has real AJR-sourced rows
+        has_year_built_data=True,  # Travis has real year_built data (New Construction card is live today)
+    )
+
     def _snapshot_ctx(status_2026, mode="investor"):
         return dict(
             view="overall", mode=mode, status_2026=status_2026,
@@ -243,21 +284,65 @@ def main():
                     "total_mv25_b": 180.0, "total_mv26_b": 190.0, "median_pct": 5.5},
             bench_trends=[], new_construction_count=42, risk_flagged_count=7,
             subtype_cap=8, top_neighborhoods=[], bottom_neighborhoods=[],
+            **_TRAVIS_TAB_CTX,
         )
 
-    check("snapshot.html / status certified (investor)",
-          lambda: tpl.render(**_snapshot_ctx("certified")))
-    check("snapshot.html / status preliminary (investor)",
-          lambda: tpl.render(**_snapshot_ctx("preliminary")))
-    check("snapshot.html / status mixed (investor)",
-          lambda: tpl.render(**_snapshot_ctx("mixed")))
-    check("snapshot.html / status certified (homeowner)",
-          lambda: tpl.render(**_snapshot_ctx("certified", mode="homeowner")))
-    check("snapshot.html / totals=None (no-data branch, e.g. an empty view)",
-          lambda: tpl.render(view="overall", mode="investor", status_2026="none", rows=[], totals=None,
-                              data_unavailable=False, data_unavailable_reason=None,
-                              bench_trends=[], new_construction_count=0, risk_flagged_count=0,
-                              subtype_cap=8, top_neighborhoods=[], bottom_neighborhoods=[]))
+    def _assert_snapshot_tabs_rendered(label, out, expect_tabs=True):
+        """PX-20260901-04 Task 5: the harness-gap fix itself. Isolates the
+        tab-bar block and counts real <a href> tabs -- for any investor-mode,
+        data-available scenario, this must be non-zero (10 for this file's
+        full-coverage Travis contexts) or the assertion fails the run, unlike
+        the old silent zero-tab render. Homeowner mode and data_unavailable
+        scenarios never render the tab bar at all (see snapshot.html's own
+        `{% if mode != 'homeowner' %}` / `{% if data_unavailable %}` gates),
+        so those pass `expect_tabs=False` and are only checked for absence."""
+        bar_start = out.find('class="btn-group btn-group-sm flex-wrap"')
+        if not expect_tabs:
+            if bar_start != -1:
+                FAILURES.append(f"{label}: tab bar unexpectedly present "
+                                 f"(mode=homeowner or data_unavailable scenario)")
+            return
+        if bar_start == -1:
+            FAILURES.append(f"{label}: tab bar markup not found in output at all")
+            return
+        bar_end = out.find("</div>", bar_start)
+        tab_count = out[bar_start:bar_end].count("<a href=")
+        if tab_count == 0:
+            FAILURES.append(
+                f"{label}: tab bar rendered but contains ZERO tabs -- this is "
+                f"exactly the silent-zero-tab gap PX-20260901-04 Task 5 closed; "
+                f"available_tabs/tab_button_labels are likely missing from this "
+                f"scenario's context again"
+            )
+        else:
+            print(f"  OK   {label}: tab bar has {tab_count} tab(s)")
+
+    _out = check("snapshot.html / status certified (investor)",
+                 lambda: tpl.render(**_snapshot_ctx("certified")))
+    if _out is not None:
+        _assert_snapshot_tabs_rendered("snapshot.html / status certified (investor)", _out)
+    _out = check("snapshot.html / status preliminary (investor)",
+                 lambda: tpl.render(**_snapshot_ctx("preliminary")))
+    if _out is not None:
+        _assert_snapshot_tabs_rendered("snapshot.html / status preliminary (investor)", _out)
+    _out = check("snapshot.html / status mixed (investor)",
+                 lambda: tpl.render(**_snapshot_ctx("mixed")))
+    if _out is not None:
+        _assert_snapshot_tabs_rendered("snapshot.html / status mixed (investor)", _out)
+    _out = check("snapshot.html / status certified (homeowner)",
+                 lambda: tpl.render(**_snapshot_ctx("certified", mode="homeowner")))
+    if _out is not None:
+        # homeowner mode never shows the sector view toggle at all -- see
+        # snapshot.html's `{% if mode != 'homeowner' %}` gate around the tab bar.
+        _assert_snapshot_tabs_rendered("snapshot.html / status certified (homeowner)", _out, expect_tabs=False)
+    _out = check("snapshot.html / totals=None (no-data branch, e.g. an empty view)",
+                 lambda: tpl.render(view="overall", mode="investor", status_2026="none", rows=[], totals=None,
+                                     data_unavailable=False, data_unavailable_reason=None,
+                                     bench_trends=[], new_construction_count=0, risk_flagged_count=0,
+                                     subtype_cap=8, top_neighborhoods=[], bottom_neighborhoods=[],
+                                     **_TRAVIS_TAB_CTX))
+    if _out is not None:
+        _assert_snapshot_tabs_rendered("snapshot.html / totals=None (no-data branch, e.g. an empty view)", _out)
 
     # AGGPRECOMP-2-FIX-2 fixture-coverage note (Fable's review): the render
     # matrix needs at minimum overall + one SECTOR view + the empty-view
@@ -283,7 +368,7 @@ def main():
                 "n_flat": 10, "median_pct": med_pct, "p25_pct": p25, "p75_pct": p75,
                 "total_mv25_b": mv25_b, "total_mv26_b": mv26_b}
 
-    check("snapshot.html / populated SECTOR view (retail, capped subtype rollup)",
+    _out = check("snapshot.html / populated SECTOR view (retail, capped subtype rollup)",
           lambda: tpl.render(
               view="retail", mode="investor", status_2026="certified",
               data_unavailable=False, data_unavailable_reason=None,
@@ -305,7 +390,21 @@ def main():
               bench_trends=[], new_construction_count=18, risk_flagged_count=4,
               subtype_cap=7, top_neighborhoods=[{"neighborhood_cd": "NB2", "n_parcels": 22, "median_pct": 9.1}],
               bottom_neighborhoods=[{"neighborhood_cd": "NB9", "n_parcels": 14, "median_pct": -3.4}],
+              available_tabs=list(_SNAPSHOT_VIEW_TAB_ORDER), tab_button_labels=_SNAPSHOT_TAB_BUTTON_LABEL,
+              coverage_line=None,
+              # PX-20260901-04 Task 1: county_benchmark only has 5 canonical
+              # rows (Residential/Multi-Family/Commercial/Land/Agricultural) --
+              # ptype_and_sort_case_for_view()'s real bench_labels mapping
+              # (snapshot_taxonomy.py) points ALL FOUR of Retail/Industrial/
+              # Office/Hotel at the single "Commercial" row, since none of
+              # them has its own dedicated benchmark row. "Retail" here would
+              # be a fictional label this scenario's own view would never
+              # actually produce.
+              bench_label="Commercial",
+              has_ajr_data=True, has_year_built_data=True,
           ))
+    if _out is not None:
+        _assert_snapshot_tabs_rendered("snapshot.html / populated SECTOR view (retail, capped subtype rollup)", _out)
 
     # Task AGGPRECOMP-2 (Aug 2026): the new "no live fallback, ever" gate --
     # _compute_snapshot_data() (app.py) now returns data_unavailable=True
@@ -326,7 +425,12 @@ def main():
             if reason not in out:
                 raise AssertionError(f"expected reason text {reason!r} not found in output")
             return out
-        check(label, _render)
+        _out = check(label, _render)
+        if _out is not None:
+            # data_unavailable=True short-circuits before the tab bar's own
+            # `{% else %}` branch (see snapshot.html's Tier 1 gate) -- no tabs
+            # should render here regardless of available_tabs being absent.
+            _assert_snapshot_tabs_rendered(label, _out, expect_tabs=False)
 
     check_unavailable_banner(
         "snapshot.html / data_unavailable=True (missing table)",

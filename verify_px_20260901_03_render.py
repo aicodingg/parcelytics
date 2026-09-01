@@ -1,37 +1,28 @@
 #!/usr/bin/env python3
 """
-verify_px_20260901_03_render.py — PX-20260901-03 Task 3 render/byte-compare
-fixture for templates/snapshot.html.
+verify_px_20260901_03_render.py — PX-20260901-03 Task 3 render fixture for
+templates/snapshot.html.
 
-Two things this brief's Task 3 explicitly requires and no existing fixture
-file covers:
+What this file still proves (item 2, the byte-identical Travis claim, was
+retired -- see the PX-20260901-04 SUPERSESSION NOTE inline below):
 
   1. Dallas-shaped data (7 available_tabs-eligible views -> 6 real tabs, no
      neighborhood-movers panel, the new coverage line, "2026 Certified vs
      2025 Certified") renders the composed-from-availability page correctly.
-  2. Travis-shaped data (full coverage) renders BYTE-IDENTICAL to the
-     pre-brief template -- proving this brief's tab-bar/coverage-line
-     changes are a no-op for a county that already has everything.
+  2. Travis-shaped data (full coverage) still gets all 10 tab-order entries
+     in `available_tabs` -- the composition LOGIC this brief introduced is
+     unaffected by PX-20260901-04's later, deliberate copy changes.
 
 Reuses verify_m4_part1_other_pages_render.py's own make_env() (same Jinja
 globals/mocks already established there for snapshot.html) rather than
 rebuilding the mock environment a second time.
 
-The "pre-brief template" for item 2 is read via `git show HEAD:templates/
-snapshot.html` -- this repo has the PX-20260901-03 diff still uncommitted,
-so HEAD is genuinely the byte-for-byte pre-brief file, not a hand-reconstructed
-approximation.
-
 Run: python3 verify_px_20260901_03_render.py
 """
 import os
-import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(__file__))
-
-from jinja2 import Environment, FileSystemLoader
 
 from verify_m4_part1_other_pages_render import make_env
 from snapshot_taxonomy import _SNAPSHOT_VIEW_TAB_ORDER, _SNAPSHOT_TAB_BUTTON_LABEL
@@ -85,6 +76,15 @@ def _base_ctx(status_2026, mode="investor"):
                 "total_mv25_b": 180.0, "total_mv26_b": 190.0, "median_pct": 5.5},
         bench_trends=[], new_construction_count=42, risk_flagged_count=7,
         subtype_cap=8, top_neighborhoods=[], bottom_neighborhoods=[],
+        # PX-20260901-04 defaults -- Travis-shaped (full coverage) values;
+        # dallas_ctx below overrides has_ajr_data/has_year_built_data/
+        # bench_label/overall_tab_description with real Dallas-shaped ones.
+        bench_label="Residential",
+        overall_tab_description=(
+            "All taxable real property — residential, multi-family, retail, "
+            "industrial, office, hotel, land, agricultural, other"
+        ),
+        has_ajr_data=True, has_year_built_data=True,
     )
 
 
@@ -120,6 +120,19 @@ def main():
         "coverage_line": dallas_coverage_line,
         "top_neighborhoods": [],
         "bottom_neighborhoods": [],
+        # PX-20260901-04 keys, added so this scenario keeps rendering after
+        # that brief's template changes -- real Dallas-shaped values (see
+        # verify_px_20260901_04_render.py for the dedicated fixture that
+        # actually asserts on these; this file only needs them present so
+        # this Task 3 scenario doesn't regress to Undefined-blank output).
+        "bench_label": "Residential",
+        "overall_tab_description": (
+            "All taxable real property — " + ", ".join(
+                v for v in ("residential", "multifamily", "land", "agricultural", "other")
+            )
+        ),
+        "has_ajr_data": False,
+        "has_year_built_data": False,
     }
     dallas_out = check("Dallas-shaped: renders cleanly", lambda: tpl.render(**dallas_ctx))
 
@@ -159,70 +172,27 @@ def main():
         assert_check("Dallas-shaped: '2026 Certified vs 2025 Certified' subtitle present",
                      "2026 Certified vs 2025 Certified" in dallas_out, "subtitle missing")
 
-    # ── Scenario 2: Travis-shaped byte-compare against pre-brief HEAD ──────
-    head_snapshot_html = subprocess.run(
-        ["git", "show", "HEAD:templates/snapshot.html"],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-    ).stdout
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with open(os.path.join(tmpdir, "snapshot.html"), "w", encoding="utf-8") as f:
-            f.write(head_snapshot_html)
-        old_env = Environment(loader=FileSystemLoader([tmpdir, TEMPLATE_DIR]))
-        old_env.globals.update(env.globals)
-        old_env.filters.update(env.filters)  # tojson stub etc -- must match, or unrelated
-                                              # base.html filter differences masquerade as regressions
-        old_tpl = old_env.get_template("snapshot.html")
-
+    # ── Scenario 2: Travis-shaped tab composition (byte-compare RETIRED) ────
+    # PX-20260901-04 SUPERSESSION NOTE: this scenario used to byte-diff the
+    # post-brief render against pre-brief HEAD and require the diff be
+    # whitespace-only, proving PX-20260901-03's tab-bar/coverage-line change
+    # was a true no-op for a fully-covered county. That guarantee no longer
+    # holds -- PX-20260901-04's own brief states plainly that Task 1's
+    # benchmark-row bug "has been live on Travis" too, and Task 4 explicitly
+    # converts several Travis-visible strings (the Annual Trends "County
+    # Median" header, the hardcoded "Certified 2021-2025" badge, the
+    # "Red = increasing/green = decreasing" footer line) into county-aware
+    # or generated copy -- Travis's rendered bytes are SUPPOSED to change now.
+    # Keeping a byte-identical assertion here would either be a permanent,
+    # known-false failure or would have to be quietly loosened until it
+    # proved nothing. Retired in favor of the composition-only assertion
+    # below (still true and still worth guarding) plus a dedicated new
+    # fixture file, verify_px_20260901_04_render.py, that asserts the SPECIFIC
+    # new Travis and Dallas content this brief introduced.
     travis_available_views = set(_SNAPSHOT_VIEW_TAB_ORDER) | {"commercial"}
     travis_tabs = [v for v in _SNAPSHOT_VIEW_TAB_ORDER if v in travis_available_views]
     assert_check("Travis-shaped: full-coverage available_tabs has all 10 tab-order entries",
                  travis_tabs == list(_SNAPSHOT_VIEW_TAB_ORDER), travis_tabs)
-
-    travis_ctx_old = _base_ctx("certified")  # pre-brief template needs no new keys
-    travis_ctx_new = {
-        **travis_ctx_old,
-        "available_tabs": travis_tabs,
-        "tab_button_labels": _SNAPSHOT_TAB_BUTTON_LABEL,
-        "coverage_line": None,  # full coverage -> snapshot_coverage_copy() returns None
-    }
-
-    old_out = check("Travis-shaped: pre-brief (HEAD) template renders cleanly",
-                     lambda: old_tpl.render(**travis_ctx_old))
-    new_out = check("Travis-shaped: post-brief template renders cleanly",
-                     lambda: tpl.render(**travis_ctx_new))
-
-    if old_out is not None and new_out is not None:
-        if old_out == new_out:
-            print("  OK   Travis-shaped: BYTE-IDENTICAL to pre-brief render "
-                  f"({len(old_out)} chars)")
-        else:
-            # Not necessarily a failure -- turning a static 10-<a>-tag block
-            # into a {% for %} loop can shift blank-line whitespace around
-            # the loop tags (Jinja's default trim_blocks=False leaves the
-            # newline after `{% for %}`/`{% endfor %}` in the output) without
-            # changing anything a browser renders differently. Report the
-            # actual diff size so a human can judge whitespace-only vs real.
-            import difflib
-            diff_lines = list(difflib.unified_diff(
-                old_out.splitlines(keepends=True), new_out.splitlines(keepends=True),
-                fromfile="pre-brief (HEAD)", tofile="post-brief", n=1,
-            ))
-            non_blank_diff = [l for l in diff_lines
-                               if l.startswith(("+", "-")) and l[1:].strip() != ""
-                               and not l.startswith(("+++", "---"))]
-            if non_blank_diff:
-                FAILURES.append(
-                    "Travis-shaped: NOT byte-identical, and the diff has "
-                    f"{len(non_blank_diff)} non-blank line(s) changed -- this is a "
-                    f"REAL content difference, not whitespace. First few:\n" +
-                    "".join(non_blank_diff[:10])
-                )
-            else:
-                print(f"  OK   Travis-shaped: byte-diff is whitespace-only "
-                      f"({len(diff_lines)} diff line(s), all blank -- expected from "
-                      f"the static tab list becoming a {{% for %}} loop; no visible "
-                      f"or functional change)")
 
     print()
     if FAILURES:

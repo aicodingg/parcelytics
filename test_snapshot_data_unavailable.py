@@ -119,6 +119,21 @@ def _build_real_namespace(source):
     # function bodies above raise NameError the moment they're called.
     neighborhood_data_src = _extract_function_body(source, "_county_has_neighborhood_data")
     assert neighborhood_data_src, "_county_has_neighborhood_data() not found in app.py -- extraction broke"
+    # PX-20260901-04 Task 3/4: _compute_snapshot_data() now also calls two
+    # more real app.py functions -- _county_has_ajr_data() (Task 4's AJR-copy
+    # gate) and _county_has_year_built_data() (Task 3's New Construction
+    # card gate). Same reason as _county_has_neighborhood_data() above: skip
+    # extracting either and the real extracted _compute_snapshot_data() body
+    # raises NameError the instant it's called. Both follow the identical
+    # per-request g-cache / "SELECT EXISTS (...) AS has_data" shape, so no
+    # new stub-query branch is needed -- every existing query stub in this
+    # file already matches on the generic "AS has_data" substring rather
+    # than the exact SQL text, so it answers these two new calls the same
+    # way it already answers _county_has_neighborhood_data()'s.
+    ajr_data_src = _extract_function_body(source, "_county_has_ajr_data")
+    assert ajr_data_src, "_county_has_ajr_data() not found in app.py -- extraction broke"
+    year_built_data_src = _extract_function_body(source, "_county_has_year_built_data")
+    assert year_built_data_src, "_county_has_year_built_data() not found in app.py -- extraction broke"
     # snapshot_coverage_copy() is immediately followed by
     # "@app.context_processor" (same shape as unavailable_copy() right
     # above it) -- the shared _extract_function_body() boundary regex only
@@ -178,6 +193,8 @@ def _build_real_namespace(source):
     exec(compile(unavailable_copy_src, "<extracted unavailable_copy>", "exec"), namespace)
     exec(compile(coverage_copy_src, "<extracted snapshot_coverage_copy>", "exec"), namespace)
     exec(compile(neighborhood_data_src, "<extracted _county_has_neighborhood_data>", "exec"), namespace)
+    exec(compile(ajr_data_src, "<extracted _county_has_ajr_data>", "exec"), namespace)
+    exec(compile(year_built_data_src, "<extracted _county_has_year_built_data>", "exec"), namespace)
     exec(compile(freshness_src, "<extracted _snapshot_summary_freshness>", "exec"), namespace)
     exec(compile(compute_src, "<extracted _compute_snapshot_data>", "exec"), namespace)
     return namespace

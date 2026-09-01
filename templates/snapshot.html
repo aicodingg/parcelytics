@@ -109,7 +109,13 @@
     {% endfor %}
   </div>
   <div class="text-muted mt-2" style="font-size:12px;">
-    {% if view == 'overall' %}All taxable real property — residential, multi-family, retail, industrial, office, hotel, land, ag, other
+    {# PX-20260901-04 Task 4: overall_tab_description (app.py) is generated
+       from the same `available_tabs` list the tab bar above renders from --
+       no longer a hand-typed "residential, multi-family, retail, ...
+       hotel, land, ag, other" list that named sectors a county might not
+       actually have a tab for (Dallas: no retail/industrial/office/hotel
+       tabs today). #}
+    {% if view == 'overall' %}{{ overall_tab_description }}
     {% elif view == 'residential' %}Single-family, condos/townhomes, duplex–fourplex, mobile/manufactured homes (real property)
     {% elif view == 'multifamily' %}Apartments (5+ units), dorms, fraternity/sorority, retirement/assisted living
     {% elif view == 'retail' %}Stores, restaurants, shopping centers, grocery, auto dealerships, theaters — Market Snapshot's own taxonomy, see footer
@@ -185,11 +191,19 @@
     <div class="kpi-value">{{ "{:,}".format(risk_flagged_count) }}</div>
     <div class="kpi-sub">parcels flagged for an unusually large value change this year</div>
   </div>
+  {# PX-20260901-04 Task 3: gated on has_year_built_data (app.py's
+     _county_has_year_built_data()) -- same coverage rule as the
+     neighborhood-movers panel. Dallas's "NEW CONSTRUCTION 0" wasn't zero
+     new construction; year_built is unmapped for Dallas's DCAD source (see
+     that function's docstring), so a literal 0 here would misread as a
+     real fact about the county rather than a gap in what's loaded. #}
+  {% if has_year_built_data %}
   <div class="kpi-card">
     <div class="kpi-label">New Construction</div>
     <div class="kpi-value">{{ "{:,}".format(new_construction_count) }}</div>
     <div class="kpi-sub">parcels built {{ 2026 - 1 }} or later — same cutoff as Search's New Construction filter</div>
   </div>
+  {% endif %}
 </div>
 
 {# ── Investor takeaway ─────────────────────────────────────────── #}
@@ -266,7 +280,7 @@
       <strong style="color:var(--accent);">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
-      ({{ "{:,}".format(totals.n_total) }} parcels, AJR* personal property supplements excluded).
+      ({{ "{:,}".format(totals.n_total) }} parcels{% if has_ajr_data %}, AJR* personal property supplements excluded{% endif %}).
       {% if sub1 %}
         {{ sub1.ptype }}: median {{ "+" if sub1.median_pct >= 0 else "" }}{{ sub1.median_pct }}%,
         ${{ "{:,.2f}B".format(sub1.total_mv25_b) }} → ${{ "{:,.2f}B".format(sub1.total_mv26_b) }}.
@@ -294,7 +308,7 @@
       <strong style="color:var(--accent);">
         {{ "+" if totals.median_pct >= 0 else "" }}{{ totals.median_pct }}%
       </strong>
-      ({{ "{:,}".format(totals.n_total) }} parcels, AJR* personal property supplements excluded).
+      ({{ "{:,}".format(totals.n_total) }} parcels{% if has_ajr_data %}, AJR* personal property supplements excluded{% endif %}).
       {% if sub1 %}
         {{ sub1.ptype }}: median {{ "+" if sub1.median_pct >= 0 else "" }}{{ sub1.median_pct }}%,
         ${{ "{:,.2f}B".format(sub1.total_mv25_b) }} → ${{ "{:,.2f}B".format(sub1.total_mv26_b) }}.
@@ -375,13 +389,34 @@
       {% set _com_total_mv25 = _com_sectors | sum(attribute='total_mv25_b') %}
       {% set _com_total_mv26 = _com_sectors | sum(attribute='total_mv26_b') %}
       {% set _com_largest = (_com_sectors | sort(attribute='n_parcels', reverse=true) | list)[0] if _com_sectors else none %}
+      {# PX-20260901-04 Task 2: this used to unconditionally say "should
+         expect relief/increases" from a bare median_pct sign check, which
+         reads as a confident, non-zero prediction even when the underlying
+         median genuinely IS 0.00% (Dallas: 315,464 of 545,925 residential
+         parcels carried forward completely unchanged -- median_pct is
+         correctly 0, not a rounding artifact). Branch on the real
+         n_flat/n_up/n_down shape instead of blindly trusting the median's
+         sign: when flat parcels outnumber both up and down individually
+         (the flat bucket is the biggest single group), lead with THAT fact
+         -- "should expect X%" is a misleading frame when most owners saw no
+         change at all. Never renders the word "expect" alongside a literal
+         0.00% median in any branch below. #}
       {% if res %}
+        {% if res.n_flat > res.n_up and res.n_flat > res.n_down %}
+        Most residential parcels carried forward unchanged
+        ({{ "{:,}".format(res.n_flat) }} of {{ "{:,}".format(res.n_parcels) }}); among those that
+        changed, {{ "{:,}".format(res.n_up) }} rose and {{ "{:,}".format(res.n_down) }} fell.
+        {% elif res.median_pct == 0 %}
+        Residential values were flat overall
+        (median 0.00%, {{ "{:,}".format(res.n_down) }} down / {{ "{:,}".format(res.n_up) }} up).
+        {% else %}
         Residential owners should expect
         <strong style="color:var(--accent);">
           {{ "relief" if res.median_pct < 0 else "increases" }}
         </strong>
         (median {{ "+" if res.median_pct >= 0 else "" }}{{ res.median_pct }}%,
         {{ "{:,}".format(res.n_down) }} down / {{ "{:,}".format(res.n_up) }} up).
+        {% endif %}
       {% endif %}
       {% if _com_sectors %}
         Retail/Industrial/Office/Hotel combined added ${{ "{:,.1f}B".format(_com_total_mv26 - _com_total_mv25) }} in aggregate {% if status_2026 == "certified" %}certified{% elif status_2026 == "mixed" %}certified/preliminary{% elif status_2026 == "preliminary" %}preliminary{% else %}not-yet-certified{% endif %} value
@@ -543,8 +578,8 @@
     {% else %}
     Based on the most recently available 2026 {{ county_profile.cad_abbr }} Appraisal Export vs 2025 Certified Export.
     {% endif %}
-    Excludes: tax-exempt accounts (X state_cd1 prefix), personal property accounts (N prefix, 3 accounts),
-    and AJR* personal property supplement records (placeholder $1 values in certified data).
+    Excludes: tax-exempt accounts (X state_cd1 prefix), personal property accounts (N prefix, 3 accounts){% if has_ajr_data %},
+    and AJR* personal property supplement records (placeholder $1 values in certified data){% endif %}.
     M (manufactured homes) and O/G/J (other real property, minerals, utilities) are included as real property.
     Sector tabs (Residential/Multi-Family/Retail/Industrial/Office/Hotel/Land/Agricultural/Other) use a
     Market-Snapshot-specific classification separate from the rest of the site's canonical property-type
@@ -555,7 +590,12 @@
     are combined into one "Other &lt;Sector&gt;" row (real summed parcel counts and dollar totals, but no
     median/percentile — see that row's tooltip).
     Median Δ = median parcel-level % change; P25/P75 = 25th/75th percentiles.
-    Red = increasing burden, green = decreasing.
+    {# PX-20260901-04 Task 4: this page has no red/green value coding anywhere
+       (confirmed by grep -- every percentage/delta display uses a single
+       neutral var(--accent), not var(--up)/var(--down) or any color-by-sign
+       logic). This line claimed a color convention the page doesn't
+       actually implement -- removed rather than replaced, since there is no
+       true palette-semantics statement to put in its place. #}
   </div>
 </div>
 
@@ -632,7 +672,12 @@
   </div>
   <div class="card-footer text-muted small">
     Median parcel-level YoY % change by neighborhood_cd, current sector only ({{ "{:,}".format(totals.n_total) if totals else "" }} parcels total).
-    Neighborhoods with fewer than 10 qualifying parcels are excluded. Red = increasing value, green = decreasing — same convention as the table above.
+    Neighborhoods with fewer than 10 qualifying parcels are excluded.
+    {# PX-20260901-04 Task 4: removed the "Red = increasing value, green =
+       decreasing" claim -- same reasoning as the by-type table footer
+       above: this page has no red/green value coding anywhere (confirmed
+       by grep), every percentage/delta display uses a single neutral
+       var(--accent). #}
     Click a neighborhood code to browse its parcels in Search.
   </div>
 </div>
@@ -644,8 +689,24 @@
 {% if _bt_years | length >= 2 %}
 <div class="card mb-4">
   <div class="card-header d-flex align-items-center gap-2">
-    Annual Trends — County Median
-    <span class="badge-partial" style="font-size:9.5px; padding:2px 6px;">Certified 2021–2025</span>
+    {# PX-20260901-04 Task 1: bench_label is the single property_type_label
+       this panel's rows actually come from (see app.py's
+       _compute_snapshot_data() -- bench_labels is now always 0 or 1
+       entries). Labeling the panel with the REAL category instead of the
+       old blanket "County Median" -- there is no county-wide row in
+       county_benchmark, so that phrase implied data this panel never had,
+       for either county. #}
+    Annual Trends — {{ bench_label }}
+    {# PX-20260901-04 Task 4: year range is now read off _bt_years (this
+       county's own actual county_benchmark rows) instead of a hardcoded
+       "2021–2025" that was true for Travis and wrong for Dallas (whose
+       first loaded year is 2022, not 2021, and which also carries a 2026
+       preliminary row Travis-only language never accounted for). Dropped
+       the "Certified" word from this badge -- the per-year "V" marker
+       below already marks exactly which single year is certified; a range
+       label claiming ALL of it is "Certified" would itself be inaccurate
+       whenever the range includes an uncertified year (e.g. 2026). #}
+    <span class="badge-partial" style="font-size:9.5px; padding:2px 6px;">{{ _bt_years[0] }}–{{ _bt_years[-1] }}</span>
   </div>
   <div class="card-body p-0">
     <div class="table-responsive">
@@ -664,7 +725,12 @@
           <tr>
             <td class="trend-row-label">Median Market Value</td>
             {% for yr in _bt_years %}
-            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+            {# PX-20260901-04 Task 1: explicit property_type_label filter, not
+               just tax_year -- defense in depth against this exact class of
+               bug recurring (bench_labels going back to multiple entries for
+               "overall" would otherwise silently resurrect the
+               first-alphabetical-row bug this brief fixes). #}
+            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | selectattr('property_type_label', 'equalto', bench_label) | list | first | default(none) %}
             <td class="text-end">
               {% if _row and _row.median_market_value %}
                 ${{ "{:,.0f}".format(_row.median_market_value) }}
@@ -677,7 +743,12 @@
           <tr>
             <td class="trend-row-label text-muted fw-normal" style="font-size:11px;">P25 / P75</td>
             {% for yr in _bt_years %}
-            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+            {# PX-20260901-04 Task 1: explicit property_type_label filter, not
+               just tax_year -- defense in depth against this exact class of
+               bug recurring (bench_labels going back to multiple entries for
+               "overall" would otherwise silently resurrect the
+               first-alphabetical-row bug this brief fixes). #}
+            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | selectattr('property_type_label', 'equalto', bench_label) | list | first | default(none) %}
             <td class="text-end text-muted small">
               {% if _row and _row.p25_market_value and _row.p75_market_value %}
                 ${{ "{:,.0f}".format(_row.p25_market_value // 1000) }}K / ${{ "{:,.0f}".format(_row.p75_market_value // 1000) }}K
@@ -690,7 +761,12 @@
           <tr>
             <td class="trend-row-label">Median Asmt. Ratio</td>
             {% for yr in _bt_years %}
-            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+            {# PX-20260901-04 Task 1: explicit property_type_label filter, not
+               just tax_year -- defense in depth against this exact class of
+               bug recurring (bench_labels going back to multiple entries for
+               "overall" would otherwise silently resurrect the
+               first-alphabetical-row bug this brief fixes). #}
+            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | selectattr('property_type_label', 'equalto', bench_label) | list | first | default(none) %}
             <td class="text-end">
               {% if _row and _row.median_assessment_ratio is not none %}
                 {{ "{:.1f}%".format(_row.median_assessment_ratio * 100) }}
@@ -703,7 +779,12 @@
           <tr>
             <td class="trend-row-label">Median YoY Change</td>
             {% for yr in _bt_years %}
-            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+            {# PX-20260901-04 Task 1: explicit property_type_label filter, not
+               just tax_year -- defense in depth against this exact class of
+               bug recurring (bench_labels going back to multiple entries for
+               "overall" would otherwise silently resurrect the
+               first-alphabetical-row bug this brief fixes). #}
+            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | selectattr('property_type_label', 'equalto', bench_label) | list | first | default(none) %}
             <td class="text-end">
               {% if _row and _row.median_yoy_value_change_pct is not none %}
                 {# Coherence fix (July 2026, per Fable review finding 6): raw
@@ -721,7 +802,12 @@
             <td class="trend-row-label text-muted fw-normal" style="font-size:11px;"
                 title="Number of parcels in this category with a valid certified market value that year. It varies year to year as parcels are added, reclassified, or have a value on record.">Parcels in This Category</td>
             {% for yr in _bt_years %}
-            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | list | first | default(none) %}
+            {# PX-20260901-04 Task 1: explicit property_type_label filter, not
+               just tax_year -- defense in depth against this exact class of
+               bug recurring (bench_labels going back to multiple entries for
+               "overall" would otherwise silently resurrect the
+               first-alphabetical-row bug this brief fixes). #}
+            {% set _row = bench_trends | selectattr('tax_year', 'equalto', yr) | selectattr('property_type_label', 'equalto', bench_label) | list | first | default(none) %}
             <td class="text-end text-muted small">
               {% if _row and _row.parcel_count %}
                 {{ "{:,}".format(_row.parcel_count) }}
@@ -735,7 +821,7 @@
     </div>
   </div>
   <div class="card-footer text-muted small">
-    County-wide medians from <code>county_benchmark</code> table.
+    {{ bench_label }} medians from <code>county_benchmark</code> table.
     Assessment ratio = median(assessed ÷ market) across all parcels in this category.
     {# Interpretive line (July 2026, per Fable review P1-16): the row above
        showed a bare per-year percentage with no context for what it means --
@@ -752,7 +838,7 @@
        county-wide pattern. #}
     A median ratio below ~100% is expected and common at the county level — it reflects the many parcels in this category with an active homestead or other value-limiting cap, not a data issue.
     YoY Change = median parcel-level year-over-year % change.
-    <span class="badge-partial" style="font-size:9.5px;">Partial</span> = AJR data.
+    {% if has_ajr_data %}<span class="badge-partial" style="font-size:9.5px;">Partial</span> = AJR data.{% endif %}
     <span class="badge-verified" style="font-size:9.5px;">V</span> = Certified 2025 data.
   </div>
 </div>

@@ -4611,6 +4611,80 @@ def _county_has_neighborhood_data(county_code):
     return cache[county_code]
 
 
+def _county_has_ajr_data(county_code):
+    """PX-20260901-04 Task 4: whether this county has any AJR-sourced rows
+    at all (AJR is Travis's 2021-2024 personal-property-supplement export,
+    loaded by loaders/load_ajr.py and identified everywhere else in this
+    file by the same geo_id LIKE 'AJR%%' pattern -- see the AJR* exclusion
+    clauses throughout api_peer_benchmark_local/api_peer_set/etc). Dallas's
+    DCAD source has no AJR-equivalent supplement file, so it never has any
+    AJR rows -- a real, data-derived fact, not a hardcoded "Travis only"
+    literal, so this stays correct if a future county DOES get an AJR-style
+    supplement loaded.
+
+    Gates the Market Snapshot page's AJR-specific copy (the "Partial = AJR
+    data" legend and "AJR* personal property supplements excluded" asides)
+    so a county that has never had any AJR data doesn't carry a footnote
+    describing a data quirk it's never had. Same per-request g-cache
+    convention as _county_has_neighborhood_data() above."""
+    cache = getattr(g, "_snapshot_ajr_data_cache", None)
+    if cache is None:
+        cache = {}
+        g._snapshot_ajr_data_cache = cache
+    if county_code not in cache:
+        row = query(
+            "SELECT EXISTS (SELECT 1 FROM parcel WHERE county_code = %s "
+            "AND geo_id LIKE 'AJR%%') AS has_data",
+            (county_code,), one=True,
+        )
+        cache[county_code] = bool(row["has_data"]) if row else False
+    return cache[county_code]
+
+
+def _county_has_year_built_data(county_code):
+    """PX-20260901-04 Task 3: whether this county's `parcel` rows carry any
+    real year_built at all -- a real, data-derived coverage fact, same
+    pattern as _county_has_neighborhood_data()/_county_has_ajr_data() above.
+
+    Dallas shows "NEW CONSTRUCTION 0" on the Snapshot page, which reads as
+    "zero new construction this year" but is actually "year_built is
+    unmapped for this county." DCAD's real source almost certainly carries
+    a year-built-equivalent field on its RES_DETAIL/COM_DETAIL building-
+    component-detail tables -- loaders/dcad_format.py's own
+    TABLE_LOAD_POLICY marks BOTH of those tables "DELIBERATELY UNLOADED...
+    no existing Travis-side schema column at this granularity," with no
+    iter_*_records function ever written for either one, so no column-level
+    confirmation of a year-built field has ever been done. This makes
+    year_built a THIRD unmapped DCAD field alongside exemption_codes and
+    neighborhood_cd (same PX-20260826-03/PX-20260901-02 precedent) --
+    joining the Dallas loader brief, not a bug in this page's query.
+
+    Confirming SQL (read-only, run against production -- this sandbox has
+    no live DB access, see this brief's own report for the disclosure):
+        SELECT COUNT(*) FILTER (WHERE year_built IS NOT NULL)
+        FROM parcel WHERE county_code='DALLAS';
+    A 0 (or near-0) result confirms unmapped, matching every other
+    DCAD-unmapped field's signature; any large non-zero count would mean
+    this helper's EXISTS check already routes correctly around a real,
+    populated field and this docstring's DCAD-source theory can be
+    disregarded in favor of "genuinely 0 new construction" instead.
+
+    Same per-request g-cache convention as the other _county_has_*_data()
+    helpers."""
+    cache = getattr(g, "_snapshot_year_built_data_cache", None)
+    if cache is None:
+        cache = {}
+        g._snapshot_year_built_data_cache = cache
+    if county_code not in cache:
+        row = query(
+            "SELECT EXISTS (SELECT 1 FROM parcel WHERE county_code = %s "
+            "AND year_built IS NOT NULL) AS has_data",
+            (county_code,), one=True,
+        )
+        cache[county_code] = bool(row["has_data"]) if row else False
+    return cache[county_code]
+
+
 def _snapshot_summary_freshness(county_code="TRAVIS"):
     """
     Tier 1 "no live fallback, ever" gate for /snapshot (SPEC_AGGREGATE_
@@ -4819,6 +4893,7 @@ def _compute_snapshot_data(view, county_code):
             "rows": [],
             "totals": None,
             "bench_trends": [],
+            "bench_label": None,
             "new_construction_count": 0,
             "risk_flagged_count": 0,
             "subtype_cap": SNAPSHOT_SUBTYPE_CAP,
@@ -4832,7 +4907,10 @@ def _compute_snapshot_data(view, county_code):
             # anyway to match this dict's existing every-key-explicit style.
             "available_tabs": [],
             "tab_button_labels": _SNAPSHOT_TAB_BUTTON_LABEL,
+            "overall_tab_description": "All taxable real property",
             "coverage_line": None,
+            "has_ajr_data": False,
+            "has_year_built_data": False,
         }
 
     # PX-20260901-03 Task 2: composition facts -- which views this county's
@@ -4849,7 +4927,21 @@ def _compute_snapshot_data(view, county_code):
     )
     available_views = {r["view"] for r in available_view_rows}
     available_tabs = [v for v in _SNAPSHOT_VIEW_TAB_ORDER if v in available_views]
+    # PX-20260901-04 Task 4: the Overall tab's own sub-copy line ("All
+    # taxable real property -- residential, multi-family, retail, ...")
+    # used to hand-list every sector regardless of whether this county's
+    # `available_tabs` actually includes it -- generated here instead, from
+    # the SAME available_tabs list the tab bar itself renders from, so a
+    # county missing sub-sector breakdowns (Dallas today) never claims to
+    # cover sectors it has no tab for.
+    _overall_desc_views = [v for v in available_tabs if v != "overall"]
+    overall_tab_description = (
+        "All taxable real property — " + ", ".join(_SNAPSHOT_COVERAGE_LABELS[v] for v in _overall_desc_views)
+        if _overall_desc_views else "All taxable real property"
+    )
     has_neighborhood_movers = _county_has_neighborhood_data(county_code)
+    has_ajr_data = _county_has_ajr_data(county_code)
+    has_year_built_data = _county_has_year_built_data(county_code)
     coverage_line = snapshot_coverage_copy(
         COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])["county_name"],
         available_views, has_neighborhood_movers,
@@ -4917,7 +5009,15 @@ def _compute_snapshot_data(view, county_code):
 
     # ── County Benchmark Annual Trends for the selected view (unchanged --
     # out of Tier 1 scope, see docstring above) ──────────────────────────
+    # PX-20260901-04 Task 1: bench_labels is now always 0 or 1 entries (see
+    # ptype_and_sort_case_for_view()'s "overall" branch -- narrowed to just
+    # ["Residential"] this brief). bench_label (singular) is the one label
+    # this panel actually shows, passed through to the template so it can
+    # label the panel header truthfully ("Residential"/"Commercial"/etc)
+    # instead of the old blanket "County Median" that implied a county-wide
+    # row which doesn't exist in county_benchmark.
     bench_trends = []
+    bench_label = bench_labels[0] if bench_labels else None
     if bench_labels:
         fmt_labels = ", ".join(f"'{lb}'" for lb in bench_labels)
         bench_trends = query(f"""
@@ -4959,6 +5059,7 @@ def _compute_snapshot_data(view, county_code):
         "rows": rows,
         "totals": totals,
         "bench_trends": bench_trends,
+        "bench_label": bench_label,
         "new_construction_count": new_construction_count,
         "risk_flagged_count": risk_flagged_count,
         "subtype_cap": SNAPSHOT_SUBTYPE_CAP,
@@ -4969,7 +5070,15 @@ def _compute_snapshot_data(view, county_code):
         # above the freshness-gate branch point in this function's body.
         "available_tabs": available_tabs,
         "tab_button_labels": _SNAPSHOT_TAB_BUTTON_LABEL,
+        "overall_tab_description": overall_tab_description,
         "coverage_line": coverage_line,
+        # PX-20260901-04 Task 4: real, data-derived fact gating the AJR-
+        # specific copy (see _county_has_ajr_data() docstring above) --
+        # never a hardcoded "county == TRAVIS" check.
+        "has_ajr_data": has_ajr_data,
+        # PX-20260901-04 Task 3: real, data-derived fact gating the New
+        # Construction KPI card (see _county_has_year_built_data() above).
+        "has_year_built_data": has_year_built_data,
     }
 
 
