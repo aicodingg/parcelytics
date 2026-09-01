@@ -1098,6 +1098,25 @@ CREATE TABLE IF NOT EXISTS group_stats_shadow (
 -- requested live -- the whole point of Tier 1 is that "which view a user
 -- clicks" no longer decides whether a query runs.
 
+-- PX-20260831-02 Task 1 (schema.sql staleness disclosure, same convention
+-- already used above for parcel_metrics/ingest_audit/load_batch): the three
+-- CREATE TABLE bodies below (snapshot_breakdown, snapshot_totals,
+-- snapshot_neighborhood_movers) are all stale relative to what's actually
+-- live in production. migrate_county_partitioning.py's real, already-run
+-- migration made county_code the LEADING primary-key column on all three
+-- (confirmed via that script's own TABLE_SPECS entries):
+--   snapshot_breakdown:           (view, ptype)            -> (county_code, view, ptype)
+--   snapshot_totals:              (view)                   -> (county_code, view)
+--   snapshot_neighborhood_movers: (view, neighborhood_cd)  -> (county_code, view, neighborhood_cd)
+-- This CREATE TABLE IF NOT EXISTS text is a no-op against the already-
+-- migrated live tables (same reason parcel_metrics' own stale bootstrap DDL
+-- above is left unedited rather than rewritten) -- fresh-DB bootstrap alone
+-- would create the OLD, pre-migration PK shape, which would immediately
+-- collide the instant a second county's row landed in any of these three
+-- tables (loaders/refresh_snapshot_summary.py's build_shadow() writes real,
+-- per-row-derived county_code values as of PX-20260831-02 Task 1 -- see
+-- that file's own module docstring).
+
 -- snapshot_breakdown: one row per (view, ptype) -- the per-property-type/
 -- subtype breakdown _compute_snapshot_data()'s `rows` used to hold. Stored
 -- UNCAPPED (every real ptype the GROUP BY produced) -- the top-N-plus-

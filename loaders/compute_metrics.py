@@ -59,12 +59,43 @@ COMPUTATION_VERSION = "2.0"
 # Absolute backstop for the "silently far fewer rows than expected" failure mode.
 # Primary check is relative (new vs. previous row count, see _assert_row_count_sane);
 # these are only the floor for a first-ever run or if the previous count was itself 0.
-# parcel_metrics is currently ~2,796,316 rows (508K parcels x ~5.5 years); 1,000,000
-# is comfortably below normal (survives losing a year or two of coverage) while still
-# catching a near-empty or empty table.
-PARCEL_METRICS_ROW_FLOOR = 1_000_000
+#
+# PX-20260831-02 Task 3: PARCEL_METRICS_ROW_FLOOR = 1_000_000 (a single hardcoded
+# constant, retired below) was itself a Travis-tuned number -- comfortably below
+# Travis's own ~2,796,316-row normal (508K parcels x ~5.5 years), but with NO
+# relationship at all to any other county's real size. Confirmed dangerous the
+# moment a second county exists: Dallas's real parcel_tax_year row count is
+# 3,576,634 (measured live, 2026-08-31), so 1,000,000 happens to still clear for
+# Dallas today -- but a THIRD, smaller county (or an early partial Dallas load)
+# could easily produce a genuinely healthy row count under 1,000,000 that this
+# constant would have rejected as a false failure, while simultaneously being
+# FAR too permissive a floor for a truly broken join on a large county (a JOIN
+# bug that silently drops 90% of a 3.5M-row county still clears "over 1,000,000"
+# with room to spare). A single global constant cannot be both tight enough to
+# catch real failures and loose enough to never false-positive across counties
+# of very different sizes -- only a per-county-derived floor can be.
+#
+# Replaced with a per-county floor computed fresh inside compute_parcel_metrics()
+# itself, in the SAME transaction, before the INSERT: half of that county's own
+# parcel_tax_year row count (see _parcel_metrics_row_floor() below). Since this
+# INSERT's SELECT is one row per (pty.geo_id, pty.tax_year) row scoped to this
+# county (the LEFT JOINs to tax_billing/tax_delinquent can only leave that row
+# count unchanged or produce NULLs, never multiply/reduce it), parcel_metrics'
+# real row count for a healthy run is very close to 1:1 with parcel_tax_year's
+# own count for that county -- 0.5x is a generous floor that only fires on a
+# genuine catastrophic failure (a join/WHERE bug cutting the result in half or
+# worse) while comfortably tolerating ordinary attrition (a parcel excluded for
+# a data-quality reason, etc.). This is the pattern, not a Dallas-specific
+# unblock -- Dallas's own 3,576,634-row parcel_tax_year count already clears the
+# OLD 1,000,000 constant on its own; the point is that the NEXT county, whatever
+# size it is, gets a floor sized to ITS OWN data, automatically, with no manual
+# re-tuning required.
+#
 # county_benchmark is 5 TYPE_GROUPS x ~5 years each = ~25 rows; 15 survives losing a
-# year of coverage on a couple of categories without masking a real failure.
+# year of coverage on a couple of categories without masking a real failure. (Not
+# touched by this task -- county_benchmark's own row shape doesn't scale with
+# county size the way parcel_metrics does, so the per-county-derivation argument
+# above doesn't apply to it the same way; out of this brief's scope.)
 COUNTY_BENCHMARK_ROW_FLOOR = 15
 # Relative tolerance: a rebuild producing fewer than this fraction of the previous
 # row count is treated as a failure, not a quirk of the source data.
@@ -108,15 +139,94 @@ def _assert_row_count_sane(label, new_count, prev_count, hard_floor, tolerance=R
     print(f"    row-count check OK: {label} = {new_count:,} rows "
           f"(prev {prev_count:,}, floor {hard_floor:,})")
 
+
+def _parcel_metrics_row_floor(conn, county_code, fraction=0.5):
+    """PX-20260831-02 Task 3: per-county derived hard floor for
+    _assert_row_count_sane()'s parcel_metrics check, replacing the retired
+    PARCEL_METRICS_ROW_FLOOR module constant (see that name's own retirement
+    comment above for the full reasoning). Computed fresh, in the SAME
+    transaction as compute_parcel_metrics()'s DELETE+INSERT (called before
+    the INSERT below), so it always reflects that county's CURRENT
+    parcel_tax_year row count, not a number someone hardcoded once and never
+    revisited as the data grew.
+
+    fraction=0.5 is the proposed default: parcel_metrics' INSERT is one row
+    per (geo_id, tax_year) pair for this county (the tax_billing/
+    tax_delinquent LEFT JOINs can only preserve or NULL-pad that count, never
+    multiply or shrink it), so a healthy run's real row count sits very close
+    to 1:1 with parcel_tax_year's own count -- half of that is a floor that
+    only fires on a genuine catastrophic failure (a join/WHERE bug cutting
+    the result by 50%+) while tolerating ordinary attrition.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM parcel_tax_year WHERE county_code = %s", (county_code,))
+        source_count = cur.fetchone()[0]
+    return int(fraction * source_count)
+
+
 # ── Risk threshold ──────────────────────────────────────────────────────────────
-# Set at 75% based on actual distribution across 1,401,316 parcel-year pairs:
-#   p50=7.1%  p75=32.3%  p90=59.4%  p95=72.0%  p99=292.9%
-#   > 50%: 15.9% of pairs  > 75%: 4.5%  > 100%: 2.6%
+# PX-20260831-02 Task 4: LARGE_JUMP_THRESHOLD_PCT = 75.0 (a single hardcoded
+# constant, retired below) was measured ONLY against Travis's distribution and
+# applied identically to every county regardless of that county's own
+# yoy_market_value_pct shape. Confirmed actively wrong for Dallas: Dallas's own
+# measured distribution (analyze_threshold(county_code=DALLAS), live,
+# 2026-08-31, 2,745,496 YoY parcel-year pairs) is structurally different from
+# Travis's --
 #
-# 75% sits just above the p90 — flags genuinely unusual moves without drowning
-# investors in noise. 50% (p90) flagged 1 in 6 parcel-years, too broad to be
-# actionable. 100% was considered but is only 2.6% and misses real 75-99% jumps.
-LARGE_JUMP_THRESHOLD_PCT = 75.0
+#   TRAVIS (original measurement, 1,401,316 pairs):
+#     p50=7.1%   p75=32.3%  p90=59.4%  p95=72.0%  p99=292.9%
+#     >50%: 15.9%   >75%: 4.5%   >100%: 2.6%
+#
+#   DALLAS (live, 2026-08-31, 2,745,496 pairs):
+#     p50=0.00%  p75=11.91% p90=27.53% p95=41.77% p99=167.59%
+#     Min -100.0%  Max 878960.0%  Avg 33.12%
+#     >10%: 30.1%  >20%: 16.0%  >30%: 9.0%  >40%: 5.5%  >50%: 3.8%
+#     >75%: 2.2%   >100%: 1.5%
+#
+# Applying Travis's 75.0 to Dallas would flag only 2.2% of Dallas's pairs --
+# under-detecting by roughly half relative to Travis's own ~4.5% flag rate.
+# Dallas's median of exactly 0.00% is a real, disclosed data characteristic
+# (DCAD carries values forward on non-reappraised parcels — see the Dallas
+# metrics runbook's R3 section), not a defect in this measurement or an
+# argument for a different methodology; it does explain why Dallas's whole
+# distribution sits well below Travis's at every percentile.
+#
+# Same methodology applied to Dallas as produced Travis's own 75.0: Travis's
+# threshold sits ~3 points above Travis's own p95 (75.0 - 72.0 = 3.0). Applying
+# that same ~3-point-above-p95 rule to Dallas's p95 (41.77) gives
+# 41.77 + 3.23 ≈ 45.0. Checking the resulting flag rate against Dallas's own
+# measured brackets: 45.0 falls between the >40% (5.5%) and >50% (3.8%) points;
+# linear interpolation between them (45 is 50% of the way from 40 to 50) gives
+# an estimated flag rate of 5.5% - 0.5*(5.5-3.8) ≈ 4.65% -- landing right next
+# to Travis's own ~4.5% flag rate. That consistency (same TARGET flag rate
+# across counties, not the same raw percentage) is the real justification for
+# 45.0, not just "it happens to sit near p95" -- it reproduces the same
+# investor-facing signal density Travis's 75.0 already proved out, on Dallas's
+# own genuinely different value-change distribution. PM confirms before this
+# value is used against production.
+LARGE_JUMP_THRESHOLD_PCT_BY_COUNTY = {
+    "TRAVIS": 75.0,
+    "DALLAS": 45.0,
+}
+
+
+def _large_jump_threshold_for_county(county_code):
+    """No default, no fallback to Travis's value -- a county missing from
+    LARGE_JUMP_THRESHOLD_PCT_BY_COUNTY must fail loudly rather than silently
+    borrow another county's threshold (which was the exact single-county-
+    tuned-constant problem this whole task exists to retire). Per-county;
+    measured at each county's first metrics run via --analyze; re-measured
+    when a county's roll is refreshed.
+    """
+    try:
+        return LARGE_JUMP_THRESHOLD_PCT_BY_COUNTY[county_code]
+    except KeyError:
+        raise MetricsIntegrityError(
+            f"No LARGE_JUMP_THRESHOLD_PCT_BY_COUNTY entry for county_code={county_code!r}. "
+            f"Run `--analyze --county {county_code}` to measure this county's own "
+            f"yoy_market_value_pct distribution and register a threshold before running "
+            f"metrics for it -- there is no default and no fallback to another county's value."
+        )
 
 # State code prefix → benchmark property type label
 # Matches the display mapping used in property.html
@@ -300,11 +410,19 @@ def analyze_threshold(conn, county_code):
     print(f"    Min:           {r[8]}%   Max: {r[9]}%   Avg: {r[10]}%")
 
     print(f"\n  Parcels flagged (|YoY| > threshold):")
+    # PX-20260831-02 Task 4: this marker uses .get(), NOT
+    # _large_jump_threshold_for_county() -- --analyze is the tool Diego runs
+    # to MEASURE a county's distribution BEFORE a threshold is registered for
+    # it in LARGE_JUMP_THRESHOLD_PCT_BY_COUNTY, so an unregistered county
+    # here is the expected, common case, not an error to raise on. Once a
+    # value IS registered, the marker shows it against the measured
+    # distribution exactly as before.
+    registered_threshold = LARGE_JUMP_THRESHOLD_PCT_BY_COUNTY.get(county_code)
     thresholds = [10, 20, 30, 40, 50, 75, 100]
     counts = [r[1], r[2], r[3], r[4], r[5], r[6], r[7]]
     for t, c in zip(thresholds, counts):
         pct_flagged = 100.0 * c / total if total else 0
-        marker = "  ← current LARGE_JUMP_THRESHOLD_PCT" if t == LARGE_JUMP_THRESHOLD_PCT else ""
+        marker = "  ← current registered threshold" if t == registered_threshold else ""
         print(f"    > {t:3d}%:  {c:>8,}  ({pct_flagged:.1f}%){marker}")
 
     print(f"\n  Elapsed: {time.time()-t0:.1f}s")
@@ -331,6 +449,12 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
         # in this table).
         cur.execute("SELECT COUNT(*) FROM parcel_metrics WHERE county_code = %s", (county_code,))
         prev_count = cur.fetchone()[0]
+
+    # PX-20260831-02 Task 3: per-county hard floor, computed fresh in this
+    # SAME transaction (see _parcel_metrics_row_floor()'s own docstring for
+    # the 0.5x reasoning) -- replaces the retired PARCEL_METRICS_ROW_FLOOR
+    # module constant.
+    row_floor = _parcel_metrics_row_floor(conn, county_code)
 
     with conn.cursor() as cur:
         # PX-20260828-16-followup: this DELETE and the INSERT...SELECT below
@@ -456,21 +580,24 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
                      AND (
                          SELECT SUM(tbe.amount_due)
                          FROM   tax_billing_entity tbe
-                         WHERE  tbe.geo_id    = pty.geo_id
-                           AND  tbe.tax_year  = 2025
+                         WHERE  tbe.geo_id      = pty.geo_id
+                           AND  tbe.tax_year    = 2025
+                           AND  tbe.county_code = pty.county_code
                      ) > 0
                      AND (
                          SELECT SUM(tbe.amount_due)
                          FROM   tax_billing_entity tbe
-                         WHERE  tbe.geo_id    = pty.geo_id
-                           AND  tbe.tax_year  = 2025
+                         WHERE  tbe.geo_id      = pty.geo_id
+                           AND  tbe.tax_year    = 2025
+                           AND  tbe.county_code = pty.county_code
                      )::NUMERIC / pty.market_value <= 1
                     THEN ROUND(
                         (
                             SELECT SUM(tbe.amount_due)
                             FROM   tax_billing_entity tbe
-                            WHERE  tbe.geo_id    = pty.geo_id
-                              AND  tbe.tax_year  = 2025
+                            WHERE  tbe.geo_id      = pty.geo_id
+                              AND  tbe.tax_year    = 2025
+                              AND  tbe.county_code = pty.county_code
                         )::NUMERIC / pty.market_value,
                         6
                     )
@@ -498,14 +625,16 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
                      AND (
                          SELECT SUM(tbe.amount_due)
                          FROM   tax_billing_entity tbe
-                         WHERE  tbe.geo_id    = pty.geo_id
-                           AND  tbe.tax_year  = 2025
+                         WHERE  tbe.geo_id      = pty.geo_id
+                           AND  tbe.tax_year    = 2025
+                           AND  tbe.county_code = pty.county_code
                      ) > 0
                      AND (
                          SELECT SUM(tbe.amount_due)
                          FROM   tax_billing_entity tbe
-                         WHERE  tbe.geo_id    = pty.geo_id
-                           AND  tbe.tax_year  = 2025
+                         WHERE  tbe.geo_id      = pty.geo_id
+                           AND  tbe.tax_year    = 2025
+                           AND  tbe.county_code = pty.county_code
                      )::NUMERIC / pty.market_value <= 1
                     THEN (tb.total_tax IS NULL OR tb.total_tax <= 0)
                 END,
@@ -519,11 +648,11 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
                 '{COMPUTATION_VERSION}'
 
             FROM parcel_tax_year pty
-            JOIN parcel p ON p.geo_id = pty.geo_id
+            JOIN parcel p ON p.geo_id = pty.geo_id AND p.county_code = pty.county_code
             LEFT JOIN tax_billing tb
-              ON tb.geo_id = pty.geo_id AND tb.tax_year = pty.tax_year
+              ON tb.geo_id = pty.geo_id AND tb.tax_year = pty.tax_year AND tb.county_code = pty.county_code
             LEFT JOIN tax_delinquent td
-              ON td.geo_id = pty.geo_id
+              ON td.geo_id = pty.geo_id AND td.county_code = pty.county_code
             WHERE pty.county_code = %s
             WINDOW w AS (PARTITION BY pty.geo_id ORDER BY pty.tax_year)
         """, (county_code,))
@@ -534,10 +663,15 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
     # silently matched far fewer rows than it should used to "succeed" here
     # with no error. This raises instead — and because nothing has been
     # committed yet, the table is left untouched (see top-of-function note).
-    _assert_row_count_sane("parcel_metrics", n, prev_count, hard_floor=PARCEL_METRICS_ROW_FLOOR)
+    _assert_row_count_sane("parcel_metrics", n, prev_count, hard_floor=row_floor)
 
     # Pass 2: large value jump flag
     t1 = time.time()
+    # PX-20260831-02 Task 4: threshold is now per-county, looked up here (once
+    # per run, same transaction) via _large_jump_threshold_for_county() --
+    # raises MetricsIntegrityError with no default/fallback if this county has
+    # never had its own distribution measured and registered.
+    jump_threshold = _large_jump_threshold_for_county(county_code)
     with conn.cursor() as cur:
         # PX-20260823-02: county_code added to the WHERE -- this UPDATE
         # previously touched every county's rows on every run.
@@ -545,11 +679,11 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
             UPDATE parcel_metrics
             SET risk_large_value_jump     = TRUE,
                 risk_large_value_jump_pct = ABS(yoy_market_value_pct)
-            WHERE ABS(yoy_market_value_pct) > {LARGE_JUMP_THRESHOLD_PCT}
+            WHERE ABS(yoy_market_value_pct) > {jump_threshold}
               AND county_code = %s
         """, (county_code,))
         n_jump = cur.rowcount
-    print(f"    risk_large_value_jump: {n_jump:,} rows flagged (>{LARGE_JUMP_THRESHOLD_PCT}%)  ({time.time()-t1:.1f}s)")
+    print(f"    risk_large_value_jump: {n_jump:,} rows flagged (>{jump_threshold}%)  ({time.time()-t1:.1f}s)")
 
     # Pass 3: homestead cap signals — residential only, consistent with Phase 1 guard.
     #
@@ -631,9 +765,12 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
             FROM (
                 SELECT DISTINCT pty.geo_id
                 FROM parcel_tax_year pty
-                JOIN parcel p ON p.geo_id = pty.geo_id
-                LEFT JOIN tax_billing tb ON tb.geo_id = pty.geo_id AND tb.tax_year = 2025
+                JOIN parcel p ON p.geo_id = pty.geo_id AND p.county_code = pty.county_code
+                LEFT JOIN tax_billing tb
+                       ON tb.geo_id = pty.geo_id AND tb.tax_year = 2025
+                      AND tb.county_code = pty.county_code
                 WHERE COALESCE(p.state_cd1, '') LIKE 'A%'
+                  AND pty.county_code = %s
                   AND pty.tax_year = 2025
                   AND pty.exemption_codes LIKE '%HS%'
                   AND pty.market_value > 0
@@ -658,7 +795,7 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
             ) cse
             WHERE pm.geo_id = cse.geo_id AND pm.tax_year = 2025
               AND pm.county_code = %s
-        """, (county_code,))
+        """, (county_code, county_code))
         n_step_up = cur.rowcount
     print(f"    cap_step_up_exposure: {n_step_up:,} rows flagged (2025 only, >=22% relative gap "
           f"AND >=$500 estimated)  ({time.time()-t1:.1f}s)")
@@ -671,10 +808,12 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
             FROM (
                 SELECT DISTINCT pty25.geo_id
                 FROM parcel_tax_year pty25
-                JOIN parcel p ON p.geo_id = pty25.geo_id
+                JOIN parcel p ON p.geo_id = pty25.geo_id AND p.county_code = pty25.county_code
                 LEFT JOIN parcel_tax_year pty26
                        ON pty26.geo_id = pty25.geo_id AND pty26.tax_year = 2026
+                      AND pty26.county_code = pty25.county_code
                 WHERE COALESCE(p.state_cd1, '') LIKE 'A%'
+                  AND pty25.county_code = %s
                   AND pty25.tax_year = 2025
                   AND pty25.exemption_codes LIKE '%HS%'
                   AND (
@@ -694,7 +833,7 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
             ) ces
             WHERE pm.geo_id = ces.geo_id AND pm.tax_year = 2025
               AND pm.county_code = %s
-        """, (county_code,))
+        """, (county_code, county_code))
         n_expiry = cur.rowcount
     print(f"    cap_expiry_signal: {n_expiry:,} rows flagged (2025 only, HS on 2025 "
           f"certified, absent from 2026 preliminary)  ({time.time()-t1:.1f}s)")
@@ -717,23 +856,35 @@ def compute_parcel_metrics(conn, county_code=DEFAULT_COUNTY):
                     ) AS cum_pct
                 FROM parcel_tax_year cur
                 JOIN (
-                    -- Find earliest year with valid (non-zero, non-null) market_value per parcel
-                    SELECT geo_id, MIN(tax_year) AS earliest_year
+                    -- PX-20260831-02 Task 5: county_code added to both the
+                    -- SELECT/GROUP BY here and the join condition below --
+                    -- this subquery used to find each geo_id's earliest
+                    -- market_value MIN(tax_year) across the ENTIRE
+                    -- parcel_tax_year table with no county_code involved at
+                    -- all. With a single county that's harmless (every
+                    -- geo_id row in the table already belongs to that one
+                    -- county), but once a second county coexists, a geo_id
+                    -- collision between counties could silently compute one
+                    -- county's "earliest valid market value" from a
+                    -- DIFFERENT county's row for the same geo_id string.
+                    SELECT geo_id, county_code, MIN(tax_year) AS earliest_year
                     FROM parcel_tax_year
                     WHERE market_value > 0
-                    GROUP BY geo_id
-                ) mn ON mn.geo_id = cur.geo_id
+                    GROUP BY geo_id, county_code
+                ) mn ON mn.geo_id = cur.geo_id AND mn.county_code = cur.county_code
                 JOIN parcel_tax_year earliest
                   ON earliest.geo_id = mn.geo_id
                  AND earliest.tax_year = mn.earliest_year
-                WHERE cur.tax_year = 2025
+                 AND earliest.county_code = mn.county_code
+                WHERE cur.county_code = %s
+                  AND cur.tax_year = 2025
                   AND cur.market_value > 0
                   AND earliest.market_value > 0
                   AND cur.tax_year != mn.earliest_year   -- need at least 2 data points
             ) sub
             WHERE pm.geo_id = sub.geo_id AND pm.tax_year = 2025
               AND pm.county_code = %s
-        """, (county_code,))
+        """, (county_code, county_code))
         n_cum = cur.rowcount
     print(f"    cumulative_value_growth_pct: {n_cum:,} rows updated  ({time.time()-t1:.1f}s)")
 
@@ -801,7 +952,7 @@ def compute_county_benchmarks(conn, county_code=DEFAULT_COUNTY):
                             ORDER BY pm.yoy_market_value_pct
                         )::NUMERIC, 4)
                 FROM parcel_tax_year pty
-                JOIN parcel p ON p.geo_id = pty.geo_id
+                JOIN parcel p ON p.geo_id = pty.geo_id AND p.county_code = pty.county_code
                 LEFT JOIN parcel_metrics pm
                   ON pm.geo_id = pty.geo_id AND pm.tax_year = pty.tax_year
                   AND pm.county_code = pty.county_code

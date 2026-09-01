@@ -126,6 +126,22 @@ Every claim in an artifact is one of these types; each has a specific trap:
   UNDERSTATES coverage for the 15 tables schema.sql's own CREATE TABLE
   PRIMARY KEY text is confirmed stale for (see KNOWN_LIMITATIONS.md); a
   schema-sql-mode "no gap found" is never sufficient grounds to commit.
+- **Shadow-swap county-derivation lint (PX-20260831-02 Task 2):**
+  `verify_shadow_swap_county_derivation.py` is a required pre-commit check
+  for any change touching a shadow-table-then-atomic-swap writer
+  (structurally detected via the `DROP TABLE IF EXISTS X_shadow` +
+  `RENAME TO` shape, not a filename list). Third real instance of the same
+  bug class (compute_county_benchmarks, refresh_group_stats.py,
+  refresh_snapshot_summary.py): a per-county aggregate whose county_code is
+  externally stamped from a caller parameter instead of derived per-row
+  from the aggregation query's own GROUP BY. Run it alongside
+  `verify_index_coverage.py --index-source live` and
+  `verify_county_scoping.py` -- all three are complementary, not
+  redundant: index coverage checks WHERE-clause scoping, MC-2 checks
+  INSERT/ON-CONFLICT/UPDATE-predicate scoping for plain writers, and this
+  one checks the shadow-swap architecture's own distinct failure shape
+  (a write-path function signature plus its feeding query's grouping
+  clause).
 
 ## 6. Epistemics and voice (how findings are stated)
 

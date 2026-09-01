@@ -65,6 +65,20 @@ traffic, or that a full 11-view refresh completes within the spec's
 Diego needs to verify all of this live — see this task's final report for
 exact commands.
 
+── PX-20260831-02 Task 1 (2026-08-31) ──────────────────────────────────────
+Every fixture in this file has been rewritten for the single-county
+build-time seam's retirement: build_shadow()/refresh_snapshot_summary() no
+longer take a county_code parameter (mirrors refresh_group_stats.py's own
+signature exactly); the five SQL builders now derive county_code from
+parcel.county_code per row; merge_breakdown_rows() returns a LIST of
+per-county totals dicts, not a single dict-or-None; _compute_one_view()
+returns (rows, totals_rows, neighborhoods_by_county), not the old 7-tuple.
+New Part 8 fixtures specifically prove the multi-county behavior that is
+the actual point of this fix: two counties' rows in the same view are kept
+genuinely separate through the merge and the INSERT calls, and the
+post-refresh consistency check is now wired into refresh_snapshot_summary()
+itself (not just available behind --check-consistency).
+
 Run: python3 loaders/test_refresh_snapshot_summary.py
 """
 import os
@@ -119,6 +133,35 @@ def test_sql_builders_produce_valid_shapes_for_every_real_view():
         check(f"neighborhoods_sql({view}): NULL/blank neighborhood_cd excluded",
               "neighborhood_cd IS NOT NULL" in nb and "neighborhood_cd != ''" in nb)
 
+        # PX-20260831-02 Task 1: every builder now derives county_code from
+        # p.county_code (a real SELECT column, not an external parameter)
+        # and carries it in every GROUP BY/GROUPING SETS clause -- and every
+        # join to a second parcel_tax_year/parcel_metrics alias is now also
+        # equality-scoped on county_code, not just geo_id/tax_year.
+        check(f"breakdown_sql({view}): p.county_code selected", "p.county_code" in b)
+        check(f"breakdown_sql({view}): county_code carried in GROUPING SETS",
+              "GROUPING SETS ((p.county_code" in b and "), (p.county_code))" in b)
+        check(f"breakdown_sql({view}): both parcel_tax_year joins equality-scoped on county_code",
+              b.count("t25.county_code = p.county_code") == 1 and b.count("t26.county_code = p.county_code") == 1)
+        check(f"single_year_mv_sql({view}): p.county_code selected", "p.county_code" in mv25)
+        check(f"single_year_mv_sql({view}): county_code carried in GROUPING SETS",
+              "GROUPING SETS ((p.county_code" in mv25 and "), (p.county_code))" in mv25)
+        check(f"single_year_mv_sql({view}): parcel_tax_year join equality-scoped on county_code",
+              "t.county_code = p.county_code" in mv25)
+        check(f"part4_agg_sql({view}): p.county_code selected", "p.county_code" in p4)
+        check(f"part4_agg_sql({view}): GROUP BY p.county_code present (one row per county, not one per view)",
+              "GROUP BY p.county_code" in p4)
+        check(f"part4_agg_sql({view}): both parcel_tax_year joins + the parcel_metrics LEFT JOIN "
+              f"equality-scoped on county_code",
+              p4.count("t25.county_code = p.county_code") == 1
+              and p4.count("t26.county_code = p.county_code") == 1
+              and "pm.county_code = p.county_code" in p4)
+        check(f"cert_agg_sql({view}): p.county_code selected", "p.county_code" in ca)
+        check(f"cert_agg_sql({view}): GROUP BY p.county_code present", "GROUP BY p.county_code" in ca)
+        check(f"neighborhoods_sql({view}): p.county_code selected", "p.county_code" in nb)
+        check(f"neighborhoods_sql({view}): GROUP BY (county_code, neighborhood_cd), not neighborhood_cd alone",
+              "GROUP BY p.county_code, p.neighborhood_cd" in nb)
+
 
 def test_breakdown_and_neighborhoods_sql_differ_by_view_where():
     """Two different sector views must produce DIFFERENT SQL (the view-scoping
@@ -143,28 +186,32 @@ def test_merge_breakdown_rows_applies_inner_join_suppression_override():
     exact defect the INNER JOIN suppression fix (app.py, July 2026 "Fix
     parcel-exclusion filtering" brief item 5) exists to correct. Expected
     values hand-derived from the fixture's own numbers, not from running
-    the code first.
+    the code first. Single-county fixture (all rows county_code='TRAVIS')
+    -- see test_merge_breakdown_rows_keeps_two_counties_separate below for
+    the genuinely new multi-county behavior PX-20260831-02 Task 1 adds.
     """
     breakdown_rows = [
-        {"ptype": "Residential", "sort_key": "Residential", "n_parcels": 100, "n_up": 60, "n_down": 30, "n_flat": 10,
-         "median_pct": 5.0, "p25_pct": 1.0, "p75_pct": 9.0, "total_mv25_b": 10.0, "total_mv26_b": 11.0},
-        {"ptype": "Commercial", "sort_key": "Commercial", "n_parcels": 50, "n_up": 20, "n_down": 25, "n_flat": 5,
-         "median_pct": -1.0, "p25_pct": -3.0, "p75_pct": 2.0, "total_mv25_b": 20.0, "total_mv26_b": 19.5},
-        {"ptype": None, "sort_key": None, "n_parcels": 150, "n_up": 80, "n_down": 55, "n_flat": 15,
-         "median_pct": 2.0, "p25_pct": -1.0, "p75_pct": 5.0, "total_mv25_b": 30.0, "total_mv26_b": 30.5},
+        {"county_code": "TRAVIS", "ptype": "Residential", "sort_key": "Residential", "n_parcels": 100, "n_up": 60,
+         "n_down": 30, "n_flat": 10, "median_pct": 5.0, "p25_pct": 1.0, "p75_pct": 9.0,
+         "total_mv25_b": 10.0, "total_mv26_b": 11.0},
+        {"county_code": "TRAVIS", "ptype": "Commercial", "sort_key": "Commercial", "n_parcels": 50, "n_up": 20,
+         "n_down": 25, "n_flat": 5, "median_pct": -1.0, "p25_pct": -3.0, "p75_pct": 2.0,
+         "total_mv25_b": 20.0, "total_mv26_b": 19.5},
+        {"county_code": "TRAVIS", "ptype": None, "sort_key": None, "n_parcels": 150, "n_up": 80, "n_down": 55,
+         "n_flat": 15, "median_pct": 2.0, "p25_pct": -1.0, "p75_pct": 5.0, "total_mv25_b": 30.0, "total_mv26_b": 30.5},
     ]
     mv25_rows = [
-        {"ptype": "Residential", "total_mv_b": 10.0},
-        {"ptype": "Commercial", "total_mv_b": 20.0},
-        {"ptype": None, "total_mv_b": 30.0},
+        {"county_code": "TRAVIS", "ptype": "Residential", "total_mv_b": 10.0},
+        {"county_code": "TRAVIS", "ptype": "Commercial", "total_mv_b": 20.0},
+        {"county_code": "TRAVIS", "ptype": None, "total_mv_b": 30.0},
     ]
     mv26_rows = [
-        {"ptype": "Residential", "total_mv_b": 13.0},   # +2.0 vs paired-JOIN's 11.0
-        {"ptype": "Commercial", "total_mv_b": 19.5},
-        {"ptype": None, "total_mv_b": 32.5},             # +2.0 vs paired-JOIN's 30.5
+        {"county_code": "TRAVIS", "ptype": "Residential", "total_mv_b": 13.0},   # +2.0 vs paired-JOIN's 11.0
+        {"county_code": "TRAVIS", "ptype": "Commercial", "total_mv_b": 19.5},
+        {"county_code": "TRAVIS", "ptype": None, "total_mv_b": 32.5},             # +2.0 vs paired-JOIN's 30.5
     ]
 
-    rows, totals = rss.merge_breakdown_rows(breakdown_rows, mv25_rows, mv26_rows)
+    rows, totals_rows = rss.merge_breakdown_rows(breakdown_rows, mv25_rows, mv26_rows)
 
     check("2 per-ptype rows returned (total row excluded)", len(rows) == 2, rows)
     res = next(r for r in rows if r["ptype"] == "Residential")
@@ -179,7 +226,9 @@ def test_merge_breakdown_rows_applies_inner_join_suppression_override():
     check("non-dollar fields (n_parcels, n_up, ...) pass through untouched",
           res["n_parcels"] == 100 and res["n_up"] == 60 and res["n_down"] == 30 and res["n_flat"] == 10, res)
 
-    check("totals row produced", totals is not None)
+    check("exactly one totals row produced (one county in the fixture)", len(totals_rows) == 1, totals_rows)
+    totals = totals_rows[0]
+    check("totals row's county_code is TRAVIS", totals["county_code"] == "TRAVIS", totals)
     check("grand total total_mv26_b overridden to single-year value (32.5, not paired-JOIN's 30.5)",
           totals["total_mv26_b"] == 32.5, totals)
     check("grand total total_mv25_b unchanged (30.0)", totals["total_mv25_b"] == 30.0, totals)
@@ -190,33 +239,89 @@ def test_merge_breakdown_rows_applies_inner_join_suppression_override():
           totals["median_pct"] == 2.0, totals)
 
 
-def test_merge_breakdown_rows_empty_view_produces_no_total_row():
+def test_merge_breakdown_rows_empty_view_produces_no_total_rows():
     """A view with zero qualifying parcels (e.g. a sector with no data in
-    the current load) must return (rows=[], totals=None) — distinct from
+    the current load) must return (rows=[], totals_rows=[]) — distinct from
     'table missing/stale', per the Tier 1 design (see schema.sql's
     snapshot_totals comment: a view genuinely absent from load-time results
     is a real, valid 'no data' state, not an error)."""
-    rows, totals = rss.merge_breakdown_rows([], [], [])
+    rows, totals_rows = rss.merge_breakdown_rows([], [], [])
     check("empty breakdown_rows -> rows == []", rows == [], rows)
-    check("empty breakdown_rows -> totals is None", totals is None, totals)
+    check("empty breakdown_rows -> totals_rows == [] (PX-20260831-02: a list now, never None)",
+          totals_rows == [], totals_rows)
 
 
 def test_merge_breakdown_rows_falls_back_when_single_year_data_missing_for_ptype():
     """If a ptype exists in the paired-JOIN breakdown but the independent
     single-year query returns nothing for it (e.g. a genuinely empty single-
     year slice), the merge must fall back to the paired-JOIN's own value via
-    .get(ptype, fallback) — never KeyError, never silently become None."""
-    rows, totals = rss.merge_breakdown_rows(
-        [{"ptype": "Land", "sort_key": "Land", "n_parcels": 5, "n_up": 1, "n_down": 1, "n_flat": 3,
-          "median_pct": 0.0, "p25_pct": 0.0, "p75_pct": 0.0, "total_mv25_b": 1.0, "total_mv26_b": 1.0},
-         {"ptype": None, "sort_key": None, "n_parcels": 5, "n_up": 1, "n_down": 1, "n_flat": 3,
-          "median_pct": 0.0, "p25_pct": 0.0, "p75_pct": 0.0, "total_mv25_b": 1.0, "total_mv26_b": 1.0}],
+    .get((county_code, ptype), fallback) — never KeyError, never silently
+    become None."""
+    rows, totals_rows = rss.merge_breakdown_rows(
+        [{"county_code": "TRAVIS", "ptype": "Land", "sort_key": "Land", "n_parcels": 5, "n_up": 1, "n_down": 1,
+          "n_flat": 3, "median_pct": 0.0, "p25_pct": 0.0, "p75_pct": 0.0, "total_mv25_b": 1.0, "total_mv26_b": 1.0},
+         {"county_code": "TRAVIS", "ptype": None, "sort_key": None, "n_parcels": 5, "n_up": 1, "n_down": 1,
+          "n_flat": 3, "median_pct": 0.0, "p25_pct": 0.0, "p75_pct": 0.0, "total_mv25_b": 1.0, "total_mv26_b": 1.0}],
         [], [],
     )
     check("fallback: per-ptype total_mv25_b/26_b keep paired-JOIN value when single-year is missing",
           rows[0]["total_mv25_b"] == 1.0 and rows[0]["total_mv26_b"] == 1.0, rows)
     check("fallback: grand total total_mv25_b keeps paired-JOIN value when single-year is missing",
-          totals["total_mv25_b"] == 1.0, totals)
+          totals_rows[0]["total_mv25_b"] == 1.0, totals_rows)
+
+
+def test_merge_breakdown_rows_keeps_two_counties_separate():
+    """THE genuinely new behavior PX-20260831-02 Task 1 requires: two
+    counties' grand-total rows both have ptype IS NULL, but DIFFERENT
+    county_code values. Matching mv25/mv26 rows by ptype alone (the old
+    single-county behavior) would silently blend or misattribute one
+    county's single-year dollar total onto the other's grand-total row --
+    exactly the class of cross-county contamination this whole brief exists
+    to close off. This fixture makes Dallas's 2026 single-year total
+    diverge from Travis's by an amount ($5.0B) that would be immediately
+    obvious if the two got crossed."""
+    breakdown_rows = [
+        {"county_code": "TRAVIS", "ptype": "Residential", "sort_key": "Residential", "n_parcels": 100, "n_up": 60,
+         "n_down": 30, "n_flat": 10, "median_pct": 5.0, "p25_pct": 1.0, "p75_pct": 9.0,
+         "total_mv25_b": 10.0, "total_mv26_b": 11.0},
+        {"county_code": "TRAVIS", "ptype": None, "sort_key": None, "n_parcels": 100, "n_up": 60, "n_down": 30,
+         "n_flat": 10, "median_pct": 5.0, "p25_pct": 1.0, "p75_pct": 9.0, "total_mv25_b": 10.0, "total_mv26_b": 11.0},
+        {"county_code": "DALLAS", "ptype": "Residential", "sort_key": "Residential", "n_parcels": 200, "n_up": 120,
+         "n_down": 60, "n_flat": 20, "median_pct": 3.0, "p25_pct": 0.5, "p75_pct": 6.0,
+         "total_mv25_b": 40.0, "total_mv26_b": 42.0},
+        {"county_code": "DALLAS", "ptype": None, "sort_key": None, "n_parcels": 200, "n_up": 120, "n_down": 60,
+         "n_flat": 20, "median_pct": 3.0, "p25_pct": 0.5, "p75_pct": 6.0, "total_mv25_b": 40.0, "total_mv26_b": 42.0},
+    ]
+    mv25_rows = [
+        {"county_code": "TRAVIS", "ptype": "Residential", "total_mv_b": 10.0},
+        {"county_code": "TRAVIS", "ptype": None, "total_mv_b": 10.0},
+        {"county_code": "DALLAS", "ptype": "Residential", "total_mv_b": 40.0},
+        {"county_code": "DALLAS", "ptype": None, "total_mv_b": 40.0},
+    ]
+    mv26_rows = [
+        {"county_code": "TRAVIS", "ptype": "Residential", "total_mv_b": 11.0},
+        {"county_code": "TRAVIS", "ptype": None, "total_mv_b": 11.0},
+        {"county_code": "DALLAS", "ptype": "Residential", "total_mv_b": 47.0},  # +5.0 vs paired-JOIN's 42.0
+        {"county_code": "DALLAS", "ptype": None, "total_mv_b": 47.0},
+    ]
+
+    rows, totals_rows = rss.merge_breakdown_rows(breakdown_rows, mv25_rows, mv26_rows)
+
+    check("2 per-ptype rows returned, one per county", len(rows) == 2, rows)
+    check("2 totals rows returned, one per county", len(totals_rows) == 2, totals_rows)
+
+    travis_total = next(t for t in totals_rows if t["county_code"] == "TRAVIS")
+    dallas_total = next(t for t in totals_rows if t["county_code"] == "DALLAS")
+
+    check("TRAVIS grand total total_mv26_b is TRAVIS's own value (11.0), unaffected by Dallas's override",
+          travis_total["total_mv26_b"] == 11.0, travis_total)
+    check("DALLAS grand total total_mv26_b picks up DALLAS's own override (47.0), not TRAVIS's",
+          dallas_total["total_mv26_b"] == 47.0, dallas_total)
+    check("DALLAS grand total total_mv25_b unaffected (40.0)", dallas_total["total_mv25_b"] == 40.0, dallas_total)
+
+    dallas_row = next(r for r in rows if r["county_code"] == "DALLAS")
+    check("DALLAS per-ptype row picks up its own single-year override (47.0), not TRAVIS's value",
+          dallas_row["total_mv26_b"] == 47.0, dallas_row)
 
 
 # ── Part 3: FakeConn/FakeCursor DB-call-shape tests ──────────────────────────
@@ -312,15 +417,22 @@ def _sql_kinds(executed):
     return kinds
 
 
+# PX-20260831-02 Task 1: _compute_one_view() now returns a 3-tuple
+# (rows, totals_rows, neighborhoods_by_county) -- totals_rows is a LIST (one
+# dict per county with qualifying parcels) and neighborhoods_by_county is a
+# {county_code: [rows]} dict, replacing the old 7-tuple single-county shape
+# (rows, totals_row-or-None, new_construction_count, risk_flagged_count,
+# n_preliminary_2026, n_total_2026, flat neighborhood_rows). This single-
+# county fixture (all TRAVIS) exercises the plumbing through build_shadow()/
+# refresh_snapshot_summary() unchanged; see Part 7 below for the
+# genuinely-new two-county fixtures.
 _FAKE_ONE_VIEW_RESULT = (
-    [{"ptype": "TypeA", "sort_key": "TypeA", "n_parcels": 5, "n_up": 2, "n_down": 2, "n_flat": 1,
-      "median_pct": 1.0, "p25_pct": 0.5, "p75_pct": 1.5, "total_mv25_b": 1.0, "total_mv26_b": 1.1}],
-    {"n_total": 5, "n_up": 2, "n_down": 2, "n_flat": 1, "total_mv25_b": 1.0, "total_mv26_b": 1.1, "median_pct": 1.0},
-    1,   # new_construction_count
-    0,   # risk_flagged_count
-    2,   # n_preliminary_2026
-    5,   # n_total_2026
-    [{"neighborhood_cd": "NB1", "n_parcels": 10, "median_pct": 2.0}],
+    [{"county_code": "TRAVIS", "ptype": "TypeA", "sort_key": "TypeA", "n_parcels": 5, "n_up": 2, "n_down": 2,
+      "n_flat": 1, "median_pct": 1.0, "p25_pct": 0.5, "p75_pct": 1.5, "total_mv25_b": 1.0, "total_mv26_b": 1.1}],
+    [{"county_code": "TRAVIS", "n_total": 5, "n_up": 2, "n_down": 2, "n_flat": 1, "total_mv25_b": 1.0,
+      "total_mv26_b": 1.1, "median_pct": 1.0, "new_construction_count": 1, "risk_flagged_count": 0,
+      "n_preliminary_2026": 2, "n_total_2026": 5}],
+    {"TRAVIS": [{"neighborhood_cd": "NB1", "n_parcels": 10, "median_pct": 2.0}]},
 )
 
 
@@ -363,13 +475,13 @@ def test_build_shadow_drops_and_creates_all_three_tables_before_any_insert():
 
 
 def test_build_shadow_skips_totals_and_neighborhood_inserts_for_empty_view():
-    """An empty view (no qualifying parcels -> totals_row is None) must
-    still get its breakdown/neighborhood rows attempted per the real
-    function's `if totals_row:` guards on the neighborhood fetch -- but with
-    zero rows in every list, produces zero inserts for that view without
-    erroring."""
+    """An empty view (no qualifying parcels for any county -> totals_rows is
+    an empty list) must still get its breakdown/neighborhood rows attempted
+    per the real function's `if counties_with_data:` guard on the part4/
+    cert/neighborhood fetches -- but with zero rows in every list, produces
+    zero inserts for that view without erroring."""
     def _fake_empty_view(conn, view, verbose=True):
-        return ([], None, 0, 0, 0, 0, [])
+        return ([], [], {})
 
     orig = rss._compute_one_view
     rss._compute_one_view = _fake_empty_view
@@ -583,11 +695,13 @@ def test_build_shadow_does_not_truncate_a_realistically_long_sort_key():
           len(long_ptype) > 10, len(long_ptype))
 
     fake_result = (
-        [{"ptype": long_ptype, "sort_key": long_ptype, "n_parcels": 5, "n_up": 2, "n_down": 2, "n_flat": 1,
-          "median_pct": 1.0, "p25_pct": 0.5, "p75_pct": 1.5, "total_mv25_b": 1.0, "total_mv26_b": 1.1}],
-        {"n_total": 5, "n_up": 2, "n_down": 2, "n_flat": 1, "total_mv25_b": 1.0, "total_mv26_b": 1.1, "median_pct": 1.0},
-        1, 0, 2, 5,
-        [{"neighborhood_cd": "NB1", "n_parcels": 10, "median_pct": 2.0}],
+        [{"county_code": "TRAVIS", "ptype": long_ptype, "sort_key": long_ptype, "n_parcels": 5, "n_up": 2,
+          "n_down": 2, "n_flat": 1, "median_pct": 1.0, "p25_pct": 0.5, "p75_pct": 1.5,
+          "total_mv25_b": 1.0, "total_mv26_b": 1.1}],
+        [{"county_code": "TRAVIS", "n_total": 5, "n_up": 2, "n_down": 2, "n_flat": 1, "total_mv25_b": 1.0,
+          "total_mv26_b": 1.1, "median_pct": 1.0, "new_construction_count": 1, "risk_flagged_count": 0,
+          "n_preliminary_2026": 2, "n_total_2026": 5}],
+        {"TRAVIS": [{"neighborhood_cd": "NB1", "n_parcels": 10, "median_pct": 2.0}]},
     )
 
     orig = rss._compute_one_view
@@ -787,102 +901,266 @@ def test_consistency_catches_cross_county_blending_regression():
           set(detail["views_and_counties_checked"]) == {("overall", "TRAVIS"), ("overall", "DALLAS")}, detail)
 
 
-# ── Part 7: PARTITION-2-FIX-1 — county_code on all three real INSERTs ──────
+# ── Part 7: PX-20260831-02 Task 1 — county_code is PER-ROW-DERIVED, not a
+# write-path parameter, on all three real INSERTs ───────────────────────────
 #
-# Real, urgent gap: migrate_county_partitioning.py's already-run migration
-# made county_code a NOT NULL column with no default on snapshot_breakdown/
-# snapshot_totals/snapshot_neighborhood_movers (finding 9.4). build_shadow()
-# writes to all THREE of these per view -- this proves county_code reaches
-# every one of the 3 INSERT paths, not just one, per this brief's explicit
-# instruction not to assume a single, simple fix covers all of them.
+# Real, urgent gap this replaces: the retired PARTITION-2-FIX-1 seam threaded
+# ONE externally-supplied county_code into every row of a run -- correct only
+# because Travis was the sole county with real data. Now that Dallas has real
+# parcels too, that seam would silently attribute every county's rows to
+# whichever single county_code the caller happened to pass. These tests
+# prove two things the old ones couldn't: (a) build_shadow()/
+# refresh_snapshot_summary() no longer ACCEPT a county_code argument at all
+# (TypeError if you try), and (b) when _compute_one_view() returns rows for
+# TWO different counties in the same view, each row's OWN county_code reaches
+# its own INSERT call -- not a single blended or externally-stamped value.
 
-def test_build_shadow_stamps_county_code_on_all_three_inserts():
+def test_build_shadow_signature_no_longer_accepts_county_code():
+    """Source-level proof of the retired write-path parameter: calling
+    build_shadow() with a county_code kwarg must raise TypeError, exactly
+    mirroring refresh_group_stats.py's own build_shadow() signature."""
+    import inspect
+    sig = inspect.signature(rss.build_shadow)
+    check("build_shadow() signature has no county_code parameter",
+          "county_code" not in sig.parameters, sig)
+
     orig = rss._compute_one_view
     rss._compute_one_view = _fake_compute_one_view
     try:
         conn = FakeConn()
-        rss.build_shadow(conn, batch_id=7, verbose=False)
+        raised = False
+        try:
+            rss.build_shadow(conn, batch_id=7, county_code="DALLAS", verbose=False)
+        except TypeError:
+            raised = True
+        check("build_shadow(county_code=...) raises TypeError -- the write-path parameter is gone",
+              raised)
+    finally:
+        rss._compute_one_view = orig
+
+
+def test_refresh_snapshot_summary_signature_no_longer_accepts_county_code():
+    import inspect
+    sig = inspect.signature(rss.refresh_snapshot_summary)
+    check("refresh_snapshot_summary() signature has no county_code parameter",
+          "county_code" not in sig.parameters, sig)
+
+    orig = rss._compute_one_view
+    rss._compute_one_view = _fake_compute_one_view
+    try:
+        conn = FakeConn()
+        raised = False
+        try:
+            rss.refresh_snapshot_summary(conn, dry_run=True, county_code="DALLAS", verbose=False)
+        except TypeError:
+            raised = True
+        check("refresh_snapshot_summary(county_code=...) raises TypeError -- the write-path parameter is gone",
+              raised)
+    finally:
+        rss._compute_one_view = orig
+
+
+def test_build_shadow_stamps_each_rows_own_county_code_not_a_single_value():
+    """THE point of this whole task: _compute_one_view() returns one view's
+    worth of TWO counties' data at once (TRAVIS and DALLAS both present in
+    the same fake result) -- build_shadow() must write EACH row with ITS OWN
+    county_code, not blend them or stamp one county's value onto the other's
+    rows. This is the fixture the old externally-stamped-parameter design
+    could never have needed (there was only ever one county to stamp)."""
+    def _fake_two_county_view(conn, view, verbose=True):
+        rows = [
+            {"county_code": "TRAVIS", "ptype": "TypeA", "sort_key": "TypeA", "n_parcels": 5, "n_up": 2, "n_down": 2,
+             "n_flat": 1, "median_pct": 1.0, "p25_pct": 0.5, "p75_pct": 1.5, "total_mv25_b": 1.0, "total_mv26_b": 1.1},
+            {"county_code": "DALLAS", "ptype": "TypeA", "sort_key": "TypeA", "n_parcels": 9, "n_up": 4, "n_down": 4,
+             "n_flat": 1, "median_pct": 0.5, "p25_pct": 0.1, "p75_pct": 0.9, "total_mv25_b": 3.0, "total_mv26_b": 3.2},
+        ]
+        totals_rows = [
+            {"county_code": "TRAVIS", "n_total": 5, "n_up": 2, "n_down": 2, "n_flat": 1, "total_mv25_b": 1.0,
+             "total_mv26_b": 1.1, "median_pct": 1.0, "new_construction_count": 1, "risk_flagged_count": 0,
+             "n_preliminary_2026": 2, "n_total_2026": 5},
+            {"county_code": "DALLAS", "n_total": 9, "n_up": 4, "n_down": 4, "n_flat": 1, "total_mv25_b": 3.0,
+             "total_mv26_b": 3.2, "median_pct": 0.5, "new_construction_count": 2, "risk_flagged_count": 1,
+             "n_preliminary_2026": 9, "n_total_2026": 9},
+        ]
+        neighborhoods_by_county = {
+            "TRAVIS": [{"neighborhood_cd": "NB1", "n_parcels": 10, "median_pct": 2.0}],
+            "DALLAS": [{"neighborhood_cd": "NB9", "n_parcels": 20, "median_pct": 0.7}],
+        }
+        return rows, totals_rows, neighborhoods_by_county
+
+    orig = rss._compute_one_view
+    rss._compute_one_view = _fake_two_county_view
+    try:
+        conn = FakeConn()
+        breakdown_n, totals_n, nb_n = rss.build_shadow(conn, batch_id=7, verbose=False)
+
+        n_views = len(_SNAPSHOT_VALID_VIEWS)
+        check("build_shadow: 2 breakdown rows per view (one per county) x 11 views",
+              breakdown_n == 2 * n_views, breakdown_n)
+        check("build_shadow: 2 totals rows per view (one per county) x 11 views",
+              totals_n == 2 * n_views, totals_n)
+        check("build_shadow: 2 neighborhood rows per view (one per county) x 11 views",
+              nb_n == 2 * n_views, nb_n)
 
         kinds = _sql_kinds(conn.executed)
-        breakdown_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_BREAKDOWN")
-        totals_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_TOTALS")
-        nb_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_NEIGHBORHOOD")
+        breakdown_ccs = [p["county_code"] for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_BREAKDOWN"]
+        totals_ccs = [p["county_code"] for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_TOTALS"]
+        nb_ccs = [p["county_code"] for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_NEIGHBORHOOD"]
 
-        check("build_shadow: snapshot_breakdown_shadow INSERT carries county_code='TRAVIS' (default)",
-              breakdown_params["county_code"] == "TRAVIS", breakdown_params)
-        check("build_shadow: snapshot_totals_shadow INSERT carries county_code='TRAVIS' (default)",
-              totals_params["county_code"] == "TRAVIS", totals_params)
-        check("build_shadow: snapshot_neighborhood_movers_shadow INSERT carries county_code='TRAVIS' (default)",
-              nb_params["county_code"] == "TRAVIS", nb_params)
+        check("build_shadow: breakdown INSERTs carry BOTH TRAVIS and DALLAS county_codes across the run",
+              set(breakdown_ccs) == {"TRAVIS", "DALLAS"}, set(breakdown_ccs))
+        check("build_shadow: every breakdown INSERT for view 1 carries its OWN county_code "
+              "(TRAVIS row -> 'TRAVIS', DALLAS row -> 'DALLAS', never swapped)",
+              breakdown_ccs[0] == "TRAVIS" and breakdown_ccs[1] == "DALLAS", breakdown_ccs[:2])
+        check("build_shadow: totals INSERTs carry BOTH counties' own county_code",
+              set(totals_ccs) == {"TRAVIS", "DALLAS"}, set(totals_ccs))
+        check("build_shadow: neighborhood INSERTs carry BOTH counties' own county_code",
+              set(nb_ccs) == {"TRAVIS", "DALLAS"}, set(nb_ccs))
 
-        breakdown_sql = next(s for k, (s, _p) in zip(kinds, conn.executed) if k == "INSERT_BREAKDOWN")
-        totals_sql = next(s for k, (s, _p) in zip(kinds, conn.executed) if k == "INSERT_TOTALS")
-        nb_sql = next(s for k, (s, _p) in zip(kinds, conn.executed) if k == "INSERT_NEIGHBORHOOD")
-        check("build_shadow: snapshot_breakdown_shadow INSERT's column list includes county_code",
-              "county_code" in breakdown_sql, breakdown_sql)
-        check("build_shadow: snapshot_totals_shadow INSERT's column list includes county_code",
-              "county_code" in totals_sql, totals_sql)
-        check("build_shadow: snapshot_neighborhood_movers_shadow INSERT's column list includes county_code",
-              "county_code" in nb_sql, nb_sql)
+        # Cross-check the actual dollar values travel with the right county --
+        # not just that the right LABEL is attached, but that DALLAS's own
+        # $3.2B total_mv26_b never lands on a TRAVIS-labeled row or vice versa.
+        totals_params_by_cc = {
+            p["county_code"]: p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_TOTALS"
+        }
+        check("build_shadow: TRAVIS totals row keeps its own total_mv26_b (1.1), not DALLAS's (3.2)",
+              totals_params_by_cc["TRAVIS"]["total_mv26_b"] == 1.1, totals_params_by_cc["TRAVIS"])
+        check("build_shadow: DALLAS totals row keeps its own total_mv26_b (3.2), not TRAVIS's (1.1)",
+              totals_params_by_cc["DALLAS"]["total_mv26_b"] == 3.2, totals_params_by_cc["DALLAS"])
     finally:
         rss._compute_one_view = orig
 
 
-def test_build_shadow_threads_a_non_default_county_code_into_all_three_inserts():
-    """The real, future-facing proof: build_shadow() must genuinely thread
-    through whatever county_code the caller passes, not just default it --
-    same reasoning as refresh_group_stats.py's own equivalent test."""
+# ── Part 8: PX-20260831-02 Task 1 — post-refresh SnapshotConsistencyError ──
+#
+# refresh_snapshot_summary() now runs assert_snapshot_breakdown_totals_
+# consistent() automatically after every real (non-dry-run) swap and raises
+# SnapshotConsistencyError if it finds a mismatch -- no longer gated behind
+# a separate --check-consistency flag. FakeConn's results_queue feeds the
+# two SELECTs assert_snapshot_breakdown_totals_consistent() issues (sums
+# over snapshot_breakdown, then snapshot_totals' own rows) in that order.
+
+def test_refresh_snapshot_summary_raises_when_post_swap_consistency_check_fails():
     orig = rss._compute_one_view
     rss._compute_one_view = _fake_compute_one_view
     try:
-        conn = FakeConn()
-        rss.build_shadow(conn, batch_id=7, county_code="DALLAS", verbose=False)
-
-        kinds = _sql_kinds(conn.executed)
-        breakdown_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_BREAKDOWN")
-        totals_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_TOTALS")
-        nb_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_NEIGHBORHOOD")
-
-        check("build_shadow(county_code='DALLAS'): breakdown INSERT carries 'DALLAS', not the TRAVIS default",
-              breakdown_params["county_code"] == "DALLAS", breakdown_params)
-        check("build_shadow(county_code='DALLAS'): totals INSERT carries 'DALLAS'",
-              totals_params["county_code"] == "DALLAS", totals_params)
-        check("build_shadow(county_code='DALLAS'): neighborhood INSERT carries 'DALLAS'",
-              nb_params["county_code"] == "DALLAS", nb_params)
+        # Row shape matches assert_snapshot_breakdown_totals_consistent()'s
+        # own SELECTs: (view, county_code, n_total/n_up/n_down/n_flat, mv25, mv26).
+        breakdown_sums_row = ("overall", "TRAVIS", 5, 2, 2, 1, 1.0, 1.1)
+        totals_row_MISMATCHED = ("overall", "TRAVIS", 999, 2, 2, 1, 1.0, 1.1)  # n_total deliberately wrong
+        conn = FakeConn(results_queue=[
+            ([breakdown_sums_row], []),
+            ([totals_row_MISMATCHED], []),
+        ])
+        raised = False
+        try:
+            rss.refresh_snapshot_summary(conn, batch_id=555, dry_run=False, verbose=False)
+        except rss.SnapshotConsistencyError:
+            raised = True
+        check("refresh_snapshot_summary: raises SnapshotConsistencyError when the post-swap "
+              "consistency check finds a real mismatch", raised)
+        check("refresh_snapshot_summary: the swap itself still completed before the alarm fired "
+              "(RENAME statements present in conn.executed)",
+              any("RENAME" in k for k in _sql_kinds(conn.executed)), _sql_kinds(conn.executed))
     finally:
         rss._compute_one_view = orig
 
 
-def test_refresh_snapshot_summary_threads_county_code_through_to_build_shadow():
+def test_refresh_snapshot_summary_does_not_raise_when_consistent():
     orig = rss._compute_one_view
     rss._compute_one_view = _fake_compute_one_view
     try:
-        conn = FakeConn()
-        result = rss.refresh_snapshot_summary(conn, batch_id=555, dry_run=False, county_code="DALLAS", verbose=False)
-
-        kinds = _sql_kinds(conn.executed)
-        breakdown_params = next(p for k, (_s, p) in zip(kinds, conn.executed) if k == "INSERT_BREAKDOWN")
-        check("refresh_snapshot_summary(county_code='DALLAS'): the real breakdown INSERT carries 'DALLAS'",
-              breakdown_params["county_code"] == "DALLAS", breakdown_params)
-        check("refresh_snapshot_summary(county_code='DALLAS'): result dict reports the county_code used",
-              result["county_code"] == "DALLAS", result)
+        breakdown_sums_row = ("overall", "TRAVIS", 5, 2, 2, 1, 1.0, 1.1)
+        totals_row_MATCHING = ("overall", "TRAVIS", 5, 2, 2, 1, 1.0, 1.1)
+        conn = FakeConn(results_queue=[
+            ([breakdown_sums_row], []),
+            ([totals_row_MATCHING], []),
+        ])
+        result = rss.refresh_snapshot_summary(conn, batch_id=555, dry_run=False, verbose=False)
+        check("refresh_snapshot_summary: does not raise when the post-swap check is consistent",
+              result["dry_run"] is False, result)
+        check("refresh_snapshot_summary: result includes the consistency_detail dict",
+              "consistency_detail" in result and result["consistency_detail"]["mismatches"] == [], result)
     finally:
         rss._compute_one_view = orig
 
 
-def test_refresh_snapshot_summary_dry_run_does_not_require_county_code():
-    """dry_run never reaches build_shadow() at all -- proves the new
-    parameter doesn't change dry-run's existing 'no writes' contract."""
-    orig = rss._compute_one_view
-    rss._compute_one_view = _fake_compute_one_view
-    try:
-        conn = FakeConn()
-        result = rss.refresh_snapshot_summary(conn, dry_run=True, county_code="DALLAS", verbose=False)
-        check("dry-run: still issues zero DB statements even with a non-default county_code passed",
-              conn.executed == [], conn.executed)
-        check("dry-run: result still marked dry_run=True", result["dry_run"] is True)
-    finally:
-        rss._compute_one_view = orig
+# ── Part 9: PX-20260831-02 delta (2026-08-31) — SELECT-vs-GROUP-BY-scoped ────
+# county_code floor, all 5 builders x all 11 real views
+#
+# Diego's live EXPLAIN proof (explain_snapshot_summary_county_derivation.py)
+# found single_year_mv_sql('overall') FAILing a PLANNER-level check even
+# though this builder's own SQL text was never missing county_code -- Part 1
+# above already asserts "p.county_code" appears somewhere in each builder's
+# string, and separately asserts county_code inside single_year_mv_sql's own
+# GROUPING SETS clause, for every view (see lines ~146-150). Root cause was
+# in the live-proof script's checker (it only recognized "Group Key:" lines;
+# single_year_mv_sql's narrower 2-column GROUPING SETS shape planned as
+# HashAggregate, which Postgres renders as "Hash Key:" instead -- fixed in
+# that script's _county_code_is_a_group_key()), not in this builder.
+#
+# This Part tightens Part 1's scattered anywhere-in-string asserts into one
+# explicit, SELECT-list-vs-GROUP-BY-clause-SCOPED check per builder, per
+# view, so a future regression can't hide by having county_code appear only
+# in a WHERE/JOIN clause while actually being absent from the aggregation
+# itself -- and proves (next function) that this check would have caught the
+# pre-Task-1 externally-stamped shape had that been the real bug here.
+
+def _select_and_group_by_halves(sql):
+    """Splits a builder's rendered SQL at the first 'GROUP BY' keyword:
+    select_half is everything before it (SELECT/FROM/JOIN/WHERE), group_by_half
+    is 'GROUP BY' onward (plain GROUP BY or GROUPING SETS, to end of string).
+    All 5 real builders have exactly one GROUP BY; a builder with none at all
+    would get group_by_half == '', which the check below correctly fails."""
+    idx = sql.find("GROUP BY")
+    if idx == -1:
+        return sql, ""
+    return sql[:idx], sql[idx:]
+
+
+def test_every_builder_carries_county_code_in_select_and_group_by_for_every_view():
+    builders = {
+        "breakdown_sql": lambda view: rss.breakdown_sql(view),
+        "single_year_mv_sql": lambda view: rss.single_year_mv_sql(view, 2025),
+        "part4_agg_sql": lambda view: rss.part4_agg_sql(view),
+        "cert_agg_sql": lambda view: rss.cert_agg_sql(view),
+        "neighborhoods_sql": lambda view: rss.neighborhoods_sql(view),
+    }
+    for view in sorted(_SNAPSHOT_VALID_VIEWS):
+        for name, build in builders.items():
+            sql = build(view)
+            select_half, group_by_half = _select_and_group_by_halves(sql)
+            check(f"{name}({view}): GROUP BY clause present at all",
+                  group_by_half != "", "no 'GROUP BY' found in rendered SQL")
+            check(f"{name}({view}): county_code present in SELECT list",
+                  "county_code" in select_half, select_half.strip()[:200])
+            check(f"{name}({view}): county_code present in GROUP BY / GROUPING SETS clause",
+                  "county_code" in group_by_half, group_by_half.strip())
+
+
+def test_new_select_group_by_check_would_have_failed_pre_task_1_shape():
+    """Proof the check above has teeth: reconstructs the shape single_year_mv_sql
+    had BEFORE PX-20260831-02 Task 1 (per that task's own before/after diff --
+    no p.county_code in SELECT, plain non-county GROUP BY -- county was stamped
+    onto every row by the caller after the fact, not derived per row) and
+    confirms _select_and_group_by_halves + the same assertions used above would
+    correctly flag it on both halves."""
+    pre_task_1_single_year_mv_sql = """
+        SELECT
+            ({ptype_case})                                  AS ptype,
+            ROUND(SUM(t.market_value)::NUMERIC / 1e9, 3)     AS total_mv_b
+        FROM parcel p
+        JOIN parcel_tax_year t ON t.geo_id = p.geo_id AND t.tax_year = {year}
+        WHERE t.market_value > 0
+        GROUP BY GROUPING SETS ((({ptype_case})), ())
+    """
+    select_half, group_by_half = _select_and_group_by_halves(pre_task_1_single_year_mv_sql)
+    check("pre-Task-1 shape: GROUP BY clause is present (so the failure is specifically "
+          "about county_code, not a vacuous no-GROUP-BY pass)", group_by_half != "")
+    check("pre-Task-1 shape: new check correctly flags county_code MISSING from SELECT",
+          "county_code" not in select_half)
+    check("pre-Task-1 shape: new check correctly flags county_code MISSING from GROUP BY",
+          "county_code" not in group_by_half)
 
 
 def main():
