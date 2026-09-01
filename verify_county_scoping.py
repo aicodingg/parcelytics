@@ -973,6 +973,37 @@ EXEMPTIONS = {
     # entry is deletion, which is what happened here -- not the deletion
     # itself triggering the stale-exemption alarm, since a deleted key can
     # never be "matched zero times" (it isn't examined at all).
+    # PX-20260901-04 review: explain_compute_metrics_passes.py is an
+    # EXPLAIN-only diagnostic (built under PX-20260901-01). It renders
+    # compute_metrics' own INSERT/UPDATE statement text under EXPLAIN inside
+    # a transaction that is ALWAYS rolled back -- it has no write path at
+    # all, so listing it in allowed_writers would be false. Registered as an
+    # exemption instead, per PM ruling: the honest record is "contains write
+    # statement TEXT, never executes a write." Known follow-up (not built
+    # here): the script should IMPORT these statement strings from
+    # compute_metrics rather than carry copies, so the EXPLAIN proof cannot
+    # drift from the real SQL.
+    ("loaders/explain_compute_metrics_passes.py", "parcel_metrics", "INSERT"): {
+        "reason": (
+            "EXPLAIN-only rendering of compute_parcel_metrics()'s own INSERT "
+            "text for live plan review; every statement runs under EXPLAIN in "
+            "a transaction that is always rolled back (see the module's own "
+            "docstring and the always-rollback connection handling). Not a "
+            "write path; not a writer."
+        ),
+        "approved_by": "PX-20260901-04",
+        "applies_to": {"write"},
+    },
+    ("loaders/explain_compute_metrics_passes.py", "parcel_metrics", "UPDATE"): {
+        "reason": (
+            "Same EXPLAIN-only diagnostic as this file's INSERT exemption "
+            "above -- Pass 4's UPDATE text rendered under EXPLAIN, always "
+            "rolled back, never executed as a write. See that entry for the "
+            "full reasoning and the import-don't-copy follow-up."
+        ),
+        "approved_by": "PX-20260901-04",
+        "applies_to": {"write"},
+    },
     ("loaders/snapshot_2026_preliminary.py", "parcel_2026_preliminary_snapshot", "INSERT"): {
         "reason": (
             "Correct-by-design, not a gap: this INSERT always runs immediately "
