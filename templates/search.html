@@ -747,7 +747,17 @@ ParcelTypeahead.attach({ inputId: "spQ" });
   // this can't drift out of sync with what's actually live.
   const LIVE_COUNTIES = {{ live_counties | tojson }};
   countyTA.setOptions(LIVE_COUNTIES.map(c => ({ value: c.value, label: c.display_name })));
-  {% if county_selected %}
+  {# PX-20260907-01 Task 1: county_resolved is a SEPARATE flag from
+     county_selected -- county_selected still means "this page has real
+     Filter-Parcels results to fetch" (runSearch()'s early return below is
+     unchanged, still keyed on county_selected alone), while
+     county_resolved means only "this render already knows a real county"
+     (true on the anchored /<slug>/search page, AND on the neutral bare
+     /search landing when an explicit, recognized ?county=<slug> was
+     given -- see search_landing()'s docstring). Pre-filling the typeahead
+     is safe and correct in both cases; it does not, by itself, turn on
+     the results-fetching path. #}
+  {% if county_selected or county_resolved %}
   document.getElementById("fltCountyInput").value = {{ county_profile.display_name | tojson }};
   document.getElementById("fltCountyValue").value = {{ county_slug.split('-')[0] | tojson }};
   {% endif %}
@@ -756,14 +766,15 @@ ParcelTypeahead.attach({ inputId: "spQ" });
   // search page rather than trying to swap results in place -- "clean
   // navigation over clever state-carryover" (Diego's stated preference).
   // Works identically whether this page is the neutral bare '/search'
-  // landing (county_selected=False, nothing pre-filled above) or the
-  // county-anchored '/<slug>/search' (county_selected=True) -- the bare
-  // landing has no county of its own to compare against, so it always
-  // navigates on any real selection.
+  // landing with no county resolved (nothing pre-filled above) or a page
+  // that already knows its county (county-anchored '/<slug>/search', or
+  // the neutral landing with an explicit '?county=<slug>') -- a page with
+  // no county of its own to compare against always navigates on any real
+  // selection.
   document.getElementById("fltCountyInput").addEventListener("ta:select", (e) => {
     const picked = LIVE_COUNTIES.find(c => c.value === e.detail);
     if (!picked) return;
-    {% if county_selected %}
+    {% if county_selected or county_resolved %}
     if (picked.slug === {{ county_slug | tojson }}) return;
     {% endif %}
     const params = new URLSearchParams(window.location.search);

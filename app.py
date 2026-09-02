@@ -1984,6 +1984,25 @@ COUNTY_SLUGS = {
 DEFAULT_COUNTY_SLUG = "travis-tx"
 
 
+def _slug_for_county_code(county_code):
+    """PX-20260907-01 Task 2: the one place a real county_code (e.g.
+    'DALLAS', read off an actual parcel row) is turned back into its URL
+    slug (e.g. 'dallas-tx') -- extracted out of _resolve_quick_search()'s
+    own inline `next((slug for slug, code in COUNTY_SLUGS.items() if code
+    == parcel["county_code"]), DEFAULT_COUNTY_SLUG)` expression so the
+    NEW geo_id-keyed legacy-redirect fix below (_make_legacy_parcel_
+    redirect()) can share the exact same lookup instead of a second,
+    possibly-drifting hand-copy. Falls back to DEFAULT_COUNTY_SLUG only
+    for a county_code with no registered slug at all -- should not happen
+    for any county_code that actually came out of a real `parcel` row
+    (every live row's county_code is one of COUNTY_SLUGS' own values by
+    construction), kept as a defensive default rather than a KeyError."""
+    return next(
+        (slug for slug, code in COUNTY_SLUGS.items() if code == county_code),
+        DEFAULT_COUNTY_SLUG,
+    )
+
+
 # PX-20260824-01: the county-profile-of-record for site COPY (institutional
 # names, source-attribution strings), as distinct from COUNTY_SLUGS above
 # (which is purely a routing table). Every field here is copied verbatim
@@ -2584,8 +2603,22 @@ def _inject_county_helpers():
 # resolve_exact_parcel() with county_code=None -- the same cross-county
 # mechanism _home_search_response() already uses -- not a redirect target.
 _LEGACY_REDIRECT_ROUTES = [
-    ("/parcel/<geo_id>", "property_detail"),
-    ("/parcel/<geo_id>/export.pdf", "export_due_diligence_pdf"),
+    # PX-20260907-01 Task 2: "/parcel/<geo_id>" and
+    # "/parcel/<geo_id>/export.pdf" are deliberately NOT in this generic
+    # list any more -- see _make_legacy_parcel_redirect() and its
+    # registration below, right after this list's loop. Both used to run
+    # through _make_legacy_redirect() like everything else here, which
+    # means _add_county_slug()'s blanket "no g.county_slug on this bare-
+    # path request -> DEFAULT_COUNTY_SLUG" fallback silently picked Travis
+    # for EVERY geo_id, including Dallas ones -- confirmed live (PM's
+    # report): "/parcel/0284460113?county=dallas-tx" (a real Dallas geo_id)
+    # 301-redirected to "/travis-tx/parcel/0284460113?county=dallas-tx",
+    # not "/dallas-tx/...". These two are the ONLY entries in this list
+    # keyed by a real, individually-resolvable geo_id -- every other entry
+    # here has either no county-specific identity at all (e.g. "/parcels",
+    # "/compare" -- see this brief's report for why those are a separate,
+    # not-fixed-here gap) or is an API/JSON endpoint, not a canonical,
+    # user-facing, potentially search-indexed page.
     ("/api/parcel_entities", "api_parcel_entities"),
     ("/snapshot/neighborhood/<code>", "snapshot_neighborhood"),
     ("/api/rates", "api_rates"),
@@ -2630,6 +2663,76 @@ for _old_path, _endpoint in _LEGACY_REDIRECT_ROUTES:
         _old_path,
         endpoint=f"{_endpoint}__legacy_redirect",
         view_func=_make_legacy_redirect(_endpoint),
+    )
+
+
+def _make_legacy_parcel_redirect(target_endpoint):
+    """PX-20260907-01 Task 2: the real fix for
+        "/parcel/0284460113?county=dallas-tx" (a genuine Dallas geo_id)
+        301-redirecting to "/travis-tx/parcel/0284460113?county=dallas-tx"
+        instead of "/dallas-tx/...".
+    Root cause, confirmed by reading the code (not assumed): the bare
+    "/parcel/<geo_id>" and "/parcel/<geo_id>/export.pdf" legacy paths used
+    to be registered through _make_legacy_redirect() above, same as every
+    OTHER entry in _LEGACY_REDIRECT_ROUTES. That generic redirector calls
+    plain `url_for(target_endpoint, geo_id=...)` with no county_slug of
+    its own, which _add_county_slug()'s url_defaults hook then fills in
+    via `getattr(g, "county_slug", DEFAULT_COUNTY_SLUG)` -- and a request
+    arriving at a bare, unprefixed "/parcel/..." path has no g.county_slug
+    at all (this route itself has no <county_slug> segment), so this
+    ALWAYS resolved to DEFAULT_COUNTY_SLUG ("travis-tx"), for every geo_id,
+    Dallas's included, regardless of any "?county=" query param -- that
+    param was never even read by this code path; it just rode along
+    unexamined as part of the preserved querystring, giving the
+    appearance (but not the reality) of being honored.
+
+    THE FIX: these two routes -- the only two entries in
+    _LEGACY_REDIRECT_ROUTES keyed by an individually-resolvable geo_id
+    (see this brief's own report for why the other, non-geo_id entries in
+    that list are a separate, not-fixed-here gap) -- now resolve the
+    PARCEL'S REAL county via resolve_exact_parcel(geo_id, county_code=
+    None), the exact same cross-county lookup _resolve_quick_search()
+    already uses for the home/search-landing "type an account number"
+    box (PX-20260828-03/-06b) -- geo_id is only unique WITHIN a county
+    (SPEC_COUNTY_PARTITIONING.md §3's own real, investigated finding), so
+    a bare geo_id genuinely cannot be resolved to one right county without
+    checking data, and this is the one function in this file that already
+    does that check correctly, across every live county in turn. The
+    "?county=" query param on the INCOMING request is deliberately NOT
+    trusted or even read here -- it's exactly the kind of unverified input
+    this whole brief exists to stop treating as authoritative; the real
+    parcel data is the single source of truth for which slug is correct,
+    the same principle _resolve_quick_search()'s redirect has always
+    followed for a typed-in account number.
+
+    If NO live county has this geo_id (a genuinely bad/nonexistent
+    parcel ID, not a wrong-county one), this falls through to the exact
+    same DEFAULT_COUNTY_SLUG-based redirect the generic path used before
+    -- property_detail()'s own real 404 handling (a live DB lookup that
+    will also fail there) is what a visitor actually sees in that case,
+    completely unchanged from today's behavior. This function only
+    changes the outcome for a geo_id that DOES exist somewhere -- it now
+    lands on that parcel's real county instead of blindly assuming
+    Travis."""
+    def _view(geo_id, **kwargs):
+        parcel = resolve_exact_parcel(geo_id, county_code=None)
+        slug = _slug_for_county_code(parcel["county_code"]) if parcel else DEFAULT_COUNTY_SLUG
+        target = url_for(target_endpoint, geo_id=geo_id, county_slug=slug, **kwargs)
+        qs = request.query_string.decode()
+        if qs:
+            target = f"{target}?{qs}"
+        return redirect(target, code=301)
+    return _view
+
+
+for _old_path, _endpoint in (
+    ("/parcel/<geo_id>", "property_detail"),
+    ("/parcel/<geo_id>/export.pdf", "export_due_diligence_pdf"),
+):
+    app.add_url_rule(
+        _old_path,
+        endpoint=f"{_endpoint}__legacy_redirect",
+        view_func=_make_legacy_parcel_redirect(_endpoint),
     )
 
 
@@ -2681,10 +2784,11 @@ def _resolve_quick_search(q, county_code=None):
 
     parcel = resolve_exact_parcel(q, county_code=county_code)
     if parcel:
-        match_slug = next(
-            (slug for slug, code in COUNTY_SLUGS.items() if code == parcel["county_code"]),
-            DEFAULT_COUNTY_SLUG,
-        )
+        # PX-20260907-01 Task 2: now the shared _slug_for_county_code()
+        # helper (was an inline copy of the same expression) -- see that
+        # function's own docstring for why this one lookup is now reused
+        # by the geo_id-keyed legacy-redirect fix too.
+        match_slug = _slug_for_county_code(parcel["county_code"])
         return {"redirect": redirect(url_for("property_detail", geo_id=parcel["geo_id"], county_slug=match_slug))}
 
     # Address-like query (contains letters) — show disambiguation list
@@ -2920,6 +3024,12 @@ def search_page():
         "search.html", has_preliminary_2026=has_preliminary_2026, county_selected=True,
         q=q, addr_matches=result.get("addr_matches"), error=result.get("error"),
         filter_data_availability=filter_data_availability,
+        # PX-20260907-01 Task 1: county_selected=True already implies the
+        # typeahead should show this page's county (see search_landing()'s
+        # docstring for why the two flags are kept separate) -- passed
+        # explicitly here anyway so search.html's `county_selected or
+        # county_resolved` check never has to rely on that implication.
+        county_resolved=True,
     )
 
 
@@ -2949,7 +3059,54 @@ def search_landing():
     _add_county_slug()'s DEFAULT_COUNTY_SLUG, meaning the box ALWAYS
     submitted to /travis-tx?q=... from this page regardless of what was
     typed -- silently Travis-only, found while reading this route for
-    Task 1's read-first report, not part of the originally reported bug."""
+    Task 1's read-first report, not part of the originally reported bug.
+
+    PX-20260907-01 Task 1: this route never called
+    _resolve_landing_county_slug(), unlike rates_landing()/info_landing()/
+    snapshot_landing() -- so '?county=dallas-tx' here was silently dropped,
+    and _inject_county_helpers()'s own Travis-shaped default for
+    county_code/county_profile took over instead. That's exactly why the
+    homestead Quick Filter button/dropdown (search.html's two
+    `county_has_field(county_code, "exemption_codes")` gates) rendered as
+    Travis (present) regardless of an explicit '?county=dallas-tx', and why
+    the county typeahead never reflected that param either. Fixed the same
+    way /rates does it: resolve here, then override county_code/
+    county_profile/county_slug/api_county_slug via explicit render_template
+    kwargs (Jinja precedence: an explicit kwarg wins over the context
+    processor's same-named default -- no template change needed for the
+    county_has_field() gates themselves, they already read the `county_code`
+    template variable by name).
+
+    Only done when `explicit` is True, though -- an unrecognized slug (e.g.
+    '?county=bogus-tx') gets NO override at all here, which leaves this
+    route byte-for-byte identical to the plain, param-less '/search' render
+    it had before this fix. That's the "unknown falls back to neutral, not
+    Travis" rule from this brief applied literally: an unrecognized value
+    is not treated as if the user had asked for Dallas, and it is not
+    treated as if they had asked for Travis either -- it's treated as if
+    they hadn't named a county at all, same as today. (Separately,
+    api_county_slug was ALREADY correctly "" for both the absent and
+    unrecognized cases before this fix, via omission -- there was no
+    api_county_slug override on this route at all, and
+    _inject_county_helpers()'s own default for it is
+    `getattr(g, "county_slug", "")`, which is "" here since this route
+    never sets g.county_slug. See this brief's report for why /rates'
+    api_county_slug needed no equivalent fix.)
+
+    The new `county_resolved` kwarg is a SEPARATE flag from
+    `county_selected` on purpose: `county_selected` still means "this page
+    has server-side Filter-Parcels results to fetch" (runSearch()'s early
+    return, and the ta:select "already here, no-op" check, both still key
+    off it, unchanged) -- turning that on for a bare landing page would be
+    a bigger, unrequested behavior change (this route would start hitting
+    /api/search_filter on load) and would conflict with the "clean
+    navigation over clever state-carryover" principle documented above.
+    `county_resolved` means only "the county typeahead should show the
+    county this page already knows about" -- true here exactly when
+    `explicit` is True, always true on the real anchored /<slug>/search
+    page (search_page() below now also passes it, for clarity, though
+    county_selected=True already implies it there via search.html's
+    `county_selected or county_resolved` check)."""
     q = request.args.get("q", "").strip()
     result = _resolve_quick_search(q, county_code=None)
     if "redirect" in result:
@@ -2960,11 +3117,18 @@ def search_landing():
     # filter_data_availability.get(key, True) reads as "no gap known yet"
     # (available) instead of relying on Jinja's Undefined semantics for a
     # missing template variable.
-    return render_template(
-        "search.html", has_preliminary_2026=False, county_selected=False,
+    county_code, county_slug, county_explicit = _resolve_landing_county_slug()
+    render_kwargs = dict(
+        has_preliminary_2026=False, county_selected=False,
         q=q, addr_matches=result.get("addr_matches"), error=result.get("error"),
-        filter_data_availability={},
+        filter_data_availability={}, county_resolved=county_explicit,
     )
+    if county_explicit:
+        render_kwargs["county_code"] = county_code
+        render_kwargs["county_profile"] = COUNTY_PROFILES.get(county_code, COUNTY_PROFILES["TRAVIS"])
+        render_kwargs["county_slug"] = county_slug
+        render_kwargs["api_county_slug"] = county_slug
+    return render_template("search.html", **render_kwargs)
 
 
 @app.route("/<county_slug>/parcel/<geo_id>")
