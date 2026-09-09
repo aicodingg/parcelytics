@@ -1,0 +1,62 @@
+name: Offline verification (required tier)
+
+# PX Engineering Foundation Mission 1, Deliverable D.
+#
+# Minimal CI around run_offline_checks.py's REQUIRED tier only. Deliberately
+# does NOT touch the advisory tier, a live database, the production
+# environment, or the raw-source vault -- see run_offline_checks.py's own
+# docstring and PX_ENGINEERING_FOUNDATION_M1_REPORT.md for what each tier is
+# and why the required tier is what CI gates on.
+#
+# This workflow file exists in the working tree as of this mission but has
+# NOT been committed or pushed by this agent (commit/push authority belongs
+# to Diego, per parcelytics.md Section 15 and this mission's own preamble).
+# It has therefore never actually executed on GitHub -- see the completion
+# report's GitHub Actions section for "CI execution: NOT VERIFIED" and exact
+# instructions for Diego to verify the first real run once this file is
+# pushed.
+#
+# Explicitly does NOT: connect to the production database, write to
+# production, deploy to Render, require any production credential, rotate
+# any credential, spend money, or depend on the external source-data vault.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  offline-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Production's real Python version: 3.14, evidenced by
+          # ".venv/lib/python3.14" appearing in Render production
+          # tracebacks [Render logs 2026-09-01, PM-supplied]. No
+          # runtime.txt or .python-version is committed to this repo, so
+          # this workflow still can't derive the version from the repo
+          # itself -- it is hardcoded here from PM-supplied evidence, not
+          # a guess. The P1 recommendation to commit a runtime.txt (or
+          # .python-version) stating 3.14 still stands -- see
+          # PX_ENGINEERING_FOUNDATION_M1_REPORT.md, Runtime & Dependency
+          # Assessment -- so this stops being a value only this workflow
+          # file knows.
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run authoritative offline verification (required tier)
+        run: python3 run_offline_checks.py
+        # No --advisory (non-blocking tier is not part of the CI gate by
+        # design in this mission -- see Deliverable C). No database, no
+        # network beyond pip's own package index, no vault, no credentials.
