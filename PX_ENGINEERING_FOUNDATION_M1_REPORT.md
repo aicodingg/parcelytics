@@ -121,7 +121,7 @@ Runner process exit code: `1` [measured 2026-09-02].
 
 It does not connect to any database, does not write to production, does not deploy, does not require or reference any production credential, does not rotate anything, and does not touch the raw-source vault.
 
-**`CI execution: NOT VERIFIED`.** Per the mission preamble's point 2: this agent writes to the working tree only; it does not commit or push. This workflow file has therefore never actually run on GitHub — it cannot have, since GitHub Actions only executes workflow files that exist on a pushed branch. Confirmed the real GitHub remote is `https://github.com/aicodingg/parcelytics.git` [file: `git remote -v`].
+**`CI execution: VERIFIED`** — first run (run #1, "Offline verification (required tier)", trigger: push of `826944a`) completed green in 26 s [dashboard 2026-09-09, github.com/aicodingg/parcelytics/actions]. The paragraph below records the pre-push state for history. Original status line: `CI execution: NOT VERIFIED`. Per the mission preamble's point 2: this agent writes to the working tree only; it does not commit or push. This workflow file has therefore never actually run on GitHub — it cannot have, since GitHub Actions only executes workflow files that exist on a pushed branch. Confirmed the real GitHub remote is `https://github.com/aicodingg/parcelytics.git` [file: `git remote -v`].
 
 **Exact instructions for Diego to verify the first real run**, once this file (and `run_offline_checks.py`, `CLAUDE.md`) are committed and pushed to `main`:
 1. Push the commit containing `.github/workflows/offline-checks.yml` to `main` (or open a PR against `main` — either trigger fires the workflow).
