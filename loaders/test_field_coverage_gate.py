@@ -178,7 +178,22 @@ def test_sanity_floor_pass_and_fail():
 def test_tax_delinquent_low_but_nonzero_rate_still_available():
     def behavior(sql, params):
         if "information_schema.columns" in sql:
-            return (1,)
+            # Live-validation regression (PM review): the real tax_delinquent
+            # table has NO column literally named "tax_delinquent" (its real
+            # columns are delinquent_total, current_year_total, total_due,
+            # etc, confirmed via a live `\d tax_delinquent`). If this branch
+            # is ever hit, measure_sparse_by_nature_field()'s tax_delinquent
+            # case has regressed back to routing through the generic
+            # single-column check_source_column() gate, which always fails
+            # for this table -- fail loud rather than silently answering
+            # "yes" the way this fixture used to (that's exactly what made
+            # the original bug invisible to fixture testing).
+            raise AssertionError(
+                "tax_delinquent measurement must not query "
+                "information_schema.columns -- it has no single named "
+                "column to look up; see test_tax_delinquent_measures_via_"
+                "table_presence_not_column_lookup for the dedicated proof"
+            )
         if "COUNT(*) FROM tax_delinquent" in sql:
             return (12,)  # only 12 delinquent parcels -- a low, GOOD rate
         raise AssertionError(f"unexpected SQL for tax_delinquent presence check: {sql}")
@@ -198,7 +213,13 @@ def test_tax_delinquent_low_but_nonzero_rate_still_available():
 def test_tax_delinquent_zero_rows_reads_unavailable():
     def behavior(sql, params):
         if "information_schema.columns" in sql:
-            return (1,)
+            # See the matching comment in
+            # test_tax_delinquent_low_but_nonzero_rate_still_available --
+            # this must never be queried for tax_delinquent.
+            raise AssertionError(
+                "tax_delinquent measurement must not query "
+                "information_schema.columns"
+            )
         if "COUNT(*) FROM tax_delinquent" in sql:
             return (0,)  # Dallas today: no billing/delinquency data loaded at all
         raise AssertionError(sql)
@@ -210,6 +231,52 @@ def test_tax_delinquent_zero_rows_reads_unavailable():
     state = capability_state(record["measurement_status"], record["coverage_fraction"])
     check("tax_delinquent: zero rows -> Unavailable (dataset genuinely not loaded, Dallas today)",
           state == UNAVAILABLE, (record, state))
+
+
+# ── Live-validation fix: tax_delinquent must measure via whole-table
+#    presence, NEVER via check_source_column()'s single-column
+#    information_schema.columns lookup. Production's real tax_delinquent
+#    table has no column literally named "tax_delinquent" -- confirmed via
+#    a live `\d tax_delinquent` during Diego's live-validation pass (real
+#    columns: delinquent_total, current_year_total, total_due, etc). Before
+#    this fix, check_source_column(table="tax_delinquent",
+#    column="tax_delinquent") ALWAYS returned False in production, so the
+#    structural gate ALWAYS short-circuited to NOT_MEASURABLE and the
+#    presence-check code (added in the earlier post-M4-review fix) was
+#    dead, unreachable code -- invisible to the fixture tests above only
+#    because their fixtures always answered "yes, the column exists" to
+#    ANY information_schema.columns query, which is not what real
+#    production's catalog says for this table. This test's fixture instead
+#    fails loudly if that query is ever issued for tax_delinquent, so a
+#    regression back to routing through check_source_column() is caught
+#    immediately rather than silently passing.
+def test_tax_delinquent_measures_via_table_presence_not_column_lookup():
+    def behavior(sql, params):
+        if "information_schema.columns" in sql:
+            raise AssertionError(
+                "tax_delinquent has no column named 'tax_delinquent' in "
+                "real production (its real columns are delinquent_total, "
+                "current_year_total, total_due, etc) -- "
+                "measure_sparse_by_nature_field()'s tax_delinquent branch "
+                "must run its own table-presence check BEFORE and INSTEAD "
+                "OF check_source_column(), never query "
+                "information_schema.columns for it at all"
+            )
+        if "COUNT(*) FROM tax_delinquent" in sql:
+            return (37,)  # any nonzero count -- dataset is present
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    field_def = get_field_definition("tax_delinquent")
+    record = measure_sparse_by_nature_field(make_cursor(behavior), "TRAVIS", field_def)
+    check("tax_delinquent: measures MEASURED via table-presence query alone, "
+          "no column-existence lookup needed or performed",
+          record["measurement_status"] == MEASURED, record)
+    check("tax_delinquent: presence-based coverage_fraction is 1.0",
+          record["coverage_fraction"] == 1.0, record)
+    state = capability_state(record["measurement_status"], record["coverage_fraction"])
+    check("tax_delinquent: reads Available once the structural gate no "
+          "longer depends on a nonexistent column name",
+          state == AVAILABLE, (record, state))
 
 
 # ── 10. Zero-population edge case ───────────────────────────────────────────
@@ -361,6 +428,7 @@ ALL_TESTS = [
     test_sanity_floor_pass_and_fail,
     test_tax_delinquent_low_but_nonzero_rate_still_available,
     test_tax_delinquent_zero_rows_reads_unavailable,
+    test_tax_delinquent_measures_via_table_presence_not_column_lookup,
     test_zero_population_no_crash,
     test_measure_field_unregistered_is_not_measurable,
     test_measure_county_isolates_per_field_failures,

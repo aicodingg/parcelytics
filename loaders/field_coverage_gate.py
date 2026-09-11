@@ -221,50 +221,40 @@ def measure_class_conditional_field(cur, county_code, field_def):
 def measure_sparse_by_nature_field(cur, county_code, field_def, tax_year=None,
                                     sanity_floor_references=None):
     """D4: for sparse-by-nature fields, do NOT treat a low all-parcel
-    percentage as evidence of an incomplete source. Sequence: (1) confirm
+    percentage as evidence of an incomplete source. Sequence for a normal,
+    single-named-column field (exemption_codes, hs_cap_loss): (1) confirm
     the source column exists; (2) confirm it was mapped (has at least one
     non-null value ANYWHERE, not just for this county -- distinguishes
     "column exists but this loader never writes to it" from "column exists
     and other counties/years populate it fine"); (3) measure the resulting
     population; (4) where a sanity floor is registered, apply it; otherwise
-    report the structural measurement honestly with no invented threshold."""
+    report the structural measurement honestly with no invented threshold.
+    tax_delinquent is the one exception to this sequence: it is a whole
+    TABLE-level presence question, not a single-column one (see the
+    table == "tax_delinquent" branch below, handled before and instead of
+    the generic check_source_column() gate)."""
     sanity_floor_references = sanity_floor_references if sanity_floor_references is not None else SANITY_FLOOR_REFERENCES
     table = field_def.table
     column = field_def.canonical_field
 
-    if not check_source_column(cur, table, column):
-        return make_record(
-            county_code, field_def.canonical_field, field_def.field_class,
-            population_definition=field_def.population_predicate,
-            population_count=None, populated_count=None,
-            measurement_method=field_def.measurement_method,
-            measurement_status=NOT_MEASURABLE, source_column_present=False,
-            source_column_mapped=False,
-        )
-
     # tax_delinquent is its own table -- a WHOLE-TABLE PRESENCE check, not a
-    # per-row nonempty check. FIX (PM review, post-M4): this used to compute
-    # coverage_fraction = delinquent_rows / all_parcels, which made the
-    # DELINQUENCY RATE drive capability_state() -- backwards. A real, low
-    # delinquency rate (a good thing) would fall below COVERAGE_THRESHOLD
-    # and read Unavailable, telling users "we don't have delinquency data"
-    # when we do. The capability signal for a sparse-by-nature field is
-    # whether the DATASET EXISTS for this county, not what fraction of
-    # parcels happen to match a rare real-world condition -- exactly the
-    # same principle already applied to exemption_codes/hs_cap_loss (a low
-    # exemption rate isn't itself evidence of a loading gap, per those
-    # fields' own docstrings), just not carried through to this table's
-    # different (whole-table, not per-row) shape until now.
-    #
-    # Fix: report a BOOLEAN-SHAPED measurement -- population_count=1,
-    # populated_count=1 if the county has ANY row in tax_delinquent (the
-    # dataset was acquired/loaded), else 0. This reuses capability_state()'s
-    # existing threshold logic with no special-casing: any nonzero
-    # delinquent_rows count, no matter how small relative to the county's
-    # total parcels, yields coverage_fraction=1.0 (>= threshold -> "as
-    # measured, Available"); zero delinquent_rows yields 0.0 (< threshold
-    # -> Unavailable) -- Dallas's real, confirmed "no billing/delinquency
-    # data loaded at all" case (parcelytics.md §16).
+    # per-row nonempty check. FIX 2 (live-validation review, post-M4-review):
+    # this branch used to run AFTER check_source_column(table, column) below,
+    # which looks up information_schema.columns for a column literally named
+    # "tax_delinquent" (field_def.canonical_field). No such column exists on
+    # the real tax_delinquent table -- its actual data columns are
+    # delinquent_total, current_year_total, total_due, etc (confirmed via a
+    # live `\d tax_delinquent`, Diego's live-validation pass). That meant
+    # check_source_column() ALWAYS returned False for this field and the
+    # structural gate ALWAYS short-circuited to NOT_MEASURABLE, making the
+    # presence-check code below (correct on its own, added in the earlier
+    # post-M4-review fix) dead and unreachable. tax_delinquent doesn't map to
+    # one column at all -- it maps to "does this table have any rows for
+    # this county," a table-level structural question, not a column-level
+    # one -- so this branch now runs FIRST, before and instead of the
+    # generic single-column check_source_column() gate, which remains
+    # correct and unchanged for exemption_codes/hs_cap_loss below (those
+    # really are single named columns on parcel_tax_year).
     if table == "tax_delinquent":
         cur.execute("SELECT COUNT(*) FROM tax_delinquent WHERE county_code = %s", (county_code,))
         (delinquent_rows,) = cur.fetchone()
@@ -277,6 +267,16 @@ def measure_sparse_by_nature_field(cur, county_code, field_def, tax_year=None,
             measurement_method=field_def.measurement_method,
             measurement_status=MEASURED, source_column_present=True,
             source_column_mapped=dataset_present,
+        )
+
+    if not check_source_column(cur, table, column):
+        return make_record(
+            county_code, field_def.canonical_field, field_def.field_class,
+            population_definition=field_def.population_predicate,
+            population_count=None, populated_count=None,
+            measurement_method=field_def.measurement_method,
+            measurement_status=NOT_MEASURABLE, source_column_present=False,
+            source_column_mapped=False,
         )
 
     # exemption_codes / hs_cap_loss: parcel_tax_year-scoped, per (county, tax_year)
