@@ -432,6 +432,48 @@ def resolve_prop_unit_conflict(existing, incoming):
 # (also a real, already-migrated, county_code-leading-PK table:
 # new_pk=["county_code", "prop_id", "tax_year"]). Same not-yet-triggered
 # NOT NULL disclosure as PROP_UNIT_UPSERT_SQL above.
+#
+# PX-20260910-03 (COALESCE guard on hs_cap_loss): PX-20260910-01 found that
+# load_certified_historical.py / load_certified_2025.py / load_2026_
+# preliminary.py write hs_cap_loss=NULL for every row (Certified Export
+# genuinely has no such field), and because this UPSERT's ON CONFLICT
+# previously did a bare `hs_cap_loss = EXCLUDED.hs_cap_loss`, those NULLs
+# silently destroyed the real, AJR-sourced hs_cap_loss values load_ajr.py
+# had already written for the same (county_code, prop_id, tax_year) keys --
+# the confirmed root cause of Travis 2022-2024 reading 0.00% coverage in
+# production. PM ruling (PX-20260910-03): COALESCE-guard this one column so
+# a NULL from a source that structurally can't supply the field never wins
+# over a real prior value -- hs_cap_loss is never intentionally cleared to
+# NULL by a later loader, by design, permanently. Every other column in
+# this SET clause keeps its original unconditional-overwrite behavior
+# unchanged; this guard is scoped to hs_cap_loss only.
+#
+# Caller-by-caller check that none relies on NULLing out an existing
+# hs_cap_loss (done as part of this fix, not assumed):
+#   - load_ajr.py: writes a real extracted AJR field[35] value for the row
+#     it's loading; only produces None when that source field is itself
+#     blank for that prop/year. Re-running the same year's AJR file is
+#     idempotent (same file, same result) and AJR years are not
+#     re-supplied by a different, later AJR file, so this caller never
+#     depends on being able to overwrite a real value with NULL.
+#   - load_certified_historical.py / load_certified_2025.py /
+#     load_2026_preliminary.py: always write None for hs_cap_loss (their
+#     source format has no such field) -- this is exactly the
+#     already-destructive behavior this guard exists to stop. These
+#     callers have no legitimate reason to ever want their None to win.
+#   - load_dallas_certified.py: writes a real, derived hs_cap_loss from
+#     dcad_format.derive_value_mapping() (TOT_VAL - HMSTD_CAP_VAL when a
+#     cap is present, else None -- see that function's docstring). NOTE,
+#     flagged for awareness though out of scope for this fix (Dallas is
+#     PX-20260910-02, not this brief): unlike the three Travis loaders
+#     above, Dallas's None here IS a potentially legitimate "no cap this
+#     year" answer, not a source-format limitation -- if the same
+#     (county_code, prop_id, tax_year) key is ever re-loaded from a
+#     corrected DCAD export where a previously-present cap is now
+#     genuinely gone, this guard would incorrectly preserve the stale
+#     non-NULL value instead of updating it to NULL. This does not affect
+#     Travis and is not fixed here per this brief's explicit scope
+#     boundary; see PX_HS_CAP_LOSS_FIX_REPORT.md for the full note.
 PROP_UNIT_TAX_YEAR_UPSERT_SQL = """
     INSERT INTO prop_unit_tax_year
         (county_code, prop_id, tax_year, geo_id, market_value, assessed_value, taxable_value,
@@ -442,7 +484,7 @@ PROP_UNIT_TAX_YEAR_UPSERT_SQL = """
             market_value    = EXCLUDED.market_value,
             assessed_value  = EXCLUDED.assessed_value,
             taxable_value   = EXCLUDED.taxable_value,
-            hs_cap_loss     = EXCLUDED.hs_cap_loss,
+            hs_cap_loss     = COALESCE(EXCLUDED.hs_cap_loss, prop_unit_tax_year.hs_cap_loss),
             land_value      = EXCLUDED.land_value,
             imprv_value     = EXCLUDED.imprv_value,
             exemption_codes = EXCLUDED.exemption_codes,
@@ -461,6 +503,32 @@ PROP_UNIT_TAX_YEAR_UPSERT_SQL = """
 # cross-year ordering ambiguity to guard against; a re-run of the same
 # year's file re-derives the identical value, same reasoning already
 # documented on this file's DO UPDATE semantics elsewhere.
+
+
+def resolve_hs_cap_loss(existing_hs_cap_loss, incoming_hs_cap_loss):
+    """
+    Pure-Python mirror of PROP_UNIT_TAX_YEAR_UPSERT_SQL's ON CONFLICT DO
+    UPDATE hs_cap_loss clause -- `COALESCE(EXCLUDED.hs_cap_loss,
+    prop_unit_tax_year.hs_cap_loss)` -- kept in sync by hand, same division
+    of labor as resolve_prop_unit_conflict() above (fixture-test the real
+    upsert's semantics without a live DB).
+
+    PX-20260910-03: added to stop a real production bug (PX-20260910-01) --
+    load_certified_historical.py / load_certified_2025.py /
+    load_2026_preliminary.py all write hs_cap_loss=None for every row
+    (their source format structurally lacks the field), and before this
+    guard, the bare `hs_cap_loss = EXCLUDED.hs_cap_loss` let that None
+    silently destroy a real, AJR-sourced value load_ajr.py had already
+    written for the same (county_code, prop_id, tax_year) key -- confirmed
+    root cause of Travis 2022-2024 reading 0.00% hs_cap_loss coverage in
+    production.
+
+    Semantics: an incoming non-None value always wins (a real value should
+    always be written/updated); an incoming None never overwrites an
+    existing non-None value (preserves it); None stays None when both are
+    None (no false "preserved a value" claim when there was never one).
+    """
+    return incoming_hs_cap_loss if incoming_hs_cap_loss is not None else existing_hs_cap_loss
 
 
 # ── Internal ──────────────────────────────────────────────────────────────

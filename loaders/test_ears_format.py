@@ -345,6 +345,75 @@ def test_geoid_new_guard_other_columns_unaffected():
     )
 
 
+# ── PROP_UNIT_TAX_YEAR_UPSERT_SQL hs_cap_loss COALESCE guard (PX-20260910-03) ──
+# Verifies ef.resolve_hs_cap_loss(), the hand-verified pure-Python mirror of
+# the real SQL's `hs_cap_loss = COALESCE(EXCLUDED.hs_cap_loss,
+# prop_unit_tax_year.hs_cap_loss)` clause (no DB in this sandbox to run the
+# actual SQL against). Same division of labor as the geo_id guard tests
+# above. Also includes a direct string assertion against the real shipping
+# SQL text, proving the guard actually shipped in the constant these
+# loaders execute against, not just in the pure-Python mirror.
+def test_hs_cap_loss_sql_text_contains_coalesce_guard():
+    """Direct assertion against the real, shipping SQL string -- catches
+    the case where the pure-Python mirror is correct but the actual SQL
+    constant drifted from it (or the fix was reverted)."""
+    sql = ef.PROP_UNIT_TAX_YEAR_UPSERT_SQL
+    check(
+        "PROP_UNIT_TAX_YEAR_UPSERT_SQL: hs_cap_loss uses COALESCE(EXCLUDED.hs_cap_loss, "
+        "prop_unit_tax_year.hs_cap_loss), not a bare unconditional overwrite",
+        "hs_cap_loss     = COALESCE(EXCLUDED.hs_cap_loss, prop_unit_tax_year.hs_cap_loss)" in sql,
+        sql,
+    )
+    check(
+        "PROP_UNIT_TAX_YEAR_UPSERT_SQL: bare 'hs_cap_loss = EXCLUDED.hs_cap_loss' "
+        "(the old, destructive form) no longer appears anywhere in the SQL",
+        "hs_cap_loss     = EXCLUDED.hs_cap_loss," not in sql,
+        sql,
+    )
+
+
+def test_hs_cap_loss_real_value_into_null_row_is_written():
+    """Direction (a): a loader (e.g. load_ajr.py) writing a real
+    hs_cap_loss value into a row that previously had NULL -- the guard
+    must not interfere; the real value is written."""
+    result = ef.resolve_hs_cap_loss(existing_hs_cap_loss=None, incoming_hs_cap_loss=4321)
+    check(
+        "hs_cap_loss guard: real incoming value into a previously-NULL row is written, unaffected by the guard",
+        result == 4321,
+        result,
+    )
+
+
+def test_hs_cap_loss_null_into_real_row_is_preserved():
+    """Direction (b): THE regression fixture. A loader with no source data
+    for this field (load_certified_historical.py / load_certified_2025.py /
+    load_2026_preliminary.py, all of which always pass None) writing NULL
+    into a row that already has a real, AJR-sourced hs_cap_loss -- this is
+    the exact production bug PX-20260910-01 found (Travis 2022-2024 reading
+    0.00% coverage). Proves the guard preserves the existing real value and
+    the regression no longer reproduces."""
+    result = ef.resolve_hs_cap_loss(existing_hs_cap_loss=7890, incoming_hs_cap_loss=None)
+    check(
+        "hs_cap_loss guard: NULL from a source that structurally lacks the field does NOT "
+        "clobber an existing real value -- PX-20260910-01's exact regression no longer reproduces",
+        result == 7890,
+        result,
+    )
+
+
+def test_hs_cap_loss_null_into_null_row_stays_null():
+    """Direction (c): a loader writing NULL into a row that is ALSO
+    already NULL (e.g. a 2025/2026 row, which never had AJR data to begin
+    with) -- must stay NULL. Guards against a false-positive "preserved a
+    value" claim when there was never a real value to preserve."""
+    result = ef.resolve_hs_cap_loss(existing_hs_cap_loss=None, incoming_hs_cap_loss=None)
+    check(
+        "hs_cap_loss guard: NULL into an already-NULL row stays NULL (no false 'preserved' claim)",
+        result is None,
+        result,
+    )
+
+
 def main():
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
