@@ -48,6 +48,15 @@ from snapshot_taxonomy import (
     _snapshot_view_where, ptype_and_sort_case_for_view,
     _SNAPSHOT_VIEW_TAB_ORDER, _SNAPSHOT_TAB_BUTTON_LABEL, _SNAPSHOT_COVERAGE_LABELS,
 )
+# Mission 4 (Capability Contract measurement layer): county_has_field()
+# below becomes a thin wrapper over the new measured logic rather than a
+# parallel function call sites must migrate to -- see capability_state.py's
+# own module docstring and PX_CAPABILITY_CONTRACT_M4_REPORT.md for the
+# full rationale. Only capability_state (pure Python, no DB) is imported
+# at module load time; the measured snapshot itself is loaded lazily (see
+# _get_field_coverage_snapshot() below get_db()) so an app process that
+# never calls county_has_field() never pays a DB round-trip for this.
+import capability_state as _capability_state
 
 # BILLING-DIAG-1: _BILLING_TARGET_YEARS used to be its own separately-
 # maintained {2021, 2022, 2023, 2024} literal here -- confirmed identical in
@@ -2219,25 +2228,70 @@ COUNTY_PROFILES = {
 }
 
 
-def county_has_field(county_code, field):
-    """PX-20260901-05 Task 1: the one call-site shape for reading
-    COUNTY_PROFILES' new `field_coverage` map -- every exemption/
-    neighborhood/year_built/billing gate in this file and in
-    templates/*.html (registered as `county_has_field` in
-    _inject_county_helpers() below) should call this instead of reaching
-    into `COUNTY_PROFILES[...]["field_coverage"][...]` directly, so the
-    dict shape itself can change in one place later (e.g. once a real
-    loader-gate mechanism replaces these hand-declared booleans) without
-    hunting down every call site.
+_FIELD_COVERAGE_SNAPSHOT = None  # None = not yet attempted this process;
+                                  # {} = attempted, table absent/empty/error.
 
-    Defaults to False for an unrecognized county_code, an unregistered
-    field name, or a county profile that predates this map entirely --
-    "unknown" must never read as "covered". This mirrors every other
-    COUNTY_PROFILES helper's convention in this file (county_cad_link(),
-    the info_content_available reads) of treating an absent value as an
-    honest gap, not a guessed default of True."""
+
+def _load_field_coverage_snapshot():
+    """Mission 4 (Capability Contract measurement layer), D2/D3: lazily
+    loads county_field_coverage's measured contents once per process and
+    caches them for county_has_field()'s remaining lifetime. Guarded so a
+    missing table (Diego has not yet run loaders/field_coverage_gate.py
+    --live against production -- see PX_M4_LIVE_MEASUREMENT_COMMANDS.md)
+    or any DB error falls back to an empty snapshot, in which case
+    county_has_field() below falls all the way back to the pre-Mission-4
+    hand-declared COUNTY_PROFILES boolean -- i.e. IDENTICAL behavior to
+    today until a real measurement exists. Not re-queried per request:
+    this table only changes when a human re-runs the gate, not on every
+    page load, so a process-lifetime cache (cleared by a deploy/restart)
+    is the right freshness/cost tradeoff -- same choice
+    STAGE_A_PX-20260907-02-rev_dallas_field_coverage.md §A5.2 proposed."""
+    global _FIELD_COVERAGE_SNAPSHOT
+    if _FIELD_COVERAGE_SNAPSHOT is not None:
+        return _FIELD_COVERAGE_SNAPSHOT
+    snapshot = {}
+    try:
+        rows = query(
+            "SELECT DISTINCT ON (county_code, field) "
+            "county_code, field, fraction, measured_at "
+            "FROM county_field_coverage "
+            "ORDER BY county_code, field, measured_at DESC"
+        )
+        for row in rows:
+            snapshot[(row["county_code"], row["field"])] = {
+                "measurement_status": _capability_state.MEASURED,
+                "coverage_fraction": float(row["fraction"]) if row["fraction"] is not None else None,
+                "sanity_floor_status": _capability_state.SANITY_FLOOR_NOT_APPLICABLE,
+            }
+    except Exception:
+        # county_field_coverage doesn't exist yet, or any other DB error --
+        # never let this crash a request; fall back to the legacy booleans.
+        snapshot = {}
+    _FIELD_COVERAGE_SNAPSHOT = snapshot
+    return _FIELD_COVERAGE_SNAPSHOT
+
+
+def county_has_field(county_code, field):
+    """PX-20260901-05 Task 1's original call-site shape, UPGRADED under
+    Mission 4 (Capability Contract measurement layer) to a thin wrapper
+    over capability_state.county_has_field() rather than a parallel
+    function call sites must migrate to -- see the Mission 4 preamble's
+    item 6 and PX_CAPABILITY_CONTRACT_M4_REPORT.md for the full rationale.
+    Every existing call site in this file and in templates/*.html
+    (registered as `county_has_field` in _inject_county_helpers() below)
+    is UNCHANGED and continues to work: it reads a real measured fraction
+    from county_field_coverage the moment one exists (via
+    _load_field_coverage_snapshot() above), and falls back to the exact
+    same hand-declared COUNTY_PROFILES["field_coverage"] boolean it always
+    has until then. "Unknown" still never reads as "covered" -- that
+    guarantee now lives in capability_state.county_shows_field()."""
     profile = COUNTY_PROFILES.get(county_code, {})
-    return bool(profile.get("field_coverage", {}).get(field, False))
+    snapshot = _load_field_coverage_snapshot()
+    return _capability_state.county_has_field(
+        county_code, field,
+        snapshot=snapshot,
+        legacy_field_coverage=profile.get("field_coverage", {}),
+    )
 
 
 @app.url_value_preprocessor

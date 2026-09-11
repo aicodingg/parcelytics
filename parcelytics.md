@@ -72,11 +72,42 @@ Defined in `loaders/ingest_gate.py` (Migration M2, per `SPEC_UNIT_MODEL_AND_INGE
 
 **Honest parity disclosure.** Travis runs the full G1–G6 battery described above. Dallas does **not** run the identical battery — it has its own gate function, `run_dallas_ingest_gate()` [loaders/load_dallas_certified.py:614], with its own multi-table G1-analog and G2-analog checks plus one Dallas-specific addition, **G3_FIELD_COVERAGE** [loaders/load_dallas_certified.py:675] (a hard-fail check requiring non-empty `situs_address` in ≥99% of accepted rows and non-empty `owner_name` in ≥95%, per `KNOWN_LIMITATIONS.md:351-358`). Dallas currently has **no G4 (rollup integrity), G5 (account coverage), or G6 (external reconciliation) analog**. So the precise state is: Dallas has its own G1/G2-style structural checks plus a field-coverage check that Travis doesn't have in that form, but is missing G4/G5/G6 entirely — describing this as "Dallas has G3-field-coverage only" understates what exists but correctly identifies G4–G6 as the real, open gap.
 
-## 6. County Capability Contract (target state — not yet built)
+## 6. County Capability Contract
 
-**Target design:** each county declares, and the load gate measures, a capability set — per-field populated fractions and source-column-found flags, conceptually named `county_field_coverage` in the design work for this — which the UI, metric eligibility, and marketing-qualifier logic would all read from directly, with a Notion "Parcel Detail — Field Coverage Matrix" as the human-readable mirror.
+**Update (Mission 4, 2026-09-10 — the design below is now SHIPPED, not merely planned):** `capability_registry.py` (D1), `loaders/field_coverage_gate.py` (D2/D4), `capability_state.py` (D3, including `county_shows_field()` and `COVERAGE_THRESHOLD = 0.30`), `capability_contract.py` (D5), and `render_contract.py` (D7) all exist in the repo as of this revision, with fixture-test coverage (`loaders/test_field_coverage_gate.py`) and a Travis/Dallas measurement demonstration (`loaders/demonstrate_capability_m4.py`) — see `PX_CAPABILITY_CONTRACT_M4_REPORT.md` for the full account, including what is real-measured today vs. still `[PENDING — live execution]` pending Diego's run of `loaders/field_coverage_gate.py --live` against production (this agent has no database access; see that report's own disclosure).
 
-**What exists today, confirmed by direct inspection, is not that.** `app.py`'s `COUNTY_PROFILES` dict [app.py:~2114] and `county_has_field()` [app.py:~2222] are real and shipped, but `field_coverage` inside `COUNTY_PROFILES` is a **hand-declared dict of booleans** per county — Travis is `True` across the board; Dallas is `False` for `exemption_codes`, `neighborhood_cd`, `year_built`, and billing [app.py:~2158-2163, ~2203-2208] — with an explicit in-code comment stating this is **not derived from a live query at read time** [app.py:~2147-2157]. `county_field_coverage` (the measured-fraction registry) and `county_shows_field()` (a fraction-aware renderer) do **not exist in shipped code today** — they appear only in a design document [STAGE_A_PX-20260907-02-rev_dallas_field_coverage.md:185, 226], which itself states `county_has_field()` is meant to be deleted in the same change that ships the measured-fraction version. Treat the boolean system as **current state** and the fraction-measured system as **planned, queued work** (see §17) — do not describe `county_field_coverage`/`county_shows_field()` as if they already exist.
+**Capability vs. confidence — how the two systems now connect (D8):**
+
+```
+Capability state (Available / Partial / Unavailable / Unknown)
+      |  capability_state.capability_state(), consuming a measured
+      |  county_field_coverage row (or the legacy COUNTY_PROFILES
+      |  boolean, until a real measurement exists for a given field)
+      v
+Does the field/module render at all?  (render_contract.should_render_field())
+      |
+      |  Unavailable/Unknown -> NO. Stop here -- the confidence system
+      |  below is never reached. An omitted field is an honest absence
+      |  (§7's existing rule), not a "confidence: none" value.
+      v
+  [Available or Partial -> yes, it renders]
+      |
+      v
+Confidence state (Verified / Preliminary / Partial / Estimated / Not
+Available -- §10's existing THE_FABLE_METHOD numbers-checklist labels,
+UNCHANGED by Mission 4)
+      |  How should THIS PARTICULAR VALUE be characterized, now that we
+      |  know the field itself is showing? A field can be capability-
+      |  Available AND confidence-Preliminary at the same time (brief
+      |  §2.3's own example) -- the two are independent axes, ordered
+      |  capability-first.
+```
+
+This is an amendment connecting two already-existing concepts (capability, §2.3's ruling; confidence, §10's existing labels) — it is not a new confidence framework, and does not change how any existing confidence label is computed or displayed.
+
+**What "measured" means today, concretely:** `county_field_coverage` (schema.sql) stores one row per `(county_code, field, tax_year)` with a real `numerator`/`denominator`/`fraction`, written by `loaders/field_coverage_gate.py`. `app.py`'s `county_has_field()` [app.py, near its original ~2222 location] is now a **thin wrapper**: it reads a cached snapshot of that table (lazily loaded once per process) and falls back to the original hand-declared `COUNTY_PROFILES[...]["field_coverage"]` boolean for any `(county, field)` pair not yet measured — so every one of PX-20260901-05's existing exemption-gating call sites (`app.py`, `compare.html`, `property.html`, `search.html`) continues to work unchanged today, and upgrades automatically to a real measured fraction the moment Diego runs the gate live. This was a deliberate choice between two options the Mission 4 brief itself offered (a new `county_shows_field()` call sites migrate to over time, vs. a wrapper); see `PX_CAPABILITY_CONTRACT_M4_REPORT.md`'s "county_has_field() replacement" section for the full rationale.
+
+**What is still NOT built** (queued, see §17): the Source Registry piece of the Capability Contract (D5's `SourceRegistryEntry` is a deliberately minimal, unpopulated shape — the brief itself says not to overbuild this without real source-metadata infrastructure); Mission 6's declarative per-county source-field mapping registry (a different, later concern from this measurement layer); broad UI wiring beyond the `render_contract.py` interface (no property-page rewrite happened, per the brief's own explicit instruction); and the §7 open denominator question below, which Mission 4 deliberately did not resolve.
 
 ## 7. Parcel-detail coverage rule (Diego, 2026-09-02 — supersedes any prior 50% rule)
 
@@ -88,7 +119,7 @@ This is a current ruling, not yet fully implemented in shipped code (see the gap
 - County coverage < 30% for a field → that field/row is **omitted entirely** from the page for that county — not dashed, not labeled "Not Available."
 - **No inferred fields, ever.** A field is shown only if the county actually publishes/sources it. Travis's valuation-method field is sourced (per Diego's supplied source list) and stays. Dallas's equivalent, where not evidenced by a real source, is deleted rather than inferred.
 
-**Implementation status, confirmed by direct inspection [repo-wide grep, this session]:** there is currently **no shipped `COVERAGE_THRESHOLD` constant anywhere in the repo**, at 30% or any other value. The only coverage-percentage-flavored code found is `data_coverage.py`'s `is_reliable(field, tax_year, min_coverage=0.50)` [data_coverage.py:112] — a **50%** default — which grep confirms is **never called anywhere outside its own definition**; it is dead code, not the active mechanism for anything on the parcel-detail page today. The proposed `fraction > 0.50` render-gating logic that a prior instruction may have referenced also lives only in the `STAGE_A_...md` design document, not in shipped code. **In short: the 30% rule above is Diego's current ruling and should be treated as the target/required behavior for any new work, but no coverage-threshold gating — 50%, 30%, or otherwise — is live in `app.py`/templates today.** Building the named constant and wiring it through is open work (see §17, Stage B).
+**Implementation status (UPDATED, Mission 4, 2026-09-10):** `capability_state.COVERAGE_THRESHOLD = 0.30` now exists as the one shipped, named constant [capability_state.py] — the 30% rule above is now wired into real, tested decision logic (`capability_state.capability_state()`, see §6). `data_coverage.py`'s `is_reliable(field, tax_year, min_coverage=0.50)` [data_coverage.py:112] is UNCHANGED and remains confirmed dead code (never called outside its own definition per the original repo-wide grep this section was based on) — it is a separate, pre-existing, non-competing number; Mission 4 did not touch or repurpose it, and a future reader should not confuse the two. What is **still not wired through** is app.py/templates actually reading a per-field measured fraction end-to-end in production — that depends on Diego running `loaders/field_coverage_gate.py --live` (see `PX_M4_LIVE_MEASUREMENT_COMMANDS.md`); until then, `county_has_field()`'s wrapper (§6) falls back to the pre-Mission-4 hand-declared booleans, so today's live behavior is unchanged even though the measured mechanism now exists.
 
 **[OPEN QUESTION — PM ruling pending; not resolved here, per explicit instruction not to resolve it]:** what denominator should sparse-by-nature fields (exemptions, cap loss, delinquency data) use when computing their coverage fraction? One proposal on the table: source-column-found plus a per-field sanity floor, rather than a literal all-parcels fraction (a field that is genuinely rare for every parcel, like an exemption, would otherwise always compute near-zero coverage under an all-parcels denominator even when the county publishes the column faithfully). This document does not pick a side — whoever builds the Stage B work above must get this ruling from the PM first.
 
@@ -213,7 +244,7 @@ Condensed from `KNOWN_LIMITATIONS.md`, other named spec docs, and this session's
 This section is explicitly the one section on this page expected to be revised frequently; the live version of the queue lives in the Notion Task Log, not here. As of this writing, in order:
 
 1. Version bump to v1.11.0 + the CHANGELOG catch-up entry (§12).
-2. Stage B of PX-20260907-02-rev — building out Dallas field coverage per the County Capability Contract (§6) and the 30% rule (§7) — **blocked on the PM's ruling on the coverage-denominator open question in §7.**
+2. ~~Stage B of PX-20260907-02-rev — building out Dallas field coverage~~ -- **Mission 4 shipped the measurement layer itself** (§6); Diego's live `--live` run (`PX_M4_LIVE_MEASUREMENT_COMMANDS.md`) is the remaining step before Mission 5 (Dallas Stage B proper, per the Mission 4 brief's own §20 sequencing) begins. **Still blocked on the PM's ruling on the coverage-denominator open question in §7** for any field wanting a population-scoped (rather than structural-gate) sparse-by-nature fraction.
 3. Password re-rotation (Diego, via the written runbook, §13).
 4. PX-20260907-03 — Pipeline v2 (D1–D6).
 5. Dallas billing/delinquency data acquisition.

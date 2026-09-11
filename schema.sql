@@ -1346,3 +1346,28 @@ CREATE INDEX IF NOT EXISTS idx_tbe_entity_code ON tax_billing_entity (entity_cod
 -- both real, both confirmed gaps, deliberately not fixed in this pass
 -- since they affect background jobs, not live traffic. Flagged so they
 -- aren't forgotten, not silently left off this record.
+
+-- ── Mission 4 (Capability Contract measurement layer), Deliverable D2 ──────
+-- Persisted output of loaders/field_coverage_gate.py -- the machine-
+-- measured replacement for COUNTY_PROFILES[...]["field_coverage"]'s
+-- hand-declared booleans (app.py:2158/2203). Shape matches
+-- STAGE_A_PX-20260907-02-rev_dallas_field_coverage.md §A5.2's own prior
+-- design exactly (reused, not redesigned, per that doc's own status as
+-- already-reviewed Stage A groundwork for this Stage B/Mission 4 work).
+--
+-- NOT YET LIVE: this CREATE TABLE has not been run against production by
+-- this agent (no DB access, per every mission this thread). Diego runs it
+-- as part of PX_M4_LIVE_MEASUREMENT_COMMANDS.md's first step, before any
+-- loaders/field_coverage_gate.py --live invocation (which would otherwise
+-- fail with "relation does not exist").
+CREATE TABLE IF NOT EXISTS county_field_coverage (
+    county_code   VARCHAR(10)  NOT NULL,
+    field         VARCHAR(40)  NOT NULL,   -- parcel.<col> or parcel_tax_year.<col>
+    tax_year      SMALLINT     NOT NULL DEFAULT 0,  -- 0 = parcel-level (no year dimension)
+    numerator     BIGINT       NOT NULL,   -- rows with a real value (see predicate registry)
+    denominator   BIGINT       NOT NULL,   -- rows in the field's population
+    fraction      NUMERIC(6,5) NOT NULL,
+    measured_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    loader        VARCHAR(60)  NOT NULL,   -- which script wrote it
+    PRIMARY KEY (county_code, field, tax_year)
+);
