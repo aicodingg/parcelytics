@@ -148,9 +148,11 @@ for year in (2022, 2023, 2024):
 **Run this only after Task 1's guard (already applied to the working tree, per this report) has been deployed to production** — running the backfill before the guard ships would just have the next `load_certified_historical.py`/`load_certified_2025.py`/`load_2026_preliminary.py` run re-clobber it, per PX-20260910-01's original finding.
 
 ```bash
-cd ~/Desktop/Claude\ Files/parcel_app   # or wherever the production checkout lives
+cd ~/Parcelytics/code
 python3 loaders/load_ajr.py --county TRAVIS
 ```
+
+**Path correction (post-report):** earlier drafts of this runbook, and many older docstrings throughout this repo (`README.md`, `load_cert_2021.py`, `load_certified_historical.py`, `snapshot_2026_preliminary.py`, `verify_county_scoping.py`, and others), say `cd ~/Desktop/Claude\ Files/parcel_app`. That path is very likely stale — `config.py`'s own `FILE-ARCH-2` comment block documents migrating the repo *away* from that flat `~/Desktop/Claude Files` location specifically because it mixed the git repo and raw data files together, to a dedicated `~/Parcelytics/` root instead, and this session's task history records `"FILE-ARCH-2: code/ repo move (Diego completed manually, confirmed intact)"`. This session's connected folder (`~/Parcelytics/code`) is confirmed to be a live git repo tracking `origin` = `https://github.com/aicodingg/parcelytics.git`, `main`, up to date with `origin/main` — the real, currently-synced checkout. Confirm on your machine with `cd ~/Parcelytics/code && git remote -v` before running the backfill if you want certainty; the old `Claude Files/parcel_app` path may no longer exist or may be a stale leftover (a near-identical stale-path artifact was already found and fixed once before, in `loaders/test_pir_loaders.py`).
 
 This single command processes **all four** configured AJR years (2021, 2022, 2023, 2024) — including 2021, which is already correct and unaffected by this bug; re-running it is safe and idempotent (same file, same real value re-written, no-op in effect). It ends by calling `parcel_rollup.run()` for each processed year (`load_ajr.py:235-239`), so `parcel_tax_year.hs_cap_loss` is re-derived from the repaired `prop_unit_tax_year` rows in the same run — no separate rollup step needed.
 

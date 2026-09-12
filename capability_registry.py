@@ -70,6 +70,34 @@ class FieldDefinition:
         # attribute fields (population = all county parcels, unconditionally).
         # For sparse_by_nature fields this documents the DENOMINATOR used
         # for the structural-measurement fraction, not a gating condition.
+        # Cross-county DEFAULT ONLY -- see population_predicate_by_county
+        # below, which takes precedence per county once a county's real
+        # semantics have been certified. Do not read this single string as
+        # "the predicate for every county"; that is exactly the
+        # Travis-assumption bug Mission 5 (PX-20260911, Dallas Stage B
+        # Task 0) found and this field exists to prevent recurring.
+    population_predicate_by_county: Optional[dict] = None
+        # Mission 5 (PX-20260911) addition. class_conditional fields whose
+        # population predicate is NOT known to be portable across counties
+        # register it HERE, keyed by county_code, instead of (or in addition
+        # to) the single population_predicate string above. Lookup order
+        # (see get_population_predicate() below): a county_code key in this
+        # dict wins; a county_code with NO key here and no entry falls back
+        # to population_predicate ONLY if population_predicate_by_county
+        # itself is None (meaning: this field was never flagged as
+        # cross-county-risky in the first place, e.g. a genuinely
+        # county-universal predicate). If population_predicate_by_county IS
+        # set (non-None) but the requested county_code has no key in it,
+        # get_population_predicate() returns None -- "not yet certified for
+        # this county" -- rather than silently falling back to
+        # population_predicate's value. This is the fix for Mission 4's
+        # confirmed finding (ISS-0910-06): prop_type_cd = 'R' returns zero
+        # Dallas rows because it is a Travis-specific literal that was
+        # applied to Dallas without evidence. Values placed in this dict
+        # must be [PM-supplied]/live-validated, never a repo-evidence-only
+        # candidate -- see PX_DALLAS_STAGE_B_M5_REPORT.md Task 0 for the
+        # candidates proposed-pending-validation that are deliberately NOT
+        # yet entered here.
 
     # Threshold / sanity floor
     min_coverage_threshold: float = 0.30
@@ -194,6 +222,23 @@ FIELD_REGISTRY: dict[str, FieldDefinition] = {
         measurement_method="COUNT(classi_cd IS NOT NULL AND TRIM != '') "
                             "/ COUNT(*) WHERE population_predicate",
         population_predicate="prop_type_cd = 'R'",
+        population_predicate_by_county={"TRAVIS": "prop_type_cd = 'R'", "DALLAS": "state_cd1 = 'A'"},
+        # Mission 5 (PX-20260911-01): DALLAS CERTIFIED, PM ruling, live-
+        # validated 2026-09-11. `state_cd1 = 'A'` -> 617,446 rows; within
+        # that population, `prop_type_cd` is cleanly A11/A12/A13/A20,
+        # matching Stage A's cited distribution. Candidate 2
+        # (`state_cd1 LIKE 'A%'`) rejected: DCAD's scheme uses real
+        # two-character codes (F1/F2/G1/G3/M1/D1) as distinct categories,
+        # not sub-lettered variants of a base letter, so exact match is
+        # unambiguous and carries no hidden fragility from a hypothetical
+        # future "A2"-style code. Candidate 3 (`prop_type_cd LIKE 'A%'`)
+        # rejected as the weaker, duplicative-of-state_cd1 option per this
+        # mission's own report. Original root-cause finding, still true:
+        # ISS-0910-06 confirmed (live) that `prop_type_cd = 'R'` returns
+        # zero Dallas rows -- Dallas's prop_type_cd is the raw DCAD
+        # SPTD_CODE (dcad_format.py's derive_parcel_class_fields(), e.g.
+        # "A11"), never Travis's letter convention. Full evidence trail in
+        # PX_DALLAS_STAGE_B_M5_REPORT.md's updated Task 0 section.
         source_provenance_note="Improvement-level use code, sourced from "
             "IMP_INFO.TXT for Travis (KNOWN_LIMITATIONS.md's classi_cd "
             "section) -- only meaningful for real property; personal/"
@@ -211,6 +256,10 @@ FIELD_REGISTRY: dict[str, FieldDefinition] = {
         measurement_method="COUNT(living_area_sqft > 0) / COUNT(*) "
                             "WHERE population_predicate",
         population_predicate="prop_type_cd = 'R'",
+        population_predicate_by_county={"TRAVIS": "prop_type_cd = 'R'", "DALLAS": "state_cd1 = 'A'"},
+        # Mission 5 (PX-20260911-01): DALLAS CERTIFIED -- same PM ruling and
+        # live-validation evidence as classi_cd above (state_cd1 = 'A',
+        # 617,446 rows, PX_DALLAS_STAGE_B_M5_REPORT.md Task 0).
         source_provenance_note="Structure square footage -- meaningless for "
             "personal/mineral accounts; same population reasoning as classi_cd.",
         ui_component="property.html Basic Property Information",
@@ -223,6 +272,10 @@ FIELD_REGISTRY: dict[str, FieldDefinition] = {
         measurement_method="COUNT(gross_building_area_sqft > 0) / COUNT(*) "
                             "WHERE population_predicate",
         population_predicate="prop_type_cd = 'R'",
+        population_predicate_by_county={"TRAVIS": "prop_type_cd = 'R'", "DALLAS": "state_cd1 = 'A'"},
+        # Mission 5 (PX-20260911-01): DALLAS CERTIFIED -- same PM ruling and
+        # live-validation evidence as classi_cd above (state_cd1 = 'A',
+        # 617,446 rows, PX_DALLAS_STAGE_B_M5_REPORT.md Task 0).
         ui_component="property.html Basic Property Information",
     ),
     "year_built": FieldDefinition(
@@ -233,6 +286,26 @@ FIELD_REGISTRY: dict[str, FieldDefinition] = {
         measurement_method="COUNT(year_built IS NOT NULL) / COUNT(*) "
                             "WHERE population_predicate",
         population_predicate="prop_type_cd = 'R'",
+        population_predicate_by_county={"TRAVIS": "prop_type_cd = 'R'", "DALLAS": "state_cd1 = 'A'"},
+        # Mission 5 (PX-20260911-01): DALLAS CERTIFIED -- same PM ruling and
+        # live-validation evidence as classi_cd above (state_cd1 = 'A',
+        # 617,446 rows, PX_DALLAS_STAGE_B_M5_REPORT.md Task 0). IMPORTANT,
+        # confirmed still true after this change (per PX-20260911-01 Task 1's
+        # explicit instruction not to let this field appear silently
+        # "fixed" by the predicate alone): year_built is ALSO separately
+        # unmapped for Dallas today, independent of the predicate (see
+        # PX_DALLAS_STAGE_B_M5_REPORT.md Workstream C / KNOWN_LIMITATIONS.md
+        # -- RES_DETAIL.YR_BUILT/COM_DETAIL.YR_BUILT are not loaded). With a
+        # certified predicate now in place, measure_class_conditional_field()
+        # gets past the get_population_predicate() check and reaches
+        # check_source_column(table="parcel", column="year_built") -- that
+        # check still passes (the COLUMN exists on parcel, per schema.sql)
+        # but the column is 100% NULL for Dallas rows, so `populated_count`
+        # measures 0 and the field reads MEASURED with coverage_fraction=0.0
+        # -> Unavailable (a real, honest "measured and missing" result, no
+        # longer conflated with "predicate uncertified"), NOT Available.
+        # Confirmed by the new fixture test below -- do not read a certified
+        # predicate as equivalent to a mapped field for this one.
         source_provenance_note="Dallas: unmapped by load_dallas_certified.py "
             "as of PX-20260901-04 Task 3's RES_DETAIL/COM_DETAIL investigation "
             "-- 0% (Mission 4 preamble). Included as the second explicit "
@@ -328,6 +401,34 @@ FIELD_REGISTRY: dict[str, FieldDefinition] = {
         ui_component="property.html Delinquency panel",
     ),
 }
+
+
+def get_population_predicate(field_def: FieldDefinition, county_code: str) -> Optional[str]:
+    """Mission 5 (PX-20260911, Dallas Stage B Task 0): the one place a
+    class_conditional field's ACTUAL, per-county population predicate is
+    resolved -- field_coverage_gate.py must call this instead of reading
+    field_def.population_predicate directly, so no call site can
+    accidentally re-introduce the Travis-literal-applied-to-every-county
+    bug ISS-0910-06 found live (prop_type_cd = 'R' silently evaluated
+    against Dallas, returning zero rows instead of surfacing as unknown).
+
+    Resolution order:
+      1. field_def.population_predicate_by_county is None entirely -- this
+         field was never flagged as cross-county-risky; return the single
+         population_predicate string unchanged (fully backward compatible
+         with every field registered before Mission 5).
+      2. population_predicate_by_county is set and county_code is a key in
+         it -- return that county's certified predicate.
+      3. population_predicate_by_county is set but county_code has NO key
+         in it -- return None. This is the "not yet certified for this
+         county" case; callers must treat None as NOT_MEASURABLE, never
+         fall back to population_predicate (that fallback is exactly the
+         bug being fixed).
+    """
+    by_county = field_def.population_predicate_by_county
+    if by_county is None:
+        return field_def.population_predicate
+    return by_county.get(county_code)
 
 
 def get_field_definition(field_name: str) -> Optional[FieldDefinition]:

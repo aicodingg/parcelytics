@@ -43,6 +43,7 @@ from capability_registry import (
     CLASS_CONDITIONAL,
     SPARSE_BY_NATURE,
     get_field_definition,
+    get_population_predicate,
 )
 from capability_state import (
     MEASURED,
@@ -181,10 +182,33 @@ def measure_class_conditional_field(cur, county_code, field_def):
     predicate FIRST, then compute populated-within-population /
     population -- the predicate must be explicit and reproducible (it is:
     field_def.population_predicate, a literal SQL fragment stated once in
-    capability_registry.py, never re-derived ad hoc per call site)."""
+    capability_registry.py, never re-derived ad hoc per call site).
+
+    Mission 5 (PX-20260911) fix: the predicate is resolved via
+    capability_registry.get_population_predicate(field_def, county_code),
+    NOT read directly off field_def.population_predicate. For fields
+    registered with a population_predicate_by_county map (currently:
+    classi_cd, living_area_sqft, gross_building_area_sqft, year_built --
+    all Travis-only today), a county with no certified entry in that map
+    resolves to None here and is reported NOT_MEASURABLE below, exactly
+    like a missing source column -- never silently evaluated against a
+    Travis-specific literal. This is the direct fix for ISS-0910-06
+    (prop_type_cd = 'R' returning zero live Dallas rows because Travis's
+    predicate was applied to Dallas without evidence)."""
     table = field_def.table
     column = field_def.canonical_field
-    predicate = field_def.population_predicate
+    predicate = get_population_predicate(field_def, county_code)
+    if predicate is None:
+        return make_record(
+            county_code, field_def.canonical_field, field_def.field_class,
+            population_definition=f"NOT CERTIFIED for county={county_code} "
+                                   f"(see capability_registry.FieldDefinition."
+                                   f"population_predicate_by_county)",
+            population_count=None, populated_count=None,
+            measurement_method=field_def.measurement_method,
+            measurement_status=NOT_MEASURABLE, source_column_present=None,
+            source_column_mapped=None,
+        )
     if not check_source_column(cur, table, column):
         return make_record(
             county_code, field_def.canonical_field, field_def.field_class,

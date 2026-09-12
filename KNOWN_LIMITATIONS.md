@@ -410,6 +410,14 @@ Resolves automatically once Dallas's DCAD exemption field is identified and mapp
 
 Resolves automatically once Dallas's DCAD neighborhood field is identified and mapped — no downstream code change needed; every consumer above already reads live from `parcel.neighborhood_cd`.
 
+### Dallas: legal_desc — not loaded (0% empty)
+
+`parcel.legal_desc` is 0% populated for Dallas (Mission 4 live dry-run finding, ISS-0910-04). Unlike `hs_cap_loss`'s Certified-Export gap (a field DCAD's export genuinely does not carry an equivalent of), `legal_desc` is a "mapped under a different field name, never wired" case: `STAGE_A_PX-20260907-02-rev_dallas_field_coverage.md` §A1.2 confirms (tier **V**, live from DCAD's own public account page, 2026-09-01) that `ACCOUNT_INFO.CSV` genuinely carries `LEGAL1`–`LEGAL5` (sample: "Legal Desc 1: WRIGHTS, 2: BLK 3 LT 1, 3: (blank), 4: INT201700166830 DD06122017 CO-DC, 5: 2615000300100 16026150003"). `load_dallas_certified.py`'s `PARCEL_SQL` (Stage A line 36) simply never includes `legal_desc` in its column list — not attempted, not attempted-and-failed.
+
+Proposed mapping (Stage A, Mission 5 Task C): `legal_desc = join(LEGAL1, LEGAL2, LEGAL3)`. **[PM ruling needed]**, not yet resolved: whether to include `LEGAL4` (deed instrument/date) and `LEGAL5` (legacy account cross-references) — Stage A recommends `LEGAL1`–`LEGAL3` only as the closer analog to Travis's own `legal_desc` semantic, with `LEGAL4`/`LEGAL5` out of scope unless a future brief wants a separate deed-history field.
+
+Not touched by Mission 5 (PX-20260911) beyond this documentation — no loader change made; implementing the mapping is Mission 6-scope work per Mission 5's own boundary, pending the LEGAL4/5 PM ruling above.
+
 ## Out of Scope for Phase 1
 
 The following were explicitly excluded from this phase and should not be backfilled without a separate scoping decision:

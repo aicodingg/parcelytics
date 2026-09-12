@@ -387,6 +387,29 @@ def test_county_has_field_wrapper_matches_county_shows_field():
 
 # ── 12. Travis/Dallas regression: the system must not only work because
 #        Travis happens to have a particular schema/coverage profile ───────
+#
+# Mission 5 (PX-20260911, Dallas Stage B Task 0) REVISION #1: this test
+# originally asserted Dallas classi_cd measures Unavailable via a 0-of-
+# 769,536 result from evaluating Travis's own "prop_type_cd = 'R'" literal
+# against Dallas data -- confirmed (ISS-0910-06, live) to be a bug: a Travis
+# literal silently, wrongly evaluated against a county it was never
+# validated for. That revision changed the expectation to NOT_MEASURABLE ->
+# Unknown, pending live validation of a real Dallas predicate.
+#
+# REVISION #2 (PX-20260911-01): the PM ruling is now in, live-validated
+# 2026-09-11: Dallas's certified class-conditional predicate is
+# `state_cd1 = 'A'` (617,446 rows). `capability_registry.py` now carries a
+# "DALLAS" key for classi_cd (and the other three class-conditional
+# fields). This test's expectation changes AGAIN, in the direction the
+# mission always intended: Dallas classi_cd must now resolve a REAL
+# predicate and produce a real MEASURED result -- Unknown was only ever the
+# honest placeholder for "not yet certified," never the target end state.
+# The "must never issue SQL for Dallas" assertion from REVISION #1 is
+# retired for this field specifically (a certified predicate means SQL
+# SHOULD now run) -- see test_dallas_year_built_stays_unavailable_after_
+# predicate_certification() below for the field that remains gated by a
+# DIFFERENT mechanism (a missing source mapping, not an uncertified
+# predicate) even after this change.
 def test_travis_dallas_classi_cd_regression():
     def travis_behavior(sql, params):
         if "information_schema.columns" in sql:
@@ -398,12 +421,18 @@ def test_travis_dallas_classi_cd_regression():
     def dallas_behavior(sql, params):
         if "information_schema.columns" in sql:
             return (1,)
-        if "prop_type_cd = 'R'" in sql:
-            return (769536, 0)  # Dallas: PM-supplied 2026-09-02 measurement,
-                                 # 0 of 769,536 -- the brief's own "Unavailable"
-                                 # proof case, reproduced here as a fixture,
-                                 # not re-measured live by this test.
-        raise AssertionError(sql)
+        if "state_cd1 = 'A'" in sql:
+            # PM-supplied, live-validated 2026-09-11: 617,446 rows in the
+            # certified Dallas population. classi_cd itself remains
+            # genuinely unmapped for Dallas (Workstream C finding) --
+            # 0 populated, a real, honest 0% result now, not a blocked
+            # measurement.
+            return (617446, 0)
+        raise AssertionError(
+            "unexpected SQL for Dallas classi_cd post-certification -- "
+            "the certified predicate is state_cd1 = 'A'; any other "
+            "predicate string reaching this point is a regression: " + sql
+        )
 
     field_def = get_field_definition("classi_cd")
     travis_record = measure_class_conditional_field(make_cursor(travis_behavior), "TRAVIS", field_def)
@@ -413,12 +442,80 @@ def test_travis_dallas_classi_cd_regression():
     dallas_state = capability_state(dallas_record["measurement_status"], dallas_record["coverage_fraction"])
 
     check("Travis classi_cd measures Available (99% coverage)", travis_state == AVAILABLE, travis_record)
-    check("Dallas classi_cd measures Unavailable (0% coverage) -- the same measurement "
-          "logic, a genuinely different county-specific result, not a hardcoded exception",
+    check("Dallas classi_cd now resolves the certified state_cd1 = 'A' predicate "
+          "(population_definition reflects it, not a 'NOT CERTIFIED' placeholder)",
+          dallas_record["population_definition"] == "state_cd1 = 'A'", dallas_record)
+    check("Dallas classi_cd measures MEASURED (a real query ran against the "
+          "certified population), not NOT_MEASURABLE",
+          dallas_record["measurement_status"] == "measured", dallas_record)
+    check("Dallas classi_cd measures Unavailable (0% coverage within the "
+          "certified population) -- classi_cd itself is still genuinely "
+          "unmapped for Dallas (Workstream C), a separate, real gap from "
+          "the predicate question this mission certified",
           dallas_state == UNAVAILABLE, dallas_record)
-    check("the two counties' results differ because the DATA differs, not because "
-          "of any county-name conditional in the measurement code itself",
+    check("Travis and Dallas now both resolve real, county-specific "
+          "predicates and produce genuinely different coverage results from "
+          "genuinely different data -- not from a county-name conditional "
+          "in the measurement code",
           travis_state != dallas_state, (travis_state, dallas_state))
+
+
+# ── 13. year_built must NOT appear silently "fixed" by certifying the
+#         predicate alone -- PX-20260911-01 Task 1's explicit instruction.
+#         A certified predicate only gets measure_class_conditional_field()
+#         past the predicate gate; check_source_column() then still finds
+#         the `year_built` COLUMN exists on `parcel` (Travis has real data
+#         in it), so the query runs -- but every Dallas row's `year_built`
+#         is NULL (the field is separately unmapped, per Workstream C), so
+#         the real, honest result is MEASURED / 0% / Unavailable, not
+#         Available and not NOT_MEASURABLE. ───────────────────────────────
+def test_dallas_year_built_stays_unavailable_after_predicate_certification():
+    def dallas_behavior(sql, params):
+        if "information_schema.columns" in sql:
+            return (1,)  # the year_built COLUMN exists on parcel (schema-level)
+        if "state_cd1 = 'A'" in sql:
+            # Real column, zero non-null values for Dallas -- genuinely
+            # unmapped, not a blocked measurement.
+            return (617446, 0)
+        raise AssertionError(sql)
+
+    field_def = get_field_definition("year_built")
+    record = measure_class_conditional_field(make_cursor(dallas_behavior), "DALLAS", field_def)
+    state = capability_state(record["measurement_status"], record["coverage_fraction"])
+
+    check("Dallas year_built resolves the certified predicate (proves the "
+          "predicate fix alone does not block measurement)",
+          record["population_definition"] == "state_cd1 = 'A'", record)
+    check("Dallas year_built measures MEASURED, not NOT_MEASURABLE -- the "
+          "predicate is certified and the column exists; it is not blocked",
+          record["measurement_status"] == "measured", record)
+    check("Dallas year_built capability_state is Unavailable, NOT Available -- "
+          "a certified predicate must never be mistaken for a mapped field; "
+          "this field is still 0% populated for Dallas regardless of "
+          "predicate certification (a separate, real, unresolved gap)",
+          state == UNAVAILABLE, record)
+
+
+# ── 14. living_area_sqft / gross_building_area_sqft also received the
+#         same certified DALLAS predicate in this round -- one shared
+#         assertion confirming neither silently reverted to the
+#         "not certified" placeholder. ─────────────────────────────────
+def test_dallas_sqft_fields_also_certified():
+    def dallas_behavior(sql, params):
+        if "information_schema.columns" in sql:
+            return (1,)
+        if "state_cd1 = 'A'" in sql:
+            return (617446, 0)
+        raise AssertionError(sql)
+
+    for name in ("living_area_sqft", "gross_building_area_sqft"):
+        field_def = get_field_definition(name)
+        record = measure_class_conditional_field(make_cursor(dallas_behavior), "DALLAS", field_def)
+        check(f"Dallas {name} resolves the certified state_cd1 = 'A' predicate",
+              record["population_definition"] == "state_cd1 = 'A'", record)
+        check(f"Dallas {name} measures MEASURED (not blocked by an "
+              f"uncertified predicate)",
+              record["measurement_status"] == "measured", record)
 
 
 ALL_TESTS = [
@@ -441,6 +538,8 @@ ALL_TESTS = [
     test_county_shows_field_falls_back_to_legacy_when_unmeasured,
     test_county_has_field_wrapper_matches_county_shows_field,
     test_travis_dallas_classi_cd_regression,
+    test_dallas_year_built_stays_unavailable_after_predicate_certification,
+    test_dallas_sqft_fields_also_certified,
 ]
 
 
